@@ -546,6 +546,8 @@ def transformer_predict(model, eval_xs, eval_ys, eval_position,
 
     output = output / len(ensemble_configurations)
     if average_logits and not return_logits:
+        if fp16_inference:
+            output = output.float()
         output = torch.nn.functional.softmax(output, dim=-1)
 
     output = torch.transpose(output, 0, 1)

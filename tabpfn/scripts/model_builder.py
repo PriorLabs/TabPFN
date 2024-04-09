@@ -308,6 +308,7 @@ def get_model(config, device, should_train=True, verbose=False, state_dict=None,
                   , recompute_attn=config['recompute_attn']
                   , epoch_callback=epoch_callback
                   , bptt_extra_samples = config['bptt_extra_samples']
+                  , train_mixed_precision = config['train_mixed_precision']
                   , extra_prior_kwargs_dict={
             'num_features': config['num_features']
             , 'hyperparameters': prior_hyperparameters
