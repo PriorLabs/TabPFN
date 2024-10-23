@@ -5,6 +5,8 @@ This is the original CUDA-supporting pytorch impelementation.
 
 We created a [Colab](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ), that lets you play with our scikit-learn interface.
 
+**Join our discord here: https://discord.gg/VJRuU3bSxt**
+
 ## Installation
 
 ```bash
