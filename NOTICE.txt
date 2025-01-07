@@ -1,1 +1,0 @@
-Copyright 2022 The University of Freiburg (Noah Hollmann, Samuel Müller, Katharina Eggensperger, Frank Hutter)

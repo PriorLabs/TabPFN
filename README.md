@@ -1,84 +1,148 @@
 # TabPFN
 
-The TabPFN is a neural network that learned to do tabular data prediction.
-This is the original CUDA-supporting pytorch impelementation.
+[![PyPI version](https://badge.fury.io/py/tabpfn.svg)](https://badge.fury.io/py/tabpfn)
+[![Downloads](https://pepy.tech/badge/tabpfn)](https://pepy.tech/project/tabpfn)
+[![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.com/channels/1285598202732482621/)
+[![Documentation](https://img.shields.io/badge/docs-priorlabs.ai-blue)](https://priorlabs.ai/)
+[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ)
 
-We created a [Colab](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ), that lets you play with our scikit-learn interface.
+TabPFN is a foundation model for tabular data that outperforms traditional methods while 
+being dramatically faster. This repository contains the core PyTorch implementation with
+CUDA optimization.
 
-**Join our discord here: https://discord.gg/VJRuU3bSxt**
+⚠️ **Major Update: Version 2.0**
 
-## Installation
+Complete codebase overhaul with new architecture and features. Previous version available at [v1.0.0](../../tree/v1.0.0).
+
+## 🌐 TabPFN Ecosystem
+
+Choose the right TabPFN implementation for your needs:
+
+- **[TabPFN Client](https://github.com/automl/tabpfn-client)**: Easy-to-use API client for cloud-based inference
+- **[TabPFN Systems](https://github.com/priorlabs/tabpfn_systems)**: Community extensions and integrations
+- **TabPFN (this repo)**: Core implementation for local deployment and research
+
+Try our [Interactive Colab Tutorial](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ) to get started quickly.
+
+## 🏁 Quick Start
+
+### Installation
 
 ```bash
+# Simple installation
 pip install tabpfn
+
+# Development installation
+pip install -e ".[dev]"
+pre-commit install
 ```
 
-If you want to train and evaluate our method like we did in the paper (including baselines) please install with
-```bash
-pip install tabpfn[full]
-```
-To run the autogluon and autosklearn baseline please create a separate environment and install autosklearn==0.14.5 / autogluon==0.4.0, installation in the same environment as our other baselines is not possible.
+### Basic Usage
 
-## Getting started
-
-A simple usage of our sklearn interface is:
 ```python
-from sklearn.metrics import accuracy_score
 from sklearn.datasets import load_breast_cancer
+from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
 
+# Load data
 X, y = load_breast_cancer(return_X_y=True)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
 
-# N_ensemble_configurations controls the number of model predictions that are ensembled with feature and class rotations (See our work for details).
-# When N_ensemble_configurations > #features * #classes, no further averaging is applied.
+# Initialize a classifier
+clf = TabPFNClassifier()
+clf.fit(X_train, y_train)
 
-classifier = TabPFNClassifier(device='cpu', N_ensemble_configurations=32)
+# Predict probabilities
+prediction_probabilities = clf.predict_proba(X_test)
+print("ROC AUC:", roc_auc_score(y_test, prediction_probabilities[:, 1]))
 
-classifier.fit(X_train, y_train)
-y_eval, p_eval = classifier.predict(X_test, return_winning_probability=True)
-
-print('Accuracy', accuracy_score(y_test, y_eval))
+# Predict labels
+predictions = clf.predict(X_test)
+print("Accuracy", accuracy_score(y_test, predictions))
 ```
 
-### TabPFN Usage
+## 💡 Usage Tips
 
-TabPFN is different from other methods you might know for tabular classification.
-Here, we list some tips and tricks that might help you understand how to use it best.
+TabPFN is designed to work out-of-the-box with minimal preprocessing:
 
-- Do not preprocess inputs to TabPFN. TabPFN pre-processes inputs internally. It applies a z-score normalization (`x-train_x.mean()/train_x.std()`) per feature (fitted on the training set) and log-scales outliers [heuristically](https://github.com/automl/TabPFN/blob/f7402ec1916aa78d953574daf95508045af5953e/tabpfn/utils.py#L201). Finally, TabPFN  applies a PowerTransform to all features for every second ensemble member. Pre-processing is important for the TabPFN to make sure that the real-world dataset lies in the distribution of the synthetic datasets seen during training. So to get the best results, do not apply a PowerTransformation to the inputs.
-- TabPFN expects scalar values only (if your categoricals are `float`s just leave them as they are, if you have categoricals that are not encoded as `float` (rather `str` or `object`), encode your categoricals e.g. with [OrdinalEncoder](https://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.OrdinalEncoder.html#sklearn.preprocessing.OrdinalEncoder)). TabPFN works best on data that does not contain any categorical or NaN data (see [Appendix B.1](https://arxiv.org/abs/2207.01848)).
-- TabPFN ensembles multiple input encodings per default. It feeds different index rotations of the features and labels to the model per ensemble member. You can control the ensembling with `TabPFNClassifier(...,N_ensemble_configurations=?)`
-- TabPFN does not use any statistics from the test set. That means predicting each test example one-by-one will yield the same result as feeding the whole test set together.
-- TabPFN is differentiable in principle, only the pre-processing is not and relies on numpy.
+- **No preprocessing needed**: TabPFN handles normalization internally
+- **Categorical variables**: Use numerical encodings (floats for ordered, OrdinalEncoder for unordered)
+- **Automatic ensembling**: Controls with `N_ensemble_configurations`
+- **Independent predictions**: Test samples can be predicted individually or in batch
+- **Differentiable**: Core model is differentiable (except preprocessing)
+- **GPU Support**: Use `device='cuda'` for GPU acceleration
 
-## Our Paper
-Read our [paper](https://arxiv.org/abs/2207.01848) for more information about the setup (or contact us ☺️).
-If you use our method, please cite us using
+## 🛠️ Development
+
+1. Setup environment:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -e ".[dev]"
+pre-commit install
 ```
-@inproceedings{
-  hollmann2023tabpfn,
-  title={Tab{PFN}: A Transformer That Solves Small Tabular Classification Problems in a Second},
-  author={Noah Hollmann and Samuel M{\"u}ller and Katharina Eggensperger and Frank Hutter},
-  booktitle={The Eleventh International Conference on Learning Representations},
-  year={2023},
-  url={https://openreview.net/forum?id=cp5PvcI6w8_}
+
+2. Before committing:
+```bash
+pre-commit run --all-files
+```
+
+3. Run tests:
+```bash
+pytest tests/
+```
+
+Contribution guidelines:
+- Follow PEP 8 style guide (enforced by pre-commit hooks)
+- Add tests for new functionality
+- Update documentation as needed
+- Sign CLA before submitting PRs
+- Open issues for feature discussions
+
+## 📚 Citation
+
+```bibtex
+@article{hollmann2024tabpfn,
+  title={Accurate predictions on small data with a tabular foundation model},
+  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and 
+          Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and 
+          Schirrmeister, Robin Tibor and Hutter, Frank},
+  journal={Nature},
+  year={2024},
+  month={01},
+  day={09},
+  doi={10.1038/s41586-024-08328-6},
+  publisher={Springer Nature},
+  url={https://doi.org/10.1038/s41586-024-08328-6},
 }
 ```
 
-## License
-Copyright 2022 Noah Hollmann, Samuel Müller, Katharina Eggensperger, Frank Hutter
+## 🤝 Join Our Community
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+We're building the future of tabular machine learning and would love your involvement:
 
-    http://www.apache.org/licenses/LICENSE-2.0
+1. **Connect & Learn**: 
+   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
+   - Read our [Documentation](https://priorlabs.ai/)
+   - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
 
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
+2. **Contribute**: 
+   - Report bugs or request features
+   - Submit pull requests
+   - Share your research and use cases
+
+3. **Stay Updated**: Star the repo and join Discord for the latest updates
+
+## 📜 License
+
+TBD
+
+## 🌟 Contributors
+
+[![tabpfn contributors](https://contrib.rocks/image?repo=priorlabs/tabpfn&max=2000)](https://github.com/priorlabs/tabpfn/graphs/contributors)
+
+---
+
+Built with ❤️ by [Prior Labs](https://priorlabs.ai)
