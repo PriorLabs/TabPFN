@@ -74,6 +74,33 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 - **Differentiable**: Core model is differentiable (except preprocessing)
 - **GPU Support**: Use `device='cuda'` for GPU acceleration
 
+## 📜 License
+
+TBD, currently proprietary software all rights reserved.
+Copyright (c) 2025 Prior Labs GmbH
+
+
+## 📚 Citation
+
+TBD
+
+
+## 🤝 Join Our Community
+
+We're building the future of tabular machine learning and would love your involvement:
+
+1. **Connect & Learn**: 
+   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
+   - Read our [Documentation](https://priorlabs.ai/)
+   - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
+
+2. **Contribute**: 
+   - Report bugs or request features
+   - Submit pull requests
+   - Share your research and use cases
+
+3. **Stay Updated**: Star the repo and join Discord for the latest updates
+
 ## 🛠️ Development
 
 1. Setup environment:
@@ -100,48 +127,6 @@ Contribution guidelines:
 - Update documentation as needed
 - Sign CLA before submitting PRs
 - Open issues for feature discussions
-
-## 📚 Citation
-
-```bibtex
-@article{hollmann2024tabpfn,
-  title={Accurate predictions on small data with a tabular foundation model},
-  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and 
-          Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and 
-          Schirrmeister, Robin Tibor and Hutter, Frank},
-  journal={Nature},
-  year={2024},
-  month={01},
-  day={09},
-  doi={10.1038/s41586-024-08328-6},
-  publisher={Springer Nature},
-  url={https://doi.org/10.1038/s41586-024-08328-6},
-}
-```
-
-## 🤝 Join Our Community
-
-We're building the future of tabular machine learning and would love your involvement:
-
-1. **Connect & Learn**: 
-   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
-   - Read our [Documentation](https://priorlabs.ai/)
-   - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
-
-2. **Contribute**: 
-   - Report bugs or request features
-   - Submit pull requests
-   - Share your research and use cases
-
-3. **Stay Updated**: Star the repo and join Discord for the latest updates
-
-## 📜 License
-
-TBD
-
-## 🌟 Contributors
-
-[![tabpfn contributors](https://contrib.rocks/image?repo=priorlabs/tabpfn&max=2000)](https://github.com/priorlabs/tabpfn/graphs/contributors)
 
 ---
 
