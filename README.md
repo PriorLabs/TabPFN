@@ -121,13 +121,6 @@ pre-commit run --all-files
 pytest tests/
 ```
 
-Contribution guidelines:
-- Follow PEP 8 style guide (enforced by pre-commit hooks)
-- Add tests for new functionality
-- Update documentation as needed
-- Sign CLA before submitting PRs
-- Open issues for feature discussions
-
 ---
 
 Built with ❤️ by [Prior Labs](https://priorlabs.ai)
