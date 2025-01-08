@@ -4,7 +4,7 @@
 [![Downloads](https://pepy.tech/badge/tabpfn)](https://pepy.tech/project/tabpfn)
 [![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.com/channels/1285598202732482621/)
 [![Documentation](https://img.shields.io/badge/docs-priorlabs.ai-blue)](https://priorlabs.ai/)
-[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ)
+[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6?usp=sharing)
 
 TabPFN is a foundation model for tabular data that outperforms traditional methods while 
 being dramatically faster. This repository contains the core PyTorch implementation with
@@ -22,7 +22,7 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**: Community extensions and integrations
 - **TabPFN (this repo)**: Core implementation for local deployment and research
 
-Try our [Interactive Colab Tutorial](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ) to get started quickly.
+Try our [Interactive Colab Tutorial](https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6?usp=sharing) to get started quickly.
 
 ## 🏁 Quick Start
 
