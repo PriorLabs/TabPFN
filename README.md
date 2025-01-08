@@ -77,8 +77,6 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 
 ## 📜 License
 
-Copyright (c) 2025 Prior Labs GmbH
-
 [Prior Labs License (Apache 2.0 with additional attribution requirement)](https://priorlabs.ai/tabpfn-license/)
 
 ## 📚 Citation
@@ -137,4 +135,4 @@ pytest tests/
 
 ---
 
-Built with ❤️ by [Prior Labs](https://priorlabs.ai)
+Built with ❤️ by [Prior Labs](https://priorlabs.ai) - Copyright (c) 2025 Prior Labs GmbH
