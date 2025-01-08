@@ -4,15 +4,16 @@
 [![Downloads](https://pepy.tech/badge/tabpfn)](https://pepy.tech/project/tabpfn)
 [![Discord](https://img.shields.io/discord/1285598202732482621?color=7289da&label=Discord&logo=discord&logoColor=ffffff)](https://discord.com/channels/1285598202732482621/)
 [![Documentation](https://img.shields.io/badge/docs-priorlabs.ai-blue)](https://priorlabs.ai/)
-[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6?usp=sharing)
+[![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://tinyurl.com/tabpfn-colab-local)
 
 TabPFN is a foundation model for tabular data that outperforms traditional methods while 
 being dramatically faster. This repository contains the core PyTorch implementation with
 CUDA optimization.
 
-⚠️ **Major Update: Version 2.0**
+⚠️ **Major Update: Version 2.0:** Complete codebase overhaul with new architecture and features. Previous version available at [v1.0.0](../../tree/v1.0.0).
 
-Complete codebase overhaul with new architecture and features. Previous version available at [v1.0.0](../../tree/v1.0.0).
+📚 For detailed usage examples and best practices, check out:
+- [Interactive Colab Tutorial](https://tinyurl.com/tabpfn-colab-local)
 
 ## 🌐 TabPFN Ecosystem
 
@@ -82,8 +83,21 @@ Copyright (c) 2025 Prior Labs GmbH
 
 ## 📚 Citation
 
-TBD
-
+```bibtex
+@article{hollmann2024tabpfn,
+ title={Accurate predictions on small data with a tabular foundation model},
+ author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
+         Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and
+         Schirrmeister, Robin Tibor and Hutter, Frank},
+ journal={Nature},
+ year={2024},
+ month={01},
+ day={09},
+ doi={10.1038/s41586-024-08328-6},
+ publisher={Springer Nature},
+ url={https://www.nature.com/articles/s41586-024-08328-6},
+}
+```
 
 ## 🤝 Join Our Community
 
@@ -91,7 +105,7 @@ We're building the future of tabular machine learning and would love your involv
 
 1. **Connect & Learn**: 
    - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
-   - Read our [Documentation](https://priorlabs.ai/)
+   - Read our [Documentation](https://priorlabs.ai/docs)
    - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
 
 2. **Contribute**: 
