@@ -77,9 +77,9 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 
 ## 📜 License
 
-TBD, currently proprietary software all rights reserved.
 Copyright (c) 2025 Prior Labs GmbH
 
+[Prior Labs License (Apache 2.0 with additional attribution requirement)](https://priorlabs.ai/tabpfn-license/)
 
 ## 📚 Citation
 
