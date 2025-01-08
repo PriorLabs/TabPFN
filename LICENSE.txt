@@ -1,1 +1,2 @@
-Proprietary software, all rights reseved by the authors.
+Copyright (c) 2025 Prior Labs GmbH.
+Proprietary software, all rights reserved.
