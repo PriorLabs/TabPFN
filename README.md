@@ -19,7 +19,7 @@ Complete codebase overhaul with new architecture and features. Previous version 
 Choose the right TabPFN implementation for your needs:
 
 - **[TabPFN Client](https://github.com/automl/tabpfn-client)**: Easy-to-use API client for cloud-based inference
-- **[TabPFN Systems](https://github.com/priorlabs/tabpfn_systems)**: Community extensions and integrations
+- **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**: Community extensions and integrations
 - **TabPFN (this repo)**: Core implementation for local deployment and research
 
 Try our [Interactive Colab Tutorial](https://colab.research.google.com/drive/194mCs6SEPEW6C0rcP7xWzcEtt1RBc8jJ) to get started quickly.
