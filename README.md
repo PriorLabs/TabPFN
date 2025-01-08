@@ -69,7 +69,7 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 
 - **No preprocessing needed**: TabPFN handles normalization internally
 - **Categorical variables**: Use numerical encodings (floats for ordered, OrdinalEncoder for unordered)
-- **Automatic ensembling**: Controls with `N_ensemble_configurations`
+- **Automatic ensembling**: Controls with `n_estimators`
 - **Independent predictions**: Test samples can be predicted individually or in batch
 - **Differentiable**: Core model is differentiable (except preprocessing)
 - **GPU Support**: Use `device='cuda'` for GPU acceleration
