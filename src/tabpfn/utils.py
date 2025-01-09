@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from tabpfn.model.transformer import PerFeatureTransformer
     from tabpfn.regressor import TabPFNRegressor
 
-MAXINT_RANDOM_SEED = np.iinfo(np.int32).max
+MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
 
 def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
