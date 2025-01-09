@@ -38,6 +38,8 @@ if TYPE_CHECKING:
     from tabpfn.model.transformer import PerFeatureTransformer
     from tabpfn.regressor import TabPFNRegressor
 
+MAXINT_RANDOM_SEED = np.iinfo(np.int32).max
+
 
 def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
     # Try to repair a broken transformation of the borders:
@@ -621,14 +623,14 @@ def infer_random_state(
         np_rng = np.random.default_rng(random_state)
         static_seed = int(random_state)
     elif isinstance(random_state, np.random.RandomState):
-        static_seed = int(random_state.randint(0, 2**31))
+        static_seed = int(random_state.randint(0, MAXINT_RANDOM_SEED))
         np_rng = np.random.default_rng(static_seed)
     elif isinstance(random_state, np.random.Generator):
         np_rng = random_state
-        static_seed = int(np_rng.integers(0, 2**31))
+        static_seed = int(np_rng.integers(0, MAXINT_RANDOM_SEED))
     elif random_state is None:
         np_rng = np.random.default_rng()
-        static_seed = int(np_rng.integers(0, 2**31))
+        static_seed = int(np_rng.integers(0, MAXINT_RANDOM_SEED))
     else:
         raise ValueError(f"Invalid random_state {random_state}")
 

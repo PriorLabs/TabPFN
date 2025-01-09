@@ -123,7 +123,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             save_peak_mem: Whether to save peak memory usage.
         """
         # We save it as a static seed to be reproducible across predicts
-        static_seed = rng.integers(0, 2**31)
+        static_seed = rng.integers(0, int(np.iinfo(np.int32).max))
         return cls(
             X_train=X_train,
             y_train=y_train,
