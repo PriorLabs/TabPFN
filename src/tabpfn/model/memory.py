@@ -251,6 +251,13 @@ class MemoryUsageEstimator:
                 free_memory = (
                     os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
                 )
+            except AttributeError:
+                # TODO: `os.sysconf` does not exist on windows.
+                free_memory = cls.convert_units(
+                    default_gb_cpu_if_failed_to_calculate,
+                    "gb",
+                    "b",
+                )
             except ValueError:
                 warnings.warn(
                     "Could not get system memory, defaulting to"
