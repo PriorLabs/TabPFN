@@ -10,7 +10,9 @@ TabPFN is a foundation model for tabular data that outperforms traditional metho
 being dramatically faster. This repository contains the core PyTorch implementation with
 CUDA optimization.
 
-⚠️ **Major Update: Version 2.0:** Complete codebase overhaul with new architecture and features. Previous version available at [v1.0.0](../../tree/v1.0.0).
+⚠️ **Major Update: Version 2.0:** Complete codebase overhaul with new architecture and 
+features. Previous version available at [v1.0.0](../../tree/v1.0.0) and 
+`pip install tabpfn<2`.
 
 📚 For detailed usage examples and best practices, check out:
 - [Interactive Colab Tutorial](https://tinyurl.com/tabpfn-colab-local)
@@ -33,9 +35,9 @@ Try our [Interactive Colab Tutorial](https://colab.research.google.com/drive/1SH
 # Simple installation
 pip install tabpfn
 
-# Development installation
-pip install -e ".[dev]"
-pre-commit install
+# Local development installation
+git clone https://github.com/PriorLabs/TabPFN.git
+pip install -e "tabpfn[dev]"
 ```
 
 ### Basic Usage
@@ -82,13 +84,13 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 ## 📚 Citation
 
 ```bibtex
-@article{hollmann2024tabpfn,
+@article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
          Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and
          Schirrmeister, Robin Tibor and Hutter, Frank},
  journal={Nature},
- year={2024},
+ year={2025},
  month={01},
  day={09},
  doi={10.1038/s41586-024-08328-6},
@@ -119,6 +121,8 @@ We're building the future of tabular machine learning and would love your involv
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
+git clone https://github.com/PriorLabs/TabPFN.git
+cd tabpfn
 pip install -e ".[dev]"
 pre-commit install
 ```

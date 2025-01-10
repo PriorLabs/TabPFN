@@ -14,7 +14,7 @@ dependencies = [
   "einops",
   "huggingface-hub",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.9,<3.12"
 authors = [
   { name = "Noah Hollmann", email = "noah.hollmann@charite.de" },
   { name = "Samuel Müller", email = "muellesa@cs.uni-freiburg.de" },
