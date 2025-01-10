@@ -1,0 +1,57 @@
+default_language_version:
+  python: python3
+files: |
+  (?x)^(
+    src|
+    tests
+  )/.*\.py$
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+        files: ".*"
+      - id: check-case-conflict
+        files: ".*"
+      - id: check-merge-conflict
+        files: ".*"
+      - id: check-yaml
+        files: ".*"
+      - id: end-of-file-fixer
+        files: ".*"
+        types: ["yaml"]
+      - id: check-toml
+        files: ".*"
+        types: ["toml"]
+      - id: debug-statements
+        files: '^src/.*\.py$'
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        exclude: "test_comm_task"  # Pre-commit mypy hates this one, crashes on (l106)
+        additional_dependencies:
+          - "types-pyyaml"
+          - "types-psutil"
+        args:
+          - "--no-warn-return-any" # Disable this because it doesn't know about 3rd party imports
+          - "--ignore-missing-imports"
+          - "--show-traceback"
+  - repo: https://github.com/python-jsonschema/check-jsonschema
+    rev: 0.30.0
+    hooks:
+      - id: check-github-workflows
+        files: '^github/workflows/.*\.ya?ml$'
+        types: ["yaml"]
+      - id: check-dependabot
+        files: '^\.github/dependabot\.ya?ml$'
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.1.0
+    hooks:
+      - id: commitizen
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix, --no-cache]
+      - id: ruff-format
