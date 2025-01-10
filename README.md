@@ -71,17 +71,6 @@ print("Accuracy", accuracy_score(y_test, predictions))
 For the best results use AutoTabPFNClassifer or AutoTabPFNRegressor for PostHoc Ensembling from https://github.com/PriorLabs/tabpfn-extensions - this builds an ensemble of models. 
 See https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6#scrollTo=49sMXWT5DYzj&line=1&uniqifier=1
 
-## 💡 Usage Tips
-
-TabPFN is designed to work out-of-the-box with minimal preprocessing:
-
-- **No preprocessing needed**: TabPFN handles normalization internally
-- **Categorical variables**: Use numerical encodings (floats for ordered, OrdinalEncoder for unordered)
-- **Automatic ensembling**: Controls with `n_estimators`
-- **Independent predictions**: Test samples can be predicted individually or in batch
-- **Differentiable**: Core model is differentiable (except preprocessing)
-- **GPU Support**: Use `device='cuda'` for GPU acceleration
-
 ## 📜 License
 
 [Prior Labs License (Apache 2.0 with additional attribution requirement)](https://priorlabs.ai/tabpfn-license/)
