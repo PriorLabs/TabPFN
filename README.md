@@ -67,9 +67,7 @@ print("Accuracy", accuracy_score(y_test, predictions))
 
 ### Best Results
 
-For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. 
-
-Post-hoc ensembling combines multiple TabPFN models to improve accuracy and robustness, particularly on small or noisy datasets. 
+For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble. 
 
 **Steps for Best Results:**
 1. Install the extensions:
