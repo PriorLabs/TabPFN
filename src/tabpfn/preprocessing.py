@@ -20,6 +20,7 @@ from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
     MAXIMUM_FEATURE_SHIFT,
     PARALLEL_MODE_TO_RETURN_AS,
+    SUPPORTS_RETURN_AS,
 )
 from tabpfn.model.preprocessing import (
     AddFingerprintFeaturesStep,
@@ -597,7 +598,6 @@ def fit_preprocessing(
         and the indices of categorical features.
     """
     _, rng = infer_random_state(random_state)
-    return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
 
     # TODO: It seems like we really don't benefit from much more than 1,2,4 workers,
     # even for the largest datasets from AutoMLBenchmark. Even then, the benefit is
@@ -613,11 +613,18 @@ def fit_preprocessing(
     # seemed good, with a `batch_size` of 2.
     # NOTE: By setting `n_jobs` = 1, it effectively doesn't spawn anything and runs
     # in-process
-    executor = joblib.Parallel(
-        n_jobs=1,
-        return_as=return_as,
-        batch_size="auto",  # type: ignore
-    )
+    if SUPPORTS_RETURN_AS:
+        return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
+        executor = joblib.Parallel(
+            n_jobs=1,
+            return_as=return_as,
+            batch_size="auto",  # type: ignore
+        )
+    else:
+        executor = joblib.Parallel(
+            n_jobs=1,
+            batch_size="auto",  # type: ignore
+        )
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 

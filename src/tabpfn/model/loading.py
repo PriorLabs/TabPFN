@@ -143,12 +143,12 @@ def _try_huggingface_downloads(
             config_local_path = hf_hub_download(
                 repo_id=source.repo_id,
                 filename="config.json",
-                local_dir=base_path.parent
+                local_dir=base_path.parent,
             )
             if Path(config_local_path) != config_path:
                 Path(config_local_path).rename(config_path)
             config_path.unlink()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Failed to download config.json: {e!s}")
             # Continue even if config.json download fails
 
