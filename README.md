@@ -84,13 +84,13 @@ TabPFN is designed to work out-of-the-box with minimal preprocessing:
 ## 📚 Citation
 
 ```bibtex
-@article{hollmann2024tabpfn,
+@article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
          Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and
          Schirrmeister, Robin Tibor and Hutter, Frank},
  journal={Nature},
- year={2024},
+ year={2025},
  month={01},
  day={09},
  doi={10.1038/s41586-024-08328-6},
