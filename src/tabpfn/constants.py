@@ -235,7 +235,9 @@ CLASS_SHUFFLE_OVERESTIMATE_FACTOR = 3
 SUPPORTS_GENERATOR_UNORDERED = version.parse(joblib.__version__) >= version.parse(
     "1.4.0",
 )
-
+SUPPORTS_RETURN_AS = version.parse(joblib.__version__) >= version.parse(
+    "1.3.0",
+)
 # 2) Define a mapping from your custom parallel mode to joblib's "return_as" parameter.
 if SUPPORTS_GENERATOR_UNORDERED:
     # If the installed Joblib is new enough, allow "generator_unordered"
