@@ -235,6 +235,8 @@ CLASS_SHUFFLE_OVERESTIMATE_FACTOR = 3
 SUPPORTS_GENERATOR_UNORDERED = version.parse(joblib.__version__) >= version.parse(
     "1.4.0",
 )
+
+# scikit-learn has a minimum of "1.2.0", thus we need to work also without return_as.
 SUPPORTS_RETURN_AS = version.parse(joblib.__version__) >= version.parse(
     "1.3.0",
 )
