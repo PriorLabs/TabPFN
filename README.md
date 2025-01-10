@@ -66,6 +66,11 @@ predictions = clf.predict(X_test)
 print("Accuracy", accuracy_score(y_test, predictions))
 ```
 
+### Best Results
+
+For the best results use AutoTabPFNClassifer or AutoTabPFNRegressor for PostHoc Ensembling from https://github.com/PriorLabs/tabpfn-extensions - this builds an ensemble of models. 
+See https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6#scrollTo=49sMXWT5DYzj&line=1&uniqifier=1
+
 ## 💡 Usage Tips
 
 TabPFN is designed to work out-of-the-box with minimal preprocessing:
