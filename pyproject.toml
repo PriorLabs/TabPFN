@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "2.0.0"
+version = "2.0.2"
 dependencies = [
   "torch>=2.1",
   "scikit-learn>=1",
@@ -26,6 +26,8 @@ authors = [
   { name = "Frank Hutter", email = "fh@cs.uni-freiburg.de" },
 
   { name = "Eddie Bergman"}, # Huge thanks to code refactoring contributor Eddie
+
+  { name = "Leo Grinsztajn"}
 ]
 readme = "README.md"
 description = "TabPFN: Foundation model for tabular data"
