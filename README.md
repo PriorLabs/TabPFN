@@ -36,7 +36,7 @@ pip install tabpfn
 
 # Local development installation
 git clone https://github.com/PriorLabs/TabPFN.git
-pip install -e "tabpfn[dev]"
+pip install -e "TabPFN[dev]"
 ```
 
 ### Basic Usage
