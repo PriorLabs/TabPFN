@@ -523,7 +523,7 @@ def validate_Xy_fit(
     # there is no way to specify this for `y`. The validation check above
     # will also only check for NaNs in `y` if `multi_output=True` which is
     # something we don't want. Hence, we run another check on `y` here.
-    # However we also have to consider if ther dtype is a string type,
+    # However we also have to consider if there dtype is a string type,
     # then
 
     y = check_array(
