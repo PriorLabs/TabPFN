@@ -9,6 +9,8 @@ import sklearn.datasets
 import torch
 from sklearn.base import check_is_fitted
 from sklearn.utils.estimator_checks import parametrize_with_checks
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 from tabpfn import TabPFNRegressor
 
@@ -110,3 +112,36 @@ def test_sklearn_compatible_estimator(
         estimator.inference_precision = torch.float64
 
     check(estimator)
+
+
+def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+    """Test that TabPFNRegressor works correctly within a sklearn pipeline."""
+    X, y = X_y
+    
+    # Create a simple preprocessing pipeline
+    pipeline = Pipeline([
+        ('scaler', StandardScaler()),
+        ('regressor', TabPFNRegressor(
+            n_estimators=2  # Fewer estimators for faster testing
+        ))
+    ])
+    
+    pipeline.fit(X, y)
+    predictions = pipeline.predict(X)
+    
+    # Check predictions shape
+    assert predictions.shape == (X.shape[0],), "Predictions shape is incorrect"
+    
+    # Test different prediction modes through the pipeline
+    predictions_median = pipeline.predict(X, output_type="median")
+    assert predictions_median.shape == (X.shape[0],), "Median predictions shape is incorrect"
+    
+    predictions_mode = pipeline.predict(X, output_type="mode")
+    assert predictions_mode.shape == (X.shape[0],), "Mode predictions shape is incorrect"
+    
+    quantiles = pipeline.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
+    assert isinstance(quantiles, list)
+    assert len(quantiles) == 2
+    assert quantiles[0].shape == (X.shape[0],), "Quantile predictions shape is incorrect"
+
+
