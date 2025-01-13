@@ -180,8 +180,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             balance_probabilities:
                 Whether to balance the probabilities based on the class distribution
                 in the training data. This can help to improve predictive performance
-                when the classes are highly imbalanced. This is only applied when
-                predicting during a post-processing step.
+                when the classes are highly imbalanced and the metric of interest is
+                insensitive to class imbalance (e.g., balanced accuracy, balanced log loss,
+                roc-auc macro ovo, etc.). This is only applied when predicting during a
+                post-processing step.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -560,7 +562,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if self.balance_probabilities:
             class_prob_in_train = self.class_counts_ / self.class_counts_.sum()
-            output = output * torch.Tensor(class_prob_in_train).to(self.device_)
+            output = output / torch.Tensor(class_prob_in_train).to(self.device_)
             output = output / output.sum(dim=-1, keepdim=True)
 
         output = output.float().cpu().numpy()

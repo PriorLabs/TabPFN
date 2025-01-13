@@ -94,7 +94,6 @@ def test_fit(
     predictions = model.predict(X)
     assert predictions.shape == (X.shape[0],), "Predictions shape is incorrect!"
 
-
 # TODO(eddiebergman): Should probably run a larger suite with different configurations
 @parametrize_with_checks(
     [TabPFNClassifier(inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True})],
@@ -110,3 +109,23 @@ def test_sklearn_compatible_estimator(
         estimator.inference_precision = torch.float64
 
     check(estimator)
+
+def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+    """Test that balance_probabilities=True works correctly."""
+    X, y = X_y
+    
+    model = TabPFNClassifier(
+        balance_probabilities=True,
+    )
+    
+    model.fit(X, y)
+    probabilities = model.predict_proba(X)
+    
+    # Check that probabilities sum to 1 for each prediction
+    assert np.allclose(probabilities.sum(axis=1), 1.0)
+    
+    # Check that the mean probability for each class is roughly equal
+    mean_probs = probabilities.mean(axis=0)
+    expected_mean = 1.0 / len(np.unique(y))
+    assert np.allclose(mean_probs, expected_mean, rtol=0.1), \
+        "Class probabilities are not properly balanced"
