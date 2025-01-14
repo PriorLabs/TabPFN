@@ -7,7 +7,7 @@ name = "tabpfn"
 version = "2.0.3"
 dependencies = [
   "torch>=2.1",
-  "scikit-learn>=1.4.1.post1",
+  "scikit-learn>=1.2.0",
   "typing_extensions",
   "scipy",
   "pandas",

@@ -17,7 +17,8 @@ import pandas as pd
 import torch
 from sklearn.base import check_array, is_classifier
 from sklearn.compose import ColumnTransformer, make_column_selector
-from sklearn.preprocessing import OrdinalEncoder
+from sklearn.preprocessing import OrdinalEncoder, FunctionTransformer
+
 from sklearn.utils.multiclass import check_classification_targets
 from torch import nn
 
@@ -454,7 +455,7 @@ def _get_ordinal_encoder(
     to_convert = ["category", "string"]
     return ColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
-        remainder="passthrough",
+        remainder=FunctionTransformer(),
         sparse_threshold=0.0,
         verbose_feature_names_out=False,
     )
