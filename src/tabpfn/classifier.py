@@ -440,9 +440,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if self.n_classes_ > self.interface_config_.MAX_NUMBER_OF_CLASSES:
             raise ValueError(
                 f"Number of classes {self.n_classes_} exceeds the maximal number of "
-                f"classes supported by TabPFN. Consider using a strategy to reduce "
-                f"the number of classes. For code see "
-                f"https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/tabpfn_extensions/many_class/many_class_classifier.py",
+                "classes supported by TabPFN. Consider using a strategy to reduce "
+                "the number of classes. For code see "
+                "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/"
+                "tabpfn_extensions/many_class/many_class_classifier.py"
             )
 
         # Will convert specified categorical indices to category dtype, as well
