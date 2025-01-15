@@ -106,9 +106,10 @@ We're building the future of tabular machine learning and would love your involv
 
 ## 📜 License
 
-[Prior Labs License (Apache 2.0 with additional attribution requirement)](https://priorlabs.ai/tabpfn-license/)
+Prior Labs License (Apache 2.0 with additional attribution requirement): [here](https://priorlabs.ai/tabpfn-license/)
 
 ```
+Attribution clause (cropped):
 If You distribute or make available the Work or any Derivative
 Work thereof relating to any part of the source or model weights,
 or a product or service (including another AI model) that contains
