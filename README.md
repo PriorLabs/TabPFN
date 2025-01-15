@@ -86,11 +86,44 @@ For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor`
    predictions = clf.predict(X_test)
    ```
 
-See https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6#scrollTo=49sMXWT5DYzj&line=1&uniqifier=1
+See our [Colab](https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6#scrollTo=49sMXWT5DYzj&line=1&uniqifier=1)
+
+## 🤝 Join Our Community
+
+We're building the future of tabular machine learning and would love your involvement:
+
+1. **Connect & Learn**: 
+   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
+   - Read our [Documentation](https://priorlabs.ai/docs)
+   - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
+
+2. **Contribute**: 
+   - Report bugs or request features
+   - Submit pull requests
+   - Share your research and use cases
+
+3. **Stay Updated**: Star the repo and join Discord for the latest updates
 
 ## 📜 License
 
 [Prior Labs License (Apache 2.0 with additional attribution requirement)](https://priorlabs.ai/tabpfn-license/)
+
+```
+If You distribute or make available the Work or any Derivative
+Work thereof relating to any part of the source or model weights,
+or a product or service (including another AI model) that contains
+any source or model weights, You shall (A) provide a copy of this
+License with any such materials; and (B) prominently display
+“Built with TabPFN” on each related website, user interface, blogpost,
+about page, or product documentation. If You use the source or model
+weights or model outputs to create, train, fine tune, distil, or
+otherwise improve an AI model, which is distributed or made available,
+you shall also include “TabPFN” at the beginning of any such AI model name.
+To clarify, internal benchmarking and testing without external
+communication shall not qualify as distribution or making available
+pursuant to this Section 10 and no attribution under this Section 10
+shall be required.
+```
 
 ## 📚 Citation
 
@@ -109,22 +142,6 @@ See https://colab.research.google.com/drive/1SHa43VuHASLjevzO7y3-wPCxHY18-2H6#sc
  url={https://www.nature.com/articles/s41586-024-08328-6},
 }
 ```
-
-## 🤝 Join Our Community
-
-We're building the future of tabular machine learning and would love your involvement:
-
-1. **Connect & Learn**: 
-   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
-   - Read our [Documentation](https://priorlabs.ai/docs)
-   - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
-
-2. **Contribute**: 
-   - Report bugs or request features
-   - Submit pull requests
-   - Share your research and use cases
-
-3. **Stay Updated**: Star the repo and join Discord for the latest updates
 
 ## 🛠️ Development
 
