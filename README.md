@@ -16,6 +16,10 @@ features. Previous version available at [v1.0.0](../../tree/v1.0.0) and
 
 📚 For detailed usage examples and best practices, check out [Interactive Colab Tutorial](https://tinyurl.com/tabpfn-colab-local)
 
+## 🚀 We're Hiring!
+
+Prior Labs is building breakthrough foundation models for tabular data. [Join our team in Freiburg and Berlin ](https://jobs.ashbyhq.com/prior-labs)
+
 ## 🌐 TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:
