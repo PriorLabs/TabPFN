@@ -477,6 +477,16 @@ def validate_Xy_fit(
     ignore_pretraining_limits: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting."""
+
+    if not isinstance(X, pd.DataFrame):
+        X = pd.DataFrame(X)
+
+    text_cols = X.select_dtypes(include=['object']).columns
+    X[text_cols] = X[text_cols].fillna("[MISSING]")
+    
+    numeric_cols = X.select_dtypes(include=[np.number, 'Int64', 'Float64']).columns
+    X[numeric_cols] = X[numeric_cols].astype(np.float64)
+
     # Calls `BaseEstimator._validate_data()` with specification
     X, y = estimator._validate_data(
         X,
@@ -531,6 +541,7 @@ def validate_Xy_fit(
     # something we don't want. Hence, we run another check on `y` here.
     # However we also have to consider if ther dtype is a string type,
     # then
+
 
     y = check_array(
         y,
