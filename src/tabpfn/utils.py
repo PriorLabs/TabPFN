@@ -481,10 +481,10 @@ def validate_Xy_fit(
     if not isinstance(X, pd.DataFrame):
         X = pd.DataFrame(X)
 
-    text_cols = X.select_dtypes(include=['object']).columns
+    text_cols = X.select_dtypes(include=["object"]).columns
     X[text_cols] = X[text_cols].fillna("[MISSING]")
     
-    numeric_cols = X.select_dtypes(include=[np.number, 'Int64', 'Float64']).columns
+    numeric_cols = X.select_dtypes(include=[np.number, "Int64", "Float64"]).columns
     X[numeric_cols] = X[numeric_cols].astype(np.float64)
 
     # Calls `BaseEstimator._validate_data()` with specification
