@@ -105,44 +105,6 @@ def normalize_data(
     return data
 
 
-def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
-    """Select features from the input tensor based on the selection mask,
-    and arrange them contiguously in the last dimension.
-    If batch size is bigger than 1, we pad the features with zeros to make the number of features fixed.
-
-    Args:
-        x: The input tensor of shape (sequence_length, batch_size, total_features)
-        sel: The boolean selection mask indicating which features to keep of shape (batch_size, total_features)
-
-    Returns:
-        The tensor with selected features.
-        The shape is (sequence_length, batch_size, number_of_selected_features) if batch_size is 1.
-        The shape is (sequence_length, batch_size, total_features) if batch_size is greater than 1.
-    """
-    B, total_features = sel.shape
-    sequence_length = x.shape[0]
-
-    # If B == 1, we don't need to append zeros, as the number of features don't need to be fixed.
-    if B == 1:
-        return x[:, :, sel[0]]
-
-    new_x = torch.zeros(
-        (sequence_length, B, total_features),
-        device=x.device,
-        dtype=x.dtype,
-    )
-
-    # For each batch, compute the number of selected features.
-    sel_counts = sel.sum(dim=-1)  # shape: (B,)
-
-    for b in range(B):
-        s = int(sel_counts[b])
-        if s > 0:
-            new_x[:, b, :s] = x[:, b, sel[b]]
-
-    return new_x
-
-
 def remove_outliers(
     X: torch.Tensor,
     n_sigma: float = 4,
@@ -507,7 +469,11 @@ class NanHandlingEncoderStep(SeqEncStep):
 
 
 class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
-    """Encoder step to remove empty (constant) features."""
+    """Encoder step to remove empty (constant) features.
+    Was changed to NOT DO ANYTHING, the removal of empty features now
+    done elsewhere, but the saved model still needs this encoder step.
+    TODO: REMOVE.
+    """
 
     def __init__(self, **kwargs: Any):
         """Initialize the RemoveEmptyFeaturesEncoderStep.
@@ -525,7 +491,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             x: The input tensor.
             **kwargs: Additional keyword arguments (unused).
         """
-        self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        # self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
         """Remove empty features from the input tensor.
@@ -537,7 +503,8 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        return (select_features(x, self.sel),)
+        # return (select_features(x, self.sel),)
+        return (x,)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
