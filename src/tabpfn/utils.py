@@ -15,7 +15,7 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import torch
-from sklearn.base import check_array, is_classifier
+from sklearn.base import check_array, check_is_fitted, is_classifier
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
@@ -39,6 +39,41 @@ if TYPE_CHECKING:
     from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
+
+def get_embeddings(model: TabPFNClassifier | TabPFNRegressor, X: XType) -> np.ndarray:
+    """
+    Get the embeddings for the input data `X`.
+
+    Parameters:
+        model TabPFNClassifier | TabPFNRegressor: The fitted classifier or regressor.
+        X (XType): The input data.
+    Returns:
+        np.ndarray: The computed embeddings for each fitted estimator.
+    """
+    check_is_fitted(model)
+
+    # Avoid circular imports
+    from tabpfn.preprocessing import (
+        ClassifierEnsembleConfig,
+        RegressorEnsembleConfig
+    )
+
+    X = validate_X_predict(X, model)
+    X = _fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    X = model.preprocessor_.transform(X)
+
+    embeddings: list[np.ndarray] = []
+
+    for output, config in model.executor_.iter_outputs(
+        X,
+        device=model.device_,
+        autocast=model.use_autocast_,
+    ):
+        assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
+        assert output.ndim == 2
+        embeddings.append(output.squeeze().cpu().numpy())
+
+    return np.array(embeddings)
 
 
 def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
