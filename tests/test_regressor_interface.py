@@ -289,7 +289,7 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
+    model = TabPFNRegressor(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)
 
     embeddings = get_embeddings(model, X)
