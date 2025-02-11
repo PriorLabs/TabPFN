@@ -27,26 +27,43 @@ class ONNXModelWrapper:
         Args:
             model_path: Path to the ONNX model file.
         """
+        self.model_path = model_path
+        self.providers = ["CPUExecutionProvider"]
         self.session = ort.InferenceSession(
             model_path,
-            providers=["CPUExecutionProvider"],  # TODO: Add GPU support
+            providers=self.providers,
         )
 
     def to(
         self,
-        device: torch.device,  # noqa: ARG002
+        device: torch.device,
     ) -> ONNXModelWrapper:
         """Moves the model to the specified device.
 
-        This is a no-op for the ONNX model wrapper. GPU support is not implemented.
-
         Args:
-            device: The target device (unused).
+            device: The target device (cuda or cpu).
 
         Returns:
             self
         """
-        # TODO: Add GPU support by changing provider
+        if device.type == "cuda":
+            # Check if CUDA is available in ONNX Runtime
+            cuda_provider = "CUDAExecutionProvider"
+            if cuda_provider in ort.get_available_providers():
+                self.providers = [cuda_provider, "CPUExecutionProvider"]
+                # Reinitialize session with CUDA provider
+                self.session = ort.InferenceSession(
+                    self.model_path,
+                    providers=self.providers,
+                )
+            else:
+                pass
+        else:
+            self.providers = ["CPUExecutionProvider"]
+            self.session = ort.InferenceSession(
+                self.model_path,
+                providers=self.providers,
+            )
         return self
 
     def type(
@@ -105,8 +122,6 @@ class ONNXModelWrapper:
 
         Returns:
             A torch tensor containing the model output.
-
-        Note that only_return_standard_out is not used in the ONNX runtime.
         """
         # Convert inputs to numpy
         X_np = X.cpu().numpy() if isinstance(X, torch.Tensor) else X
@@ -125,8 +140,11 @@ class ONNXModelWrapper:
         # Run inference
         outputs = self.session.run(None, onnx_inputs)
 
-        # Convert back to a torch tensor
-        return torch.from_numpy(outputs[0])
+        # Convert back to torch tensor and move to the appropriate device
+        output_tensor = torch.from_numpy(outputs[0])
+        if "CUDAExecutionProvider" in self.providers:
+            output_tensor = output_tensor.cuda()
+        return output_tensor
 
 
 class ModelWrapper(nn.Module):
