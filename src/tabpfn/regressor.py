@@ -366,7 +366,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.inference_config = inference_config
-
+        self.placeholder = "__MISSING__"
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -439,11 +439,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Will convert specified categorical indices to category dtype, as well
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
-
+        X_fixed = _fix_dtypes(X, cat_indices=self.categorical_features_indices,placeholder=self.placeholder)
+        string_cols = X_fixed.select_dtypes(include=["string", "object"]).columns
         # Ensure categories are ordinally encoded
         ord_encoder = _get_ordinal_encoder()
-        X = ord_encoder.fit_transform(X)  # type: ignore
+        X = ord_encoder.fit_transform(X_fixed)
+        string_indices = [X_fixed.columns.get_loc(col) for col in string_cols]
+        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()  
+        for i, col_idx in enumerate(string_indices):
+            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])  
         self.preprocessor_ = ord_encoder
 
         self.inferred_categorical_indices_ = infer_categorical_features(
@@ -605,8 +609,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         X = validate_X_predict(X, self)
-        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
-        X = self.preprocessor_.transform(X)
+        
+        X_fixed = _fix_dtypes(X, cat_indices=self.categorical_features_indices,placeholder=self.placeholder)
+        string_cols = X_fixed.select_dtypes(include=["string", "object"]).columns
+
+        X = self.preprocessor_.transform(X_fixed)
+        string_indices = [X_fixed.columns.get_loc(col) for col in string_cols]
+        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()  
+        for i, col_idx in enumerate(string_indices):
+            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])  
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
