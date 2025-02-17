@@ -91,6 +91,10 @@ line-length = 88
 output-format = "full"
 src = ["src", "tests", "examples"]
 
+[tool.ruff.lint.mccabe]
+# Flag errors (`C901`) whenever the complexity level exceeds 5.
+max-complexity = 15
+
 [tool.ruff.lint]
 # Extend what ruff is allowed to fix, even it it may break
 # This is okay given we use it all the time and it ensures
@@ -256,6 +260,7 @@ convention = "google"
 
 [tool.ruff.lint.pylint]
 max-args = 10 # Changed from default of 5
+max-branches = 16
 
 [tool.mypy]
 python_version = "3.9"

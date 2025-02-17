@@ -104,7 +104,7 @@ class PerFeatureTransformer(nn.Module):
     """
 
     # TODO: Feel like this could be simplified a lot from this part downwards
-    def __init__(  # noqa: C901, D417, PLR0913
+    def __init__(  # noqa: D417, PLR0913
         self,
         *,
         encoder: nn.Module | None = None,
@@ -679,7 +679,7 @@ class PerFeatureTransformer(nn.Module):
 
         return output_decoded
 
-    def add_embeddings(  # noqa: C901, PLR0912
+    def add_embeddings(
         self,
         x: torch.Tensor,
         y: torch.Tensor,

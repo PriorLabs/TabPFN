@@ -372,7 +372,7 @@ def _fix_dtypes(
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
-    placeholder:str = "__MISSING__"
+    placeholder: str = "__MISSING__",
 ) -> pd.DataFrame:
     if isinstance(X, pd.DataFrame):
         # This will help us get better dtype inference later
@@ -564,7 +564,6 @@ def validate_X_predict(
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
-
 
 
 def infer_categorical_features(

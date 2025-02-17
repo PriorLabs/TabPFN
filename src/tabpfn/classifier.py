@@ -360,6 +360,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_jobs = n_jobs
         self.inference_config = inference_config
         self.placeholder = "__MISSING__"
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -443,21 +444,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "classes supported by TabPFN. Consider using a strategy to reduce "
                 "the number of classes. For code see "
                 "https://github.com/PriorLabs/tabpfn-extensions/blob/main/src/"
-                "tabpfn_extensions/many_class/many_class_classifier.py"
+                "tabpfn_extensions/many_class/many_class_classifier.py",
             )
 
         # Will convert specified categorical indices to category dtype, as well
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-        X_fixed = _fix_dtypes(X, cat_indices=self.categorical_features_indices,placeholder=self.placeholder)
+        X_fixed = _fix_dtypes(
+            X,
+            cat_indices=self.categorical_features_indices,
+            placeholder=self.placeholder,
+        )
         string_cols = X_fixed.select_dtypes(include=["string", "object"]).columns
         # Ensure categories are ordinally encoded
         ord_encoder = _get_ordinal_encoder()
         X = ord_encoder.fit_transform(X_fixed)
         string_indices = [X_fixed.columns.get_loc(col) for col in string_cols]
-        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()  
+        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()
         for i, col_idx in enumerate(string_indices):
-            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])  
-            
+            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])
 
         assert isinstance(X, np.ndarray)
         self.preprocessor_ = ord_encoder
@@ -536,15 +540,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         X = validate_X_predict(X, self)
 
-        X_fixed = _fix_dtypes(X, cat_indices=self.categorical_features_indices,placeholder=self.placeholder)
+        X_fixed = _fix_dtypes(
+            X,
+            cat_indices=self.categorical_features_indices,
+            placeholder=self.placeholder,
+        )
         string_cols = X_fixed.select_dtypes(include=["string", "object"]).columns
 
         X = self.preprocessor_.transform(X_fixed)
         string_indices = [X_fixed.columns.get_loc(col) for col in string_cols]
-        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()  
+        mask = (X_fixed[string_cols] == self.placeholder).to_numpy()
         for i, col_idx in enumerate(string_indices):
-            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])  
-
+            X[:, col_idx] = np.where(mask[:, i], np.nan, X[:, col_idx])
 
         outputs: list[torch.Tensor] = []
 
