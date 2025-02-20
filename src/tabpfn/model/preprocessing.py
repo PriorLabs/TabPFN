@@ -840,7 +840,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
-    def _set_transformer_and_cat_ix(  # noqa: PLR0912
+    def _set_transformer_and_cat_ix(
         self,
         n_samples: int,
         n_features: int,
