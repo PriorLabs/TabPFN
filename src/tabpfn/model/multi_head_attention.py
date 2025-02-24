@@ -133,7 +133,7 @@ class MultiHeadAttention(torch.nn.Module):
         assert_tensor_shape(w_v, [self._nhead_kv, self._d_v, self._input_size])
         assert_tensor_shape(w_kv, [2, self._nhead_kv, self._d_k, self._input_size])
         assert_tensor_shape(w_qkv, [3, self._nhead, self._d_k, self._input_size])
-        assert_tensor_shape(w_out, [self._nhead, self._d_k, self._output_size])
+        assert_tensor_shape(w_out, [self._nhead, self._d_v, self._output_size])
 
         self.register_parameter("_w_out", w_out)
         self.register_parameter("_w_q", w_q)
@@ -253,7 +253,7 @@ class MultiHeadAttention(torch.nn.Module):
                         dtype=dtype,
                     )
                     w_v = self.newly_initialized_input_weight(
-                        [self._nhead_kv, self._d_k, self._input_size],
+                        [self._nhead_kv, self._d_v, self._input_size],
                         nhead=self._nhead,
                         device=device,
                         dtype=dtype,
