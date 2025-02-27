@@ -47,6 +47,8 @@ pip install -e "TabPFN[dev]"
 
 TabPFN automatically downloads model weights when first used. For offline usage:
 
+#### Manual Download
+
 1. Download the model files manually from HuggingFace:
    - Classifier: [tabpfn-v2-classifier.ckpt](https://huggingface.co/Prior-Labs/TabPFN-v2-clf/resolve/main/tabpfn-v2-classifier.ckpt)
    - Regressor: [tabpfn-v2-regressor.ckpt](https://huggingface.co/Prior-Labs/TabPFN-v2-reg/resolve/main/tabpfn-v2-regressor.ckpt)
@@ -58,6 +60,33 @@ TabPFN automatically downloads model weights when first used. For offline usage:
      - Windows: `%APPDATA%\tabpfn\`
      - macOS: `~/Library/Caches/tabpfn/`
      - Linux: `~/.cache/tabpfn/`
+
+#### Quick Download Script
+
+```python
+import requests
+from tabpfn.utils import _user_cache_dir
+import sys
+
+# Get default cache directory using TabPFN's internal function
+cache_dir = _user_cache_dir(platform=sys.platform)
+cache_dir.mkdir(parents=True, exist_ok=True)
+
+# Define models to download
+models = {
+    "tabpfn-v2-classifier.ckpt": "https://huggingface.co/Prior-Labs/TabPFN-v2-clf/resolve/main/tabpfn-v2-classifier.ckpt",
+    "tabpfn-v2-regressor.ckpt": "https://huggingface.co/Prior-Labs/TabPFN-v2-reg/resolve/main/tabpfn-v2-regressor.ckpt",
+}
+
+# Download each model
+for name, url in models.items():
+    path = cache_dir / name
+    print(f"Downloading {name} to {path}")
+    with open(path, "wb") as f:
+        f.write(requests.get(url).content)
+
+print(f"Models downloaded to {cache_dir}")
+```
 
 ### Basic Usage
 
@@ -188,6 +217,16 @@ You can read our paper explaining TabPFN [here](https://doi.org/10.1038/s41586-0
 ```
 
 
+
+## ❓ FAQ
+
+### Python Version Compatibility
+
+**Q: Why can't I use TabPFN with Python 3.8?**  
+A: TabPFN v2 requires Python 3.9 or newer as specified in our `pyproject.toml`. This is due to our use of newer Python features and type annotations. We recommend updating to Python 3.9+ to use TabPFN v2.
+
+**Q: I'm getting pickle errors when loading the model. What could be wrong?**  
+A: First check that you're using Python 3.9+ and PyTorch 2.1+. If you've manually downloaded the model files, ensure they weren't corrupted during download. Try using the download script in the [Offline Usage](#offline-usage) section above.
 
 ## 🛠️ Development
 
