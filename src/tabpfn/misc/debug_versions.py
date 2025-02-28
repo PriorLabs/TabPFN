@@ -657,7 +657,7 @@ def _get_deps_info():
         try:
             deps_info[modname] = get_version(modname)  # Use renamed function
         except PackageNotFoundError:
-            deps_info[modname] = None
+            deps_info[modname] = "None"
     return deps_info
 
 

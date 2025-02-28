@@ -423,6 +423,7 @@ def _fix_dtypes(
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
+    placeholder: str = "__MISSING__",
 ) -> pd.DataFrame:
     if isinstance(X, pd.DataFrame):
         # This will help us get better dtype inference later
@@ -480,10 +481,14 @@ def _fix_dtypes(
     #
     if convert_dtype:
         X = X.convert_dtypes()
-
     integer_columns = X.select_dtypes(include=["number"]).columns
+
     if len(integer_columns) > 0:
         X[integer_columns] = X[integer_columns].astype(numeric_dtype)
+
+    string_cols = X.select_dtypes(include=["string", "object"]).columns
+    if len(string_cols) > 0:
+        X[string_cols] = X[string_cols].fillna(placeholder)
     return X
 
 

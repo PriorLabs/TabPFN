@@ -545,7 +545,7 @@ class MultiHeadAttention(torch.nn.Module):
         return kv.reshape(*kv.shape[:-3], nhead * share_kv_across_n_heads, d)
 
     @staticmethod
-    def compute_attention_heads(  # noqa: C901, PLR0912
+    def compute_attention_heads(  # noqa: PLR0912
         q: torch.Tensor | None,
         k: torch.Tensor | None,
         v: torch.Tensor | None,
