@@ -71,6 +71,10 @@ def _get_embeddings(
     X = _fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 
+    # Ensure X is a numpy array, not a DataFrame
+    if hasattr(X, "values"):
+        X = X.to_numpy()
+
     embeddings: list[np.ndarray] = []
 
     for output, config in model.executor_.iter_outputs(
@@ -390,11 +394,12 @@ def load_model_criterion_config(
             model_name=model_name,
         )
         if res != "ok":
-            repo_type = "clf" if which == "classifier" else "reg"
             raise RuntimeError(
                 f"Failed to download model to {model_path}!\n\n"
                 f"For offline usage, please download the model manually from:\n"
-                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
+                f"https://huggingface.co/Prior-Labs/TabPFN-v2-"
+                f"{'clf' if which == 'classifier' else 'reg'}"
+                f"/resolve/main/{model_name}\n\n"
                 f"Then place it at: {model_path}",
             ) from res[0]
 
@@ -417,6 +422,30 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
+
+
+def _handle_string_na_values(X: pd.DataFrame) -> pd.DataFrame:
+    """Replace NA values in string columns with a placeholder.
+
+    This avoids mixed type errors in scikit-learn's validation.
+    """
+    string_cols = X.select_dtypes(include=["string", "object"]).columns
+    if len(string_cols) == 0:
+        return X
+
+    # Use a placeholder for NaN values in string columns
+    placeholder = "__MISSING__"
+    # We need to handle several pandas versions and their different NA handling
+    for col in string_cols:
+        # Force to object type first for consistent behavior
+        X[col] = X[col].astype("object")
+        # Create mask for all NaN-like values
+        is_all_na = X[col].isna().all()
+        is_none = False if is_all_na else X[col].apply(lambda x: x is None)
+        mask = X[col].isna() | is_none
+        # Apply mask to set placeholder
+        X.loc[mask, col] = placeholder
+    return X
 
 
 def _fix_dtypes(
@@ -481,6 +510,10 @@ def _fix_dtypes(
     if convert_dtype:
         X = X.convert_dtypes()
 
+    # Handle NAs in text/string/object columns
+    X = _handle_string_na_values(X)
+
+    # Convert numeric columns to the specified numeric dtype
     integer_columns = X.select_dtypes(include=["number"]).columns
     if len(integer_columns) > 0:
         X[integer_columns] = X[integer_columns].astype(numeric_dtype)
@@ -523,11 +556,17 @@ def validate_Xy_fit(
     ignore_pretraining_limits: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting."""
+    # Convert pandas DataFrame to numpy array first if needed
+    # This is important when sklearn.set_config(transform_output='pandas') is used
+    X_numpy = X.to_numpy() if hasattr(X, "to_numpy") else X
+
+    y_numpy = y.to_numpy() if hasattr(y, "to_numpy") else y
+
     # Calls `validate_data()` with specification
     X, y = validate_data(
         estimator,
-        X=X,
-        y=y,
+        X=X_numpy,
+        y=y_numpy,
         # Parameters to `check_X_y()`
         accept_sparse=False,
         dtype=None,  # This is handled later in `fit()`
@@ -598,9 +637,13 @@ def validate_X_predict(
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
     """Validate the input data for prediction."""
+    # Convert pandas DataFrame to numpy array first if needed
+    # This is important when sklearn.set_config(transform_output='pandas') is used
+    X_numpy = X.to_numpy() if hasattr(X, "to_numpy") else X
+
     return validate_data(
         estimator,
-        X=X,
+        X=X_numpy,
         # NOTE: Important that reset is False, i.e. doesn't reset estimator
         reset=False,
         #
