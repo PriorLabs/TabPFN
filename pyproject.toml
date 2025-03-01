@@ -169,6 +169,7 @@ ignore = [
   "PLR0915", # Too many statements
   "N803",    # Argument name `X` should be lowercase
   "N802",    # Function name should be lowercase
+  "COM812",  # Trailing comma missing (conflicts with formatter)
   # These tend to be lighweight and confuse pyright
 ]
 
