@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import typing
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
@@ -44,6 +45,7 @@ from tabpfn.model.preprocessing import (
 )
 from tabpfn.preprocessing import (
     EnsembleConfig,
+    PreprocessorConfig,
     RegressorEnsembleConfig,
     default_regressor_preprocessor_configs,
 )
@@ -480,10 +482,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
-            preprocessor_configs=(
+            preprocessor_configs=typing.cast(
+                Sequence[PreprocessorConfig],
                 preprocess_transforms
                 if preprocess_transforms is not None
-                else default_regressor_preprocessor_configs()
+                else default_regressor_preprocessor_configs(),
             ),
             target_transforms=target_preprocessors,
             random_state=rng,
@@ -696,15 +699,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             quantiles=quantiles,
         )
         if output_type in ["full", "main"]:
-            output = {k: logit_to_output(output_type=k) for k in self._OUTPUT_TYPES}
+            # Create a dictionary of outputs
+            output_dict = {
+                k: logit_to_output(output_type=k) for k in self._OUTPUT_TYPES
+            }
 
             if output_type == "full":
-                output = {
-                    "criterion": self.renormalized_criterion_,
-                    "logits": logits,
-                    **output,
-                }
-            return output  # type: ignore
+                # Use typing.cast to help mypy understand this dictionary operation
+                return typing.cast(
+                    dict[str, typing.Any],
+                    {
+                        "criterion": self.renormalized_criterion_,
+                        "logits": logits,
+                        **output_dict,
+                    },
+                )
+
+            return typing.cast(dict[str, typing.Any], output_dict)
 
         return logit_to_output(output_type=output_type)
 
