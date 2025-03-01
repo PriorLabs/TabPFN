@@ -143,21 +143,21 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     # Test different prediction modes through the pipeline
     predictions_median = pipeline.predict(X, output_type="median")
-    assert predictions_median.shape == (
-        X.shape[0],
-    ), "Median predictions shape is incorrect"
+    assert predictions_median.shape == (X.shape[0],), (
+        "Median predictions shape is incorrect"
+    )
 
     predictions_mode = pipeline.predict(X, output_type="mode")
-    assert predictions_mode.shape == (
-        X.shape[0],
-    ), "Mode predictions shape is incorrect"
+    assert predictions_mode.shape == (X.shape[0],), (
+        "Mode predictions shape is incorrect"
+    )
 
     quantiles = pipeline.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
     assert isinstance(quantiles, list)
     assert len(quantiles) == 2
-    assert quantiles[0].shape == (
-        X.shape[0],
-    ), "Quantile predictions shape is incorrect"
+    assert quantiles[0].shape == (X.shape[0],), (
+        "Quantile predictions shape is incorrect"
+    )
 
 
 def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) -> None:
@@ -306,3 +306,102 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
     assert embeddings.shape[2] == encoder_shape
+
+
+def test_regressor_with_pandas_dataframes() -> None:
+    """Test that TabPFNRegressor works with pandas DataFrames and numpy arrays.
+
+    This test verifies that TabPFN handles both pandas and numpy data types
+    correctly and consistently for regression tasks.
+    """
+    import numpy as np
+    import pandas as pd
+
+    # Create synthetic regression data
+    rng = np.random.default_rng(42)
+    X_np = rng.random((100, 10))
+    y_np = rng.random(100)
+
+    # Convert to pandas for testing
+    X_pd = pd.DataFrame(X_np, columns=[f"feature_{i}" for i in range(10)])
+    y_pd = pd.Series(y_np, name="target")
+
+    # Test 1: Train with pandas, predict with pandas
+    model1 = TabPFNRegressor(n_estimators=2, random_state=42)
+    model1.fit(X_pd, y_pd)
+    pd_pred1 = model1.predict(X_pd)
+
+    # Test 2: Train with pandas, predict with numpy
+    np_pred1 = model1.predict(X_np)
+
+    # Test 3: Train with numpy, predict with numpy
+    model2 = TabPFNRegressor(n_estimators=2, random_state=42)
+    model2.fit(X_np, y_np)
+    np_pred2 = model2.predict(X_np)
+
+    # Test 4: Train with numpy, predict with pandas
+    pd_pred2 = model2.predict(X_pd)
+
+    # Check that predictions have the expected shape
+    assert pd_pred1.shape == (X_pd.shape[0],)
+    assert np_pred1.shape == (X_np.shape[0],)
+    assert np_pred2.shape == (X_np.shape[0],)
+    assert pd_pred2.shape == (X_pd.shape[0],)
+
+    # Check that predictions are the same regardless of input type
+    np.testing.assert_array_almost_equal(pd_pred1, np_pred1)
+    np.testing.assert_array_almost_equal(pd_pred2, np_pred2)
+
+    # Test with pipeline including a StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("regressor", TabPFNRegressor(n_estimators=2, random_state=42)),
+        ]
+    )
+
+    # Test pipeline with pandas input
+    pipe.fit(X_pd, y_pd)
+    pipe_pd_pred = pipe.predict(X_pd)
+
+    # Test pipeline with numpy input
+    pipe.fit(X_np, y_np)
+    pipe_np_pred = pipe.predict(X_np)
+
+    # Check that predictions have the expected shape
+    assert pipe_pd_pred.shape == (X_pd.shape[0],)
+    assert pipe_np_pred.shape == (X_np.shape[0],)
+
+    # Test different output types
+    for output_type in ["mean", "median", "mode"]:
+        # Test with pandas input
+        pred_pd = model1.predict(X_pd, output_type=output_type)
+        assert pred_pd.shape == (X_pd.shape[0],)
+
+        # Test with numpy input
+        pred_np = model1.predict(X_np, output_type=output_type)
+        assert pred_np.shape == (X_np.shape[0],)
+
+        # Check consistency
+        np.testing.assert_array_almost_equal(pred_pd, pred_np)
+
+    # Test quantiles
+    quantiles = [0.1, 0.5, 0.9]
+    # Test with pandas input
+    quant_pred_pd = model1.predict(X_pd, output_type="quantiles", quantiles=quantiles)
+    # Test with numpy input
+    quant_pred_np = model1.predict(X_np, output_type="quantiles", quantiles=quantiles)
+
+    assert isinstance(quant_pred_pd, list)
+    assert isinstance(quant_pred_np, list)
+    assert len(quant_pred_pd) == len(quantiles)
+    assert len(quant_pred_np) == len(quantiles)
+
+    # Check consistency between pandas and numpy
+    for q_pd, q_np in zip(quant_pred_pd, quant_pred_np):
+        assert q_pd.shape == (X_pd.shape[0],)
+        assert q_np.shape == (X_np.shape[0],)
+        np.testing.assert_array_almost_equal(q_pd, q_np)

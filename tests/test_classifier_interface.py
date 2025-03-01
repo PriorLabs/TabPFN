@@ -310,3 +310,79 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
     assert embeddings.shape[2] == encoder_shape
+
+
+def test_classifier_with_pandas_dataframes() -> None:
+    """Test that TabPFNClassifier works with pandas DataFrames and numpy arrays.
+
+    This test verifies that TabPFN handles both pandas and numpy data types
+    correctly and consistently.
+    """
+    import numpy as np
+    import pandas as pd
+
+    # Create synthetic classification data
+    rng = np.random.default_rng(42)
+    X_np = rng.random((100, 10))
+    y_np = rng.choice([0, 1], size=100)
+
+    # Convert to pandas for testing
+    X_pd = pd.DataFrame(X_np, columns=[f"feature_{i}" for i in range(10)])
+    y_pd = pd.Series(y_np, name="target")
+
+    # Test 1: Train with pandas, predict with pandas
+    model1 = TabPFNClassifier(n_estimators=2, random_state=42)
+    model1.fit(X_pd, y_pd)
+    pd_pred1 = model1.predict(X_pd)
+    pd_proba1 = model1.predict_proba(X_pd)
+
+    # Test 2: Train with pandas, predict with numpy
+    np_pred1 = model1.predict(X_np)
+    np_proba1 = model1.predict_proba(X_np)
+
+    # Test 3: Train with numpy, predict with numpy
+    model2 = TabPFNClassifier(n_estimators=2, random_state=42)
+    model2.fit(X_np, y_np)
+    np_pred2 = model2.predict(X_np)
+    np_proba2 = model2.predict_proba(X_np)
+
+    # Test 4: Train with numpy, predict with pandas
+    pd_pred2 = model2.predict(X_pd)
+    pd_proba2 = model2.predict_proba(X_pd)
+
+    # Check that predictions have the expected shape
+    assert pd_pred1.shape == (X_pd.shape[0],)
+    assert np_pred1.shape == (X_np.shape[0],)
+    assert np_pred2.shape == (X_np.shape[0],)
+    assert pd_pred2.shape == (X_pd.shape[0],)
+
+    # Check that predictions are the same regardless of input type
+    np.testing.assert_array_equal(pd_pred1, np_pred1)
+    np.testing.assert_array_equal(pd_pred2, np_pred2)
+
+    # Check that probabilities are the same regardless of input type
+    np.testing.assert_array_almost_equal(pd_proba1, np_proba1)
+    np.testing.assert_array_almost_equal(pd_proba2, np_proba2)
+
+    # Test with pipeline including a StandardScaler
+    from sklearn.pipeline import Pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    pipe = Pipeline(
+        [
+            ("scaler", StandardScaler()),
+            ("classifier", TabPFNClassifier(n_estimators=2, random_state=42)),
+        ]
+    )
+
+    # Test pipeline with pandas input
+    pipe.fit(X_pd, y_pd)
+    pipe_pd_pred = pipe.predict(X_pd)
+
+    # Test pipeline with numpy input
+    pipe.fit(X_np, y_np)
+    pipe_np_pred = pipe.predict(X_np)
+
+    # Check that predictions have the expected shape
+    assert pipe_pd_pred.shape == (X_pd.shape[0],)
+    assert pipe_np_pred.shape == (X_np.shape[0],)

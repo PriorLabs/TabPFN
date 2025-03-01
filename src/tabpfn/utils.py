@@ -523,11 +523,16 @@ def validate_Xy_fit(
     ignore_pretraining_limits: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting."""
+    # Convert pandas DataFrame to numpy array first if needed
+    # This is important when sklearn.set_config(transform_output='pandas') is used
+    X_numpy = X.to_numpy() if hasattr(X, "to_numpy") else X
+    y_numpy = y.to_numpy() if hasattr(y, "to_numpy") else y
+
     # Calls `validate_data()` with specification
     X, y = validate_data(
         estimator,
-        X=X,
-        y=y,
+        X=X_numpy,
+        y=y_numpy,
         # Parameters to `check_X_y()`
         accept_sparse=False,
         dtype=None,  # This is handled later in `fit()`
@@ -598,9 +603,13 @@ def validate_X_predict(
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
     """Validate the input data for prediction."""
+    # Convert pandas DataFrame to numpy array first if needed
+    # This is important when sklearn.set_config(transform_output='pandas') is used
+    X_numpy = X.to_numpy() if hasattr(X, "to_numpy") else X
+
     return validate_data(
         estimator,
-        X=X,
+        X=X_numpy,
         # NOTE: Important that reset is False, i.e. doesn't reset estimator
         reset=False,
         #
