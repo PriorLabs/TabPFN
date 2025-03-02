@@ -73,13 +73,17 @@ def _get_embeddings(
 
     embeddings: list[np.ndarray] = []
 
-    for output, config in model.executor_.iter_outputs(
+    # Cast executor to Any to bypass the iter_outputs signature check
+    executor = typing.cast(typing.Any, model.executor_)
+    for output, config in executor.iter_outputs(
         X,
         device=model.device_,
         autocast=model.use_autocast_,
         only_return_standard_out=False,
     ):
-        embed = output[selected_data].squeeze(1)
+        # Cast output to Any to allow dict-like access
+        output_dict = typing.cast(dict[str, torch.Tensor], output)
+        embed = output_dict[selected_data].squeeze(1)
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
         assert embed.ndim == 2
         embeddings.append(embed.squeeze().cpu().numpy())
@@ -175,11 +179,13 @@ def is_autocast_available(device_type: str) -> bool:
     """
     # Try to use PyTorch's built-in function first
     try:
-        from torch.amp.autocast_mode import (
-            is_autocast_available as torch_is_autocast_available,
-        )
-
-        return bool(torch_is_autocast_available(device_type))
+        # Check if the function is available in torch
+        if hasattr(torch.amp.autocast_mode, "is_autocast_available"):
+            # Use function directly
+            torch_is_autocast_available = torch.amp.autocast_mode.is_autocast_available
+            return bool(torch_is_autocast_available(device_type))
+        # Fall back to custom implementation
+        raise AttributeError("is_autocast_available not found")
     except (ImportError, AttributeError):
         # Fall back to custom implementation if the function isn't available
         return bool(
@@ -598,18 +604,18 @@ def validate_X_predict(
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
     """Validate the input data for prediction."""
-    return validate_data(
+    result = validate_data(
         estimator,
         X=X,
         # NOTE: Important that reset is False, i.e. doesn't reset estimator
         reset=False,
-        #
         # Parameters to `check_X_y()`
         accept_sparse=False,
         dtype=None,
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
+    return typing.cast(np.ndarray, result)
 
 
 def infer_categorical_features(
@@ -846,6 +852,10 @@ def get_total_memory_windows() -> float:
     Returns:
         The total memory of the system in GB.
     """
+    import platform
+
+    if platform.system() != "Windows":
+        return 0.0  # Function should not be called on non-Windows platforms
 
     # ref: https://github.com/microsoft/windows-rs/blob/c9177f7a65c764c237a9aebbd3803de683bedaab/crates/tests/bindgen/src/fn_return_void_sys.rs#L12
     # ref: https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex
@@ -869,7 +879,12 @@ def get_total_memory_windows() -> float:
     # need to initialize lenght of structure, see microsft docs above
     mem_status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
 
-    k32_lib = ctypes.windll.LoadLibrary("kernel32.dll")
-    k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
-
-    return mem_status.ullTotalPhys / 1e9  # Convert bytes to GB
+    try:
+        # Use typing.cast to help mypy understand this Windows-only code
+        windll = typing.cast(typing.Any, ctypes).windll
+        k32_lib = windll.LoadLibrary("kernel32.dll")
+        k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
+        return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
+    except (AttributeError, OSError):
+        # Fall back if not on Windows or if the function fails
+        return 0.0
