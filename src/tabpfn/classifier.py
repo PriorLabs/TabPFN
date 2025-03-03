@@ -48,7 +48,6 @@ from tabpfn.preprocessing import (
 from tabpfn.utils import (
     _fix_dtypes,
     _get_embeddings,
-    _get_ordinal_encoder,
     infer_categorical_features,
     infer_device_and_type,
     infer_random_state,
@@ -451,11 +450,30 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
         X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
 
-        # Ensure categories are ordinally encoded
-        ord_encoder = _get_ordinal_encoder()
-        X = ord_encoder.fit_transform(X)  # type: ignore
-        assert isinstance(X, np.ndarray)
-        self.preprocessor_ = ord_encoder
+        # Use skrub's TableVectorizer to handle text columns with NAs properly
+        from sklearn.preprocessing import OrdinalEncoder
+        from skrub import TableVectorizer
+
+        # Configure TableVectorizer to handle missing values consistently
+        # By using OrdinalEncoder with unknown_value=float("nan") for all text columns
+        table_vectorizer = TableVectorizer(
+            low_cardinality=OrdinalEncoder(
+                handle_unknown="use_encoded_value",
+                unknown_value=float("nan"),
+            ),
+            high_cardinality=OrdinalEncoder(
+                handle_unknown="use_encoded_value",
+                unknown_value=float("nan"),
+            ),
+            numeric="passthrough",
+        )
+
+        X = table_vectorizer.fit_transform(X)
+        self.preprocessor_ = table_vectorizer
+
+        # TableVectorizer returns a DataFrame, convert to numpy array
+        if hasattr(X, "values"):
+            X = X.to_numpy()
 
         self.inferred_categorical_indices_ = infer_categorical_features(
             X=X,
@@ -532,6 +550,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X = validate_X_predict(X, self)
         X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
         X = self.preprocessor_.transform(X)
+
+        # Ensure X is a numpy array, not a DataFrame
+        if hasattr(X, "values"):
+            X = X.to_numpy()
 
         outputs: list[torch.Tensor] = []
 
