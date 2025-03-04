@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import typing
 from itertools import product
 from typing import Callable, Literal
 
@@ -298,11 +299,15 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)
 
-    embeddings = model.get_embeddings(X, data_source)
+    # Cast to Literal type for mypy
+    valid_data_source = typing.cast(Literal["train", "test"], data_source)
+    embeddings = model.get_embeddings(X, valid_data_source)
 
+    # Need to access the model through the executor
+    model_instance = typing.cast(typing.Any, model.executor_).model
     encoder_shape = next(
         m.out_features
-        for m in model.executor_.model.encoder.modules()
+        for m in model_instance.encoder.modules()
         if isinstance(m, nn.Linear)
     )
 

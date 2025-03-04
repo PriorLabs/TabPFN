@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import os
+import typing
 from itertools import product
 from typing import Callable, Literal
 
@@ -200,8 +201,13 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
 
     # Compare predictions for different output types
     for output_type in ["mean", "median", "mode"]:
-        pred_dict = model_dict.predict(X, output_type=output_type)
-        pred_obj = model_obj.predict(X, output_type=output_type)
+        # Cast output_type to a valid literal type for mypy
+        valid_output_type = typing.cast(
+            typing.Literal["mean", "median", "mode"],
+            output_type,
+        )
+        pred_dict = model_dict.predict(X, output_type=valid_output_type)
+        pred_obj = model_obj.predict(X, output_type=valid_output_type)
         np.testing.assert_array_almost_equal(
             pred_dict,
             pred_obj,
@@ -294,11 +300,15 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNRegressor(n_estimators=n_estimators)
     model.fit(X, y)
 
-    embeddings = model.get_embeddings(X, data_source)
+    # Cast to Literal type for mypy
+    valid_data_source = typing.cast(Literal["train", "test"], data_source)
+    embeddings = model.get_embeddings(X, valid_data_source)
 
+    # Need to access the model through the executor
+    model_instance = typing.cast(typing.Any, model.executor_).model
     encoder_shape = next(
         m.out_features
-        for m in model.executor_.model.encoder.modules()
+        for m in model_instance.encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
