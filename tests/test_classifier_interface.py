@@ -6,6 +6,7 @@ from itertools import product
 from typing import Callable, Literal
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.datasets
 import torch
@@ -310,3 +311,43 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
     assert embeddings.shape[2] == encoder_shape
+
+
+def test_classifier_with_text_and_na() -> None:
+    """Test that TabPFNClassifier correctly handles text columns with NA values."""
+    # Create a DataFrame with text and NA values
+    # Create test data with text and NA values
+    data = {
+        "text_feature": [
+            "good product",
+            "bad service",
+            None,
+            "excellent",
+            "average",
+            None,
+        ],
+        "numeric_feature": [10, 5, 8, 15, 7, 12],
+        "all_na_column": [None, None, None, None, None, None],  # Column with all NaNs
+        "target": [1, 0, 1, 1, 0, 0],
+    }
+
+    # Create DataFrame
+    df = pd.DataFrame(data)
+
+    # Split into X and y
+    X = df[["text_feature", "numeric_feature", "all_na_column"]]
+    y = df["target"]
+
+    # Initialize and fit TabPFN on data with text+NA and a column with all NAs
+    classifier = TabPFNClassifier(device="cpu", n_estimators=2)
+
+    # This should now work without raising errors
+    classifier.fit(X, y)
+
+    # Verify we can predict
+    probabilities = classifier.predict_proba(X)
+    predictions = classifier.predict(X)
+
+    # Check output shapes
+    assert probabilities.shape == (X.shape[0], len(np.unique(y)))
+    assert predictions.shape == (X.shape[0],)

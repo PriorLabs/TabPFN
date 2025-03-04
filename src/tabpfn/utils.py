@@ -71,6 +71,10 @@ def _get_embeddings(
     X = _fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 
+    # Ensure X is a numpy array, not a DataFrame
+    if hasattr(X, "values"):
+        X = X.to_numpy()
+
     embeddings: list[np.ndarray] = []
 
     for output, config in model.executor_.iter_outputs(
@@ -390,11 +394,12 @@ def load_model_criterion_config(
             model_name=model_name,
         )
         if res != "ok":
-            repo_type = "clf" if which == "classifier" else "reg"
             raise RuntimeError(
                 f"Failed to download model to {model_path}!\n\n"
                 f"For offline usage, please download the model manually from:\n"
-                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
+                f"https://huggingface.co/Prior-Labs/TabPFN-v2-"
+                f"{'clf' if which == 'classifier' else 'reg'}"
+                f"/resolve/main/{model_name}\n\n"
                 f"Then place it at: {model_path}",
             ) from res[0]
 
@@ -481,6 +486,7 @@ def _fix_dtypes(
     if convert_dtype:
         X = X.convert_dtypes()
 
+    # Convert numeric columns to the specified numeric dtype
     integer_columns = X.select_dtypes(include=["number"]).columns
     if len(integer_columns) > 0:
         X[integer_columns] = X[integer_columns].astype(numeric_dtype)
