@@ -25,6 +25,7 @@ from torch import nn
 
 from tabpfn.constants import (
     DEFAULT_NUMPY_PREPROCESSING_DTYPE,
+    NA_PLACEHOLDER,
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
@@ -695,6 +696,34 @@ def infer_random_state(
         raise ValueError(f"Invalid random_state {random_state}")
 
     return static_seed, np_rng
+
+
+def _process_text_na_dataframe(  # type: ignore
+    X: pd.DataFrame,
+    placeholder: str = NA_PLACEHOLDER,
+    ord_encoder=None,
+    *,
+    fit_encoder: bool = False,
+) -> np.ndarray:
+    string_cols = X.select_dtypes(include=["string", "object"]).columns
+    if len(string_cols) > 0:
+        X[string_cols] = X[string_cols].fillna(placeholder)
+
+    if fit_encoder and ord_encoder is not None:
+        X_encoded = ord_encoder.fit_transform(X)
+    elif ord_encoder is not None:
+        X_encoded = ord_encoder.transform(X)
+    else:
+        X_encoded = X
+
+    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
+    placeholder_mask = X[string_cols] == placeholder
+    X_encoded[:, string_cols_ix] = np.where(
+        placeholder_mask,
+        np.nan,
+        X_encoded[:, string_cols_ix],
+    )
+    return X_encoded.astype(np.float64)
 
 
 def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
