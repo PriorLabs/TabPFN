@@ -413,6 +413,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
+        if self.device == 'cpu' and X.shape[0] > 1000:
+            warnings.warn(
+                "Running on CPU with a large dataset may be slow. "
+                "Consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client"
+            )
+
         # Load the model and config
         self.model_, self.config_, self.bardist_ = initialize_tabpfn_model(
             model_path=self.model_path,
