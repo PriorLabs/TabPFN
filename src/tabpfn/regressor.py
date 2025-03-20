@@ -51,6 +51,7 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.utils import (
+    _create_time_usage_tracker,
     _fix_dtypes,
     _get_embeddings,
     _get_ordinal_encoder,
@@ -414,6 +415,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
+        # Track time usage
+        TimeUsageTracker = _create_time_usage_tracker()
+        time_tracker = TimeUsageTracker()
+        time_tracker.start("TabPFNRegressor fit")
+
         # Load the model and config
         self.model_, self.config_, self.bardist_ = initialize_tabpfn_model(
             model_path=self.model_path,
@@ -453,6 +459,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             max_num_samples=self.interface_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.interface_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
+            device=self.device_,
         )
         assert isinstance(X, np.ndarray)
 
@@ -540,6 +547,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             use_autocast_=self.use_autocast_,
         )
 
+        time_tracker.stop("TabPFNRegressor fit")
+
         return self
 
     @overload
@@ -624,6 +633,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
+        # Track time usage
+        TimeUsageTracker = _create_time_usage_tracker()
+        time_tracker = TimeUsageTracker()
+        time_tracker.start("TabPFNRegressor predict")
+
         X = validate_X_predict(X, self)
         X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
         X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
@@ -706,6 +720,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if logits.dtype == torch.float16:
             logits = logits.float()
         logits = logits.cpu()
+
+        time_tracker.stop("TabPFNRegressor predict")
 
         # Determine and return intended output type
         logit_to_output = partial(

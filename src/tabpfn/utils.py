@@ -28,10 +28,12 @@ from tabpfn.constants import (
     NA_PLACEHOLDER,
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
+    X_SIZE_WARNING_CPU,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
 from tabpfn.model.bar_distribution import FullSupportBarDistribution
 from tabpfn.model.loading import download_model, load_model
+from tabpfn.model.time_tracker import TimeUsageTracker
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -528,6 +530,7 @@ def validate_Xy_fit(
     max_num_samples: int,
     ensure_y_numeric: bool = False,
     ignore_pretraining_limits: bool = False,
+    device: torch.device | None = None,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting."""
     # Calls `validate_data()` with specification
@@ -573,6 +576,15 @@ def validate_Xy_fit(
             f"Number of samples {X.shape[0]} is greater than the maximum "
             f"Number of samples {max_num_samples} supported by the model."
             " You may see degraded performance.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if device == torch.device("cpu") and X.shape[0] > X_SIZE_WARNING_CPU:
+        warnings.warn(
+            "Training on CPU with >1000 samples maybe slow."
+            " Use GPU for faster processing, or if unavailable,"
+            " try tabpfn-client API https://github.com/PriorLabs/tabpfn-client ",
             UserWarning,
             stacklevel=2,
         )
@@ -917,3 +929,8 @@ def get_total_memory_windows() -> float:
     except (AttributeError, OSError):
         # Fall back if not on Windows or if the function fails
         return 0.0
+
+
+def _create_time_usage_tracker() -> type[TimeUsageTracker]:
+    """Creates and returns the TimeUsageTracker class."""
+    return TimeUsageTracker

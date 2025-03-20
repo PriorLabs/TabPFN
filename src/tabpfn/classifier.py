@@ -49,6 +49,7 @@ from tabpfn.preprocessing import (
     default_classifier_preprocessor_configs,
 )
 from tabpfn.utils import (
+    _create_time_usage_tracker,
     _fix_dtypes,
     _get_embeddings,
     _get_ordinal_encoder,
@@ -386,6 +387,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
+        # Track time usage
+        TimeUsageTracker = _create_time_usage_tracker()
+        time_tracker = TimeUsageTracker()
+        time_tracker.start("TabPFNClassifier fit")
+
         # Load the model and config
         self.model_, self.config_, _ = initialize_tabpfn_model(
             model_path=self.model_path,
@@ -425,6 +431,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             max_num_samples=self.interface_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.interface_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
+            device=self.device_,
         )
         if feature_names_in is not None:
             self.feature_names_in_ = feature_names_in
@@ -513,6 +520,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             use_autocast_=self.use_autocast_,
         )
 
+        time_tracker.stop("TabPFNClassifier fit")
+
         return self
 
     def predict(self, X: XType) -> np.ndarray:
@@ -539,6 +548,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             The predicted probabilities of the classes.
         """
         check_is_fitted(self)
+
+        # Track time usage
+        TimeUsageTracker = _create_time_usage_tracker()
+        time_tracker = TimeUsageTracker()
+        time_tracker.start("TabPFNClassifier predict_proba")
 
         X = validate_X_predict(X, self)
         X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
@@ -586,6 +600,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             output = np.around(output, decimals=SKLEARN_16_DECIMAL_PRECISION)
             output = np.where(output < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, output)
 
+        time_tracker.stop("TabPFNClassifier predict_proba")
         # Normalize to guarantee proba sum to 1, required due to precision issues and
         # going from torch to numpy
         return output / output.sum(axis=1, keepdims=True)  # type: ignore
