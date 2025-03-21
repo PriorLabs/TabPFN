@@ -34,6 +34,7 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     initialize_tabpfn_model,
+    load_onnx_model,
 )
 from tabpfn.config import ModelInterfaceConfig
 from tabpfn.constants import (
@@ -151,6 +152,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: int = -1,
         inference_config: dict | ModelInterfaceConfig | None = None,
+        use_onnx: bool = False,
     ) -> None:
         """A TabPFN interface for classification.
 
@@ -340,6 +342,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 - If `dict`, the key-value pairs are used to update the default
                   `ModelInterfaceConfig`. Raises an error if an unknown key is passed.
                 - If `ModelInterfaceConfig`, the object is used as the configuration.
+
+            use_onnx:
+                Whether to use an ONNX compiled model.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -362,6 +367,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.random_state = random_state
         self.n_jobs = n_jobs
         self.inference_config = inference_config
+        self.use_onnx = use_onnx
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
@@ -386,19 +392,22 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
-        # Load the model and config
-        self.model_, self.config_, _ = initialize_tabpfn_model(
-            model_path=self.model_path,
-            which="classifier",
-            fit_mode=self.fit_mode,
-            static_seed=static_seed,
-        )
-
         # Determine device and precision
         self.device_ = infer_device_and_type(self.device)
         (self.use_autocast_, self.forced_inference_dtype_, byte_size) = (
             determine_precision(self.inference_precision, self.device_)
         )
+
+        # Load the model and config
+        if self.use_onnx:
+            self.model_ = load_onnx_model("model_classifier.onnx", self.device_)
+        else:
+            self.model_, self.config_, _ = initialize_tabpfn_model(
+                model_path=self.model_path,
+                which="classifier",
+                fit_mode=self.fit_mode,
+                static_seed=static_seed,
+            )
 
         # Build the interface_config
         self.interface_config_ = ModelInterfaceConfig.from_user_input(
@@ -511,6 +520,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            use_onnx=self.use_onnx,
         )
 
         return self

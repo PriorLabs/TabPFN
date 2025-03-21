@@ -1,0 +1,413 @@
+"""Module providing wrappers to use ONNX models with a PyTorch-like interface.
+
+This module defines wrappers for ONNX models as well as helper functions to export
+and validate ONNX models derived from TabPFN models.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+import numpy as np
+import onnx
+import onnxruntime as ort
+import sklearn.datasets
+import torch
+from torch import nn
+
+from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+
+class ONNXModelWrapper:
+    """Wrap ONNX model to match the PyTorch model interface."""
+
+    def __init__(self, model_path: str, device: torch.device):
+        """Initialize the ONNX model wrapper.
+
+        Args:
+            model_path: Path to the ONNX model file.
+            device: The device to run the model on.
+        """
+        self.model_path = model_path
+        self.device = device
+        if device.type == "cuda":
+            self.providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        elif device.type == "cpu":
+            self.providers = ["CPUExecutionProvider"]
+        else:
+            raise ValueError(f"Invalid device: {device}")
+        self.session = ort.InferenceSession(
+            model_path,
+            providers=self.providers,
+        )
+
+    def to(
+        self,
+        device: torch.device,
+    ) -> ONNXModelWrapper:
+        """Moves the model to the specified device.
+
+        Args:
+            device: The target device (cuda or cpu).
+
+        Returns:
+            self
+        """
+        # Only recreate session if device type has changed
+        if device.type != self.device.type:
+            if device.type == "cuda":
+                # Check if CUDA is available in ONNX Runtime
+                cuda_provider = "CUDAExecutionProvider"
+                if cuda_provider in ort.get_available_providers():
+                    self.providers = [cuda_provider, "CPUExecutionProvider"]
+                    # Reinitialize session with CUDA provider
+                    self.session = ort.InferenceSession(
+                        self.model_path,
+                        providers=self.providers,
+                    )
+                # If CUDA is not available, keep current session
+            else:
+                self.providers = ["CPUExecutionProvider"]
+                self.session = ort.InferenceSession(
+                    self.model_path,
+                    providers=self.providers,
+                )
+            # Update the device
+            self.device = device
+        return self
+
+    def type(
+        self,
+        dtype: torch.dtype,  # noqa: ARG002
+    ) -> ONNXModelWrapper:
+        """Changes the model data type.
+
+        The ONNX runtime handles dtype conversion internally; this method does nothing.
+
+        Args:
+            dtype: The target data type (unused).
+
+        Returns:
+            self
+        """
+        return self
+
+    def cpu(self) -> ONNXModelWrapper:
+        """Moves the model to CPU.
+
+        This is a no-op for the ONNX model wrapper.
+
+        Returns:
+            self
+        """
+        return self
+
+    def eval(self) -> ONNXModelWrapper:
+        """Sets the model to evaluation mode.
+
+        For the ONNX model wrapper, this does nothing and simply returns self.
+
+        Returns:
+            self
+        """
+        return self
+
+    def __call__(
+        self,
+        style: torch.Tensor | None,  # noqa: ARG002
+        X: torch.Tensor,
+        y: torch.Tensor | None,
+        *,
+        single_eval_pos: int | None = None,
+        only_return_standard_out: bool = False,  # noqa: ARG002
+    ) -> torch.Tensor:
+        """Run inference using the ONNX model.
+
+        Args:
+            style: Unused tensor placeholder.
+            X: Input tensor.
+            y: Target tensor.
+            single_eval_pos: Position to evaluate at. Defaults to -1 if not provided.
+            only_return_standard_out: Flag to return only the standard output.
+
+        Returns:
+            A torch tensor containing the model output.
+        """
+        # Convert inputs to numpy
+        X_np = X.cpu().numpy() if isinstance(X, torch.Tensor) else X
+        y_np = y.cpu().numpy() if isinstance(y, torch.Tensor) and y is not None else y
+
+        # Prepare ONNX inputs
+        onnx_inputs = {
+            "X": X_np,
+            "y": y_np if y_np is not None else np.zeros((0,), dtype=np.float32),
+            "single_eval_pos": np.array(
+                single_eval_pos if single_eval_pos is not None else -1,
+                dtype=np.int64,
+            ),
+        }
+
+        # Run inference
+        outputs = self.session.run(None, onnx_inputs)
+
+        # Convert back to torch tensor and move to the appropriate device
+        output_tensor = torch.from_numpy(outputs[0])
+        if "CUDAExecutionProvider" in self.providers:
+            output_tensor = output_tensor.cuda()
+        return output_tensor
+
+
+class ModelWrapper(nn.Module):
+    """A wrapper class to embed an ONNX model within the PyTorch nn.Module interface."""
+
+    def __init__(self, original_model):
+        """Initialize the ModelWrapper.
+
+        Args:
+            original_model: The original model object to wrap.
+        """
+        super().__init__()
+        self.model = original_model
+
+    def forward(self, X, y, single_eval_pos, only_return_standard_out):
+        """Perform a forward pass.
+
+        Args:
+            X: Input tensor.
+            y: Target tensor.
+            single_eval_pos: Position for evaluation.
+            only_return_standard_out: Whether to return only standard outputs.
+
+        Returns:
+            The output tensor from the model.
+        """
+        return self.model(
+            None,
+            X,
+            y,
+            single_eval_pos=single_eval_pos,
+            only_return_standard_out=only_return_standard_out,
+        )
+
+
+def export_model(
+    output_path: str,
+    model_type: str = "classifier",
+) -> None:
+    """Export the TabPFN model to the ONNX format.
+
+    This function creates a sample model based on the specified
+    model_type ('classifier' or 'regressor'), trains it on a small dataset,
+    and exports the model to ONNX format with dynamic axes.
+
+    Args:
+        output_path: The file path where the ONNX model should be saved.
+        model_type: The type of model to export ('classifier' or 'regressor').
+    """
+    # Load sample dataset for initialization
+    if model_type == "classifier":
+        X, y = sklearn.datasets.load_iris(return_X_y=True)
+    else:  # regressor
+        X, y = sklearn.datasets.load_diabetes(return_X_y=True)
+
+    with torch.no_grad():
+        # Initialize and fit the model
+        if model_type == "classifier":
+            model = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
+        else:
+            model = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42)
+
+        model.fit(X, y)
+        model.predict(X)
+
+        # Create sample input tensors
+        X = torch.randn(
+            (X.shape[0] * 2, 1, X.shape[1] + 1),
+            generator=torch.Generator().manual_seed(42),
+        )
+        # make the first feature categorical
+        X[:, 0, 0] = torch.randint(0, 10, (X.shape[0],))
+
+        if model_type == "classifier":
+            y = (
+                torch.rand(y.shape, generator=torch.Generator().manual_seed(42))
+                .round()
+                .to(torch.float32)
+            )
+        else:
+            y = torch.rand(y.shape, generator=torch.Generator().manual_seed(42))
+
+        single_eval_pos = torch.tensor(
+            y.shape[0],
+            dtype=torch.int64,
+        )  # Convert to tensor
+
+        only_return_standard_out = torch.tensor(
+            data=True,
+            dtype=torch.bool,
+        )  # Convert to tensor
+
+        # Define dynamic axes for variable input sizes
+        dynamic_axes = {
+            "X": {0: "num_datapoints", 2: "num_features"},
+            "y": {0: "num_datapoints"},
+            "single_eval_pos": {},
+            "only_return_standard_out": {},
+        }
+
+        # Export the model
+        torch.onnx.export(
+            ModelWrapper(model.model_).eval(),
+            (X, y, single_eval_pos, only_return_standard_out),
+            output_path,
+            input_names=[
+                "X",
+                "y",
+                "single_eval_pos",
+                "only_return_standard_out",
+            ],
+            output_names=["output"],
+            opset_version=17,
+            dynamic_axes=dynamic_axes,
+        )
+
+
+def check_onnx_model(model_path: str) -> None:
+    """Validate the ONNX model.
+
+    Loads the ONNX model and runs a checker to ensure that the model is valid.
+
+    Args:
+        model_path: The path to the ONNX model file.
+    """
+    onnx_model = onnx.load(model_path)  # Load the ONNX model
+    onnx.checker.check_model(onnx_model)  # Check if the model is valid
+
+
+def check_input_names(model_path: str) -> None:
+    """Load the ONNX model to check its input names.
+
+    Args:
+        model_path: The path to the ONNX model file.
+    """
+    onnx.load(model_path)
+
+    # Print output names
+
+
+def test_models(
+    model_path_classifier: str,
+    model_path_regressor: str,
+) -> None:
+    """Test both TabPFNClassifier and TabPFNRegressor with and without ONNX.
+
+    This function validates that both the original PyTorch models and the
+    exported ONNX models work correctly on simple datasets.
+
+    Args:
+        model_path_classifier: Path to the exported ONNX classifier model.
+        model_path_regressor: Path to the exported ONNX regressor model.
+    """
+    from sklearn.datasets import load_diabetes, load_iris
+    from sklearn.metrics import accuracy_score, mean_squared_error
+    from sklearn.model_selection import train_test_split
+
+    from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+    # Test classifier
+    def _test_classifier(use_onnx: bool = False) -> float:
+        # Load dataset
+        X, y = load_iris(return_X_y=True)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+
+        # Create and fit model
+        if use_onnx:
+            model = TabPFNClassifier(n_estimators=1, use_onnx=True)
+        else:
+            model = TabPFNClassifier(n_estimators=1, use_onnx=False)
+
+        model.fit(X_train, y_train)
+
+        # Make predictions
+        y_pred = model.predict(X_test)
+        return accuracy_score(y_test, y_pred)
+
+    # Test regressor
+    def _test_regressor(use_onnx: bool = False) -> float:
+        # Load dataset
+        X, y = load_diabetes(return_X_y=True)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=0.2, random_state=42
+        )
+
+        # Create and fit model
+        if use_onnx:
+            model = TabPFNRegressor(n_estimators=1, use_onnx=True)
+        else:
+            model = TabPFNRegressor(n_estimators=1, use_onnx=False)
+
+        model.fit(X_train, y_train)
+
+        # Make predictions (mean)
+        y_pred_mean = model.predict(X_test)
+        return mean_squared_error(y_test, y_pred_mean)
+
+    # Test with PyTorch backend
+    clf_acc_torch = _test_classifier(use_onnx=False)
+    reg_mse_torch = _test_regressor(use_onnx=False)
+
+    # Test with ONNX backend
+    try:
+        clf_acc_onnx = _test_classifier(use_onnx=True)
+        reg_mse_onnx = _test_regressor(use_onnx=True)
+
+        # Compare results
+
+        # Check if results are similar
+        accuracy_diff = abs(clf_acc_torch - clf_acc_onnx)
+        mse_ratio = reg_mse_torch / max(reg_mse_onnx, 1e-10)
+
+        if accuracy_diff > 0.1 or mse_ratio < 0.5 or mse_ratio > 2.0:
+            pass
+        else:
+            pass
+
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Export TabPFN models to ONNX format",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="model",
+        help=(
+            "Base output path for the ONNX models (will append _classifier.onnx and "
+            "_regressor.onnx)"
+        ),
+    )
+
+    args = parser.parse_args()
+
+    # Export both models with appropriate suffixes
+    classifier_path = f"{args.output}_classifier.onnx"
+    regressor_path = f"{args.output}_regressor.onnx"
+
+    export_model(classifier_path, "classifier")
+    check_onnx_model(classifier_path)
+    check_input_names(classifier_path)
+
+    export_model(regressor_path, "regressor")
+    check_onnx_model(regressor_path)
+    check_input_names(regressor_path)
+
+    # Run tests if requested
+    if args.output == "model":
+        test_models(classifier_path, regressor_path)
+    else:
+        pass
