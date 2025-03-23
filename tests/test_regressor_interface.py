@@ -371,8 +371,8 @@ def test_cpu_large_dataset_error():
 
     # Create synthetic data above the error threshold
     rng = np.random.default_rng(seed=42)
-    X_large = rng.random((1001, 10))
-    y_large = rng.random(1001)
+    X_large = rng.random((1501, 10))
+    y_large = rng.random(1501)
 
     # Check that a RuntimeError is raised
     with pytest.raises(

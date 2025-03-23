@@ -245,7 +245,7 @@ def create_inference_engine(  # noqa: PLR0913
 
 
 def check_cpu_warning(
-    device: torch.device, X: np.ndarray | torch.Tensor | pd.DataFrame
+    device: str | torch.device, X: np.ndarray | torch.Tensor | pd.DataFrame
 ) -> None:
     """Check if using CPU with large datasets and warn or error appropriately.
 
@@ -255,13 +255,15 @@ def check_cpu_warning(
     """
     allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
 
+
     # Determine number of samples
     try:
         num_samples = X.shape[0]
     except AttributeError:
         return
 
-    if device == torch.device("cpu"):
+
+    if device == torch.device("cpu") or device == "cpu" or "cpu" in device:
         if num_samples > 1000:
             if not allow_cpu_override:
                 raise RuntimeError(
