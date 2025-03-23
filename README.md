@@ -208,32 +208,16 @@ TabPFN automatically downloads model weights when first used. For offline usage:
      - macOS: `~/Library/Caches/tabpfn/`
      - Linux: `~/.cache/tabpfn/`
 
-**Quick Download Script**
+**Using the Provided Download Script**
 
-```python
-import requests
-from tabpfn.utils import _user_cache_dir
-import sys
+If you have the TabPFN repository, you can use the included script to download all models (including ensemble variants):
 
-# Get default cache directory using TabPFN's internal function
-cache_dir = _user_cache_dir(platform=sys.platform)
-cache_dir.mkdir(parents=True, exist_ok=True)
-
-# Define models to download
-models = {
-    "tabpfn-v2-classifier.ckpt": "https://huggingface.co/Prior-Labs/TabPFN-v2-clf/resolve/main/tabpfn-v2-classifier.ckpt",
-    "tabpfn-v2-regressor.ckpt": "https://huggingface.co/Prior-Labs/TabPFN-v2-reg/resolve/main/tabpfn-v2-regressor.ckpt",
-}
-
-# Download each model
-for name, url in models.items():
-    path = cache_dir / name
-    print(f"Downloading {name} to {path}")
-    with open(path, "wb") as f:
-        f.write(requests.get(url).content)
-
-print(f"Models downloaded to {cache_dir}")
+```bash
+# After installing TabPFN
+python scripts/download_all_models.py
 ```
+
+This script will download the main classifier and regressor models, as well as all ensemble variant models to your system's default cache directory.
 
 **Q: I'm getting a `pickle` error when loading the model. What should I do?**  
 A: Try the following:

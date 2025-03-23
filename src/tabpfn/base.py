@@ -27,10 +27,8 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.utils import (
-    infer_fp16_inference_mode,
-    load_model_criterion_config,
-)
+from tabpfn.model.loading import load_model_criterion_config
+from tabpfn.utils import infer_fp16_inference_mode
 
 if TYPE_CHECKING:
     import numpy as np

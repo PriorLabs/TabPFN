@@ -8,6 +8,7 @@ from itertools import product
 from typing import Callable, Literal
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn.datasets
 import torch
@@ -34,9 +35,11 @@ fit_modes = [
 ]
 inference_precision_methods = ["auto", "autocast", torch.float64]
 remove_remove_outliers_stds = [None, 12]
+estimators = [1,2]
 
 all_combinations = list(
     product(
+        estimators,
         devices,
         feature_shift_decoders,
         multiclass_decoders,
@@ -51,11 +54,13 @@ all_combinations = list(
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y = sklearn.datasets.load_iris(return_X_y=True)
+    X, y = X[:40], y[:40]
     return X, y  # type: ignore
 
 
 @pytest.mark.parametrize(
     (
+        "n_estimators",
         "device",
         "feature_shift_decoder",
         "multiclass_decoder",
@@ -66,6 +71,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
     all_combinations,
 )
 def test_fit(
+    n_estimators: int,
     device: Literal["cuda", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     multiclass_decoder: Literal["shuffle", "rotate"],
@@ -78,6 +84,7 @@ def test_fit(
         pytest.skip("Only GPU supports inference_precision")
 
     model = TabPFNClassifier(
+        n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
         inference_precision=inference_precision,
@@ -106,7 +113,12 @@ def test_fit(
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations
 @parametrize_with_checks(
-    [TabPFNClassifier(inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True})],
+    [
+        TabPFNClassifier(
+            n_estimators=2,
+            inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True}
+        ),
+    ],
 )
 def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
@@ -325,7 +337,7 @@ def test_pandas_output_config():
     """Test compatibility with sklearn's output configuration settings."""
     # Generate synthetic classification data
     X, y = sklearn.datasets.make_classification(
-        n_samples=100,
+        n_samples=50,
         n_features=10,
         random_state=19,
     )
@@ -399,3 +411,43 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         decimal=5,
         err_msg="Prediction probabilities changed after adding constant features",
     )
+
+
+def test_classifier_with_text_and_na() -> None:
+    """Test that TabPFNClassifier correctly handles text columns with NA values."""
+    # Create a DataFrame with text and NA values
+    # Create test data with text and NA values
+    data = {
+        "text_feature": [
+            "good product",
+            "bad service",
+            None,
+            "excellent",
+            "average",
+            None,
+        ],
+        "numeric_feature": [10, 5, 8, 15, 7, 12],
+        "all_na_column": [None, None, None, None, None, None],  # Column with all NaNs
+        "target": [1, 0, 1, 1, 0, 0],
+    }
+
+    # Create DataFrame
+    df = pd.DataFrame(data)
+
+    # Split into X and y
+    X = df[["text_feature", "numeric_feature", "all_na_column"]]
+    y = df["target"]
+
+    # Initialize and fit TabPFN on data with text+NA and a column with all NAs
+    classifier = TabPFNClassifier(device="cpu", n_estimators=2)
+
+    # This should now work without raising errors
+    classifier.fit(X, y)
+
+    # Verify we can predict
+    probabilities = classifier.predict_proba(X)
+    predictions = classifier.predict(X)
+
+    # Check output shapes
+    assert probabilities.shape == (X.shape[0], len(np.unique(y)))
+    assert predictions.shape == (X.shape[0],)

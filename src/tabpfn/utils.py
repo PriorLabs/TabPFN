@@ -5,13 +5,10 @@
 from __future__ import annotations
 
 import ctypes
-import os
-import sys
 import typing
 import warnings
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, overload
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -25,20 +22,17 @@ from torch import nn
 
 from tabpfn.constants import (
     DEFAULT_NUMPY_PREPROCESSING_DTYPE,
+    NA_PLACEHOLDER,
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import download_model, load_model
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
     from tabpfn.classifier import TabPFNClassifier, XType, YType
-    from tabpfn.model.config import InferenceConfig
-    from tabpfn.model.transformer import PerFeatureTransformer
     from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
@@ -242,180 +236,6 @@ def infer_fp16_inference_mode(device: torch.device, *, enable: bool | None) -> b
         return False
 
     raise ValueError(f"Unrecognized argument '{enable}'")
-
-
-def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
-    use_instead_path = (Path.cwd() / ".tabpfn_models").resolve()
-
-    # https://docs.python.org/3/library/sys.html#sys.platform
-    if platform == "win32":
-        # Honestly, I don't want to do what `platformdirs` does:
-        # https://github.com/tox-dev/platformdirs/blob/b769439b2a3b70769a93905944a71b3e63ef4823/src/platformdirs/windows.py#L252-L265
-        APPDATA_PATH = os.environ.get("APPDATA", "")
-        if APPDATA_PATH.strip() != "":
-            return Path(APPDATA_PATH) / appname
-
-        warnings.warn(
-            "Could not find APPDATA environment variable to get user cache dir,"
-            " but detected platform 'win32'."
-            f" Defaulting to a path '{use_instead_path}'."
-            " If you would prefer, please specify a directory when creating"
-            " the model.",
-            UserWarning,
-            stacklevel=2,
-        )
-        return use_instead_path
-
-    if platform == "darwin":
-        return Path.home() / "Library" / "Caches" / appname
-
-    # TODO: Not entirely sure here, Python doesn't explicitly list
-    # all of these and defaults to the underlying operating system
-    # if not sure.
-    linux_likes = ("freebsd", "linux", "netbsd", "openbsd")
-    if any(platform.startswith(linux) for linux in linux_likes):
-        # The reason to use "" as default is that the env var could exist but be empty.
-        # We catch all this with the `.strip() != ""` below
-        XDG_CACHE_HOME = os.environ.get("XDG_CACHE_HOME", "")
-        if XDG_CACHE_HOME.strip() != "":
-            return Path(XDG_CACHE_HOME) / appname
-        return Path.home() / ".cache" / appname
-
-    warnings.warn(
-        f"Unknown platform '{platform}' to get user cache dir."
-        f" Defaulting to a path at the execution site '{use_instead_path}'."
-        " If you would prefer, please specify a directory when creating"
-        " the model.",
-        UserWarning,
-        stacklevel=2,
-    )
-    return use_instead_path
-
-
-@overload
-def load_model_criterion_config(
-    model_path: str | Path | None,
-    *,
-    check_bar_distribution_criterion: Literal[False],
-    cache_trainset_representation: bool,
-    version: Literal["v2"],
-    which: Literal["classifier"],
-    download: bool,
-    model_seed: int,
-) -> tuple[
-    PerFeatureTransformer,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
-    InferenceConfig,
-]: ...
-
-
-@overload
-def load_model_criterion_config(
-    model_path: str | Path | None,
-    *,
-    check_bar_distribution_criterion: Literal[True],
-    cache_trainset_representation: bool,
-    version: Literal["v2"],
-    which: Literal["regressor"],
-    download: bool,
-    model_seed: int,
-) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
-
-
-def load_model_criterion_config(
-    model_path: None | str | Path,
-    *,
-    check_bar_distribution_criterion: bool,
-    cache_trainset_representation: bool,
-    which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
-    download: bool,
-    model_seed: int,
-) -> tuple[
-    PerFeatureTransformer,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    InferenceConfig,
-]:
-    """Load the model, criterion, and config from the given path.
-
-    Args:
-        model_path: The path to the model.
-        check_bar_distribution_criterion:
-            Whether to check if the criterion
-            is a FullSupportBarDistribution, which is the expected criterion
-            for models trained for regression.
-        cache_trainset_representation:
-            Whether the model should know to cache the trainset representation.
-        which: Whether the model is a regressor or classifier.
-        version: The version of the model.
-        download: Whether to download the model if it doesn't exist.
-        model_seed: The seed of the model.
-
-    Returns:
-        The model, criterion, and config.
-    """
-    if model_path is None:
-        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
-        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
-            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
-        else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        model_name = f"tabpfn-{version}-{which}.ckpt"
-        model_path = model_dir / model_name
-    else:
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
-
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    model_dir.mkdir(parents=True, exist_ok=True)
-    if not model_path.exists():
-        if not download:
-            raise ValueError(
-                f"Model path does not exist and downloading is disabled"
-                f"\nmodel path: {model_path}",
-            )
-
-        # NOTE: We use warnings as:
-        # * Logging is only visible if the user has logging enabled,
-        #   which for the majority of people using Python, this is not
-        #   the case.
-        # * `print` has no way to easily be disabled from the outside.
-        warnings.warn(
-            f"Downloading model to {model_path}.",
-            UserWarning,
-            stacklevel=2,
-        )
-        res = download_model(
-            model_path,
-            version=version,
-            which=which,
-            model_name=model_name,
-        )
-        if res != "ok":
-            repo_type = "clf" if which == "classifier" else "reg"
-            raise RuntimeError(
-                f"Failed to download model to {model_path}!\n\n"
-                f"For offline usage, please download the model manually from:\n"
-                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
-                f"Then place it at: {model_path}",
-            ) from res[0]
-
-    loaded_model, criterion, config = load_model(path=model_path, model_seed=model_seed)
-    loaded_model.cache_trainset_representation = cache_trainset_representation
-    if check_bar_distribution_criterion and not isinstance(
-        criterion,
-        FullSupportBarDistribution,
-    ):
-        raise ValueError(
-            f"The model loaded, '{model_path}', was expected to have a"
-            " FullSupportBarDistribution criterion, but instead "
-            f" had a {type(criterion).__name__} criterion.",
-        )
-    return loaded_model, criterion, config
 
 
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
@@ -695,6 +515,34 @@ def infer_random_state(
         raise ValueError(f"Invalid random_state {random_state}")
 
     return static_seed, np_rng
+
+
+def _process_text_na_dataframe(  # type: ignore
+    X: pd.DataFrame,
+    placeholder: str = NA_PLACEHOLDER,
+    ord_encoder=None,
+    *,
+    fit_encoder: bool = False,
+) -> np.ndarray:
+    string_cols = X.select_dtypes(include=["string", "object"]).columns
+    if len(string_cols) > 0:
+        X[string_cols] = X[string_cols].fillna(placeholder)
+
+    if fit_encoder and ord_encoder is not None:
+        X_encoded = ord_encoder.fit_transform(X)
+    elif ord_encoder is not None:
+        X_encoded = ord_encoder.transform(X)
+    else:
+        X_encoded = X
+
+    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
+    placeholder_mask = X[string_cols] == placeholder
+    X_encoded[:, string_cols_ix] = np.where(
+        placeholder_mask,
+        np.nan,
+        X_encoded[:, string_cols_ix],
+    )
+    return X_encoded.astype(np.float64)
 
 
 def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
