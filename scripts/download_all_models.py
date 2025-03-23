@@ -13,7 +13,9 @@ from tabpfn.model.loading import _user_cache_dir, download_all_models
 def main() -> None:
     """Download all TabPFN models and save to cache directory."""
     # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Download all TabPFN models for offline use.")
+    parser = argparse.ArgumentParser(
+        description="Download all TabPFN models for offline use."
+    )
     parser.add_argument(
         "--cache-dir",
         type=Path,
@@ -27,7 +29,9 @@ def main() -> None:
     logger = logging.getLogger(__name__)
 
     # Determine cache directory
-    cache_dir = args.cache_dir or _user_cache_dir(platform=sys.platform, appname="tabpfn")
+    cache_dir = args.cache_dir or _user_cache_dir(
+        platform=sys.platform, appname="tabpfn"
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Downloading all models to {cache_dir}")
