@@ -35,7 +35,7 @@ fit_modes = [
 ]
 inference_precision_methods = ["auto", "autocast", torch.float64]
 remove_remove_outliers_stds = [None, 12]
-estimators = [1,2]
+estimators = [1, 2]
 
 all_combinations = list(
     product(
@@ -115,8 +115,7 @@ def test_fit(
 @parametrize_with_checks(
     [
         TabPFNClassifier(
-            n_estimators=2,
-            inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True}
+            n_estimators=2, inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True}
         ),
     ],
 )
