@@ -32,6 +32,7 @@ from tabpfn.utils import infer_fp16_inference_mode
 
 if TYPE_CHECKING:
     import numpy as np
+    import pandas as pd
 
     from tabpfn.model.bar_distribution import FullSupportBarDistribution
     from tabpfn.model.config import InferenceConfig
@@ -243,15 +244,22 @@ def create_inference_engine(  # noqa: PLR0913
     return engine
 
 
-def check_cpu_warning(device: torch.device, X: np.ndarray) -> None:
+def check_cpu_warning(
+    device: torch.device, X: np.ndarray | torch.Tensor | pd.DataFrame
+) -> None:
     """Check if using CPU with large datasets and warn or error appropriately.
 
     Args:
         device: The torch device being used
-        X: The input data array
+        X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
     """
     allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
-    num_samples = X.shape[0]
+
+    # Determine number of samples
+    try:
+        num_samples = X.shape[0]
+    except AttributeError:
+        return
 
     if device == torch.device("cpu"):
         if num_samples > 1000:
@@ -262,7 +270,7 @@ def check_cpu_warning(device: torch.device, X: np.ndarray) -> None:
                     "To override this behavior, set the environment variable "
                     "TABPFN_ALLOW_CPU_LARGE_DATASET=1.\n"
                     "Alternatively, consider using a GPU or the tabpfn-client API: "
-                    "https://github.com/PriorLabs/tabpfn-client",
+                    "https://github.com/PriorLabs/tabpfn-client"
                 )
         elif num_samples > 200:
             warnings.warn(
