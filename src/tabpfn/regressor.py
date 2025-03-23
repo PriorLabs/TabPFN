@@ -415,8 +415,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
-        check_cpu_warning(self.device, X)
-
         # Load the model and config
         self.model_, self.config_, self.bardist_ = initialize_tabpfn_model(
             model_path=self.model_path,
@@ -458,6 +456,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
         assert isinstance(X, np.ndarray)
+        check_cpu_warning(self.device, X)
 
         if feature_names_in is not None:
             self.feature_names_in_ = feature_names_in
