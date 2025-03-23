@@ -35,6 +35,7 @@ from sklearn.base import (
 )
 
 from tabpfn.base import (
+    check_cpu_warning,
     create_inference_engine,
     determine_precision,
     initialize_tabpfn_model,
@@ -413,11 +414,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         static_seed, rng = infer_random_state(self.random_state)
 
-        if self.device == 'cpu' and X.shape[0] > 1000:
-            warnings.warn(
-                "Running on CPU with a large dataset may be slow. "
-                "Consider using a GPU or the tabpfn-client API: https://github.com/PriorLabs/tabpfn-client"
-            )
+        check_cpu_warning(self.device, X)
 
         # Load the model and config
         self.model_, self.config_, self.bardist_ = initialize_tabpfn_model(

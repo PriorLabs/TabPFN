@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import os
+import warnings
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -241,3 +243,33 @@ def create_inference_engine(  # noqa: PLR0913
         raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
     return engine
+
+
+def check_cpu_warning(device: torch.device, X: np.ndarray) -> None:
+    """Check if using CPU with large datasets and warn or error appropriately.
+
+    Args:
+        device: The torch device being used
+        X: The input data array
+    """
+    allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
+    num_samples = X.shape[0]
+
+    if device == torch.device("cpu"):
+        if num_samples > 1000:
+            if not allow_cpu_override:
+                raise RuntimeError(
+                    "Running on CPU with more than 1000 samples is not allowed "
+                    "by default due to slow performance.\n"
+                    "To override this behavior, set the environment variable "
+                    "TABPFN_ALLOW_CPU_LARGE_DATASET=1.\n"
+                    "Alternatively, consider using a GPU or the tabpfn-client API: "
+                    "https://github.com/PriorLabs/tabpfn-client",
+                )
+        elif num_samples > 200:
+            warnings.warn(
+                "Running on CPU with more than 200 samples may be slow.\n"
+                "Consider using a GPU or the tabpfn-client API: "
+                "https://github.com/PriorLabs/tabpfn-client",
+                stacklevel=2,
+            )
