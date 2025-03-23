@@ -255,13 +255,11 @@ def check_cpu_warning(
     """
     allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
 
-
     # Determine number of samples
     try:
         num_samples = X.shape[0]
     except AttributeError:
         return
-
 
     if device == torch.device("cpu") or device == "cpu" or "cpu" in device:
         if num_samples > 1000:
