@@ -362,6 +362,7 @@ class MemoryUsageEstimator:
         dtype_byte_size: int,
         safety_factor: float = 5.0,
         n_train_samples: int | None = None,
+        use_onnx: bool = False,
     ) -> None:
         """Reset the peak memory if required.
 
@@ -381,7 +382,11 @@ class MemoryUsageEstimator:
             safety_factor (float): The safety factor to apply.
             n_train_samples (int): The number of training samples (to be used
                 only for cache_kv mode)
+            use_onnx (bool): Whether we're using an ONNX compiled model.
         """
+        if use_onnx:
+            # TODO: Implement memory estimation for ONNX
+            return
         save_peak_mem_is_num = isinstance(
             save_peak_mem,
             (float, int),

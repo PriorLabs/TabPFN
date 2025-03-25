@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import io
 import os
-import sys
 import typing
 from itertools import product
 from typing import Callable, Literal
@@ -244,7 +242,6 @@ class ModelWrapper(nn.Module):
         y,
         single_eval_pos,
         only_return_standard_out,
-        categorical_inds,
     ):
         return self.model(
             None,
@@ -252,50 +249,6 @@ class ModelWrapper(nn.Module):
             y,
             single_eval_pos=single_eval_pos,
             only_return_standard_out=only_return_standard_out,
-            categorical_inds=categorical_inds,
-        )
-
-
-# WARNING: unstable for scipy<1.11.0
-@pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
-def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
-    if os.name == "nt":
-        pytest.skip("onnx export is not tested on windows")
-    if sys.version_info >= (3, 13):
-        pytest.xfail("onnx is not yet supported on Python 3.13")
-    X, y = X_y
-    with torch.no_grad():
-        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
-        # load the model so we can access it via classifier.model_
-        regressor.fit(X, y)
-        # this is necessary if cuda is available
-        regressor.predict(X)
-        # replicate the above call with random tensors of same shape
-        X = torch.randn(
-            (X.shape[0] * 2, 1, X.shape[1] + 1),
-            generator=torch.Generator().manual_seed(42),
-        )
-        y = (torch.randn(y.shape, generator=torch.Generator().manual_seed(42)) > 0).to(
-            torch.float32,
-        )
-        dynamic_axes = {
-            "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
-            "y": {0: "num_labels"},
-        }
-        torch.onnx.export(
-            ModelWrapper(regressor.model_).eval(),
-            (X, y, y.shape[0], True, []),
-            io.BytesIO(),
-            input_names=[
-                "X",
-                "y",
-                "single_eval_pos",
-                "only_return_standard_out",
-                "categorical_inds",
-            ],
-            output_names=["output"],
-            opset_version=17,  # using 17 since we use torch>=2.1
-            dynamic_axes=dynamic_axes,
         )
 
 

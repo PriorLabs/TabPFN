@@ -19,6 +19,7 @@ from tabpfn.model.memory import MemoryUsageEstimator
 from tabpfn.preprocessing import fit_preprocessing
 
 if TYPE_CHECKING:
+    from tabpfn.misc.compile_to_onnx import ONNXModelWrapper
     from tabpfn.model.preprocessing import SequentialFeatureTransformer
     from tabpfn.model.transformer import PerFeatureTransformer
     from tabpfn.preprocessing import EnsembleConfig
@@ -62,6 +63,7 @@ class InferenceEngine(ABC):
         *,
         device: torch.device,
         autocast: bool,
+        only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model.
 
@@ -71,6 +73,7 @@ class InferenceEngine(ABC):
             X: The input data to make predictions on.
             device: The device to run the model on.
             autocast: Whether to use torch.autocast during inference.
+            only_return_standard_out: Whether to only return the standard output.
         """
         ...
 
@@ -90,9 +93,11 @@ class InferenceEngineOnDemand(InferenceEngine):
     cat_ix: list[int]
     static_seed: int
     n_workers: int
-    model: PerFeatureTransformer
+    model: PerFeatureTransformer | ONNXModelWrapper
     force_inference_dtype: torch.dtype | None
+    use_onnx: bool = False
 
+    # ruff: noqa: PLR0913
     @classmethod
     def prepare(
         cls,
@@ -100,13 +105,14 @@ class InferenceEngineOnDemand(InferenceEngine):
         y_train: np.ndarray,
         *,
         cat_ix: list[int],
-        model: PerFeatureTransformer,
+        model: PerFeatureTransformer | ONNXModelWrapper,
         ensemble_configs: Sequence[EnsembleConfig],
         rng: np.random.Generator,
         n_workers: int,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
+        use_onnx: bool = False,
     ) -> InferenceEngineOnDemand:
         """Prepare the inference engine.
 
@@ -121,6 +127,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            use_onnx: Whether to use ONNX models instead of PyTorch models.
         """
         # We save it as a static seed to be reproducible across predicts
         static_seed = rng.integers(0, int(np.iinfo(np.int32).max))
@@ -135,6 +142,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
+            use_onnx=use_onnx,
         )
 
     @override
@@ -161,7 +169,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         if self.force_inference_dtype is not None:
             self.model = self.model.type(self.force_inference_dtype)
 
-        for config, preprocessor, X_train, y_train, cat_ix in itr:
+        for config, preprocessor, X_train, y_train, _cat_ix in itr:
             X_train = torch.as_tensor(X_train, dtype=torch.float32, device=device)  # noqa: PLW2901
 
             X_test = preprocessor.transform(X).X
@@ -178,6 +186,7 @@ class InferenceEngineOnDemand(InferenceEngine):
                 dtype_byte_size=self.dtype_byte_size,
                 device=device,
                 safety_factor=1.2,  # TODO(Arjun): make customizable
+                use_onnx=self.use_onnx,
             )
 
             if self.force_inference_dtype is not None:
@@ -193,7 +202,6 @@ class InferenceEngineOnDemand(InferenceEngine):
                 output = self.model(
                     *(style, X_full, y_train),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
                     single_eval_pos=len(y_train),
                 )
 
@@ -222,8 +230,9 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     cat_ixs: Sequence[list[int]]
     ensemble_configs: Sequence[EnsembleConfig]
     preprocessors: Sequence[SequentialFeatureTransformer]
-    model: PerFeatureTransformer
+    model: PerFeatureTransformer | ONNXModelWrapper
     force_inference_dtype: torch.dtype | None
+    use_onnx: bool = False
 
     @classmethod
     def prepare(
@@ -232,13 +241,14 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         y_train: np.ndarray,
         *,
         cat_ix: list[int],
-        model: PerFeatureTransformer,
+        model: PerFeatureTransformer | ONNXModelWrapper,
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
         rng: np.random.Generator,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
+        use_onnx: bool = False,
     ) -> InferenceEngineCachePreprocessing:
         """Prepare the inference engine.
 
@@ -253,6 +263,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            use_onnx: Whether to use ONNX models instead of PyTorch models.
 
         Returns:
             The prepared inference engine.
@@ -277,6 +288,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
+            use_onnx=use_onnx,
         )
 
     @override
@@ -291,7 +303,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         self.model = self.model.to(device)
         if self.force_inference_dtype is not None:
             self.model = self.model.type(self.force_inference_dtype)
-        for preprocessor, X_train, y_train, config, cat_ix in zip(
+        for preprocessor, X_train, y_train, config, _cat_ix in zip(
             self.preprocessors,
             self.X_trains,
             self.y_trains,
@@ -321,6 +333,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 device=device,
                 dtype_byte_size=self.dtype_byte_size,
                 safety_factor=1.2,  # TODO(Arjun): make customizable
+                use_onnx=self.use_onnx,
             )
 
             style = None
@@ -332,7 +345,6 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 output = self.model(
                     *(style, X_full, y_train),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
                     single_eval_pos=len(y_train),
                 )
 
@@ -356,12 +368,13 @@ class InferenceEngineCacheKV(InferenceEngine):
     preprocessors: list[SequentialFeatureTransformer]
     configs: list[EnsembleConfig]
     cat_ixs: list[list[int]]
-    models: list[PerFeatureTransformer]
+    models: list[PerFeatureTransformer | ONNXModelWrapper]
     n_train_samples: list[int]
     force_inference_dtype: torch.dtype | None
+    use_onnx: bool = False
 
     @classmethod
-    def prepare(  # noqa: PLR0913
+    def prepare(
         cls,
         X_train: np.ndarray,
         y_train: np.ndarray,
@@ -369,7 +382,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         cat_ix: list[int],
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
-        model: PerFeatureTransformer,
+        model: PerFeatureTransformer | ONNXModelWrapper,
         device: torch.device,
         rng: np.random.Generator,
         dtype_byte_size: int,
@@ -377,6 +390,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         save_peak_mem: bool | Literal["auto"] | float | int,
         autocast: bool,
         only_return_standard_out: bool = True,
+        use_onnx: bool = False,
     ) -> InferenceEngineCacheKV:
         """Prepare the inference engine.
 
@@ -394,6 +408,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             save_peak_mem: Whether to save peak memory usage.
             autocast: Whether to use torch.autocast during inference.
             only_return_standard_out: Whether to only return the standard output
+            use_onnx: Whether to use ONNX models instead of PyTorch models.
         """
         itr = fit_preprocessing(
             configs=ensemble_configs,
@@ -404,7 +419,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             n_workers=n_workers,
             parallel_mode="as-ready",
         )
-        models: list[PerFeatureTransformer] = []
+        models: list[PerFeatureTransformer | ONNXModelWrapper] = []
         preprocessors: list[SequentialFeatureTransformer] = []
         correct_order_configs: list[EnsembleConfig] = []
         cat_ixs: list[list[int]] = []
@@ -432,7 +447,6 @@ class InferenceEngineCacheKV(InferenceEngine):
                 ens_model.forward(
                     *(None, X, y),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=preprocessor_cat_ix,
                     single_eval_pos=len(X),
                 )
 
@@ -450,6 +464,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
+            use_onnx=use_onnx,
         )
 
     @override
@@ -461,7 +476,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        for preprocessor, model, config, cat_ix, X_train_len in zip(
+        for preprocessor, model, config, _cat_ix, X_train_len in zip(
             self.preprocessors,
             self.models,
             self.configs,
@@ -481,6 +496,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                 dtype_byte_size=self.dtype_byte_size,
                 safety_factor=1.2,  # TODO(Arjun): make customizable
                 n_train_samples=X_train_len,
+                use_onnx=self.use_onnx,
             )
 
             model = model.to(device)  # noqa: PLW2901
@@ -497,7 +513,6 @@ class InferenceEngineCacheKV(InferenceEngine):
                 output = model(
                     *(style, X_test, None),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
                     single_eval_pos=None,
                 )
 

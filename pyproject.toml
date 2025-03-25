@@ -63,6 +63,7 @@ dev = [
   # Test
   "pytest",
   "onnx", # required for onnx export tests
+  "onnxruntime",
   "psutil", # required for testing internal memory tool on windows
   # Docs
   "mkdocs",

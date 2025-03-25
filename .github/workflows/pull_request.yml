@@ -37,6 +37,15 @@ jobs:
             python-version: "3.9"
             dependency-set: minimum
           - os: ubuntu-latest
+            python-version: "3.11"
+            dependency-set: direct-install
+          - os: macos-latest
+            python-version: "3.11"
+            dependency-set: direct-install
+          - os: windows-latest
+            python-version: "3.11"
+            dependency-set: direct-install
+          - os: ubuntu-latest
             python-version: "3.13"
             dependency-set: maximum
           - os: macos-latest
@@ -73,14 +82,16 @@ jobs:
 
       - name: Install dependencies
         run: |
-          uv pip install --system --no-deps .
-          # onnx is required for onnx export tests
-          # we don't install all dev dependencies here for speed
-          uv pip install --system -r requirements.txt
+          if [[ "${{ matrix.dependency-set }}" == "direct-install" ]]; then
+            uv pip install --system .
+          else
+            uv pip install --system --no-deps .
+            uv pip install --system -r requirements.txt
+          fi
           uv pip install --system pytest psutil
           # onnx is not supported on python 3.13 yet https://github.com/onnx/onnx/issues/6339
           if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
-            uv pip install --system onnx
+            uv pip install --system onnx onnxruntime
           fi
         shell: bash
 

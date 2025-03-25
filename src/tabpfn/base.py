@@ -27,13 +27,18 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.model.loading import load_model_criterion_config
-from tabpfn.utils import infer_fp16_inference_mode
+from tabpfn.model.loading import (
+    load_model_criterion_config,
+)
+from tabpfn.utils import (
+    infer_fp16_inference_mode,
+)
 
 if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
 
+    from tabpfn.misc.compile_to_onnx import ONNXModelWrapper
     from tabpfn.model.bar_distribution import FullSupportBarDistribution
     from tabpfn.model.config import InferenceConfig
     from tabpfn.model.transformer import PerFeatureTransformer
@@ -41,7 +46,7 @@ if TYPE_CHECKING:
 
 @overload
 def initialize_tabpfn_model(
-    model_path: str | Path | Literal["auto"],
+    model_path: Path,
     which: Literal["regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     static_seed: int,
@@ -50,7 +55,7 @@ def initialize_tabpfn_model(
 
 @overload
 def initialize_tabpfn_model(
-    model_path: str | Path | Literal["auto"],
+    model_path: Path,
     which: Literal["classifier"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     static_seed: int,
@@ -58,7 +63,7 @@ def initialize_tabpfn_model(
 
 
 def initialize_tabpfn_model(
-    model_path: str | Path | Literal["auto"],
+    model_path: Path,
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     static_seed: int,
@@ -79,8 +84,6 @@ def initialize_tabpfn_model(
     """
     # Handle auto model_path
     download = True
-    if isinstance(model_path, str) and model_path == "auto":
-        model_path = None  # type: ignore
 
     # Load model with potential caching
     if which == "classifier":
@@ -110,6 +113,46 @@ def initialize_tabpfn_model(
         bar_distribution = bardist
 
     return model, config_, bar_distribution
+
+
+def load_onnx_model(
+    model_path: Path,
+    device: torch.device,
+) -> ONNXModelWrapper:
+    """Load a TabPFN model in ONNX format.
+
+    Args:
+        model_path: Path to the ONNX model file.
+        which: Which TabPFN model to load.
+        version: The version of the model.
+        device: The device to run the model on.
+
+    Returns:
+        The loaded ONNX model wrapped in a PyTorch-compatible interface.
+
+    Raises:
+        ImportError: If onnxruntime is not installed.
+        FileNotFoundError: If the model file doesn't exist.
+    """
+    try:
+        from tabpfn.misc.compile_to_onnx import ONNXModelWrapper
+    except ImportError as err:
+        raise ImportError(
+            "onnxruntime is required to load ONNX models. "
+            "Install it with: pip install onnxruntime-gpu"
+            "or pip install onnxruntime",
+        ) from err
+
+    if not model_path.exists():
+        raise FileNotFoundError(
+            f"ONNX model not found at: {model_path}, "
+            "please compile the model by running "
+            "`from tabpfn.misc.compile_to_onnx import compile_onnx_models; "
+            "compile_onnx_models()`"
+            "or change `model_path`.",
+        )
+
+    return ONNXModelWrapper(model_path, device)
 
 
 def determine_precision(
@@ -158,7 +201,7 @@ def create_inference_engine(  # noqa: PLR0913
     *,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model: PerFeatureTransformer,
+    model: PerFeatureTransformer | ONNXModelWrapper,
     ensemble_configs: Any,
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
@@ -169,6 +212,7 @@ def create_inference_engine(  # noqa: PLR0913
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: bool | Literal["auto"] | float | int,
     use_autocast_: bool,
+    use_onnx: bool = False,
 ) -> InferenceEngine:
     """Creates the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -191,6 +235,7 @@ def create_inference_engine(  # noqa: PLR0913
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
         use_autocast_: Whether we use torch.autocast for inference.
+        use_onnx: Whether to use ONNX runtime for model inference.
     """
     engine: (
         InferenceEngineOnDemand
@@ -209,6 +254,7 @@ def create_inference_engine(  # noqa: PLR0913
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            use_onnx=use_onnx,
         )
     elif fit_mode == "fit_preprocessors":
         engine = InferenceEngineCachePreprocessing.prepare(
@@ -222,6 +268,7 @@ def create_inference_engine(  # noqa: PLR0913
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            use_onnx=use_onnx,
         )
     elif fit_mode == "fit_with_cache":
         engine = InferenceEngineCacheKV.prepare(
@@ -237,6 +284,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
+            use_onnx=use_onnx,
         )
     else:
         raise ValueError(f"Invalid fit_mode: {fit_mode}")

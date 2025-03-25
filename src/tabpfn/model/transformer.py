@@ -373,8 +373,6 @@ class PerFeatureTransformer(nn.Module):
                 Whether to only return the standard output.
             data_dags: Any
                 The data DAGs for each example.
-            categorical_inds: list[int]
-                The indices of categorical features.
             freeze_kv: bool
                 Whether to freeze the key and value weights.
 
@@ -388,7 +386,6 @@ class PerFeatureTransformer(nn.Module):
             "only_return_standard_out",
             "style",
             "data_dags",
-            "categorical_inds",
             "freeze_kv",
             "train_x",
             "train_y",
@@ -428,7 +425,6 @@ class PerFeatureTransformer(nn.Module):
         only_return_standard_out: bool = True,
         style: torch.Tensor | None = None,
         data_dags: list[Any] | None = None,
-        categorical_inds: list[int] | None = None,
         half_layers: bool = False,
     ) -> Any | dict[str, torch.Tensor]:
         """The core forward pass of the model.
@@ -441,7 +437,6 @@ class PerFeatureTransformer(nn.Module):
             only_return_standard_out: Whether to only return the standard output.
             style: The style vector.
             data_dags: The data DAGs for each example in the batch.
-            categorical_inds: The indices of categorical features.
             half_layers: Whether to use half the layers.
 
         Returns:
@@ -507,24 +502,6 @@ class PerFeatureTransformer(nn.Module):
                 n=self.features_per_group,
             )  # s b f -> b s #groups #features_per_group
 
-        # We have to re-work categoricals based on the subgroup they fall into.
-        categorical_inds_to_use: list[list[int]] | None = None
-        if categorical_inds is not None:
-            new_categorical_inds = []
-            n_subgroups = x["main"].shape[2]
-
-            for subgroup in range(n_subgroups):
-                subgroup_lower = subgroup * self.features_per_group
-                subgroup_upper = (subgroup + 1) * self.features_per_group
-                subgroup_indices = [
-                    i - subgroup_lower
-                    for i in categorical_inds
-                    if subgroup_lower <= i < subgroup_upper
-                ]
-                new_categorical_inds.append(subgroup_indices)
-
-            categorical_inds_to_use = new_categorical_inds
-
         for k in y:
             if y[k].ndim == 1:
                 y[k] = y[k].unsqueeze(-1)
@@ -576,13 +553,6 @@ class PerFeatureTransformer(nn.Module):
                 " to the ys that are not fully provided (test set missing)",
             )
 
-        extra_encoders_args = {}
-        if categorical_inds_to_use is not None and isinstance(
-            self.encoder,
-            SequentialEncoder,
-        ):
-            extra_encoders_args["categorical_inds"] = categorical_inds_to_use
-
         for k in x:
             x[k] = einops.rearrange(x[k], "b s f n -> s (b f) n")
 
@@ -591,7 +561,6 @@ class PerFeatureTransformer(nn.Module):
                 x,
                 single_eval_pos=single_eval_pos_,
                 cache_trainset_representation=self.cache_trainset_representation,
-                **extra_encoders_args,
             ),
             "s (b f) e -> b s f e",
             b=embedded_y.shape[0],

@@ -101,7 +101,7 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def _suppress_hf_token_warning():
+def _suppress_hf_token_warning() -> None:
     """Suppress warning about missing HuggingFace token."""
     import warnings
 
@@ -279,15 +279,16 @@ def download_model(
 def download_all_models(to: Path) -> None:
     """Download all v2 classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
+
     for model_source, model_type in [
-        (ModelSource.get_classifier_v2(), "classifier"),
-        (ModelSource.get_regressor_v2(), "regressor"),
+        (ModelSource.get_classifier_v2(), ModelType.CLASSIFIER),
+        (ModelSource.get_regressor_v2(), ModelType.REGRESSOR),
     ]:
         for ckpt_name in model_source.filenames:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=model_type,
+                which=model_type.value,
                 model_name=ckpt_name,
             )
 
@@ -340,9 +341,45 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
     return use_instead_path
 
 
+def resolve_model_path(
+    model_path: None | str | Path,
+    which: Literal["regressor", "classifier"],
+    version: Literal["v2"] = "v2",
+    *,
+    use_onnx: bool = False,
+) -> tuple[Path, Path, str]:
+    if isinstance(model_path, str) and model_path == "auto":
+        model_path = None
+
+    if model_path is None:
+        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
+        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
+            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
+        else:
+            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
+        if use_onnx:
+            model_name = f"tabpfn-{version}-{which}.onnx"
+        else:
+            model_name = f"tabpfn-{version}-{which}.ckpt"
+        model_path = model_dir / model_name
+    else:
+        if not isinstance(model_path, (str, Path)):
+            raise ValueError(f"Invalid model_path: {model_path}")
+
+        model_path = Path(model_path)
+        model_dir = model_path.parent
+        if use_onnx and not model_path.name.endswith(".onnx"):
+            # More general approach - replace any extension with .onnx
+            model_name = model_path.stem + ".onnx"
+        else:
+            model_name = model_path.name
+
+    return model_path, model_dir, model_name
+
+
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: Path,
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
@@ -359,7 +396,7 @@ def load_model_criterion_config(
 
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: Path,
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
@@ -370,33 +407,8 @@ def load_model_criterion_config(
 ) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
 
 
-def resolve_model_path(
-    model_path: None | str | Path,
-    which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
-) -> tuple[Path, Path, str, str]:
-    if model_path is None:
-        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
-        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
-            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
-        else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        model_name = f"tabpfn-{version}-{which}.ckpt"
-        model_path = model_dir / model_name
-    else:
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
-
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    return model_path, model_dir, model_name, which
-
-
 def load_model_criterion_config(
-    model_path: None | str | Path,
+    model_path: Path,
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
@@ -427,9 +439,7 @@ def load_model_criterion_config(
     Returns:
         The model, criterion, and config.
     """
-    (model_path, model_dir, model_name, which) = resolve_model_path(
-        model_path, which, version
-    )
+    model_dir, model_name = model_path.parent, model_path.name
 
     model_dir.mkdir(parents=True, exist_ok=True)
     if not model_path.exists():
