@@ -9,7 +9,8 @@ def test_preprocessing_large_dataset():
     # Generate a synthetic dataset with more than 10,000 samples
     num_samples = 15000
     num_features = 10
-    X = np.random.rand(num_samples, num_features)
+    rng = np.random.default_rng()
+    X = rng.random((num_samples, num_features))
 
     # Create an instance of ReshapeFeatureDistributionsStep
     preprocessing_step = ReshapeFeatureDistributionsStep(
