@@ -261,7 +261,7 @@ def check_cpu_warning(
     except AttributeError:
         return
 
-    if device == torch.device("cpu") or device == "cpu" or "cpu" in device:
+    if torch.device(device).type == "cpu":
         if num_samples > 1000:
             if not allow_cpu_override:
                 raise RuntimeError(
