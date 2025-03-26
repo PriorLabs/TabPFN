@@ -28,7 +28,7 @@ from tabpfn.inference import (
     InferenceEngineOnDemand,
 )
 from tabpfn.model.loading import load_model_criterion_config
-from tabpfn.utils import infer_fp16_inference_mode
+from tabpfn.utils import infer_device_and_type, infer_fp16_inference_mode
 
 if TYPE_CHECKING:
     import numpy as np
@@ -254,6 +254,7 @@ def check_cpu_warning(
         X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
     """
     allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
+    device_mapped = infer_device_and_type(device)
 
     # Determine number of samples
     try:
@@ -261,7 +262,7 @@ def check_cpu_warning(
     except AttributeError:
         return
 
-    if torch.device(device).type == "cpu":
+    if torch.device(device_mapped).type == "cpu":
         if num_samples > 1000:
             if not allow_cpu_override:
                 raise RuntimeError(
