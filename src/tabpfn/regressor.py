@@ -720,7 +720,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Create a dictionary of outputs with proper typing via TypedDict
             # Get individual outputs with proper typing
             mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
-            median_ot = typing.cast("np.ndarray", logit_to_output(output_type="median"),)
+            median_ot = typing.cast("np.ndarray", logit_to_output(output_type="median"))
             mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
             quantiles_out = typing.cast(
                 "list[np.ndarray]",
