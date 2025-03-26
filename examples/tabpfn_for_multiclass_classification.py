@@ -1,4 +1,9 @@
 #  Copyright (c) Prior Labs GmbH 2025.
+"""Example of using TabPFN for multiclass classification.
+
+This example demonstrates how to use TabPFNClassifier on a multiclass classification task
+using the Iris dataset from scikit-learn.
+"""
 
 from sklearn.datasets import load_iris
 from sklearn.metrics import accuracy_score, roc_auc_score

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "2.0.6"
+version = "2.0.7"
 dependencies = [
   "torch>=2.1,<3",
   "scikit-learn>=1.2.0,<1.7",
@@ -170,6 +170,7 @@ ignore = [
   "PLR0915", # Too many statements
   "N803",    # Argument name `X` should be lowercase
   "N802",    # Function name should be lowercase
+  "COM812",  # Trailing comma missing (conflicts with formatter)
   # These tend to be lighweight and confuse pyright
 ]
 

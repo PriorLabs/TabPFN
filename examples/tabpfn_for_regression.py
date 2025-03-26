@@ -1,4 +1,9 @@
 #  Copyright (c) Prior Labs GmbH 2025.
+"""Example of using TabPFN for regression.
+
+This example demonstrates how to use TabPFNRegressor on a regression task
+using the diabetes dataset from scikit-learn.
+"""
 
 from sklearn.datasets import load_diabetes
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
