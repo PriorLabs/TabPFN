@@ -74,7 +74,7 @@ def _get_embeddings(
     embeddings: list[np.ndarray] = []
 
     # Cast executor to Any to bypass the iter_outputs signature check
-    executor = typing.cast(typing.Any, model.executor_)
+    executor = typing.cast("typing.Any", model.executor_)
     for output, config in executor.iter_outputs(
         X,
         device=model.device_,
@@ -82,7 +82,7 @@ def _get_embeddings(
         only_return_standard_out=False,
     ):
         # Cast output to Any to allow dict-like access
-        output_dict = typing.cast(dict[str, torch.Tensor], output)
+        output_dict = typing.cast("dict[str, torch.Tensor]", output)
         embed = output_dict[selected_data].squeeze(1)
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
         assert embed.ndim == 2
@@ -615,7 +615,7 @@ def validate_X_predict(
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
-    return typing.cast(np.ndarray, result)
+    return typing.cast("np.ndarray", result)
 
 
 def infer_categorical_features(
@@ -881,7 +881,7 @@ def get_total_memory_windows() -> float:
 
     try:
         # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast(typing.Any, ctypes).windll
+        windll = typing.cast("typing.Any", ctypes).windll
         k32_lib = windll.LoadLibrary("kernel32.dll")
         k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
         return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB

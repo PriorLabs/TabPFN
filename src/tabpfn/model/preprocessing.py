@@ -729,7 +729,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             ),
             "quantile_uni": QuantileTransformer(
                 output_distribution="uniform",
-                n_quantiles=max(num_examples // 5, 2),
+                n_quantiles=min(max(num_examples // 5, 2), 10_000),
                 random_state=random_state,
             ),
             "quantile_norm": QuantileTransformer(

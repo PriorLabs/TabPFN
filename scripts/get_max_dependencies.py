@@ -1,13 +1,16 @@
+from __future__ import annotations
+
 import re
 
+
 def main() -> None:
-    with open('pyproject.toml', 'r') as f:
+    with open("pyproject.toml") as f:
         content = f.read()
 
     # Find dependencies section using regex
-    deps_match = re.search(r'dependencies\s*=\s*\[(.*?)\]', content, re.DOTALL)
+    deps_match = re.search(r"dependencies\s*=\s*\[(.*?)\]", content, re.DOTALL)
     if deps_match:
-        deps = [d.strip(' "\'') for d in deps_match.group(1).strip().split('\n') if d.strip()]
+        deps = [d.strip(' "\'') for d in deps_match.group(1).strip().split("\n") if d.strip()]
         max_reqs = []
         for dep in deps:
             # Check for maximum version constraint
@@ -18,11 +21,11 @@ def main() -> None:
                 max_reqs.append(f"{package}<{max_ver}")
             else:
                 # If no max version, just use the package name
-                package = re.match(r'([^>=<\s]+)', dep).group(1)
+                package = re.match(r"([^>=<\s]+)", dep).group(1)
                 max_reqs.append(package)
 
-        with open('requirements.txt', 'w') as f:
-            f.write('\n'.join(max_reqs))
+        with open("requirements.txt", "w") as f:
+            f.write("\n".join(max_reqs))
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
