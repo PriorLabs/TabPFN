@@ -5,13 +5,15 @@ from __future__ import annotations
 import dataclasses
 import logging
 import math
+import os
+import sys
 import urllib.request
 import urllib.response
 import warnings
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Literal
+from typing import Literal, overload
 from urllib.error import URLError
 
 import torch
@@ -99,11 +101,33 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
+def _suppress_hf_token_warning():
+    """Suppress warning about missing HuggingFace token."""
+    import warnings
+
+    # Filter warnings about HF_TOKEN
+    warnings.filterwarnings(
+        "ignore", message="The secret HF_TOKEN does not exist.*", category=UserWarning
+    )
+
+
 def _try_huggingface_downloads(
     base_path: Path,
     source: ModelSource,
     model_name: str | None = None,
+    *,  # Force keyword-only arguments
+    suppress_warnings: bool = True,
 ) -> None:
+    """Try to download models using the HuggingFace Hub.
+
+    Args:
+        base_path: The path to save the downloaded model to.
+        source: The source of the model.
+        model_name: Optional specific model name to download.
+        suppress_warnings: Whether to suppress HF token warnings.
+    """
+    if suppress_warnings:
+        _suppress_hf_token_warning()
     """Try to download models and config using the HuggingFace Hub API."""
     try:
         from huggingface_hub import hf_hub_download
@@ -236,7 +260,7 @@ def download_model(
         return [e]
 
     try:
-        _try_huggingface_downloads(to, model_source, model_name)
+        _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
         return "ok"
     except Exception as e:  # noqa: BLE001
         logger.warning(f"HuggingFace downloads failed: {e!s}")
@@ -250,6 +274,208 @@ def download_model(
         errors.append(e)
 
     return errors
+
+
+def download_all_models(to: Path) -> None:
+    """Download all v2 classifier and regressor models into a local directory."""
+    to.mkdir(parents=True, exist_ok=True)
+    for model_source, model_type in [
+        (ModelSource.get_classifier_v2(), "classifier"),
+        (ModelSource.get_regressor_v2(), "regressor"),
+    ]:
+        for ckpt_name in model_source.filenames:
+            download_model(
+                to=to / ckpt_name,
+                version="v2",
+                which=model_type,
+                model_name=ckpt_name,
+            )
+
+
+def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
+    use_instead_path = (Path.cwd() / ".tabpfn_models").resolve()
+
+    # https://docs.python.org/3/library/sys.html#sys.platform
+    if platform == "win32":
+        # Honestly, I don't want to do what `platformdirs` does:
+        # https://github.com/tox-dev/platformdirs/blob/b769439b2a3b70769a93905944a71b3e63ef4823/src/platformdirs/windows.py#L252-L265
+        APPDATA_PATH = os.environ.get("APPDATA", "")
+        if APPDATA_PATH.strip() != "":
+            return Path(APPDATA_PATH) / appname
+
+        warnings.warn(
+            "Could not find APPDATA environment variable to get user cache dir,"
+            " but detected platform 'win32'."
+            f" Defaulting to a path '{use_instead_path}'."
+            " If you would prefer, please specify a directory when creating"
+            " the model.",
+            UserWarning,
+            stacklevel=2,
+        )
+        return use_instead_path
+
+    if platform == "darwin":
+        return Path.home() / "Library" / "Caches" / appname
+
+    # TODO: Not entirely sure here, Python doesn't explicitly list
+    # all of these and defaults to the underlying operating system
+    # if not sure.
+    linux_likes = ("freebsd", "linux", "netbsd", "openbsd")
+    if any(platform.startswith(linux) for linux in linux_likes):
+        # The reason to use "" as default is that the env var could exist but be empty.
+        # We catch all this with the `.strip() != ""` below
+        XDG_CACHE_HOME = os.environ.get("XDG_CACHE_HOME", "")
+        if XDG_CACHE_HOME.strip() != "":
+            return Path(XDG_CACHE_HOME) / appname
+        return Path.home() / ".cache" / appname
+
+    warnings.warn(
+        f"Unknown platform '{platform}' to get user cache dir."
+        f" Defaulting to a path at the execution site '{use_instead_path}'."
+        " If you would prefer, please specify a directory when creating"
+        " the model.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return use_instead_path
+
+
+@overload
+def load_model_criterion_config(
+    model_path: str | Path | None,
+    *,
+    check_bar_distribution_criterion: Literal[False],
+    cache_trainset_representation: bool,
+    version: Literal["v2"],
+    which: Literal["classifier"],
+    download: bool,
+    model_seed: int,
+) -> tuple[
+    PerFeatureTransformer,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
+    InferenceConfig,
+]: ...
+
+
+@overload
+def load_model_criterion_config(
+    model_path: str | Path | None,
+    *,
+    check_bar_distribution_criterion: Literal[True],
+    cache_trainset_representation: bool,
+    version: Literal["v2"],
+    which: Literal["regressor"],
+    download: bool,
+    model_seed: int,
+) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
+
+
+def resolve_model_path(
+    model_path: None | str | Path,
+    which: Literal["regressor", "classifier"],
+    version: Literal["v2"] = "v2",
+) -> tuple[Path, Path, str, str]:
+    if model_path is None:
+        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
+        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
+            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
+        else:
+            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
+
+        model_name = f"tabpfn-{version}-{which}.ckpt"
+        model_path = model_dir / model_name
+    else:
+        if not isinstance(model_path, (str, Path)):
+            raise ValueError(f"Invalid model_path: {model_path}")
+
+        model_path = Path(model_path)
+        model_dir = model_path.parent
+        model_name = model_path.name
+
+    return model_path, model_dir, model_name, which
+
+
+def load_model_criterion_config(
+    model_path: None | str | Path,
+    *,
+    check_bar_distribution_criterion: bool,
+    cache_trainset_representation: bool,
+    which: Literal["regressor", "classifier"],
+    version: Literal["v2"] = "v2",
+    download: bool,
+    model_seed: int,
+) -> tuple[
+    PerFeatureTransformer,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+    InferenceConfig,
+]:
+    """Load the model, criterion, and config from the given path.
+
+    Args:
+        model_path: The path to the model.
+        check_bar_distribution_criterion:
+            Whether to check if the criterion
+            is a FullSupportBarDistribution, which is the expected criterion
+            for models trained for regression.
+        cache_trainset_representation:
+            Whether the model should know to cache the trainset representation.
+        which: Whether the model is a regressor or classifier.
+        version: The version of the model.
+        download: Whether to download the model if it doesn't exist.
+        model_seed: The seed of the model.
+
+    Returns:
+        The model, criterion, and config.
+    """
+    (model_path, model_dir, model_name, which) = resolve_model_path(
+        model_path, which, version
+    )
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    if not model_path.exists():
+        if not download:
+            raise ValueError(
+                f"Model path does not exist and downloading is disabled"
+                f"\nmodel path: {model_path}",
+            )
+
+        # NOTE: We use warnings as:
+        # * Logging is only visible if the user has logging enabled,
+        #   which for the majority of people using Python, this is not
+        #   the case.
+        # * `print` has no way to easily be disabled from the outside.
+        warnings.warn(
+            f"Downloading model to {model_path}.",
+            UserWarning,
+            stacklevel=2,
+        )
+        res = download_model(
+            model_path,
+            version=version,
+            which=which,
+            model_name=model_name,
+        )
+        if res != "ok":
+            repo_type = "clf" if which == "classifier" else "reg"
+            raise RuntimeError(
+                f"Failed to download model to {model_path}!\n\n"
+                f"For offline usage, please download the model manually from:\n"
+                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
+                f"Then place it at: {model_path}",
+            ) from res[0]
+
+    loaded_model, criterion, config = load_model(path=model_path, model_seed=model_seed)
+    loaded_model.cache_trainset_representation = cache_trainset_representation
+    if check_bar_distribution_criterion and not isinstance(
+        criterion,
+        FullSupportBarDistribution,
+    ):
+        raise ValueError(
+            f"The model loaded, '{model_path}', was expected to have a"
+            " FullSupportBarDistribution criterion, but instead "
+            f" had a {type(criterion).__name__} criterion.",
+        )
+    return loaded_model, criterion, config
 
 
 def get_loss_criterion(

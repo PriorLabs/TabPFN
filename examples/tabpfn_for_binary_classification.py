@@ -1,4 +1,9 @@
 #  Copyright (c) Prior Labs GmbH 2025.
+"""Example of using TabPFN for binary classification.
+
+This example demonstrates how to use TabPFNClassifier on a binary classification task
+using the breast cancer dataset from scikit-learn.
+"""
 
 from sklearn.datasets import load_breast_cancer
 from sklearn.metrics import accuracy_score, roc_auc_score

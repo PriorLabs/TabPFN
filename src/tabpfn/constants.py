@@ -23,6 +23,7 @@ SampleWeightType: TypeAlias = Any
 YType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
 
+NA_PLACEHOLDER = "__MISSING__"
 
 SKLEARN_16_DECIMAL_PRECISION = 16
 PROBABILITY_EPSILON_ROUND_ZERO = 1e-3
