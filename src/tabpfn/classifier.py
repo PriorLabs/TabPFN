@@ -362,6 +362,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_jobs = n_jobs
         self.inference_config = inference_config
 
+    def _estimate_memory_usage(self, X: XType) -> float:
+        """Estimate the memory usage for the given input data."""
+        # This is a simple heuristic for memory estimation
+        # You might need a more sophisticated approach depending on your model
+        sample_size = X.shape[0]
+        feature_size = X.shape[1]
+        dtype_size = np.dtype(X.dtype).itemsize
+        return sample_size * feature_size * dtype_size / (1024 ** 2)  # Convert bytes to MB
+    
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -539,25 +548,32 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         outputs: list[torch.Tensor] = []
 
-        for output, config in self.executor_.iter_outputs(
-            X,
-            device=self.device_,
-            autocast=self.use_autocast_,
-        ):
-            assert isinstance(config, ClassifierEnsembleConfig)
-            # Cut out logits for classes which do not exist
-            assert output.ndim == 2
+        # Estimate memory usage and determine batch size
+        estimated_memory_usage = self._estimate_memory_usage(X)
+        available_memory = torch.cuda.get_device_properties(self.device_).total_memory / (1024 ** 2)  # Convert to MB
+        batch_size = max(1, int(available_memory // estimated_memory_usage))
 
-            if self.softmax_temperature != 1:
-                output = (  # noqa: PLW2901
-                    output[:, : self.n_classes_].float() / self.softmax_temperature
-                )
+        for i in range(0, X.shape[0], batch_size):
+            X_batch = X[i:i + batch_size]
+            for output, config in self.executor_.iter_outputs(
+                X,
+                device=self.device_,
+                autocast=self.use_autocast_,
+            ):
+                assert isinstance(config, ClassifierEnsembleConfig)
+                # Cut out logits for classes which do not exist
+                assert output.ndim == 2
 
-            # Reverse class permutation if exists
-            if config.class_permutation is not None:
-                output = output[..., config.class_permutation]  # noqa: PLW2901
+                if self.softmax_temperature != 1:
+                    output = (  # noqa: PLW2901
+                        output[:, : self.n_classes_].float() / self.softmax_temperature
+                    )
 
-            outputs.append(output)
+                # Reverse class permutation if exists
+                if config.class_permutation is not None:
+                    output = output[..., config.class_permutation]  # noqa: PLW2901
+
+                outputs.append(output)
 
         if self.average_before_softmax:
             output = torch.stack(outputs).mean(dim=0)
