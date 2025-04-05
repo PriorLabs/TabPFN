@@ -445,3 +445,34 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         decimal=5,  # Allow small numerical differences
         err_msg="Predictions changed after adding constant features",
     )
+
+
+def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+    """Test that TabPFNRegressor predicts a constant
+    value when the target y is constant.
+    """
+    X, _ = X_y
+    y_constant = np.full(X.shape[0], 5.0)  # Create a constant target array
+
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model.fit(X, y_constant)
+
+    predictions = model.predict(X)
+    assert np.all(predictions == 5.0), "Predictions are not constant as expected"
+
+    # Test different output types
+    predictions_median = model.predict(X, output_type="median")
+    assert np.all(
+        predictions_median == 5.0
+    ), "Median predictions are not constant as expected"
+
+    predictions_mode = model.predict(X, output_type="mode")
+    assert np.all(
+        predictions_mode == 5.0
+    ), "Mode predictions are not constant as expected"
+
+    quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
+    for quantile_prediction in quantiles:
+        assert np.all(
+            quantile_prediction == 5.0
+        ), "Quantile predictions are not constant as expected"

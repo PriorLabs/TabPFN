@@ -21,7 +21,7 @@ import typing
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Union
 from typing_extensions import Self, TypedDict, overload
 
 import numpy as np
@@ -458,6 +458,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         assert isinstance(X, np.ndarray)
         check_cpu_warning(self.device, X)
 
+        if np.unique(y).size == 1:
+            self.is_constant_target = True
+            self.constant_value_ = y[0]
+            return self
+
         if feature_names_in is not None:
             self.feature_names_in_ = feature_names_in
         self.n_features_in_ = n_features_in
@@ -626,10 +631,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
-        X = validate_X_predict(X, self)
-        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
-        X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
-
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         else:
@@ -638,6 +639,36 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ), "All quantiles must be between 0 and 1 and floats."
         if output_type not in self._USABLE_OUTPUT_TYPES:
             raise ValueError(f"Invalid output type: {output_type}")
+
+        ResultType = Union[np.ndarray, list[np.ndarray], MainOutputDict, FullOutputDict]
+
+        if hasattr(self, "is_constant_target") and self.is_constant_target:
+            constant_prediction = np.full(X.shape[0], self.constant_value_)
+            result: ResultType
+            if output_type == "quantiles":
+                result = [constant_prediction for _ in quantiles]
+            elif output_type in ["full", "main"]:
+                main_outputs = MainOutputDict(
+                    mean=constant_prediction,
+                    median=constant_prediction,
+                    mode=constant_prediction,
+                    quantiles=[constant_prediction for _ in quantiles],
+                )
+                if output_type == "full":
+                    result = FullOutputDict(
+                        **main_outputs,
+                        criterion=self.renormalized_criterion_,
+                        logits=torch.full((X.shape[0], 1), self.constant_value_),
+                    )
+                else:
+                    result = main_outputs
+            else:
+                result = constant_prediction
+            return result
+
+        X = validate_X_predict(X, self)
+        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
+        X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
 
         std_borders = self.bardist_.borders.cpu().numpy()
         outputs: list[torch.Tensor] = []
