@@ -151,7 +151,13 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
         The inferred device
     """
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
+        device_type_ = (
+            "mps"
+            if torch.backends.mps.is_available()
+            else "cuda"
+            if torch.cuda.is_available()
+            else "cpu"
+        )
         return torch.device(device_type_)
     if isinstance(device, str):
         return torch.device(device)
