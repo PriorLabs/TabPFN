@@ -101,7 +101,7 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def _suppress_hf_token_warning():
+def _suppress_hf_token_warning() -> None:
     """Suppress warning about missing HuggingFace token."""
     import warnings
 
@@ -287,7 +287,7 @@ def download_all_models(to: Path) -> None:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=model_type,
+                which=model_type,  # type: ignore
                 model_name=ckpt_name,
             )
 
@@ -340,7 +340,7 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
     return use_instead_path
 
 
-@overload
+@overload  # type: ignore[no-overload-impl]
 def load_model_criterion_config(
     model_path: str | Path | None,
     *,
@@ -395,7 +395,7 @@ def resolve_model_path(
     return model_path, model_dir, model_name, which
 
 
-def load_model_criterion_config(
+def load_model_criterion_config(  # type: ignore[no-redef]
     model_path: None | str | Path,
     *,
     check_bar_distribution_criterion: bool,
@@ -452,7 +452,7 @@ def load_model_criterion_config(
         res = download_model(
             model_path,
             version=version,
-            which=which,
+            which=which,  # type: ignore
             model_name=model_name,
         )
         if res != "ok":
