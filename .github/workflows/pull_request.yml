@@ -14,7 +14,7 @@ jobs:
         with:
           src: "./src ./tests"
           version: 0.8.6
-      - uses: chartboost/ruff-action@d0a0e814ec17e92d33be7d24dd922b479f1bcd38 # v1.1.1
+      - uses: astral-sh/ruff-action@d0a0e814ec17e92d33be7d24dd922b479f1bcd38 # v1.1.1
         with:
           src: "./src ./tests"
           version: 0.8.6
