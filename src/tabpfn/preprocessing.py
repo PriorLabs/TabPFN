@@ -14,7 +14,9 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
 import numpy as np
+import torch
 from sklearn.utils.validation import joblib
+from torch.utils.data import Dataset
 
 from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
@@ -24,6 +26,7 @@ from tabpfn.constants import (
 )
 from tabpfn.model.preprocessing import (
     AddFingerprintFeaturesStep,
+    DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
     FeaturePreprocessingTransformerStep,
     NanHandlingPolynomialFeaturesStep,
@@ -120,6 +123,7 @@ class PreprocessorConfig:
     append_original: bool = False
     subsample_features: float = -1
     global_transformer_name: str | None = None
+    differentiable: bool = False
 
     @override
     def __str__(self) -> str:
@@ -150,6 +154,7 @@ class PreprocessorConfig:
             "append_original": self.append_original,
             "subsample_features": self.subsample_features,
             "global_transformer_name": self.global_transformer_name,
+            "differentiable": self.differentiable,
         }
 
     @classmethod
@@ -168,6 +173,7 @@ class PreprocessorConfig:
             append_original=config_dict["append_original"],
             subsample_features=config_dict["subsample_features"],
             global_transformer_name=config_dict["global_transformer_name"],
+            differentiable=config_dict.get("differentiable", False),
         )
 
 
@@ -479,25 +485,29 @@ class EnsembleConfig:
                 ),
             )
 
-        steps.extend(
-            [
-                RemoveConstantFeaturesStep(),
-                ReshapeFeatureDistributionsStep(
-                    transform_name=self.preprocess_config.name,
-                    append_to_original=self.preprocess_config.append_original,
-                    subsample_features=self.preprocess_config.subsample_features,
-                    global_transformer_name=self.preprocess_config.global_transformer_name,
-                    apply_to_categorical=(
-                        self.preprocess_config.categorical_name == "numeric"
+        steps.append(RemoveConstantFeaturesStep())
+
+        if self.preprocess_config.differentiable:
+            steps.append(DifferentiableZNormStep())
+        else:
+            steps.extend(
+                [
+                    ReshapeFeatureDistributionsStep(
+                        transform_name=self.preprocess_config.name,
+                        append_to_original=self.preprocess_config.append_original,
+                        subsample_features=self.preprocess_config.subsample_features,
+                        global_transformer_name=self.preprocess_config.global_transformer_name,
+                        apply_to_categorical=(
+                            self.preprocess_config.categorical_name == "numeric"
+                        ),
+                        random_state=random_state,
                     ),
-                    random_state=random_state,
-                ),
-                EncodeCategoricalFeaturesStep(
-                    self.preprocess_config.categorical_name,
-                    random_state=random_state,
-                ),
-            ],
-        )
+                    EncodeCategoricalFeaturesStep(
+                        self.preprocess_config.categorical_name,
+                        random_state=random_state,
+                    ),
+                ],
+            )
 
         if self.add_fingerprint_feature:
             steps.append(AddFingerprintFeaturesStep(random_state=random_state))
@@ -534,8 +544,8 @@ class RegressorEnsembleConfig(EnsembleConfig):
 
 def fit_preprocessing_one(
     config: EnsembleConfig,
-    X_train: np.ndarray,
-    y_train: np.ndarray,
+    X_train: np.ndarray | torch.Tensor,
+    y_train: np.ndarray | torch.Tensor,
     random_state: int | np.random.Generator | None = None,
     *,
     cat_ix: list[int],
@@ -554,6 +564,8 @@ def fit_preprocessing_one(
         y_train: Training target.
         random_state: Random seed.
         cat_ix: Indices of categorical features.
+        process_idx: Which indices to consider. Only return values for these indices.
+            if None, all indices are processed, which is the default.
 
     Returns:
         Tuple containing the ensemble configuration, the fitted preprocessing pipeline,
@@ -562,9 +574,9 @@ def fit_preprocessing_one(
     """
     static_seed, _ = infer_random_state(random_state)
     if config.subsample_ix is not None:
-        X_train = X_train[config.subsample_ix].copy()
-        y_train = y_train[config.subsample_ix].copy()
-    else:
+        X_train = X_train[config.subsample_ix]
+        y_train = y_train[config.subsample_ix]
+    if not isinstance(X_train, torch.Tensor):
         X_train = X_train.copy()
         y_train = y_train.copy()
 
@@ -573,6 +585,20 @@ def fit_preprocessing_one(
 
     # TODO(eddiebergman): Not a fan of this, wish it was more transparent, but we want
     # to distuinguish what to do with the `ys` based on the ensemble config type
+    y_train = transform_labels_one(config, y_train)
+
+    return (config, preprocessor, res.X, y_train, res.categorical_features)
+
+
+def transform_labels_one(config, y_train):
+    """Transform the labels for one ensembel config.
+
+    Args:
+        config: Ensemble config.
+        y_train: The unprocessed labels.
+
+    Return: The processed labels.
+    """
     if isinstance(config, RegressorEnsembleConfig):
         if config.target_transform is not None:
             # TODO(eddiebergman): Verify this transformer is fitted back in the main
@@ -586,8 +612,7 @@ def fit_preprocessing_one(
             y_train = config.class_permutation[y_train]
     else:
         raise ValueError(f"Invalid ensemble config type: {type(config)}")
-
-    return (config, preprocessor, res.X, y_train, res.categorical_features)
+    return y_train
 
 
 def fit_preprocessing(
@@ -668,3 +693,84 @@ def fit_preprocessing(
             for config, seed in zip(configs, seeds)
         ],
     )
+
+
+class DatasetCollectionWithPreprocessing(Dataset):
+    """A meta dataset.
+    Each item corresponds to a single dataset with
+    a train test split. The dataloader further handels proprocessing and
+    returns one or multiple preprocessed versions of the dataset as a list.
+    An item consists of:
+        X_trains, X_tests, y_trains, y_test, cat_ixs, conf.
+    """
+
+    def __init__(self, split_fn, rng, config_lists: list[EnsembleConfig], n_workers=1):
+        self.configs = config_lists
+        self.split_fn = split_fn
+        self.rng = rng
+        self.n_workers = n_workers
+
+    def __len__(self):
+        return len(self.configs)
+
+    def __getitem__(self, index):  # noqa: C901
+        """Returns lists of processed training datasets, training labels,
+        test datasets. Test labels are passed through without processing.
+        """
+        if index < 0 or index > len(self):
+            raise IndexError("Index out of bounds.")
+
+        conf, x_full, y_full, cat_ix = self.configs[index][0:4]
+        if len(self.configs[index]) == 5:
+            renormalized_criterion = self.configs[index][5]
+
+        x_train, x_test, y_train, y_test = self.split_fn(x_full, y_full)
+        itr = fit_preprocessing(
+            configs=conf,
+            X_train=x_train,
+            y_train=y_train,
+            random_state=self.rng,
+            cat_ix=cat_ix,
+            n_workers=self.n_workers,
+            parallel_mode="block",
+        )
+        configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
+        X_trains = list(X_trains)
+        y_trains = list(y_trains)
+
+        ## Process test data for all ensemble estimators.
+        X_tests = []
+        for _, estim_preprocessor in zip(configs, preprocessors):
+            X_tests.append(estim_preprocessor.transform(x_test).X)
+
+        ## Convert to tensors.
+        for i in range(len(X_trains)):
+            if not isinstance(X_trains[i], torch.Tensor):
+                X_trains[i] = torch.as_tensor(X_trains[i], dtype=torch.float32)
+            if not isinstance(X_tests[i], torch.Tensor):
+                X_tests[i] = torch.as_tensor(X_tests[i], dtype=torch.float32)
+            if not isinstance(y_trains[i], torch.Tensor):
+                y_trains[i] = torch.as_tensor(y_trains[i], dtype=torch.float32)
+
+        if not isinstance(y_test, torch.Tensor):
+            y_test = torch.from_numpy(y_test)
+            if torch.is_floating_point(y_test):
+                y_test = y_test.float()
+            else:
+                y_test = y_test.long()
+
+        # Convert y_train to tensor, while preserving its float or discrete nature
+        # but converting all floats to float32 and discrete to long so they can
+        # be concatenated to tensors.
+        if len(self.configs[index]) == 5:  # Pass through renorm. for regression.
+            return (
+                X_trains,
+                X_tests,
+                y_trains,
+                y_test,
+                cat_ixs,
+                conf,
+                renormalized_criterion,
+            )
+
+        return X_trains, X_tests, y_trains, y_test, cat_ixs, conf
