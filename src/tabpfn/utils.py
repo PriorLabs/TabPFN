@@ -565,7 +565,7 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     prob_left_of_bucket = prob_so_far.gather(index=y_buckets, dim=-1)
 
     bucket_widths = borders[1:] - borders[:-1]
-    share_of_bucket_left = ys - borders[y_buckets] / bucket_widths[y_buckets]
+    share_of_bucket_left = (ys - borders[y_buckets]) / bucket_widths[y_buckets]
     share_of_bucket_left = share_of_bucket_left.clamp(0.0, 1.0)
 
     prob_in_bucket = probs.gather(index=y_buckets, dim=-1) * share_of_bucket_left
