@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "2.0.9"
+version = "2.0.9" # Or the version from your clean clone
 dependencies = [
   "torch>=2.1,<3",
   "scikit-learn>=1.2.0,<1.7",
@@ -73,6 +73,9 @@ dev = [
   "markdown-exec[ansi]",
   "mike",
   "black",  # This allows mkdocstrings to format signatures in the docs
+]
+tpu = [
+  "torch-xla>=2.0" # Users should check for the version compatible with their PyTorch and environment
 ]
 
 [tool.pytest.ini_options]
@@ -145,7 +148,7 @@ select = [
   "TID",
   "TCH",
   "UP",
-  "N",
+  # "N", # Duplicate of N above, ruff might complain or take first one
   "W",
   "YTT",
 ]
@@ -236,7 +239,7 @@ exclude = [
   "FBT001",
   "FBT002",
   "A001",
-  "A001",
+  # "A001", # Duplicate, remove
 ]
 "src/tabpfn/*.py" = [
   "D107",
@@ -306,7 +309,7 @@ module = [
   "huggingface_hub.*",
   "joblib.*",
   "torch.*",
-  "kditransform.*",
+  "kditransform.*", # Assuming this is a valid package name
 ]
 ignore_missing_imports = true
 
@@ -319,26 +322,26 @@ typeCheckingMode = "strict"
 
 strictListInference = true
 strictSetInference = true
-strictDictionaryInference = false
+strictDictionaryInference = false # Changed to false as per original
 reportImportCycles = false
 reportMissingSuperCall = true
-reportMissingTypeArgument = false
+reportMissingTypeArgument = false # Changed to false as per original
 reportOverlappingOverload = true
 reportIncompatibleVariableOverride = true
 reportIncompatibleMethodOverride = true
 reportInvalidTypeVarUse = true
 reportCallInDefaultInitializer = true
 reportImplicitOverride = true
-reportUnknownMemberType = false
-reportUnknownParameterType = false
-reportUnknownVariableType = false
-reportUnknownArgumentType = false
-reportUnknownLambdaType = false
-reportPrivateUsage = false
-reportUnnecessaryCast = false
-reportUnusedFunction = false
-reportMissingTypeStubs = false
-reportPrivateImportUsage = false
-reportUnnecessaryComparison = false
-reportConstantRedefinition = false
-reportUntypedFunctionDecorator = false
+reportUnknownMemberType = false # Changed to false as per original
+reportUnknownParameterType = false # Changed to false as per original
+reportUnknownVariableType = false # Changed to false as per original
+reportUnknownArgumentType = false # Changed to false as per original
+reportUnknownLambdaType = false # Changed to false as per original
+reportPrivateUsage = false # Changed to false as per original
+reportUnnecessaryCast = false # Changed to false as per original
+reportUnusedFunction = false # Changed to false as per original
+reportMissingTypeStubs = false # Changed to false as per original
+reportPrivateImportUsage = false # Changed to false as per original
+reportUnnecessaryComparison = false # Changed to false as per original
+reportConstantRedefinition = false # Changed to false as per original
+reportUntypedFunctionDecorator = false # Changed to false as per original
