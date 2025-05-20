@@ -492,7 +492,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
             preprocessor_configs=typing.cast(
-                "Sequence[PreprocessorConfig]",
+                Sequence[PreprocessorConfig],
                 preprocess_transforms
                 if preprocess_transforms is not None
                 else default_classifier_preprocessor_configs(),

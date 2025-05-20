@@ -15,7 +15,7 @@ def main() -> None:
     deps_match = re.search(r"dependencies\s*=\s*\[(.*?)\]", content, re.DOTALL)
     if deps_match:
         deps = [
-            d.strip(" \"'")
+            d.strip(' "\'')
             for d in deps_match.group(1).strip().split("\n")
             if d.strip()
         ]
