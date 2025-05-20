@@ -1,7 +1,10 @@
+"""Generate requirements.txt with maximum allowed dependency versions."""
+
 from __future__ import annotations
 
 import re
 from pathlib import Path
+
 
 def main() -> None:
     """Extract maximum dependency versions and write to requirements.txt."""
@@ -12,7 +15,7 @@ def main() -> None:
     deps_match = re.search(r"dependencies\s*=\s*\[(.*?)\]", content, re.DOTALL)
     if deps_match:
         deps = [
-            d.strip(' "\'')
+            d.strip(" \"'")
             for d in deps_match.group(1).strip().split("\n")
             if d.strip()
         ]
@@ -31,6 +34,7 @@ def main() -> None:
 
         with Path("requirements.txt").open("w") as f:
             f.write("\n".join(max_reqs))
+
 
 if __name__ == "__main__":
     main()

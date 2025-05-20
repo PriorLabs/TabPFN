@@ -13,7 +13,7 @@ import warnings
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Literal, overload
+from typing import Literal, cast, overload
 from urllib.error import URLError
 
 import torch
@@ -101,7 +101,7 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def _suppress_hf_token_warning():
+def _suppress_hf_token_warning() -> None:
     """Suppress warning about missing HuggingFace token."""
     import warnings
 
@@ -117,7 +117,7 @@ def _try_huggingface_downloads(
     model_name: str | None = None,
     *,  # Force keyword-only arguments
     suppress_warnings: bool = True,
-) -> None:
+) -> None:  # type: ignore
     """Try to download models using the HuggingFace Hub.
 
     Args:
@@ -186,7 +186,7 @@ def _try_direct_downloads(
     base_path: Path,
     source: ModelSource,
     model_name: str | None = None,
-) -> None:
+) -> None:  # type: ignore
     """Try to download models and config using direct URLs."""
     if model_name:
         if model_name not in source.filenames:
@@ -287,7 +287,7 @@ def download_all_models(to: Path) -> None:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=model_type,
+                which=cast(Literal["classifier", "regressor"], model_type),
                 model_name=ckpt_name,
             )
 
@@ -370,31 +370,6 @@ def load_model_criterion_config(
 ) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
 
 
-def resolve_model_path(
-    model_path: None | str | Path,
-    which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
-) -> tuple[Path, Path, str, str]:
-    if model_path is None:
-        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
-        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
-            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
-        else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        model_name = f"tabpfn-{version}-{which}.ckpt"
-        model_path = model_dir / model_name
-    else:
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
-
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    return model_path, model_dir, model_name, which
-
-
 def load_model_criterion_config(
     model_path: None | str | Path,
     *,
@@ -452,7 +427,7 @@ def load_model_criterion_config(
         res = download_model(
             model_path,
             version=version,
-            which=which,
+            which=cast(Literal["classifier", "regressor"], which),
             model_name=model_name,
         )
         if res != "ok":
@@ -476,6 +451,31 @@ def load_model_criterion_config(
             f" had a {type(criterion).__name__} criterion.",
         )
     return loaded_model, criterion, config
+
+
+def resolve_model_path(
+    model_path: None | str | Path,
+    which: Literal["regressor", "classifier"],
+    version: Literal["v2"] = "v2",
+) -> tuple[Path, Path, str, str]:
+    if model_path is None:
+        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
+        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
+            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
+        else:
+            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
+
+        model_name = f"tabpfn-{version}-{which}.ckpt"
+        model_path = model_dir / model_name
+    else:
+        if not isinstance(model_path, (str, Path)):
+            raise ValueError(f"Invalid model_path: {model_path}")
+
+        model_path = Path(model_path)
+        model_dir = model_path.parent
+        model_name = model_path.name
+
+    return model_path, model_dir, model_name, which
 
 
 def get_loss_criterion(

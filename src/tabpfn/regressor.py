@@ -508,7 +508,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
             preprocessor_configs=typing.cast(
-                "Sequence[PreprocessorConfig]",
+                Sequence[PreprocessorConfig],
                 preprocess_transforms
                 if preprocess_transforms is not None
                 else default_regressor_preprocessor_configs(),
@@ -722,18 +722,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type in ["full", "main"]:
             # Create a dictionary of outputs with proper typing via TypedDict
             # Get individual outputs with proper typing
-            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
-            median_ot = typing.cast("np.ndarray", logit_to_output(output_type="median"))
-            mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
+            mean_out = typing.cast(np.ndarray, logit_to_output(output_type="mean"))
+            median_out = typing.cast(np.ndarray, logit_to_output(output_type="median"))
+            mode_out = typing.cast(np.ndarray, logit_to_output(output_type="mode"))
             quantiles_out = typing.cast(
-                "list[np.ndarray]",
+                list[np.ndarray],
                 logit_to_output(output_type="quantiles"),
             )
 
             # Create our typed dictionary
             main_outputs = MainOutputDict(
                 mean=mean_out,
-                median=median_ot,
+                median=median_out,
                 mode=mode_out,
                 quantiles=quantiles_out,
             )
