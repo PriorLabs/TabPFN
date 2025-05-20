@@ -12,7 +12,7 @@ dependencies = [
   "scipy>=1.11.1,<2",
   "pandas>=1.4.0,<3",
   "einops>=0.2.0,<0.9",
-  "huggingface-hub>=0.0.1,<1",
+  "huggingface-hub>=0.0.1,<1"
 ]
 requires-python = ">=3.9"
 authors = [
@@ -24,15 +24,16 @@ authors = [
   { name = "Shi Bin Hoo" },
   { name = "Robin Tibor Schirrmeister" },
   { name = "Frank Hutter" },
-  { name = "Eddie Bergman"}, # Huge thanks to code refactoring contributor Eddie
-  { name = "Leo Grinsztajn"}
+  # Huge thanks to code refactoring contributor Eddie
+  { name = "Eddie Bergman" },
+  { name = "Leo Grinsztajn" }
 ]
+
 readme = "README.md"
 description = "TabPFN: Foundation model for tabular data"
 classifiers = [
   'Intended Audience :: Science/Research',
   'Intended Audience :: Developers',
-  #'License', TODO: Add license - currently can't be licensed!
   'Programming Language :: Python',
   'Topic :: Software Development',
   'Topic :: Scientific/Engineering',
@@ -235,7 +236,6 @@ exclude = [
   "F821",
   "FBT001",
   "FBT002",
-  "A001",
   "A001",
 ]
 "src/tabpfn/*.py" = [
