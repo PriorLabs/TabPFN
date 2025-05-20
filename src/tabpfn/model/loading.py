@@ -117,7 +117,7 @@ def _try_huggingface_downloads(
     model_name: str | None = None,
     *,  # Force keyword-only arguments
     suppress_warnings: bool = True,
-) -> None:  # type: ignore
+) -> None:
     """Try to download models using the HuggingFace Hub.
 
     Args:
@@ -186,7 +186,7 @@ def _try_direct_downloads(
     base_path: Path,
     source: ModelSource,
     model_name: str | None = None,
-) -> None:  # type: ignore
+) -> None:
     """Try to download models and config using direct URLs."""
     if model_name:
         if model_name not in source.filenames:
