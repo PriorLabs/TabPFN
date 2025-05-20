@@ -228,7 +228,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 pre-training range.
 
                 - If `True`, the model will not raise an error if the input data is
-                  outside the pre-training range.
+                  outside the pre-training range. Also supresses error when using
+                  the model with more than 1000 samples on CPU.
                 - If `False`, you can use the model outside the pre-training range, but
                   the model could perform worse.
 
@@ -428,7 +429,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
-        check_cpu_warning(self.device, X)
+        check_cpu_warning(
+            self.device, X, allow_cpu_override=self.ignore_pretraining_limits
+        )
 
         if feature_names_in is not None:
             self.feature_names_in_ = feature_names_in

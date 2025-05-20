@@ -245,15 +245,25 @@ def create_inference_engine(  # noqa: PLR0913
 
 
 def check_cpu_warning(
-    device: str | torch.device, X: np.ndarray | torch.Tensor | pd.DataFrame
+    device: str | torch.device,
+    X: np.ndarray | torch.Tensor | pd.DataFrame,
+    *,
+    allow_cpu_override: bool = False,
 ) -> None:
     """Check if using CPU with large datasets and warn or error appropriately.
 
     Args:
         device: The torch device being used
         X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
+        allow_cpu_override: If True, allow CPU usage with large datasets.
     """
-    allow_cpu_override = os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
+    allow_cpu_override = allow_cpu_override or (
+        os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
+    )
+
+    if allow_cpu_override:
+        return
+
     device_mapped = infer_device_and_type(device)
 
     # Determine number of samples
@@ -264,16 +274,16 @@ def check_cpu_warning(
 
     if torch.device(device_mapped).type == "cpu":
         if num_samples > 1000:
-            if not allow_cpu_override:
-                raise RuntimeError(
-                    "Running on CPU with more than 1000 samples is not allowed "
-                    "by default due to slow performance.\n"
-                    "To override this behavior, set the environment variable "
-                    "TABPFN_ALLOW_CPU_LARGE_DATASET=1.\n"
-                    "Alternatively, consider using a GPU or the tabpfn-client API: "
-                    "https://github.com/PriorLabs/tabpfn-client"
-                )
-        elif num_samples > 200:
+            raise RuntimeError(
+                "Running on CPU with more than 1000 samples is not allowed "
+                "by default due to slow performance.\n"
+                "To override this behavior, set the environment variable "
+                "TABPFN_ALLOW_CPU_LARGE_DATASET=1 or "
+                "set ignore_pretraining_limits=True.\n"
+                "Alternatively, consider using a GPU or the tabpfn-client API: "
+                "https://github.com/PriorLabs/tabpfn-client"
+            )
+        if num_samples > 200:
             warnings.warn(
                 "Running on CPU with more than 200 samples may be slow.\n"
                 "Consider using a GPU or the tabpfn-client API: "
