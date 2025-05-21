@@ -75,7 +75,6 @@ from sklearn.datasets import fetch_openml
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
-# Assuming there is a TabPFNRegressor (if not, a different regressor should be used)
 from tabpfn import TabPFNRegressor  
 
 # Load Boston Housing data
