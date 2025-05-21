@@ -56,7 +56,9 @@ class PreprocessorConfig:
         categorical_name:
             Name of the categorical encoding method.
             Options: "none", "numeric", "onehot", "ordinal", "ordinal_shuffled", "none".
-        append_original: Whether to append original features to the transformed features
+        append_original: Whether to append original features to the transformed
+            features. Set to ``"auto"`` to append only if the dataset has fewer
+            than 500 features.
         subsample_features: Fraction of features to subsample. -1 means no subsampling.
         global_transformer_name: Name of the global transformer to use.
     """
@@ -117,7 +119,7 @@ class PreprocessorConfig:
         "ordinal_shuffled",
         "ordinal_very_common_categories_shuffled",
     ] = "none"
-    append_original: bool = False
+    append_original: bool | Literal["auto"] = False
     subsample_features: float = -1
     global_transformer_name: str | None = None
 
@@ -125,7 +127,7 @@ class PreprocessorConfig:
     def __str__(self) -> str:
         return (
             f"{self.name}_cat:{self.categorical_name}"
-            + ("_and_none" if self.append_original else "")
+            + ("_and_none" if self.append_original is True else "")
             + (
                 f"_subsample_feats_{self.subsample_features}"
                 if self.subsample_features > 0
@@ -176,7 +178,7 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
     return [
         PreprocessorConfig(
             "quantile_uni_coarse",
-            append_original=True,
+            append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
             subsample_features=-1,
@@ -194,7 +196,7 @@ def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     return [
         PreprocessorConfig(
             "quantile_uni",
-            append_original=True,
+            append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
         ),
