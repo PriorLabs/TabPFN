@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import torch
 
 
 def test_internal_windows_total_memory():
@@ -39,3 +40,14 @@ def test_internal_windows_total_memory_multithreaded():
             t.join()
         psutil_result = psutil.virtual_memory().total / 1e9
         assert all(result == psutil_result for result in results)
+
+
+def test_is_autocast_available_cpu() -> None:
+    from tabpfn.utils import is_autocast_available
+
+    cpu_result = is_autocast_available("cpu")
+    assert isinstance(cpu_result, bool)
+
+    if torch.cuda.is_available():
+        cuda_result = is_autocast_available("cuda")
+        assert isinstance(cuda_result, bool)
