@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import typing
 import warnings
 from collections.abc import Sequence
@@ -68,7 +69,7 @@ def _get_embeddings(
     embeddings: list[np.ndarray] = []
 
     # Cast executor to Any to bypass the iter_outputs signature check
-    executor = typing.cast(typing.Any, model.executor_)
+    executor = typing.cast("typing.Any", model.executor_)
     for output, config in executor.iter_outputs(
         X,
         device=model.device_,
@@ -76,7 +77,7 @@ def _get_embeddings(
         only_return_standard_out=False,
     ):
         # Cast output to Any to allow dict-like access
-        output_dict = typing.cast(dict[str, torch.Tensor], output)
+        output_dict = typing.cast("dict[str, torch.Tensor]", output)
         embed = output_dict[selected_data].squeeze(1)
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
         assert embed.ndim == 2
@@ -149,11 +150,33 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
 
     Returns:
         The inferred device
+
+    Notes:
+        TPU support is experimental and may require additional
+        adjustments in other parts of the library.
     """
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
-        return torch.device(device_type_)
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        # Detect TPU only if torch_xla is installed and a TPU device is present
+        if importlib.util.find_spec("torch_xla") is not None:
+            try:
+                import torch_xla.core.xla_model as xm
+
+                return torch.device(str(xm.xla_device()))
+            except Exception:  # noqa: BLE001,S110
+                pass
+
+        return torch.device("cpu")
+
     if isinstance(device, str):
+        if device.lower() in {"tpu", "xla"}:
+            spec = importlib.util.find_spec("torch_xla")
+            if spec is None:
+                raise ValueError("torch_xla must be installed to use TPU devices")
+            import torch_xla.core.xla_model as xm
+
+            return torch.device(str(xm.xla_device()))
         return torch.device(device)
 
     if isinstance(device, torch.device):
@@ -435,7 +458,7 @@ def validate_X_predict(
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
-    return typing.cast(np.ndarray, result)
+    return typing.cast("np.ndarray", result)
 
 
 def infer_categorical_features(
@@ -729,7 +752,7 @@ def get_total_memory_windows() -> float:
 
     try:
         # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast(typing.Any, ctypes).windll
+        windll = typing.cast("typing.Any", ctypes).windll
         k32_lib = windll.LoadLibrary("kernel32.dll")
         k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
         return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
