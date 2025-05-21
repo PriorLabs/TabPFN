@@ -251,7 +251,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 pre-training range.
 
                 - If `True`, the model will not raise an error if the input data is
-                  outside the pre-training range. Also supresses error when using
+                  outside the pre-training range. Also suppresses error when using
                   the model with more than 1000 samples on CPU.
                 - If `False`, you can use the model outside the pre-training range, but
                   the model could perform worse.
