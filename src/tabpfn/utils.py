@@ -190,7 +190,7 @@ def is_autocast_available(device_type: str) -> bool:
                 or (
                     device_type == torch.device("cpu").type
                     and (
-                        getattr(torch, "cpu", None) is not None
+                        hasattr(torch, "cpu")
                         and hasattr(torch.cpu, "amp")
                     )
                 )
