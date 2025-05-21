@@ -1,6 +1,6 @@
 
                               Prior Labs License
-                           Version 1.0, January 2025
+                           Version 1.1, May 2025
                        http://priorlabs.ai/tabpfn-license
 
    This license is a derivative of the Apache 2.0 license
@@ -187,7 +187,7 @@
     or a product or service (including another AI model) that contains
     any source or model weights, You shall (A) provide a copy of this
     License with any such materials; and (B) prominently display
-    “Built with TabPFN” on each related website, user interface, blogpost,
+    “Built with PriorLabs-TabPFN” on each related website, user interface, blogpost,
     about page, or product documentation. If You use the source or model
     weights or model outputs to create, train, fine tune, distil, or
     otherwise improve an AI model, which is distributed or made available,
