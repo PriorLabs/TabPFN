@@ -117,7 +117,7 @@ class PreprocessorConfig:
         "ordinal_shuffled",
         "ordinal_very_common_categories_shuffled",
     ] = "none"
-    append_original: bool = False
+    append_original: bool | Literal["auto"] = False
     subsample_features: float = -1
     global_transformer_name: str | None = None
 
@@ -176,7 +176,7 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
     return [
         PreprocessorConfig(
             "quantile_uni_coarse",
-            append_original=True,
+            append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
             subsample_features=-1,
@@ -194,7 +194,7 @@ def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     return [
         PreprocessorConfig(
             "quantile_uni",
-            append_original=True,
+            append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
         ),
