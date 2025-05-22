@@ -877,7 +877,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         *,
         transform_name: str = "safepower",
         apply_to_categorical: bool = False,
-        append_to_original: bool = False,
+        append_to_original: bool | Literal["auto"] = False,
         subsample_features: float = -1,
         global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
@@ -942,15 +942,21 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
 
+        should_append_original = (
+            n_features < 500
+            if self.append_to_original == "auto"
+            else self.append_to_original
+        )
+
         # -------- Append to original ------
         # If we append to original, all the categorical indices are kept in place
         # as the first transform is a passthrough on the whole X as it is above
-        if self.append_to_original and self.apply_to_categorical:
+        if should_append_original and self.apply_to_categorical:
             trans_ixs = categorical_features + numerical_ix
             transformers.append(("original", "passthrough", all_feats_ix))
             cat_ix = categorical_features  # Exist as they are in original
 
-        elif self.append_to_original and not self.apply_to_categorical:
+        elif should_append_original and not self.apply_to_categorical:
             trans_ixs = numerical_ix
             # Includes the categoricals passed through
             transformers.append(("original", "passthrough", all_feats_ix))
@@ -960,11 +966,11 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         # We only have categorical indices if we don't transform them
         # The first transformer will be a passthrough on the categorical indices
         # Making them the first
-        elif not self.append_to_original and self.apply_to_categorical:
+        elif not should_append_original and self.apply_to_categorical:
             trans_ixs = categorical_features + numerical_ix
             cat_ix = []  # We have none left, they've been transformed
 
-        elif not self.append_to_original and not self.apply_to_categorical:
+        elif not should_append_original and not self.apply_to_categorical:
             trans_ixs = numerical_ix
             transformers.append(("cats", "passthrough", categorical_features))
             cat_ix = list(range(len(categorical_features)))  # They are at start
