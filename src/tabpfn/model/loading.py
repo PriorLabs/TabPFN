@@ -340,7 +340,7 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
     return use_instead_path
 
 
-@overload
+@overload  # type: ignore[no-overload-impl]
 def load_model_criterion_config(
     model_path: str | Path | None,
     *,
@@ -404,7 +404,7 @@ def load_model_criterion_config(
     """
     (model_path, model_dir, model_name, which) = resolve_model_path(
         model_path, which, version
-    )
+    )  # type: ignore
 
     model_dir.mkdir(parents=True, exist_ok=True)
     if not model_path.exists():
@@ -648,7 +648,7 @@ def load_model(
     # `True`, dissallowing loading of arbitrary objects.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=None)  # type: ignore
 
     assert "state_dict" in checkpoint
     assert "config" in checkpoint
