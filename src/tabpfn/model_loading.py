@@ -40,6 +40,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Public fallback base URL for model downloads
+FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/05152025"
+
 
 class ModelType(str, Enum):  # noqa: D101
     CLASSIFIER = "classifier"
@@ -92,11 +95,12 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
-    def get_fallback_urls(self) -> list[str]:  # noqa: D102
+    def get_fallback_urls(self) -> list[str]:
+        """Return list of fallback URLs for model downloads."""
         return [
             f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}?download=true"
             for filename in self.filenames
-        ]
+        ] + [f"{FALLBACK_S3_BASE_URL}/{filename}" for filename in self.filenames]
 
 
 def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
@@ -203,38 +207,42 @@ def _try_direct_downloads(
         if filename not in source.filenames:
             source.filenames.append(filename)
 
-    model_url = (
-        f"https://huggingface.co/{source.repo_id}/resolve/main/{filename}?download=true"
-    )
-    config_url = f"https://huggingface.co/{source.repo_id}/resolve/main/config.json?download=true"
+    url_pairs = [
+        (
+            f"https://huggingface.co/{source.repo_id}/resolve/main/{filename}?download=true",
+            f"https://huggingface.co/{source.repo_id}/resolve/main/config.json?download=true",
+        ),
+        (f"{FALLBACK_S3_BASE_URL}/{filename}", f"{FALLBACK_S3_BASE_URL}/config.json"),
+    ]
 
-    # Create parent directory if it doesn't exist
+    last_error: Exception | None = None
     base_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Attempting download from {model_url}")
-
-    try:
-        # Download model checkpoint
-        with urllib.request.urlopen(model_url) as response:  # noqa: S310
-            if response.status != 200:
-                raise URLError(
-                    f"HTTP {response.status} when downloading from {model_url}",
-                )
-            base_path.write_bytes(response.read())
-
-        # Try to download config.json
-        config_path = base_path.parent / "config.json"
+    for model_url, config_url in url_pairs:
+        logger.info(f"Attempting download from {model_url}")
         try:
-            with urllib.request.urlopen(config_url) as response:  # noqa: S310
-                if response.status == 200:
-                    config_path.write_bytes(response.read())
-        except Exception:  # noqa: BLE001
-            logger.warning("Failed to download config.json!")
-            # Continue even if config.json download fails
+            with urllib.request.urlopen(model_url) as response:  # noqa: S310
+                if response.status != 200:
+                    raise URLError(
+                        f"HTTP {response.status} when downloading from {model_url}",
+                    )
+                base_path.write_bytes(response.read())
 
-        logger.info(f"Successfully downloaded to {base_path}")
-    except Exception as e:
-        raise Exception("Direct download failed!") from e
+            config_path = base_path.parent / "config.json"
+            try:
+                with urllib.request.urlopen(config_url) as response:  # noqa: S310
+                    if response.status == 200:
+                        config_path.write_bytes(response.read())
+            except Exception:  # noqa: BLE001
+                logger.warning("Failed to download config.json!")
+
+            logger.info(f"Successfully downloaded to {base_path}")
+            return
+        except Exception as e:  # noqa: BLE001
+            last_error = e
+            logger.warning(f"Failed download from {model_url}: {e!s}")
+
+    raise Exception("Direct download failed!") from last_error
 
 
 def download_model(
