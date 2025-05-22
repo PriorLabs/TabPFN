@@ -115,7 +115,8 @@ For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor`
    ```python 
    from tabpfn_extensions.post_hoc_ensembles.sklearn_interface import AutoTabPFNClassifier
 
-   clf = AutoTabPFNClassifier(max_time=120, device="cuda") # 120 seconds tuning time
+   # "auto" selects CUDA or MPS when available
+   clf = AutoTabPFNClassifier(max_time=120, device="auto") # 120 seconds tuning time
    clf.fit(X_train, y_train)
    predictions = clf.predict(X_test)
    ```

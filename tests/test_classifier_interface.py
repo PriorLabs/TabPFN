@@ -21,10 +21,13 @@ from torch import nn
 
 from tabpfn import TabPFNClassifier
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.utils import is_autocast_available
 
 devices = ["cpu"]
 if torch.cuda.is_available():
     devices.append("cuda")
+if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+    devices.append("mps")
 
 feature_shift_decoders = ["shuffle", "rotate"]
 multiclass_decoders = ["shuffle", "rotate"]
@@ -72,7 +75,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 )
 def test_fit(
     n_estimators: int,
-    device: Literal["cuda", "cpu"],
+    device: Literal["cuda", "mps", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     multiclass_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
@@ -80,8 +83,8 @@ def test_fit(
     remove_outliers_std: int | None,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if device == "cpu" and inference_precision == "autocast":
-        pytest.skip("Only GPU supports inference_precision")
+    if inference_precision == "autocast" and not is_autocast_available(device):
+        pytest.skip("Autocast not supported on this device")
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,

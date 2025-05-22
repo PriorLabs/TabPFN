@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import typing
 import warnings
 from collections.abc import Sequence
@@ -68,7 +69,7 @@ def _get_embeddings(
     embeddings: list[np.ndarray] = []
 
     # Cast executor to Any to bypass the iter_outputs signature check
-    executor = typing.cast(typing.Any, model.executor_)
+    executor = typing.cast("typing.Any", model.executor_)
     for output, config in executor.iter_outputs(
         X,
         device=model.device_,
@@ -76,7 +77,7 @@ def _get_embeddings(
         only_return_standard_out=False,
     ):
         # Cast output to Any to allow dict-like access
-        output_dict = typing.cast(dict[str, torch.Tensor], output)
+        output_dict = typing.cast("dict[str, torch.Tensor]", output)
         embed = output_dict[selected_data].squeeze(1)
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
         assert embed.ndim == 2
@@ -141,25 +142,50 @@ def _cancel_nan_borders(
     return borders, logit_cancel_mask
 
 
-def infer_device_and_type(device: str | torch.device | None) -> torch.device:
+def infer_device_and_type(device: str | torch.device | None) -> torch.device:  # noqa: PLR0912
     """Infer the device and data type from the given device string.
 
     Args:
         device: The device to infer the type from.
 
     Returns:
-        The inferred device
+        The inferred device. If ``device`` is ``"auto"`` or ``None``, the
+        function chooses ``"cuda"`` when available, otherwise ``"mps"`` if
+        supported, tries a TPU via ``torch_xla`` if detected, and falls back to
+        ``"cpu"``.
     """
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
-        return torch.device(device_type_)
-    if isinstance(device, str):
-        return torch.device(device)
+        if torch.cuda.is_available():
+            device_obj = torch.device("cuda")
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            device_obj = torch.device("mps")
+        else:
+            spec = importlib.util.find_spec("torch_xla")
+            if spec is not None:
+                try:
+                    import torch_xla.core.xla_model as xm
 
-    if isinstance(device, torch.device):
-        return device
+                    device_obj = torch.device(str(xm.xla_device()))
+                except Exception:  # noqa: BLE001
+                    device_obj = torch.device("cpu")
+            else:
+                device_obj = torch.device("cpu")
+    elif isinstance(device, str):
+        if device.lower() in {"tpu", "xla"}:
+            spec = importlib.util.find_spec("torch_xla")
+            if spec is None:
+                raise ValueError("torch_xla must be installed to use TPU devices")
+            import torch_xla.core.xla_model as xm
 
-    raise ValueError(f"Invalid device: {device}")
+            device_obj = torch.device(str(xm.xla_device()))
+        else:
+            device_obj = torch.device(device)
+    elif isinstance(device, torch.device):
+        device_obj = device
+    else:
+        raise ValueError(f"Invalid device: {device}")
+
+    return device_obj
 
 
 def is_autocast_available(device_type: str) -> bool:
@@ -183,15 +209,18 @@ def is_autocast_available(device_type: str) -> bool:
     except (ImportError, AttributeError):
         # Fall back to custom implementation if the function isn't available
         return bool(
-            hasattr(torch.cuda, "amp")
-            and hasattr(torch.cuda.amp, "autocast")
-            and (
-                device_type == torch.device("cuda").type
-                or (
-                    device_type == torch.device("cpu").type
-                    and hasattr(torch.cpu, "amp")
-                )
-            ),
+            (
+                hasattr(torch.cuda, "amp")
+                and hasattr(torch.cuda.amp, "autocast")
+                and device_type == torch.device("cuda").type
+            )
+            or (hasattr(torch.cpu, "amp") and device_type == torch.device("cpu").type)
+            or (
+                getattr(torch, "mps", None)
+                and hasattr(torch.mps, "amp")
+                and hasattr(torch.mps.amp, "autocast")
+                and device_type == torch.device("mps").type
+            )
         )
 
 
@@ -435,7 +464,7 @@ def validate_X_predict(
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
-    return typing.cast(np.ndarray, result)
+    return typing.cast("np.ndarray", result)
 
 
 def infer_categorical_features(
@@ -729,7 +758,7 @@ def get_total_memory_windows() -> float:
 
     try:
         # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast(typing.Any, ctypes).windll
+        windll = typing.cast("typing.Any", ctypes).windll
         k32_lib = windll.LoadLibrary("kernel32.dll")
         k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
         return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
