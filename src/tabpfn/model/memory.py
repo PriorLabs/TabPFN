@@ -226,6 +226,41 @@ class MemoryUsageEstimator:
         return cls.convert_bytes_to_unit(total_mem_bytes, unit)
 
     @classmethod
+    def _get_mps_free_memory(cls) -> float:
+        """Get the free memory for MPS devices.
+
+        When ``torch.mps.recommended_max_memory`` is available (PyTorch 2.5.0
+        and later), it is used in combination with
+        ``torch.mps.current_allocated_memory``. Otherwise, the Metal API is used
+        via ``pyobjc-framework-Metal``.
+        """
+        if hasattr(torch.mps, "recommended_max_memory"):
+            recommended = torch.mps.recommended_max_memory()
+            if recommended is not None:
+                allocated = torch.mps.current_allocated_memory()
+                return recommended - allocated
+
+        try:
+            from Metal import MTLCreateSystemDefaultDevice
+        except ImportError as err:  # pragma: no cover - optional dependency
+            raise ImportError(
+                "pyobjc-framework-Metal is required to access the Metal APIs "
+                "for determining available free memory for MPS devices."
+            ) from err
+
+        mtl_device = MTLCreateSystemDefaultDevice()
+        if mtl_device is None:
+            raise RuntimeError("No MPS device found.")
+
+        recommended = mtl_device.recommendedMaxWorkingSetSize()
+        allocated = (
+            torch.mps.current_allocated_memory()
+            if hasattr(torch.mps, "current_allocated_memory")
+            else 0
+        )
+        return recommended - allocated
+
+    @classmethod
     def get_max_free_memory(
         cls,
         device: torch.device,
@@ -288,17 +323,7 @@ class MemoryUsageEstimator:
             a = torch.cuda.memory_allocated(0)
             free_memory = t - a  # free inside reserved
         elif device.type.startswith("mps"):
-            # It seems like we would want to use the following functions:
-            #    * torch.mps.recommended_max_memory
-            #    * torch.mps.current_allocated_memory
-            # Not entirely sure of the behavior of the first function
-            # so this might not work as intended.
-            raise NotImplementedError(
-                "Memory estimation for MPS devices is not currently supported."
-                " If you have experience with getting memory information for MPS"
-                " devices, we would gladly appreciate a contribution!"
-                "",
-            )
+            free_memory = cls._get_mps_free_memory()
         else:
             raise ValueError(f"Unknown device {device}")
 
