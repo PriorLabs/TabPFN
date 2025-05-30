@@ -241,44 +241,6 @@ class SequentialEncoder(nn.Sequential, InputEncoder):
         return input[self.output_key] if self.output_key is not None else input
 
 
-class LinearInputEncoder(nn.Module):
-    """A simple linear input encoder."""
-
-    def __init__(
-        self,
-        num_features: int,
-        emsize: int,
-        replace_nan_by_zero: bool = False,
-        bias: bool = True,
-    ):
-        """Initialize the LinearInputEncoder.
-
-        Args:
-            num_features: The number of input features.
-            emsize: The embedding size, i.e. the number of output features.
-            replace_nan_by_zero: Whether to replace NaN values in the input by zero.
-            bias: Whether to use a bias term in the linear layer.
-        """
-        super().__init__()
-        self.layer = nn.Linear(num_features, emsize, bias=bias)
-        self.replace_nan_by_zero = replace_nan_by_zero
-
-    def forward(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
-        """Apply the linear transformation to the input.
-
-        Args:
-            *x: The input tensors to concatenate and transform.
-            **kwargs: Unused keyword arguments.
-
-        Returns:
-            A tuple containing the transformed tensor.
-        """
-        x = torch.cat(x, dim=-1)  # type: ignore
-        if self.replace_nan_by_zero:
-            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
-        return (self.layer(x),)
-
-
 class SeqEncStep(nn.Module):
     """Abstract base class for sequential encoder steps.
 
