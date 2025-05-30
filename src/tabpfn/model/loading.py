@@ -287,7 +287,7 @@ def download_all_models(to: Path) -> None:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=cast(Literal["classifier", "regressor"], model_type),
+                which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
 
@@ -427,7 +427,7 @@ def load_model_criterion_config(
         res = download_model(
             model_path,
             version=version,
-            which=cast(Literal["classifier", "regressor"], which),
+            which=cast("Literal['classifier', 'regressor']", which),
             model_name=model_name,
         )
         if res != "ok":

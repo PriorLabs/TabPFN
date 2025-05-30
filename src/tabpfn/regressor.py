@@ -21,7 +21,7 @@ import typing
 from collections.abc import Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Union
 from typing_extensions import Self, TypedDict, overload
 
 import numpy as np
@@ -102,6 +102,19 @@ class FullOutputDict(MainOutputDict):
 
     criterion: FullSupportBarDistribution
     logits: torch.Tensor
+
+
+RegressionResultType = Union[
+    np.ndarray, list[np.ndarray], MainOutputDict, FullOutputDict
+]
+OutputTypeType = Literal[
+    "mean",
+    "median",
+    "mode",
+    "quantiles",
+    "full",
+    "main",
+]
 
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
@@ -461,6 +474,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.device, X, allow_cpu_override=self.ignore_pretraining_limits
         )
 
+        self.is_constant_target_ = np.unique(y).size == 1
+        self.constant_value_ = None
+
+        if self.is_constant_target_:
+            self.constant_value_ = y[0]
+            # Create minimally valid borders around constant value
+            self.renormalized_criterion_ = FullSupportBarDistribution(
+                borders=torch.tensor(
+                    [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
+                )
+            )
+            return self
+
         if feature_names_in is not None:
             self.feature_names_in_ = feature_names_in
         self.n_features_in_ = n_features_in
@@ -508,7 +534,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
             preprocessor_configs=typing.cast(
-                Sequence[PreprocessorConfig],
+                "Sequence[PreprocessorConfig]",
                 preprocess_transforms
                 if preprocess_transforms is not None
                 else default_regressor_preprocessor_configs(),
@@ -590,14 +616,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: XType,
         *,
         # TODO: support "ei", "pi"
-        output_type: Literal[
-            "mean",
-            "median",
-            "mode",
-            "quantiles",
-            "full",
-            "main",
-        ] = "mean",
+        output_type: OutputTypeType = "mean",
         quantiles: list[float] | None = None,
     ) -> np.ndarray | list[np.ndarray] | MainOutputDict | FullOutputDict:
         """Predict the target variable.
@@ -630,8 +649,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         X = validate_X_predict(X, self)
-        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
-        X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
@@ -641,6 +658,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ), "All quantiles must be between 0 and 1 and floats."
         if output_type not in self._USABLE_OUTPUT_TYPES:
             raise ValueError(f"Invalid output type: {output_type}")
+
+        if hasattr(self, "is_constant_target_") and self.is_constant_target_:
+            return self._handle_constant_target(X.shape[0], output_type, quantiles)
+
+        X = _fix_dtypes(X, cat_indices=self.categorical_features_indices)
+        X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
 
         std_borders = self.bardist_.borders.cpu().numpy()
         outputs: list[torch.Tensor] = []
@@ -722,11 +745,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type in ["full", "main"]:
             # Create a dictionary of outputs with proper typing via TypedDict
             # Get individual outputs with proper typing
-            mean_out = typing.cast(np.ndarray, logit_to_output(output_type="mean"))
-            median_out = typing.cast(np.ndarray, logit_to_output(output_type="median"))
-            mode_out = typing.cast(np.ndarray, logit_to_output(output_type="mode"))
+            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
+            median_out = typing.cast(
+                "np.ndarray", logit_to_output(output_type="median")
+            )
+            mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
             quantiles_out = typing.cast(
-                list[np.ndarray],
+                "list[np.ndarray]",
                 logit_to_output(output_type="quantiles"),
             )
 
@@ -749,6 +774,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return main_outputs
 
         return logit_to_output(output_type=output_type)
+
+    def _handle_constant_target(
+        self, n_samples: int, output_type: OutputTypeType, quantiles: list[float]
+    ) -> RegressionResultType:
+        constant_prediction = np.full(n_samples, self.constant_value_)
+        result: RegressionResultType
+        if output_type == "quantiles":
+            result = [constant_prediction for _ in quantiles]
+        elif output_type in ["full", "main"]:
+            main_outputs = MainOutputDict(
+                mean=constant_prediction,
+                median=constant_prediction,
+                mode=constant_prediction,
+                quantiles=[constant_prediction for _ in quantiles],
+            )
+            if output_type == "full":
+                result = FullOutputDict(
+                    **main_outputs,
+                    criterion=self.renormalized_criterion_,
+                    logits=torch.zeros((n_samples, 1)),
+                )
+            else:
+                result = main_outputs
+        else:
+            result = constant_prediction
+        return result
 
     def get_embeddings(
         self,
