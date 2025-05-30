@@ -877,7 +877,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         *,
         transform_name: str = "safepower",
         apply_to_categorical: bool = False,
-        append_to_original: bool = False,
+        append_to_original: bool | Literal["auto"] = False,
         subsample_features: float = -1,
         global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
@@ -941,6 +941,12 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         transformers = []
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
+
+        self.append_to_original = (
+            n_features < 500
+            if self.append_to_original == "auto"
+            else self.append_to_original
+        )
 
         # -------- Append to original ------
         # If we append to original, all the categorical indices are kept in place
