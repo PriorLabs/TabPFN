@@ -265,7 +265,7 @@ Not effective:
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 git clone https://github.com/PriorLabs/TabPFN.git
-cd tabpfn
+cd TabPFN
 pip install -e ".[dev]"
 pre-commit install
 ```
