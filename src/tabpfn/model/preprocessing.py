@@ -710,7 +710,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                         AdaptiveQuantileTransformer(
                             output_distribution="normal",
                             n_quantiles=max(num_examples // 10, 2),
-                            subsample=max(max(num_examples // 10, 2), 10_000),
+                            subsample=max(num_examples // 10, 10_000),
                             random_state=random_state,
                         ),
                         # "other" or "ordinal"
@@ -772,25 +772,25 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             "quantile_uni_coarse": QuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 10, 2),
-                subsample=max(max(num_examples // 10, 2), 10_000),
+                subsample=max(num_examples // 10, 10_000),
                 random_state=random_state,
             ),
             "quantile_norm_coarse": QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 10, 2),
-                subsample=max(max(num_examples // 10, 2), 10_000),
+                subsample=max(num_examples // 10, 10_000),
                 random_state=random_state,
             ),
             "quantile_uni": QuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 5, 2),
-                subsample=max(max(num_examples // 5, 2), 10_000),
+                subsample=max(num_examples // 5, 10_000),
                 random_state=random_state,
             ),
             "quantile_norm": QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 5, 2),
-                subsample=max(max(num_examples // 5, 2), 10_000),
+                subsample=max(num_examples // 5, 10_000),
                 random_state=random_state,
             ),
             "quantile_uni_fine": QuantileTransformer(
@@ -818,6 +818,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                         QuantileTransformer(
                             output_distribution="normal",
                             n_quantiles=max(num_examples // 10, 2),
+                            subsample=max(num_examples // 10, 10_000),
                             random_state=random_state,
                         ),
                     ),
