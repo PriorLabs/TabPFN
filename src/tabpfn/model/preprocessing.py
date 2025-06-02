@@ -768,32 +768,32 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 inverse_func=np.log,
                 check_inverse=False,
             ),
-            "quantile_uni_coarse": QuantileTransformer(
+            "quantile_uni_coarse": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 10, 2),
                 random_state=random_state,
             ),
-            "quantile_norm_coarse": QuantileTransformer(
+            "quantile_norm_coarse": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 10, 2),
                 random_state=random_state,
             ),
-            "quantile_uni": QuantileTransformer(
+            "quantile_uni": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 5, 2),
                 random_state=random_state,
             ),
-            "quantile_norm": QuantileTransformer(
+            "quantile_norm": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 5, 2),
                 random_state=random_state,
             ),
-            "quantile_uni_fine": QuantileTransformer(
+            "quantile_uni_fine": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=num_examples,
                 random_state=random_state,
             ),
-            "quantile_norm_fine": QuantileTransformer(
+            "quantile_norm_fine": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=num_examples,
                 random_state=random_state,
@@ -808,7 +808,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 [
                     (
                         "norm",
-                        QuantileTransformer(
+                        AdaptiveQuantileTransformer(
                             output_distribution="normal",
                             n_quantiles=max(num_examples // 10, 2),
                             random_state=random_state,
