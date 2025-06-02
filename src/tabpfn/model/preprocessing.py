@@ -710,6 +710,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                         AdaptiveQuantileTransformer(
                             output_distribution="normal",
                             n_quantiles=max(num_examples // 10, 2),
+                            subsample=max(max(num_examples // 10, 2), 10_000),
                             random_state=random_state,
                         ),
                         # "other" or "ordinal"
@@ -771,31 +772,37 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             "quantile_uni_coarse": QuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 10, 2),
+                subsample=max(max(num_examples // 10, 2), 10_000),
                 random_state=random_state,
             ),
             "quantile_norm_coarse": QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 10, 2),
+                subsample=max(max(num_examples // 10, 2), 10_000),
                 random_state=random_state,
             ),
             "quantile_uni": QuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 5, 2),
+                subsample=max(max(num_examples // 5, 2), 10_000),
                 random_state=random_state,
             ),
             "quantile_norm": QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 5, 2),
+                subsample=max(max(num_examples // 5, 2), 10_000),
                 random_state=random_state,
             ),
             "quantile_uni_fine": QuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=num_examples,
+                subsample=max(num_examples, 10_000),
                 random_state=random_state,
             ),
             "quantile_norm_fine": QuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=num_examples,
+                subsample=max(num_examples, 10_000),
                 random_state=random_state,
             ),
             "robust": RobustScaler(unit_variance=True),
