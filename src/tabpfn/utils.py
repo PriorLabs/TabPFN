@@ -27,6 +27,10 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.model.encoders import (
+    MulticlassClassificationTargetEncoder,
+    SequentialEncoder,
+)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -68,7 +72,7 @@ def _get_embeddings(
     embeddings: list[np.ndarray] = []
 
     # Cast executor to Any to bypass the iter_outputs signature check
-    executor = typing.cast(typing.Any, model.executor_)
+    executor = typing.cast("typing.Any", model.executor_)
     for output, config in executor.iter_outputs(
         X,
         device=model.device_,
@@ -76,7 +80,7 @@ def _get_embeddings(
         only_return_standard_out=False,
     ):
         # Cast output to Any to allow dict-like access
-        output_dict = typing.cast(dict[str, torch.Tensor], output)
+        output_dict = typing.cast("dict[str, torch.Tensor]", output)
         embed = output_dict[selected_data].squeeze(1)
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
         assert embed.ndim == 2
@@ -350,19 +354,32 @@ def validate_Xy_fit(
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting."""
     # Calls `validate_data()` with specification
-    X, y = validate_data(
-        estimator,
-        X=X,
-        y=y,
-        # Parameters to `check_X_y()`
-        accept_sparse=False,
-        dtype=None,  # This is handled later in `fit()`
-        ensure_all_finite="allow-nan",
-        ensure_min_samples=2,
-        ensure_min_features=1,
-        y_numeric=ensure_y_numeric,
-        estimator=estimator,
-    )
+
+    # Checks that we do not call validate_data() in case
+    # the Prompttuning is enabled, since it is not differentiable.
+    # TODO: update then Prompttuning is enabled for diffable models
+    if not is_classifier(estimator) or (
+        is_classifier(estimator) and not estimator.differentiable_input
+    ):
+        X, y = validate_data(
+            estimator,
+            X=X,
+            y=y,
+            # Parameters to `check_X_y()`
+            accept_sparse=False,
+            dtype=None,  # This is handled later in `fit()`
+            ensure_all_finite="allow-nan",
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            y_numeric=ensure_y_numeric,
+            estimator=estimator,
+        )
+    else:  # Quick check for tensor input for diffable classifier
+        assert isinstance(X, torch.Tensor)
+        assert isinstance(y, torch.Tensor)
+        assert len(X) == len(y)
+        assert len(X.shape) == 2
+        estimator.n_features_in_ = X.shape[1]
 
     if X.shape[1] > max_num_features:
         if not ignore_pretraining_limits:
@@ -396,26 +413,26 @@ def validate_Xy_fit(
             stacklevel=2,
         )
 
-    if is_classifier(estimator):
+    if is_classifier(estimator) and not estimator.differentiable_input:
         check_classification_targets(y)
-    # Annoyingly, the `ensure_all_finite` above only applies to `X` and
-    # there is no way to specify this for `y`. The validation check above
-    # will also only check for NaNs in `y` if `multi_output=True` which is
-    # something we don't want. Hence, we run another check on `y` here.
-    # However we also have to consider if ther dtype is a string type,
-    # then
-
-    y = check_array(
-        y,
-        accept_sparse=False,
-        ensure_all_finite=True,
-        dtype=None,  # type: ignore
-        ensure_2d=False,
-    )
+        # Annoyingly, the `ensure_all_finite` above only applies to `X` and
+        # there is no way to specify this for `y`. The validation check above
+        # will also only check for NaNs in `y` if `multi_output=True` which is
+        # something we don't want. Hence, we run another check on `y` here.
+        # However we also have to consider if ther dtype is a string type,
+        # then
+        y = check_array(
+            y,
+            accept_sparse=False,
+            ensure_all_finite=True,
+            dtype=None,  # type: ignore
+            ensure_2d=False,
+        )
 
     # NOTE: Theoretically we don't need to return the feature names and number,
     # but it makes it clearer in the calling code that these variables now exist
     # and can be set on the estimator.
+
     return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
 
 
@@ -435,7 +452,7 @@ def validate_X_predict(
         ensure_all_finite="allow-nan",
         estimator=estimator,
     )
-    return typing.cast(np.ndarray, result)
+    return typing.cast("np.ndarray", result)
 
 
 def infer_categorical_features(
@@ -599,14 +616,17 @@ def translate_probs_across_borders(
     return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
 
 
-def update_encoder_outlier_params(
+def update_encoder_params(
     model: nn.Module,
     remove_outliers_std: float | None,
     seed: int | None,
     *,
     inplace: Literal[True],
+    differentiable_input: bool = False,
 ) -> None:
-    """Update the encoder to handle outliers in the model.
+    """Update the loaded encoder elements and setting to be compatible with inference
+    requirements. This concerns handling outliers in the model and also removes
+    non-differentiable steps from the label encoder.
 
     !!! warning
 
@@ -617,6 +637,9 @@ def update_encoder_outlier_params(
         remove_outliers_std: The standard deviation to remove outliers.
         seed: The seed to use, if any.
         inplace: Whether to do the operation inplace.
+        differentiable_input: Whether the entire model including forward pass should
+            be differentiable with pt autograd. This disables non-differentiable
+            encoder steps.
 
     Raises:
         ValueError: If `inplace` is not `True`.
@@ -631,6 +654,8 @@ def update_encoder_outlier_params(
         return
 
     encoder = model.encoder
+
+    # TODO: maybe check that norm_layer even exists
     norm_layer = next(
         e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
     )
@@ -642,6 +667,26 @@ def update_encoder_outlier_params(
 
     norm_layer.seed = seed
     norm_layer.reset_seed()
+
+    if differentiable_input:
+        diffable_steps = []  # only differentiable encoder steps.
+        for module in model.y_encoder:
+            if isinstance(module, MulticlassClassificationTargetEncoder):
+                pass
+            else:
+                diffable_steps.append(module)
+
+        model.y_encoder = SequentialEncoder(*diffable_steps)
+
+    if differentiable_input:
+        diffable_steps = []  # only differentiable encoder steps.
+        for module in model.y_encoder:
+            if isinstance(module, MulticlassClassificationTargetEncoder):
+                pass
+            else:
+                diffable_steps.append(module)
+
+        model.y_encoder = SequentialEncoder(*diffable_steps)
 
 
 def _transform_borders_one(
@@ -726,13 +771,138 @@ def get_total_memory_windows() -> float:
     mem_status = _MEMORYSTATUSEX()
     # need to initialize lenght of structure, see microsft docs above
     mem_status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-
     try:
         # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast(typing.Any, ctypes).windll
+        windll = typing.cast("typing.Any", ctypes).windll
         k32_lib = windll.LoadLibrary("kernel32.dll")
         k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
         return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
     except (AttributeError, OSError):
         # Fall back if not on Windows or if the function fails
         return 0.0
+
+
+def split_large_data(largeX: XType, largey: YType, max_data_size: int):
+    """Split a large dataset into chunks along the first dimension.
+
+    Args:
+        largeX: features
+        largey: labels
+        max_data_size: int that indicates max size of a chunks.
+            We chose the minimum number of chunks that keeps each chunk under
+            max_data_size.
+    """
+    tot_size = len(largeX)
+    if max_data_size <= 0:
+        raise ValueError("max_data_size must be positive")
+    if tot_size == 0:
+        return [], []
+    num_chunks = ((tot_size - 1) // max_data_size) + 1
+    basechunk_size = tot_size // num_chunks
+    remainder = tot_size % num_chunks
+
+    offset = 0
+    xlst, ylst = [], []
+    for b in range(num_chunks):
+        chunk_sz = basechunk_size + (1 if b < remainder else 0)
+        xlst.append(largeX[offset : offset + chunk_sz])
+        ylst.append(largey[offset : offset + chunk_sz])
+        offset += chunk_sz
+    return xlst, ylst
+
+
+def pad_tensors(tensor_list, padding_val=0, *, labels=False):
+    """Pad tensors to maximum dims at the last dimensions.
+    if labels=False, 2d tensors are expected, if labels=True, one 1d
+    vectors are expected as inputs.
+
+    Args:
+        tensor_list: List of tensors to be padded.
+        padding_val: what value to use for padding.
+        labels: If true, the tensor list should contain 1D
+            tensors that are padded only along this dimension.
+            If false, rows and feature dimensions are padded.
+    """
+    max_size_clms = max([item.size(-1) for item in tensor_list])
+    if not labels:
+        max_size_rows = max([item.size(-2) for item in tensor_list])
+    ret_list = []
+    for item in tensor_list:
+        pad_seqence = [0, max_size_clms - item.size(-1)]
+        if not labels:
+            pad_seqence.extend([0, max_size_rows - item.size(-2)])
+        padded_item = torch.nn.functional.pad(
+            item, pad_seqence, mode="constant", value=padding_val
+        )
+        ret_list.append(padded_item)
+    return ret_list
+
+
+def meta_dataset_collator(batch, padding_val=0.0):
+    """Collate function for torch.utils.data.DataLoader.
+
+    Designed for batches from DatasetCollectionWithPreprocessing.
+    Takes a list of dataset samples (the batch) and structures them
+    into a single tuple suitable for model input, often for fine-tuning
+    using `fit_from_preprocessed`.
+
+    Handles samples containing nested lists (e.g., for ensemble members)
+    and tensors. Pads tensors to consistent shapes using `pad_tensors`
+    before stacking. Non-tensor items are grouped into lists.
+
+    Args:
+        batch (list): A list where each element is one sample from the
+            Dataset. Samples often contain multiple components like
+            features, labels, configs, etc., potentially nested in lists.
+        padding_val (float): Value used for padding tensors to allow
+            stacking across the batch dimension.
+
+    Returns:
+        tuple: A tuple where each element is a collated component from the
+            input batch (e.g., stacked tensors, lists of configs).
+            The structure matches the input required by methods like
+            `fit_from_preprocessed`.
+
+    Note:
+        Currently only implemented and tested for `batch_size = 1`,
+        as enforced by an internal assertion.
+    """
+    batch_sz = len(batch)
+    assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
+    num_estim = len(batch[0][0])
+    items_list = []
+    for item_idx in range(len(batch[0])):
+        if isinstance(batch[0][item_idx], list):
+            estim_list = []
+            for estim_no in range(num_estim):
+                if isinstance(batch[0][item_idx][0], torch.Tensor):
+                    labels = batch[0][item_idx][0].ndim == 1
+                    estim_list.append(
+                        torch.stack(
+                            pad_tensors(
+                                [batch[r][item_idx][estim_no] for r in range(batch_sz)],
+                                padding_val=padding_val,
+                                labels=labels,
+                            )
+                        )
+                    )
+                else:
+                    estim_list.append(
+                        list(batch[r][item_idx][estim_no] for r in range(batch_sz))  # noqa: C400
+                    )
+            items_list.append(estim_list)
+        elif isinstance(batch[0][item_idx], torch.Tensor):
+            labels = batch[0][item_idx].ndim == 1
+            items_list.append(
+                torch.stack(
+                    pad_tensors(
+                        [batch[r][item_idx] for r in range(batch_sz)],
+                        padding_val=padding_val,
+                        labels=labels,
+                    )
+                )
+            )
+        else:
+            items_list.append([batch[r][item_idx] for r in range(batch_sz)])
+
+    return tuple(items_list)

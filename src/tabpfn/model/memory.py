@@ -170,6 +170,8 @@ class MemoryUsageEstimator:
         Returns:
             The estimated memory usage of a single batch.
         """
+        assert len(X.shape) in (2, 3), "X must be a 2D or 3D tensor"
+
         if cache_kv:
             assert isinstance(
                 n_train_samples,
@@ -201,13 +203,20 @@ class MemoryUsageEstimator:
                 stacklevel=2,
             )
 
-        n_samples, n_features = X.shape[0], X.shape[-1]
+        n_samples, n_features = X.shape[-2], X.shape[-1]
+        n_batches = X.shape[0] if len(X.shape) == 3 else 1
+
         n_feature_groups = int(np.ceil(n_features / features_per_group)) + 1
 
         model_mem = sum(p.numel() for p in model.parameters()) * dtype_byte_size
         X_mem = n_samples * n_feature_groups * dtype_byte_size
         activation_mem = (
-            n_samples * n_feature_groups * embedding_size * n_layers * dtype_byte_size
+            n_samples
+            * n_feature_groups
+            * embedding_size
+            * n_layers
+            * dtype_byte_size
+            * n_batches
         )
 
         total_mem_bytes = model_mem + X_mem + activation_mem

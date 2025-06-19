@@ -1,15 +1,21 @@
 #  Copyright (c) Prior Labs GmbH 2025.
+"""Implements standard quadratic attention."""
 
 from __future__ import annotations
 
 import math
 from functools import partial
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import torch
 from torch.utils.checkpoint import checkpoint
 
+from tabpfn.model.attention import Attention
 from tabpfn.model.memory import support_save_peak_mem_factor
+
+if TYPE_CHECKING:
+    from tabpfn.model.config import ModelConfig
 
 try:
     from flash_attn.flash_attn_interface import (
@@ -23,7 +29,7 @@ except (ModuleNotFoundError, ImportError):
     HAVE_FLASH_ATTN = False
 
 
-class MultiHeadAttention(torch.nn.Module):
+class MultiHeadAttention(Attention):
     _input_size: int
     _output_size: int
     _nhead: int
@@ -77,7 +83,7 @@ class MultiHeadAttention(torch.nn.Module):
             self._k_cache is not None and self._v_cache is not None
         ) or self._kv_cache is not None
 
-    def empty_kv_cache(self):
+    def empty_kv_cache(self) -> None:
         self._k_cache = None
         self._v_cache = None
         self._kv_cache = None
@@ -93,7 +99,7 @@ class MultiHeadAttention(torch.nn.Module):
         precomputed_k: torch.Tensor | None = None,
         precomputed_v: torch.Tensor | None = None,
         precomputed_kv: torch.Tensor | None = None,
-    ):
+    ) -> None:
         assert (precomputed_k is None) == (precomputed_v is None)
         assert (precomputed_kv is None) or (precomputed_k is None)
         assert (precomputed_kv is None and precomputed_k is None) != (
@@ -164,13 +170,11 @@ class MultiHeadAttention(torch.nn.Module):
     def __init__(  # noqa: PLR0913
         self,
         *,
-        input_size: int,
-        output_size: int,
         d_k: int,
         d_v: int,
-        nhead: int,
         device: torch.device | None,
         dtype: torch.dtype | None,
+        config: ModelConfig,
         share_kv_across_n_heads: int = 1,
         dropout_p: float | None = None,
         softmax_scale: float | None = None,
@@ -178,28 +182,27 @@ class MultiHeadAttention(torch.nn.Module):
         precomputed_k: torch.Tensor | None = None,
         precomputed_v: torch.Tensor | None = None,
         precomputed_kv: torch.Tensor | None = None,
-        recompute: bool = False,
-        init_gain: float = 1.0,
         two_sets_of_queries: bool = False,
     ):
         super().__init__()
-        assert nhead % share_kv_across_n_heads == 0
-        self._input_size = input_size
-        self._output_size = output_size
+        assert config.nhead % share_kv_across_n_heads == 0
+        self._input_size = config.emsize
+        self._output_size = config.emsize
         self._d_k = d_k
         self._d_v = d_v
-        self._nhead = nhead
-        self._nhead_kv = nhead // share_kv_across_n_heads
+        self._nhead = config.nhead
+        self._nhead_kv = config.nhead // share_kv_across_n_heads
         self._device = device
         self._dtype = dtype
         self.dropout_p = dropout_p
         self.softmax_scale = softmax_scale
-        self.recompute = recompute
-        self.init_gain = init_gain
+        self.init_gain = config.attention_init_gain
         self.two_sets_of_queries = two_sets_of_queries
 
         w_out = torch.nn.Parameter(
-            torch.empty(nhead, d_v, output_size, device=device, dtype=dtype),
+            torch.empty(
+                config.nhead, d_v, self._output_size, device=device, dtype=dtype
+            ),
         )
         if initialize_output_to_zero:
             torch.nn.init.zeros_(w_out)
@@ -269,7 +272,7 @@ class MultiHeadAttention(torch.nn.Module):
             precomputed_v,
             precomputed_kv,
         )
-        if recompute:
+        if config.recompute_attn:
             self.forward = partial(checkpoint, self.forward, use_reentrant=False)  # type: ignore
 
     @override
@@ -290,7 +293,7 @@ class MultiHeadAttention(torch.nn.Module):
         only_cache_first_head_kv: bool = False,
         use_cached_kv: bool = False,
         use_second_set_of_queries: bool = False,
-    ):
+    ) -> torch.Tensor:
         """X is the current hidden and has a shape of [batch, ..., seq_len, input_size].
         If keys and values are present in the cache and 'freeze_kv' is not set, they
         are obtained from there and 'x_kv' has to be None.
@@ -566,7 +569,6 @@ class MultiHeadAttention(torch.nn.Module):
         assert q is not None
         assert k is not None
         assert v is not None
-
         batch_size, seqlen_q, nhead, d_k = q.shape
         _, seqlen_kv, nhead_kv, d_v = v.shape
         share_kv_across_n_heads = nhead // nhead_kv
