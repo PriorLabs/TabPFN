@@ -347,8 +347,12 @@ class SeqEncStep(nn.Module):
         else:
             assert not cache_trainset_representation
             out = self._forward(*args, **kwargs)
+            # TODO: I think nothing is using _forward now
 
-        assert isinstance(out, tuple)
+        assert isinstance(
+            out,
+            tuple,
+        ), f"out is not a tuple: {out}, type: {type(out)}, class: {self.__class__.__name__}"
         assert len(out) == len(self.out_keys)
         state.update({out_key: out[i] for i, out_key in enumerate(self.out_keys)})
         return state
@@ -396,7 +400,7 @@ class LinearInputEncoderStep(SeqEncStep):
         """
         x = torch.cat(x, dim=-1)
         if self.replace_nan_by_zero:
-            x = torch.nan_to_num(x, nan=0.0)
+            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
         return (self.layer(x),)
 
 
@@ -433,7 +437,11 @@ class NanHandlingEncoderStep(SeqEncStep):
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments (unused).
         """
-        self.feature_means_ = torch_nanmean(x[:single_eval_pos], axis=0)
+        self.feature_means_ = torch_nanmean(
+            x[:single_eval_pos],
+            axis=0,
+            include_inf=True,
+        )
 
     def _transform(
         self,
@@ -464,7 +472,6 @@ class NanHandlingEncoderStep(SeqEncStep):
         # replace nans with the mean of the corresponding feature
         x = x.clone()  # clone to avoid inplace operations
         x[nan_mask] = self.feature_means_.unsqueeze(0).expand_as(x)[nan_mask]
-
         return x, nans_indicator
 
 
@@ -491,7 +498,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             x: The input tensor.
             **kwargs: Additional keyword arguments (unused).
         """
-        # self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
         """Remove empty features from the input tensor.
@@ -503,8 +510,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        # return (select_features(x, self.sel),)
-        return (x,)
+        return (select_features(x, self.sel),)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
@@ -609,12 +615,14 @@ class VariableNumFeaturesEncoderStep(SeqEncStep):
             A tuple containing the transformed tensor of shape (seq_len, batch_size, num_features).
         """
         if x.shape[2] == 0:
-            return torch.zeros(
-                x.shape[0],
-                x.shape[1],
-                self.num_features,
-                device=x.device,
-                dtype=x.dtype,
+            return (
+                torch.zeros(
+                    x.shape[0],
+                    x.shape[1],
+                    self.num_features,
+                    device=x.device,
+                    dtype=x.dtype,
+                ),
             )
         if self.normalize_by_used_features:
             if self.normalize_by_sqrt:
@@ -758,7 +766,6 @@ class InputNormalizationEncoderStep(SeqEncStep):
                 mean=self.mean_for_normalization,
                 std=self.std_for_normalization,
             )
-
         return (x,)
 
 

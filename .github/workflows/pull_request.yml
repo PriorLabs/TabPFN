@@ -1,8 +1,6 @@
 name: In pull request
 on:
   pull_request:
-    branches:
-      - main
 
 jobs:
   check_python_linting:
@@ -61,15 +59,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Generate requirements file for minimum dependencies
-        if: matrix.dependency-set == 'minimum'
-        run: |
-          python scripts/get_min_dependencies.py
-
-      - name: Generate requirements file for maximum dependencies
-        if: matrix.dependency-set == 'maximum'
-        run: |
-          python scripts/get_max_dependencies.py
+      - name: Generate requirements file
+        run: python scripts/generate_dependencies.py ${{ matrix.dependency-set }}
 
       - name: Install dependencies
         run: |

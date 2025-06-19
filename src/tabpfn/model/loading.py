@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import logging
-import math
 import os
 import sys
 import urllib.request
@@ -19,8 +18,8 @@ from urllib.error import URLError
 import torch
 from torch import nn
 
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.config import InferenceConfig
+from tabpfn.model.bar_distribution import BarDistribution, FullSupportBarDistribution
+from tabpfn.model.config import ModelConfig
 from tabpfn.model.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
@@ -287,7 +286,7 @@ def download_all_models(to: Path) -> None:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=cast(Literal["classifier", "regressor"], model_type),
+                which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
 
@@ -349,11 +348,10 @@ def load_model_criterion_config(
     version: Literal["v2"],
     which: Literal["classifier"],
     download: bool,
-    model_seed: int,
 ) -> tuple[
     PerFeatureTransformer,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
-    InferenceConfig,
+    ModelConfig,
 ]: ...
 
 
@@ -366,8 +364,7 @@ def load_model_criterion_config(
     version: Literal["v2"],
     which: Literal["regressor"],
     download: bool,
-    model_seed: int,
-) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
+) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, ModelConfig]: ...
 
 
 def load_model_criterion_config(
@@ -378,11 +375,10 @@ def load_model_criterion_config(
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
     download: bool,
-    model_seed: int,
 ) -> tuple[
     PerFeatureTransformer,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    InferenceConfig,
+    ModelConfig,
 ]:
     """Load the model, criterion, and config from the given path.
 
@@ -397,7 +393,6 @@ def load_model_criterion_config(
         which: Whether the model is a regressor or classifier.
         version: The version of the model.
         download: Whether to download the model if it doesn't exist.
-        model_seed: The seed of the model.
 
     Returns:
         The model, criterion, and config.
@@ -427,7 +422,7 @@ def load_model_criterion_config(
         res = download_model(
             model_path,
             version=version,
-            which=cast(Literal["classifier", "regressor"], which),
+            which=cast("Literal['classifier', 'regressor']", which),
             model_name=model_name,
         )
         if res != "ok":
@@ -439,7 +434,7 @@ def load_model_criterion_config(
                 f"Then place it at: {model_path}",
             ) from res[0]
 
-    loaded_model, criterion, config = load_model(path=model_path, model_seed=model_seed)
+    loaded_model, criterion, config = load_model(path=model_path)
     loaded_model.cache_trainset_representation = cache_trainset_representation
     if check_bar_distribution_criterion and not isinstance(
         criterion,
@@ -479,7 +474,7 @@ def resolve_model_path(
 
 
 def get_loss_criterion(
-    config: InferenceConfig,
+    config: ModelConfig,
 ) -> nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution:
     # NOTE: We don't seem to have any of these
     if config.max_num_classes == 2:
@@ -497,40 +492,6 @@ def get_loss_criterion(
     borders = borders * 3  # Used to be `config.get("bucket_scaling", 3)`
 
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
-
-
-def _preprocess_config(config: dict) -> InferenceConfig:
-    config["task_type"]
-    batch_size = config["batch_size"]
-    agg_k_grads = config.get("aggregate_k_gradients")
-
-    if agg_k_grads is None:
-        if not math.log(batch_size, 2).is_integer():
-            raise ValueError(f"batch_size must be pow of 2, got {config['batch_size']}")
-
-        second_dim_tokens = config.get("num_global_att_tokens ", config["seq_len"])
-        memory_factor = (
-            batch_size
-            * config["nlayers"]
-            * config["emsize"]
-            * config["seq_len"]
-            * second_dim_tokens
-        )
-        standard_memory_factor = 16 * 12 * 512 * 1200 * 1200
-        agg_k_grads = math.ceil(memory_factor / (standard_memory_factor * 1.1))
-        config["aggregate_k_gradients"] = agg_k_grads
-
-        # Make sure that batch size is power of two
-        config["batch_size"] = int(
-            math.pow(2, math.floor(math.log(batch_size / agg_k_grads, 2))),
-        )
-        config["num_steps"] = math.ceil(config["num_steps"] * agg_k_grads)
-
-        # Make sure that batch_size_per_gp_sample is power of two
-        assert math.log(config["batch_size_per_gp_sample"], 2) % 1 == 0
-
-    config.setdefault("recompute_attn", False)
-    return InferenceConfig.from_dict(config)
 
 
 def get_encoder(  # noqa: PLR0913
@@ -626,73 +587,25 @@ def get_y_encoder(
     return SequentialEncoder(*steps, output_key="output")
 
 
-def load_model(
+def load_model_from_config(
     *,
-    path: Path,
-    model_seed: int,
-) -> tuple[
-    PerFeatureTransformer,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    InferenceConfig,
-]:
-    """Loads a model from a given path.
+    config: ModelConfig,
+    loss_criterion: nn.BCEWithLogitsLoss
+    | nn.CrossEntropyLoss
+    | FullSupportBarDistribution,
+    load_for_inference: bool = True,
+) -> PerFeatureTransformer:
+    """Loads a model from a given config.
 
     Args:
-        path: Path to the checkpoint
-        model_seed: The seed to use for the model
+        config: The config to load the model from.
+        loss_criterion: The loss function object created from the given config.
+        load_for_inference: Whether to load the model for inference. Controls whether
+            the model is set to evaluation mode and whether the trainset representation
+            is cached.
     """
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weightes_only=None` is the default value. In the future this will default to
-    # `True`, dissallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
-
-    assert "state_dict" in checkpoint
-    assert "config" in checkpoint
-
-    state_dict = checkpoint["state_dict"]
-    config = _preprocess_config(checkpoint["config"])
-
-    criterion_state_keys = [k for k in state_dict if "criterion." in k]
-    loss_criterion = get_loss_criterion(config)
-    if isinstance(loss_criterion, FullSupportBarDistribution):
-        # Remove from state dict
-        criterion_state = {
-            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
-        }
-        loss_criterion.load_state_dict(criterion_state)
-    else:
-        assert len(criterion_state_keys) == 0, criterion_state_keys
-
-    # Old decision tree for n_out, made equivalent:
-    # > if config.max_num_classes == 2:
-    # >   loss = Losses.bce           (n_out -> 1)
-    # > elif config.max_num_classes > 2:
-    # >   loss = Losses.ce            (n_out -> config.max_num_classes)
-    # > else:
-    # >   create_bar_distribution ... (n_out -> loss.num_bars)
-    #
-    # > if loss is bardist:
-    # >   n_out = loss.num_bars
-    # > elif loss is CrossEntropyLoss:
-    # >   n_out = config.max_num_classes
-    # > else:
-    # >  n_out = 1
-    n_out: int
-    if config.max_num_classes == 2:
-        n_out = 1
-    elif config.max_num_classes > 2:
-        n_out = config.max_num_classes
-    else:
-        assert config.max_num_classes == 0
-        assert isinstance(loss_criterion, FullSupportBarDistribution)
-        n_out = loss_criterion.num_bars
-
     model = PerFeatureTransformer(
-        seed=model_seed,
+        config=config,
         # Things that were explicitly passed inside `build_model()`
         encoder=get_encoder(
             num_features=config.features_per_group,
@@ -713,54 +626,84 @@ def load_model(
             nan_handling_y_encoder=config.nan_handling_y_encoder,
             max_num_classes=config.max_num_classes,
         ),
-        nhead=config.nhead,
-        ninp=config.emsize,
-        nhid=config.emsize * config.nhid_factor,
-        nlayers=config.nlayers,
-        features_per_group=config.features_per_group,
-        cache_trainset_representation=True,
-        #
-        # Based on not being present in config or otherwise, these were default values
-        init_method=None,
-        decoder_dict={"standard": (None, n_out)},
+        cache_trainset_representation=load_for_inference,
         use_encoder_compression_layer=False,
+        n_out=get_n_out(config, loss_criterion),
         #
         # These were extra things passed in through `**model_extra_args`
         # or `**extra_model_kwargs` and were present in the config
-        recompute_attn=config.recompute_attn,
-        recompute_layer=config.recompute_layer,
         feature_positional_embedding=config.feature_positional_embedding,
-        use_separate_decoder=config.use_separate_decoder,
         #
         # These are things that had default values from config.get() but were not
         # present in any config.
         layer_norm_with_elementwise_affine=False,
-        nlayers_decoder=None,
-        pre_norm=False,
-        #
-        # These seem to map to `**layer_config` in the init of `PerFeatureTransformer`
-        # Which got passed to the `PerFeatureEncoderLayer(**layer_config)`
-        multiquery_item_attention=config.multiquery_item_attention,  # False
-        multiquery_item_attention_for_test_set=config.multiquery_item_attention_for_test_set,  # True  # noqa: E501
-        # Is either 1.0 or None in the configs, which lead to the default of 1.0 anywho
-        attention_init_gain=(
-            config.attention_init_gain
-            if config.attention_init_gain is not None
-            else 1.0
-        ),
-        # Is True, False in the config or not present,
-        # with the default of the `PerFeatureEncoderLayer` being False,
-        # which is what the value would have mapped to if the config had not present
-        two_sets_of_queries=(
-            config.two_sets_of_queries
-            if config.two_sets_of_queries is not None
-            else False
-        ),
     )
+    if load_for_inference:
+        model.eval()
+    return model
 
+
+def load_model(
+    *,
+    path: Path,
+) -> tuple[
+    PerFeatureTransformer,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+    ModelConfig,
+]:
+    """Loads a model from a given path. Only for inference.
+
+    Args:
+        path: Path to the checkpoint
+    """
+    # Catch the `FutureWarning` that torch raises. This should be dealt with!
+    # The warning is raised due to `torch.load`, which advises against ckpt
+    # files that contain non-tensor data.
+    # This `weightes_only=None` is the default value. In the future this will default to
+    # `True`, dissallowing loading of arbitrary objects.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
+
+    assert "state_dict" in checkpoint
+    assert "config" in checkpoint
+
+    state_dict = checkpoint["state_dict"]
+    config = ModelConfig.from_dict(ModelConfig.upgrade_config(checkpoint["config"]))
+
+    criterion_state_keys = [k for k in state_dict if "criterion." in k]
+    loss_criterion = get_loss_criterion(config)
+    if isinstance(loss_criterion, FullSupportBarDistribution):
+        # Remove from state dict
+        criterion_state = {
+            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
+        }
+        loss_criterion.load_state_dict(criterion_state)
+    else:
+        assert len(criterion_state_keys) == 0, criterion_state_keys
+
+    model = load_model_from_config(config=config, loss_criterion=loss_criterion)
     model.load_state_dict(state_dict)
     model.eval()
+
     return model, loss_criterion, config
+
+
+def get_n_out(
+    config: ModelConfig,
+    loss: nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+) -> int:
+    """Works out the number of outputs of the model."""
+    if config.max_num_classes == 2:
+        return 1
+    if config.max_num_classes > 2 and isinstance(loss, nn.CrossEntropyLoss):
+        return config.max_num_classes
+    if config.max_num_classes == 0 and isinstance(loss, BarDistribution):
+        return loss.num_bars
+    raise ValueError(
+        "Unknown configuration: "
+        f"max_num_classes={config.max_num_classes} and loss={type(loss)}"
+    )
 
 
 # NOTE: This function doesn't seem to be used anywhere.
