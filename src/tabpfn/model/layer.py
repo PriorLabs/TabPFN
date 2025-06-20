@@ -13,7 +13,6 @@ from torch import nn
 from torch.nn.modules.transformer import Module, Tensor
 
 from tabpfn.model.attention.full_attention import MultiHeadAttention
-from tabpfn.model.attention.linear_attention import LinearAttention
 from tabpfn.model.memory import support_save_peak_mem_factor
 from tabpfn.model.mlp import MLP
 
@@ -458,16 +457,12 @@ class PerFeatureEncoderLayer(Module):
 
 
 def _get_feature_attn_constructor(config: ModelConfig) -> type[Attention]:
-    if config.feature_attention_type == "linear":
-        return LinearAttention
     if config.feature_attention_type == "full":
         return MultiHeadAttention
     raise ValueError(f"Unknown attention type: {config.feature_attention_type}")
 
 
 def _get_item_attn_constructor(config: ModelConfig) -> type[Attention]:
-    if config.item_attention_type == "linear":
-        return LinearAttention
     if config.item_attention_type == "full":
         return MultiHeadAttention
     raise ValueError(f"Unknown attention type: {config.item_attention_type}")
