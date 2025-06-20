@@ -13,8 +13,6 @@ import torch
 
 from tabpfn.config import ModelInterfaceConfig
 
-from tabpfn.config import ModelInterfaceConfig
-
 # --- TabPFN imports ---
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
