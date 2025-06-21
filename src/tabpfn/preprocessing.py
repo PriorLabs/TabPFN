@@ -880,7 +880,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             x_full_raw, y_full_raw
         )
 
-        # Compute traget varibale Z-transform standardization
+        # Compute target variable Z-transform standardization
         # based on statistics of training set
         # Note: Since we compute normalized_bardist_ here,
         # it is not set as an attribute of the Regressor class
