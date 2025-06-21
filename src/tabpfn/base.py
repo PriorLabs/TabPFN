@@ -483,15 +483,22 @@ def _initialize_model_variables_helper(
     calling_instance.model_.to(calling_instance.device_)
 
     # Build the interface_config
-    calling_instance.interface_config_ = ModelInterfaceConfig.from_user_input(
+    _config = ModelInterfaceConfig.from_user_input(
         inference_config=calling_instance.inference_config,
-    )
+    )  # shorter alias
+    calling_instance.interface_config_ = _config
 
-    outlier_removal_std = calling_instance.interface_config_.OUTLIER_REMOVAL_STD
+    outlier_removal_std = _config.OUTLIER_REMOVAL_STD
     if outlier_removal_std == "auto":
-        outlier_removal_std = (
-            calling_instance.interface_config_._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD
-        )
+        default_stds = {
+            "regressor": _config._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
+            "classifier": _config._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
+        }
+        try:
+            outlier_removal_std = default_stds[model_type]
+        except KeyError as e:
+            raise ValueError(f"Invalid model_type: {model_type}") from e
+
     update_encoder_params(  # Use the renamed function if available, or original one
         model=calling_instance.model_,
         remove_outliers_std=outlier_removal_std,
