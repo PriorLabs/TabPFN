@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import random
 import warnings
 from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
 from functools import partial
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import einops
 import networkx as nx
@@ -23,7 +22,8 @@ from tabpfn.model.encoders import (
 )
 from tabpfn.model.layer import PerFeatureEncoderLayer
 
-DEFAULT_EMSIZE = 128
+if TYPE_CHECKING:
+    from tabpfn.model.config import ModelConfig
 
 
 @contextmanager
@@ -103,24 +103,16 @@ class PerFeatureTransformer(nn.Module):
     as a feature positional embedding and a separate decoder for each feature.
     """
 
-    # TODO: Feel like this could be simplified a lot from this part downwards
-    def __init__(  # noqa: C901, D417, PLR0913
+    def __init__(  # noqa: D417, PLR0913
         self,
         *,
+        config: ModelConfig,
         encoder: nn.Module | None = None,
-        ninp: int = DEFAULT_EMSIZE,
-        nhead: int = 4,
-        nhid: int = DEFAULT_EMSIZE * 4,
-        nlayers: int = 10,
         y_encoder: nn.Module | None = None,
-        decoder_dict: dict[str, tuple[type[nn.Module] | None, int]] | None = None,
-        init_method: str | None = None,
+        n_out: int = 1,
         activation: Literal["gelu", "relu"] = "gelu",
-        recompute_layer: bool = False,
         min_num_layers_layer_dropout: int | None = None,
         repeat_same_layer: bool = False,
-        dag_pos_enc_dim: int = 0,
-        features_per_group: int = 1,
         feature_positional_embedding: (
             Literal[
                 "normal_rand_vec",
@@ -131,14 +123,12 @@ class PerFeatureTransformer(nn.Module):
             | None
         ) = None,
         zero_init: bool = True,
-        use_separate_decoder: bool = False,
         nlayers_decoder: int | None = None,
         use_encoder_compression_layer: bool = False,
         precomputed_kv: (
             list[torch.Tensor | tuple[torch.Tensor, torch.Tensor]] | None
         ) = None,
         cache_trainset_representation: bool = False,
-        seed: int | None = None,
         # TODO: List explicitly
         **layer_kwargs: Any,
     ):
@@ -148,29 +138,16 @@ class PerFeatureTransformer(nn.Module):
             encoder:
                 Pass a nn.Module that takes in a batch of sequences of inputs and
                 returns something of the shape (seq_len, batch_size, ninp)
-            ninp: Input dimension, also called the embedding dimension
-            nhead: Number of attention heads
-            nhid: Hidden dimension in the MLP layers
-            nlayers:
-                Number of layers, each consisting of a multi-head attention layer and
-                an MLP layer
             y_encoder:
                 A nn.Module that takes in a batch of sequences of outputs and
                 returns something of the shape (seq_len, batch_size, ninp)
-            decoder_dict: Document this (TODO)
             activation: An activation function, "gelu" or "relu"
-            recompute_layer:
-                If True, the transformer layers will be recomputed on each
-                forward pass in training. This is useful to save memory.
             min_num_layers_layer_dropout:
                 If this is set, it enables to drop the last
                 layers randomly during training up to this number.
             repeat_same_layer:
                 If True, the same layer will be used for all layers.
                 This is useful to save memory on weights.
-            features_per_group:
-                If > 1, the features will be grouped into groups of this
-                size and the attention is across groups.
             feature_positional_embedding:
                 There is a risk that our models confuse
                 features with each other. This positional embedding is added to the
@@ -180,8 +157,6 @@ class PerFeatureTransformer(nn.Module):
                 If True, the last sublayer of each attention and MLP layer will
                 be initialized with zeros.
                 Thus, the layers will start out as identity functions.
-            seed: The seed to use for the random number generator.
-            use_separate_decoder: If True, the decoder will be separate from the encoder
             nlayers_decoder:
                 If use_separate_decoder is True, this is the number of
                 layers in the decoder. The default is to use 1/3 of the layers for the
@@ -192,16 +167,13 @@ class PerFeatureTransformer(nn.Module):
                 TODO: document.
                 for now have a look at layer.py:PerFeatureEncoderLayer.
         """
-        if decoder_dict is None:
-            decoder_dict = {"standard": (None, 1)}
-
         super().__init__()
 
         if encoder is None:
             encoder = SequentialEncoder(
                 LinearInputEncoderStep(
                     num_features=1,
-                    emsize=DEFAULT_EMSIZE,
+                    emsize=config.emsize,
                     replace_nan_by_zero=False,
                     bias=True,
                     in_keys=("main",),
@@ -214,27 +186,24 @@ class PerFeatureTransformer(nn.Module):
                 NanHandlingEncoderStep(),
                 LinearInputEncoderStep(
                     num_features=2,
-                    emsize=DEFAULT_EMSIZE,
+                    emsize=config.emsize,
                     replace_nan_by_zero=False,
                     bias=True,
                     out_keys=("output",),
                     in_keys=("main", "nan_indicators"),
                 ),
             )
-
         self.encoder = encoder
         self.y_encoder = y_encoder
-        self.ninp = ninp
-        self.nhead = nhead
-        self.nhid = nhid
-        self.init_method = init_method
-        self.features_per_group = features_per_group
+        self.ninp = config.emsize
+        self.nhid_factor = config.nhid_factor
+        nhid = self.ninp * self.nhid_factor
+        self.features_per_group = config.features_per_group
         self.cache_trainset_representation = cache_trainset_representation
         self.cached_embeddings: torch.Tensor | None = None
 
         layer_creator = lambda: PerFeatureEncoderLayer(
-            d_model=ninp,
-            nhead=nhead,
+            config=config,
             dim_feedforward=nhid,
             activation=activation,
             zero_init=zero_init,
@@ -247,20 +216,20 @@ class PerFeatureTransformer(nn.Module):
             layer = layer_creator()
             layer_creator = lambda: layer
 
-        nlayers_encoder = nlayers
-        if use_separate_decoder and nlayers_decoder is None:
-            nlayers_decoder = max((nlayers // 3) * 1, 1)
-            nlayers_encoder = max((nlayers // 3) * 2, 1)
+        nlayers_encoder = config.nlayers
+        if config.use_separate_decoder and nlayers_decoder is None:
+            nlayers_decoder = max((config.nlayers // 3) * 1, 1)
+            nlayers_encoder = max((config.nlayers // 3) * 2, 1)
 
         self.transformer_encoder = LayerStack(
             layer_creator=layer_creator,
             num_layers=nlayers_encoder,
-            recompute_each_layer=recompute_layer,
+            recompute_each_layer=config.recompute_layer,
             min_num_layers_layer_dropout=min_num_layers_layer_dropout,
         )
 
         self.transformer_decoder = None
-        if use_separate_decoder:
+        if config.use_separate_decoder:
             assert nlayers_decoder is not None
             self.transformer_decoder = LayerStack(
                 layer_creator=layer_creator,
@@ -269,12 +238,12 @@ class PerFeatureTransformer(nn.Module):
 
         self.global_att_embeddings_for_compression = None
         if use_encoder_compression_layer:
-            assert use_separate_decoder
+            assert config.use_separate_decoder
             num_global_att_tokens_for_compression = 512
 
             self.global_att_embeddings_for_compression = nn.Embedding(
                 num_global_att_tokens_for_compression,
-                ninp,
+                self.ninp,
             )
 
             self.encoder_compression_layer = LayerStack(
@@ -282,32 +251,30 @@ class PerFeatureTransformer(nn.Module):
                 num_layers=2,
             )
 
-        initialized_decoder_dict = {}
-        for decoder_key in decoder_dict:
-            decoder_model, decoder_n_out = decoder_dict[decoder_key]
-            if decoder_model is None:
-                initialized_decoder_dict[decoder_key] = nn.Sequential(
-                    nn.Linear(ninp, nhid),
+        self.n_out = n_out
+        self.decoder_dict = nn.ModuleDict(
+            {
+                "standard": nn.Sequential(
+                    nn.Linear(self.ninp, nhid),
                     nn.GELU(),
-                    nn.Linear(nhid, decoder_n_out),
+                    nn.Linear(nhid, n_out),
                 )
-            else:
-                initialized_decoder_dict[decoder_key] = decoder_model(
-                    ninp,
-                    nhid,
-                    decoder_n_out,
-                )
-        self.decoder_dict = nn.ModuleDict(initialized_decoder_dict)
+            }
+        )
 
         self.feature_positional_embedding = feature_positional_embedding
         if feature_positional_embedding == "learned":
-            self.feature_positional_embedding_embeddings = nn.Embedding(1_000, ninp)
+            self.feature_positional_embedding_embeddings = nn.Embedding(
+                1_000, self.ninp
+            )
         elif feature_positional_embedding == "subspace":
-            self.feature_positional_embedding_embeddings = nn.Linear(ninp // 4, ninp)
+            self.feature_positional_embedding_embeddings = nn.Linear(
+                self.ninp // 4, self.ninp
+            )
 
-        self.dag_pos_enc_dim = dag_pos_enc_dim
+        self.dag_pos_enc_dim = config.dag_pos_enc_dim
         self.cached_feature_positional_embeddings: torch.Tensor | None = None
-        self.seed = seed if seed is not None else random.randint(0, 1_000_000)  # noqa: S311
+        self.seed = config.seed
 
     def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
         """Sets the save_peak_mem_factor for all layers.
@@ -373,7 +340,7 @@ class PerFeatureTransformer(nn.Module):
                 Whether to only return the standard output.
             data_dags: Any
                 The data DAGs for each example.
-            categorical_inds: list[int]
+            categorical_inds: list[list[int]]
                 The indices of categorical features.
             freeze_kv: bool
                 Whether to freeze the key and value weights.
@@ -428,7 +395,7 @@ class PerFeatureTransformer(nn.Module):
         only_return_standard_out: bool = True,
         style: torch.Tensor | None = None,
         data_dags: list[Any] | None = None,
-        categorical_inds: list[int] | None = None,
+        categorical_inds: list[list[int]] | None = None,
         half_layers: bool = False,
     ) -> Any | dict[str, torch.Tensor]:
         """The core forward pass of the model.
@@ -508,20 +475,29 @@ class PerFeatureTransformer(nn.Module):
             )  # s b f -> b s #groups #features_per_group
 
         # We have to re-work categoricals based on the subgroup they fall into.
-        categorical_inds_to_use: list[list[int]] | None = None
+        categorical_inds_to_use: list[list[list[int]]] | None = None
         if categorical_inds is not None:
+            assert isinstance(
+                categorical_inds[0],
+                list,
+            ), "categorical_inds must be a list of lists (one per batch item)"
+
             new_categorical_inds = []
             n_subgroups = x["main"].shape[2]
 
-            for subgroup in range(n_subgroups):
-                subgroup_lower = subgroup * self.features_per_group
-                subgroup_upper = (subgroup + 1) * self.features_per_group
-                subgroup_indices = [
-                    i - subgroup_lower
-                    for i in categorical_inds
-                    if subgroup_lower <= i < subgroup_upper
-                ]
-                new_categorical_inds.append(subgroup_indices)
+            # For each batch item
+            for batch_idx in range(batch_size):
+                # For each subgroup
+                for subgroup in range(n_subgroups):
+                    subgroup_lower = subgroup * self.features_per_group
+                    subgroup_upper = (subgroup + 1) * self.features_per_group
+                    subgroup_indices = [
+                        i - subgroup_lower
+                        for i in categorical_inds[batch_idx]
+                        if subgroup_lower <= i < subgroup_upper
+                    ]
+                    # Add this subgroup's indices to the flattened list
+                    new_categorical_inds.append(subgroup_indices)
 
             categorical_inds_to_use = new_categorical_inds
 
@@ -581,11 +557,12 @@ class PerFeatureTransformer(nn.Module):
             self.encoder,
             SequentialEncoder,
         ):
-            extra_encoders_args["categorical_inds"] = categorical_inds_to_use
+            # Transform cat. features accordingly to correspond to following to merge
+            # of batch and feature_group dimensions below (i.e., concat lists)
+            extra_encoders_args["categorical_inds"] = sum(categorical_inds_to_use, [])  # noqa: RUF017
 
         for k in x:
             x[k] = einops.rearrange(x[k], "b s f n -> s (b f) n")
-
         embedded_x = einops.rearrange(
             self.encoder(
                 x,
@@ -697,6 +674,8 @@ class PerFeatureTransformer(nn.Module):
             x += self.cached_embeddings[None, None]
             return x, y
 
+        # TODO: we should probably hardcode the seed here
+        # I think we never want to change it?
         with isolate_torch_rng(self.seed, device=x.device):
             if self.feature_positional_embedding == "normal_rand_vec":
                 embs = torch.randn(
@@ -763,6 +742,7 @@ class PerFeatureTransformer(nn.Module):
                         if (info["is_feature"] or info["is_target"])
                     ],
                 )
+                assert self.dag_pos_enc_dim is not None
                 k = self.dag_pos_enc_dim
                 assert k > 0
                 _add_pos_emb(subgraph, k=k)
@@ -795,13 +775,35 @@ class PerFeatureTransformer(nn.Module):
                 )
                 y[b_i, :, :k] += graph_pos_embs_targets.to(y.device, y.dtype)
         else:
-            assert not hasattr(self, "dag_pos_enc_dim") or not self.dag_pos_enc_dim
+            assert self.dag_pos_enc_dim is None or self.dag_pos_enc_dim == 0
 
         return x, y
 
     def empty_trainset_representation_cache(self) -> None:
         for layer in (self.transformer_decoder or self.transformer_encoder).layers:
             layer.empty_trainset_representation_cache()
+
+    def _transform_categorical_indices_feat_groups(
+        self, categorical_inds: list[int], n_subgroups: int
+    ) -> list[list[int]]:
+        """Transform the categorical indices list(s)
+        to align with the feature groups.
+
+        Args:
+            categorical_inds: categorical indices as 2D list
+            n_subgroups: number of subgroups.
+        """
+        new_categorical_inds = []
+        for subgroup in range(n_subgroups):
+            subgroup_lower = subgroup * self.features_per_group
+            subgroup_upper = (subgroup + 1) * self.features_per_group
+            subgroup_indices = [
+                i - subgroup_lower
+                for i in categorical_inds
+                if subgroup_lower <= i < subgroup_upper
+            ]
+            new_categorical_inds.append(subgroup_indices)
+        return new_categorical_inds
 
 
 def _networkx_add_direct_connections(graph: nx.DiGraph) -> bool:

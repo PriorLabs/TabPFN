@@ -284,7 +284,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         }
         torch.onnx.export(
             ModelWrapper(regressor.model_).eval(),
-            (X, y, y.shape[0], True, []),
+            (X, y, y.shape[0], True, [[]]),
             io.BytesIO(),
             input_names=[
                 "X",

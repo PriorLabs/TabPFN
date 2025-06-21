@@ -6,15 +6,22 @@ from __future__ import annotations
 
 import functools
 from functools import partial
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import torch
 from torch import nn
 from torch.nn.modules.transformer import Module, Tensor
 
+from tabpfn.model.attention.full_attention import MultiHeadAttention
 from tabpfn.model.memory import support_save_peak_mem_factor
 from tabpfn.model.mlp import MLP
-from tabpfn.model.multi_head_attention import MultiHeadAttention
+
+if TYPE_CHECKING:
+    from tabpfn.model.attention import Attention
+    from tabpfn.model.config import ModelConfig
+
+if TYPE_CHECKING:
+    from tabpfn.model.config import ModelConfig
 
 HIDDEN_SIZE_LIMIT = 512
 MLP_SAVE_PEAK_MEM_FACTOR = 32
@@ -101,11 +108,7 @@ class PerFeatureEncoderLayer(Module):
     It supports various configurations and optimization options.
 
     Args:
-        d_model: The dimensionality of the input and output embeddings.
-        nhead: The number of attention heads.
-        dim_feedforward:
-            The dimensionality of the feedforward network.
-            Default is None (2 * d_model).
+        dim_feedforward: The dimensionality of the feedforward network.
         activation: The activation function to use in the MLPs.
         layer_norm_eps: The epsilon value for layer normalization.
         pre_norm:
@@ -113,7 +116,6 @@ class PerFeatureEncoderLayer(Module):
             and MLPs.
         device: The device to use for the layer parameters.
         dtype: The data type to use for the layer parameters.
-        recompute_attn: Whether to recompute attention during backpropagation.
         second_mlp: Whether to include a second MLP in the layer.
         layer_norm_with_elementwise_affine:
             Whether to use elementwise affine parameters in layer normalization.
@@ -121,15 +123,12 @@ class PerFeatureEncoderLayer(Module):
         save_peak_mem_factor:
             The factor to save peak memory, only effective with post-norm.
         attention_between_features: Whether to apply attention between feature blocks.
-        multiquery_item_attention: Whether to use multiquery attention for items.
-        multiquery_item_attention_for_test_set:
-            Whether to use multiquery attention for the test set.
-        attention_init_gain: The gain value for initializing attention parameters.
         d_k:
             The dimensionality of the query and key vectors.
-            Default is (d_model // nhead).
+            Default is (config.emsize // config.nhead).
         d_v:
-            The dimensionality of the value vectors. Default is (d_model // nhead).
+            The dimensionality of the value vectors.
+            Default is (config.emsize // config.nhead).
         precomputed_kv: Precomputed key-value pairs for attention.
     """
 
@@ -138,60 +137,57 @@ class PerFeatureEncoderLayer(Module):
     def __init__(  # noqa: PLR0913
         self,
         *,
-        d_model: int,
-        nhead: int,
-        dim_feedforward: int | None = None,
+        config: ModelConfig,
+        dim_feedforward: int,
         activation: str = "relu",
         layer_norm_eps: float = 1e-5,
         pre_norm: bool = False,
         device: torch.device | None = None,
         dtype: torch.dtype | None = None,
-        recompute_attn: bool = False,
         second_mlp: bool = False,
         layer_norm_with_elementwise_affine: bool = False,
         zero_init: bool = False,
         save_peak_mem_factor: int | None = None,
         attention_between_features: bool = True,
-        multiquery_item_attention: bool = False,
-        multiquery_item_attention_for_test_set: bool = False,
-        two_sets_of_queries: bool = False,
-        attention_init_gain: float = 1.0,
         d_k: int | None = None,
         d_v: int | None = None,
         precomputed_kv: None | torch.Tensor | tuple[torch.Tensor, torch.Tensor] = None,
     ) -> None:
         super().__init__()
         factory_kwargs = {"device": device, "dtype": dtype}
-        assert d_model % nhead == 0 or (d_k is not None and d_v is not None)
-        if multiquery_item_attention_for_test_set and multiquery_item_attention:
+        assert config.emsize % config.nhead == 0 or (
+            d_k is not None and d_v is not None
+        )
+        if (
+            config.multiquery_item_attention_for_test_set
+            and config.multiquery_item_attention
+        ):
             raise ValueError(
                 "Cannot use both multiquery_item_attention_for_test_set"
                 "and multiquery_item_attention",
             )
-        if two_sets_of_queries and not multiquery_item_attention_for_test_set:
+        if (
+            config.two_sets_of_queries
+            and not config.multiquery_item_attention_for_test_set
+        ):
             raise ValueError(
                 "two_sets_of_queries requires multiquery_item_attention_for_test_set",
             )
 
         if d_k is None:
-            d_k = d_model // nhead
-
+            d_k = config.emsize // config.nhead
         if d_v is None:
-            d_v = d_model // nhead
+            d_v = config.emsize // config.nhead
 
-        self.self_attn_between_features: MultiHeadAttention | None = None
+        self.self_attn_between_features: Attention | None = None
         if attention_between_features:
-            self.self_attn_between_features = MultiHeadAttention(
-                input_size=d_model,
-                output_size=d_model,
+            self.self_attn_between_features = _get_feature_attn_constructor(config)(
                 d_k=d_k,
                 d_v=d_v,
-                nhead=nhead,
                 device=device,
+                config=config,
                 dtype=dtype,
                 initialize_output_to_zero=zero_init,
-                recompute=recompute_attn,
-                init_gain=attention_init_gain,
             )
 
         if isinstance(precomputed_kv, tuple):
@@ -200,43 +196,39 @@ class PerFeatureEncoderLayer(Module):
         else:
             precomputed_k = precomputed_v = None
 
-        self.self_attn_between_items = MultiHeadAttention(
-            input_size=d_model,
-            output_size=d_model,
+        self.self_attn_between_items = _get_item_attn_constructor(config)(
             d_k=d_k,
             d_v=d_v,
-            nhead=nhead,
             device=device,
             dtype=dtype,
-            share_kv_across_n_heads=nhead if multiquery_item_attention else 1,
+            config=config,
+            share_kv_across_n_heads=config.nhead
+            if config.multiquery_item_attention
+            else 1,
             initialize_output_to_zero=zero_init,
-            recompute=recompute_attn,
             precomputed_k=precomputed_k,
             precomputed_v=precomputed_v,
             precomputed_kv=precomputed_kv,
-            init_gain=attention_init_gain,
             two_sets_of_queries=(
-                multiquery_item_attention_for_test_set and two_sets_of_queries
+                config.multiquery_item_attention_for_test_set
+                and config.two_sets_of_queries
             ),
         )
 
-        if dim_feedforward is None:
-            dim_feedforward = 2 * d_model
-
         self.mlp = MLP(
-            size=d_model,
+            size=config.emsize,
             hidden_size=dim_feedforward,
             activation=activation,
             device=device,
             dtype=dtype,
             initialize_output_to_zero=zero_init,
-            recompute=recompute_attn,
+            recompute=config.recompute_attn,
         )
 
         self.layer_norms = nn.ModuleList(
             [
                 LayerNorm(
-                    d_model,  # type: ignore
+                    config.emsize,  # type: ignore
                     layer_norm_eps,
                     elementwise_affine=layer_norm_with_elementwise_affine,
                     **factory_kwargs,
@@ -248,22 +240,21 @@ class PerFeatureEncoderLayer(Module):
         self.second_mlp: MLP | None = None
         if second_mlp:
             self.second_mlp = MLP(
-                size=d_model,
+                size=config.emsize,
                 hidden_size=dim_feedforward,
                 activation=activation,
                 device=device,
                 dtype=dtype,
                 initialize_output_to_zero=zero_init,
-                recompute=recompute_attn,
+                recompute=config.recompute_attn,
             )
 
         self.pre_norm = pre_norm
-        self.recompute_attn = recompute_attn
         self.save_peak_mem_factor = save_peak_mem_factor
         self.multiquery_item_attention_for_test_set = (
-            multiquery_item_attention_for_test_set
+            config.multiquery_item_attention_for_test_set
         )
-        self.two_sets_of_queries = two_sets_of_queries
+        self.two_sets_of_queries = config.two_sets_of_queries
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         state.setdefault("save_peak_mem_factor", None)
@@ -463,3 +454,15 @@ class PerFeatureEncoderLayer(Module):
         # TODO: This could be None but this just ignored that fact here.
         assert self.self_attn_between_features is not None
         self.self_attn_between_features.empty_kv_cache()  # not necessary, just in case
+
+
+def _get_feature_attn_constructor(config: ModelConfig) -> type[Attention]:
+    if config.feature_attention_type == "full":
+        return MultiHeadAttention
+    raise ValueError(f"Unknown attention type: {config.feature_attention_type}")
+
+
+def _get_item_attn_constructor(config: ModelConfig) -> type[Attention]:
+    if config.item_attention_type == "full":
+        return MultiHeadAttention
+    raise ValueError(f"Unknown attention type: {config.item_attention_type}")

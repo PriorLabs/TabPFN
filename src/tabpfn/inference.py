@@ -50,6 +50,11 @@ class InferenceEngine(ABC):
         As we have trivially parallel parts for inference, we can parallelize them.
         However as the GPU is typically a bottle-neck in most systems, we can define,
         where and how we would like to parallelize the inference.
+
+    The InferenceEngineBatchedNoPreprocessing
+    InferenceEngineCachePreprocessing engines also support toggling
+    `torch.use_torch_inference_mode` via `use_torch_inference_mode`
+    to enable/disable gradient tracking during prediction.
     """
 
     save_peak_mem: bool | Literal["auto"] | float | int
@@ -73,6 +78,27 @@ class InferenceEngine(ABC):
             autocast: Whether to use torch.autocast during inference.
         """
         ...
+
+    def use_torch_inference_mode(self, *, use_inference: bool):
+        """Enable/Disable `torch.inference_mode`.
+
+        Disabling allows backpropagation (gradients) but is slower and uses more
+        memory during prediction. Enabling is faster for pure inference.
+
+        Only `InferenceEngineBatchedNoPreprocessing` and
+        `InferenceEngineCachePreprocessing` currently support this method. Other
+        engines will raise `NotImplementedError`.
+
+        Called internally by methods like
+        `TabPFNClassifier.predict_proba_from_preprocessed` (for batched engine) and
+        `TabPFNRegressor.forward` (for batched & fit_preprocessors engines)
+        when gradients might be needed (e.g., for fine-tuning) or when pure
+        inference speed is desired.
+
+        """
+        raise NotImplementedError(
+            "This inference engine does not support torch.inference_mode changes."
+        )
 
 
 @dataclass
@@ -168,6 +194,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
 
             X_full = torch.cat([X_train, X_test], dim=0).unsqueeze(1)
+            batched_cat_ix = [cat_ix]
             y_train = torch.as_tensor(y_train, dtype=torch.float32, device=device)  # type: ignore  # noqa: PLW2901
 
             MemoryUsageEstimator.reset_peak_memory_if_required(
@@ -193,7 +220,7 @@ class InferenceEngineOnDemand(InferenceEngine):
                 output = self.model(
                     *(style, X_full, y_train),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
+                    categorical_inds=batched_cat_ix,
                     single_eval_pos=len(y_train),
                 )
 
@@ -202,6 +229,115 @@ class InferenceEngineOnDemand(InferenceEngine):
             yield output, config
 
         self.model = self.model.cpu()
+
+
+@dataclass
+class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
+    """Inference engine that uses preprocessed inputs, and allows batched predictions
+    on several datasets at once.
+
+    Args:
+            X_trains: The training data.
+            y_trains    : The training target.
+            cat_ix: The categorical indices.
+            model: The model to use.
+            ensemble_configs: The ensemble configurations to use.
+            force_inference_dtype: The dtype to force inference to.
+            save_peak_mem: Whether to save peak memory usage.
+            inference_mode: Whether to enable torch inference mode.
+    """
+
+    X_trains: list[torch.Tensor]
+    y_trains: list[torch.Tensor]
+    cat_ix: list[list[list[int]]]
+    model: PerFeatureTransformer
+    ensemble_configs: Sequence[EnsembleConfig]
+    force_inference_dtype: torch.dtype | None
+    inference_mode: bool
+
+    @classmethod
+    def prepare(
+        cls,
+        X_trains: list[torch.Tensor],
+        y_trains: list[torch.Tensor],
+        *,
+        cat_ix: list[list[list[int]]],
+        model: PerFeatureTransformer,
+        ensemble_configs: Sequence[EnsembleConfig],
+        force_inference_dtype: torch.dtype | None,
+        inference_mode: bool,
+        dtype_byte_size: int,
+        save_peak_mem: bool | Literal["auto"] | float | int,
+    ) -> InferenceEngineBatchedNoPreprocessing:
+        """Prepare the inference engine.
+
+        Args:
+            X_trains: The training data.
+            y_trains: The training target.
+            cat_ix: The categorical indices.
+            model: The model to use.
+            ensemble_configs: The ensemble configurations to use.
+            inference_mode: Whether to use torch inference mode.
+            dtype_byte_size: The byte size of the dtype.
+            force_inference_dtype: The dtype to force inference to.
+            save_peak_mem: Whether to save peak memory usage.
+        """
+        # We save it as a static seed to be reproducible across predicts
+        return cls(
+            X_trains=X_trains,
+            y_trains=y_trains,
+            cat_ix=cat_ix,
+            model=model,
+            ensemble_configs=ensemble_configs,
+            force_inference_dtype=force_inference_dtype,
+            inference_mode=inference_mode,
+            dtype_byte_size=dtype_byte_size,
+            save_peak_mem=save_peak_mem,
+        )
+
+    @override
+    def iter_outputs(
+        self,
+        X: list[torch.Tensor],
+        *,
+        device: torch.device,
+        autocast: bool,
+    ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        self.model = self.model.to(device)
+        ensemble_size = len(self.X_trains)
+        for i in range(ensemble_size):
+            single_eval_pos = self.X_trains[i].size(-2)  # End of train data
+            train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
+            train_y_batch = self.y_trains[i]
+            train_x_full = train_x_full.to(device)
+            train_y_batch = train_y_batch.to(device)
+            if self.force_inference_dtype is not None:
+                train_x_full = train_x_full.type(self.force_inference_dtype)
+                train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
+
+            style = None
+            with (
+                torch.autocast(device.type, enabled=autocast),
+                torch.inference_mode(self.inference_mode),
+            ):
+                output = self.model(
+                    *(
+                        style,
+                        train_x_full.transpose(0, 1),
+                        train_y_batch.transpose(0, 1),
+                    ),
+                    only_return_standard_out=True,
+                    categorical_inds=list([cat_item[i] for cat_item in self.cat_ix]),  # noqa: C411
+                    single_eval_pos=single_eval_pos,
+                )
+
+            yield output, self.ensemble_configs[i]
+        if self.inference_mode:  ## if inference
+            self.model = self.model.cpu()
+
+    @override
+    def use_torch_inference_mode(self, use_inference: bool):
+        self.inference_mode = use_inference
 
 
 @dataclass
@@ -217,19 +353,21 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     forward pass through the model which is currently done sequentially.
     """
 
-    X_trains: Sequence[np.ndarray]
-    y_trains: Sequence[np.ndarray]
+    X_trains: Sequence[np.ndarray | torch.Tensor]
+    y_trains: Sequence[np.ndarray | torch.Tensor]
     cat_ixs: Sequence[list[int]]
     ensemble_configs: Sequence[EnsembleConfig]
     preprocessors: Sequence[SequentialFeatureTransformer]
     model: PerFeatureTransformer
     force_inference_dtype: torch.dtype | None
+    inference_mode: bool
+    no_preprocessing: bool = False
 
     @classmethod
-    def prepare(
+    def prepare(  # noqa: PLR0913
         cls,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
+        X_train: np.ndarray | torch.Tensor,
+        y_train: np.ndarray | torch.Tensor,
         *,
         cat_ix: list[int],
         model: PerFeatureTransformer,
@@ -239,6 +377,8 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
+        inference_mode: bool,
+        no_preprocessing: bool = False,
     ) -> InferenceEngineCachePreprocessing:
         """Prepare the inference engine.
 
@@ -253,6 +393,10 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            inference_mode: Whether to use torch.inference mode
+                (this is quicker but disables backpropagation)
+            no_preprocessing: If turned of, the preprocessing on the test
+                tensors is tuned off. Used for differentiablity.
 
         Returns:
             The prepared inference engine.
@@ -277,12 +421,14 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
+            inference_mode=inference_mode,
+            no_preprocessing=no_preprocessing,
         )
 
     @override
     def iter_outputs(
         self,
-        X: np.ndarray,
+        X: np.ndarray | torch.tensor,
         *,
         device: torch.device,
         autocast: bool,
@@ -298,13 +444,19 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             self.ensemble_configs,
             self.cat_ixs,
         ):
-            X_train = torch.as_tensor(X_train, dtype=torch.float32, device=device)  # noqa: PLW2901
-
-            X_test = preprocessor.transform(X).X
-            X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
-
+            if not isinstance(X_train, torch.Tensor):
+                X_train = torch.as_tensor(X_train, dtype=torch.float32)  # noqa: PLW2901
+            X_train = X_train.to(device)  # noqa: PLW2901
+            X_test = preprocessor.transform(X).X if not self.no_preprocessing else X
+            if not isinstance(X_test, torch.Tensor):
+                X_test = torch.as_tensor(X_test, dtype=torch.float32)
+            X_test = X_test.to(device)
             X_full = torch.cat([X_train, X_test], dim=0).unsqueeze(1)
-            y_train = torch.as_tensor(y_train, dtype=torch.float32, device=device)  # noqa: PLW2901
+            if not isinstance(y_train, torch.Tensor):
+                y_train = torch.as_tensor(y_train, dtype=torch.float32)  # noqa: PLW2901
+            y_train = y_train.to(device)  # noqa: PLW2901
+
+            batched_cat_ix = [cat_ix]
 
             # Handle type casting
             with contextlib.suppress(Exception):  # Avoid overflow error
@@ -313,34 +465,41 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 X_full = X_full.type(self.force_inference_dtype)
                 y_train = y_train.type(self.force_inference_dtype)  # type: ignore # noqa: PLW2901
 
-            MemoryUsageEstimator.reset_peak_memory_if_required(
-                save_peak_mem=self.save_peak_mem,
-                model=self.model,
-                X=X_full,
-                cache_kv=False,
-                device=device,
-                dtype_byte_size=self.dtype_byte_size,
-                safety_factor=1.2,  # TODO(Arjun): make customizable
-            )
+            if self.inference_mode:
+                MemoryUsageEstimator.reset_peak_memory_if_required(
+                    save_peak_mem=self.save_peak_mem,
+                    model=self.model,
+                    X=X_full,
+                    cache_kv=False,
+                    device=device,
+                    dtype_byte_size=self.dtype_byte_size,
+                    safety_factor=1.2,  # TODO(Arjun): make customizable
+                )
+            else:
+                pass
 
             style = None
 
             with (
                 torch.autocast(device.type, enabled=autocast),
-                torch.inference_mode(),
+                torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(
                     *(style, X_full, y_train),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
+                    categorical_inds=batched_cat_ix,
                     single_eval_pos=len(y_train),
                 )
 
             output = output if isinstance(output, dict) else output.squeeze(1)
 
             yield output, config
+        if self.inference_mode:  ## if inference
+            self.model = self.model.cpu()
 
-        self.model = self.model.cpu()
+    @override
+    def use_torch_inference_mode(self, use_inference: bool):
+        self.inference_mode = use_inference
 
 
 @dataclass
@@ -355,7 +514,7 @@ class InferenceEngineCacheKV(InferenceEngine):
 
     preprocessors: list[SequentialFeatureTransformer]
     configs: list[EnsembleConfig]
-    cat_ixs: list[list[int]]
+    cat_ixs: Sequence[list[int]]
     models: list[PerFeatureTransformer]
     n_train_samples: list[int]
     force_inference_dtype: torch.dtype | None
@@ -407,7 +566,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         models: list[PerFeatureTransformer] = []
         preprocessors: list[SequentialFeatureTransformer] = []
         correct_order_configs: list[EnsembleConfig] = []
-        cat_ixs: list[list[int]] = []
+        cat_ixs: Sequence[list[int]] = []
         n_train_samples: list[int] = []
 
         for config, preprocessor, X, y, preprocessor_cat_ix in itr:
@@ -418,8 +577,13 @@ class InferenceEngineCacheKV(InferenceEngine):
 
             ens_model = deepcopy(model)
             ens_model = ens_model.to(device)
-            X = torch.as_tensor(X, dtype=torch.float32, device=device).unsqueeze(1)  # noqa: PLW2901
-            y = torch.as_tensor(y, dtype=torch.float32, device=device)  # noqa: PLW2901
+            if not isinstance(X, torch.Tensor):
+                X = torch.as_tensor(X, dtype=torch.float32, device=device)  # noqa: PLW2901
+            X = X.unsqueeze(1)  # noqa: PLW2901
+            if not isinstance(y, torch.Tensor):
+                y = torch.as_tensor(y, dtype=torch.float32, device=device)  # noqa: PLW2901
+
+            batched_preprocessor_cat_ix = [preprocessor_cat_ix]
 
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
@@ -432,7 +596,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                 ens_model.forward(
                     *(None, X, y),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=preprocessor_cat_ix,
+                    categorical_inds=batched_preprocessor_cat_ix,
                     single_eval_pos=len(X),
                 )
 
@@ -471,6 +635,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             X_test = preprocessor.transform(X).X
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
             X_test = X_test.unsqueeze(1)
+            batched_cat_ix = [cat_ix]
 
             MemoryUsageEstimator.reset_peak_memory_if_required(
                 save_peak_mem=self.save_peak_mem,
@@ -497,7 +662,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                 output = model(
                     *(style, X_test, None),
                     only_return_standard_out=only_return_standard_out,
-                    categorical_inds=cat_ix,
+                    categorical_inds=batched_cat_ix,
                     single_eval_pos=None,
                 )
 

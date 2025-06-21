@@ -4,89 +4,92 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
-# TODO(eddiebergman):
-# * Some parameters effect model architecture which only makes sense when training
-# * Some parameters are used for training such as `epochs` (`batch_size`?)
-# TODO(eddiebergman): Remove inheritance from `MutableMapping` once problems fixed
 # TODO(eddiebergman): Anything with a default value basically has every config have it
 #   to the same value, could consider removing those. In some cases, the code asserts
 #   that it should be that value.
 @dataclass
-class InferenceConfig:
+class ModelConfig:
     """Configuration for the TabPFN model."""
 
     # ------ Actual variation across configs
-    adaptive_max_seq_len_to_max_full_table_size: Literal[75000, 150000, 300000]
-    batch_size: Literal[2, 4, 8]
-    emsize: Literal[128, 192]
+    emsize: int
+    """The embedding dimension."""
     features_per_group: Literal[1, 2]
-    max_num_classes: Literal[0, 10]
-    nhead: Literal[4, 6]
+    """If > 1, the features will be grouped into groups of this size and the attention
+    is across groups."""
+    max_num_classes: int
+    nhead: int
+    """Number of attention heads for both between-item and between-feature attention."""
     remove_duplicate_features: bool
-    seq_len: Literal[2000, 4000]
-    task_type: Literal["multiclass", "regression"]
     # Only seems used in `get_loss` which transitively gets
     # used through bar_dist.num_buckets later
     num_buckets: Literal[1000, 5000]
     max_num_features: Literal[85, 90, 95]
 
-    two_sets_of_queries: bool | None = None  # Defaulted to False when None in config
+    two_sets_of_queries: bool = False
     # --------
 
     # --- Constant across all configs and used
-    aggregate_k_gradients: Literal[1] = 1
-    differentiable_hps_as_style: Literal[False] = False
     dropout: float = 0.0
-    encoder_use_bias: Literal[False] = False
+    encoder_use_bias: bool = False
     feature_positional_embedding: Literal["subspace"] = "subspace"
     multiquery_item_attention: Literal[False] = False
+    """When True, uses multiquery for attention between items."""
     nan_handling_enabled: Literal[True] = True
     nan_handling_y_encoder: Literal[True] = True
     nhid_factor: Literal[4] = 4
+    """Hidden dimension in the MLP layers is ninp * nhid_factor."""
     nlayers: Literal[12] = 12
+    """Number of layers, each consisting of a multi-head attention + MLP layer."""
     normalize_by_used_features: Literal[True] = True
     normalize_on_train_only: Literal[True] = True
     normalize_to_ranking: Literal[False] = False
     normalize_x: Literal[True] = True
-    num_global_att_tokens: Literal[0] = 0
-    progress_bar: Literal[False] = False
     recompute_attn: Literal[False] = False
+    """If True, enables activation checkpointing for each attention  layer **and each
+    MLP layer** in the encoder. This saves memory. recompute_layer is a related flag
+    which checkpoints the input to each PerFeatureEncoderLayer."""
     recompute_layer: Literal[True] = True
+    """If True, enables activation checkpointing for each PerFeatureEncoderLayer in the
+    encoder. This saves memory. recompute_attn is a related flag which checkpoints the
+    attention and mlp layers individually."""
     remove_empty_features: Literal[True] = True
     remove_outliers: Literal[False] = False
-    semisupervised_enabled: Literal[False] = False
-    timing: Literal[False] = False
     use_separate_decoder: Literal[False] = False
+    """If True, the decoder will be separate from the encoder."""
 
     # This seems to no longer be used, and the multi-head-attention class
     # always uses it if it's available, there's no option to pass down
     use_flash_attention: Literal[False] = False  # asserted False
 
-    # Seems to just set the config value "multiquery_item_attention_for_test_set"
-    # to True. However this never triggers as multi_query_factor is always None
-    # in all configs.
-    #
-    # > if (mqf := config.get("multi_query_factor")) and mqf > 1:
-    # >   assert mqf == config["nhead"], "multi_query_factor must be equal to nhead"
-    # >  config["multiquery_item_attention_for_test_set"] = True
-    #
-    # Also multiquery_item_attention_for_test_set is always True in all configs
-    multi_query_factor: Literal[None] = None
     multiquery_item_attention_for_test_set: Literal[True] = True
+    """If true, uses multiquery attention on the test set."""
 
-    # Missing in some configs but the parameter default is set to 1.0 when this is None
-    # Basically constant at 1.0
-    attention_init_gain: float | None = None  # 1.0
+    attention_init_gain: float = 1.0
+    """The gain when initializing the attention parameters. If None, then 1.0 is
+    used."""
     # --------
+
+    dag_pos_enc_dim: int | None = None
+
+    item_attention_type: Literal["full"] = "full"
+    feature_attention_type: Literal["full"] = "full"
+    seed: int = 0
+    """The seed to use for the model. The default 0 is chosen to match
+    the default random_state of 0 in the TabPFN estimator,
+    which was used to set this seed before
+    (though I'm not sure it makes a difference for a trained model).
+    """
 
     # TODO(eddiebergman): Remove, we can just unpack directly
     # into the `Config` cls once we have fixed the stored model configs.
     @classmethod
-    def from_dict(cls, config: dict) -> InferenceConfig:
+    def from_dict(cls, config: dict) -> ModelConfig:
         """Create a Config object from a dictionary.
 
         This method also does some sanity checking initially.
@@ -106,3 +109,43 @@ class InferenceConfig:
         selected_config = {field: config[field] for field in present_fields}
 
         return cls(**selected_config)
+
+    @classmethod
+    def upgrade_config(cls, config: dict[str, Any]) -> dict[str, Any]:
+        """Upgrade old configs to match the current config.
+
+        This allows backwards compatibility with  checkpoints.
+        Raises a ValueError if the config is not compatible with the current code.
+        """
+        # The dates are to help us remove upgrades when they get very old.
+
+        config = deepcopy(config)
+
+        # Config changed on 2025-05-22
+        # Some keys were previously allowed to be None, and replaced with a default
+        # value when they were used. Now we keep the default value in the configs and
+        # None isn't allowed, so replace None with the default value.
+        if "attention_init_gain" in config and config["attention_init_gain"] is None:
+            config["attention_init_gain"] = cls._get_default("attention_init_gain")
+        if "two_sets_of_queries" in config and config["two_sets_of_queries"] is None:
+            config["two_sets_of_queries"] = cls._get_default("two_sets_of_queries")
+
+        # Config changed on 2025-06-03
+        if "attention_type" in config:
+            if "item_attention_type" in config or "feature_attention_type" in config:
+                raise ValueError("Can't have both old and new attention types set")
+            config["item_attention_type"] = config["attention_type"]
+            config["feature_attention_type"] = config["attention_type"]
+            del config["attention_type"]
+
+        # Config changed on 2025-06-04
+        if config.get("canonical_y_encoder", False) is not False:
+            raise ValueError("Current version only supports canonical_y_encoder=False")
+        if config.get("bias", False) is not False:
+            raise ValueError("Current version only supports bias=False")
+
+        return config
+
+    @classmethod
+    def _get_default(cls, field: str) -> Any:
+        return cls.__dataclass_fields__[field].default

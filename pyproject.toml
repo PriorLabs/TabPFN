@@ -152,6 +152,7 @@ select = [
 ]
 
 ignore = [
+  "ERA001", # commented code?
   "D104",    # Missing docstring in public package
   "D105",    # Missing docstring in magic mthod
   "D203",    # 1 blank line required before class docstring
