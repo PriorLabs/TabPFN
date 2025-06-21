@@ -950,7 +950,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
         # Also return raw_target variable because of flexiblity
         # in optimisation space -> see examples/
-        # Aslo return corresponding target variable binning
+        # Also return corresponding target variable binning
         # classes normalized_bardist_ and bardist_
         if regression_task:
             return (
