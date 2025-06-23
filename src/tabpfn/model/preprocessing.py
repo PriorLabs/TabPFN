@@ -111,7 +111,9 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
 
         # Adapt n_quantiles for this fit: min of user's preference and available samples
         # Ensure n_quantiles is at least 1
-        effective_n_quantiles = max(1, min(self._user_n_quantiles, n_samples))
+        effective_n_quantiles = max(
+            1, min(self._user_n_quantiles, n_samples, self.subsample)
+        )
 
         # Set self.n_quantiles to the effective value BEFORE calling super().fit()
         # This ensures the parent class uses the adapted value for fitting
@@ -119,21 +121,6 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         self.n_quantiles = effective_n_quantiles
 
         return super().fit(X, y)
-
-    # For completeness and scikit-learn compatibility, allow getting params
-    # to show the original user setting if desired, though self.n_quantiles
-    # will show the fitted effective value.
-    def get_params(self, *, deep: bool = True) -> dict:
-        params = super().get_params(deep)
-        # Report the original user_n_quantiles if it's in params
-        if "_user_n_quantiles" in self.__dict__:  # Check if it was set
-            params["n_quantiles"] = self._user_n_quantiles
-        return params
-
-    def set_params(self, **params: Any) -> AdaptiveQuantileTransformer:
-        if "n_quantiles" in params:
-            self._user_n_quantiles = params["n_quantiles"]
-        return super().set_params(**params)
 
 
 ALPHAS = (

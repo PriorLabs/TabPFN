@@ -22,8 +22,8 @@ def sample_data():
 
 def test_preprocessing_large_dataset():
     # Generate a synthetic dataset with more than 10,000 samples
-    num_samples = 15000
-    num_features = 10
+    num_samples = 150000
+    num_features = 2
     rng = np.random.default_rng()
     X = rng.random((num_samples, num_features))
 
