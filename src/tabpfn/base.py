@@ -192,6 +192,14 @@ def determine_precision(
         byte_size:
             The byte size per element for the chosen precision.
     """
+    # PyTorch CPU kernels do not support float16. We must error out.
+    if device_.type == "cpu" and inference_precision == torch.float16:
+        raise RuntimeError(
+            "Half-precision (torch.float16) inference is not supported on CPU. "
+            "Please use a GPU, or set inference_precision to 'auto', "
+            "torch.bfloat16, torch.float32, or torch.float64."
+        )
+
     if inference_precision in ["autocast", "auto"]:
         use_autocast_ = infer_fp16_inference_mode(
             device=device_,
@@ -481,14 +489,6 @@ def _initialize_model_variables_helper(
         calling_instance.inference_precision, calling_instance.device_
     )
     calling_instance.model_.to(calling_instance.device_)
-
-    if (
-        calling_instance.device_.type == "cpu"
-        and calling_instance.inference_precision == torch.float16
-    ):
-        raise RuntimeError(
-            "Half-precision (torch.float16) inference is not supported on CPU. "
-        )
 
     # Build the interface_config
     _config = ModelInterfaceConfig.from_user_input(

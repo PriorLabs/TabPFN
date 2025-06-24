@@ -51,6 +51,7 @@ def torch_nanstd(x: torch.Tensor, axis: int = 0):
         x.shape[axis],
         dim=axis,
     )
+    # Clip the denominator to avoid division by zero when num=1
     var = torch_nansum(torch.square(mean_broadcast - x), axis=axis) / (num - 1).clip(
         min=1.0
     )
@@ -78,8 +79,6 @@ def normalize_data(
         mean: If given, use this value instead of computing it.
         std: If given, use this value instead of computing it.
     """
-    # TODO(eddiebergman): I feel like this function is easier to just do what you need
-    # where you need it, rather than supporting all these variations
     assert (mean is None) == (
         std is None
     ), "Either both or none of mean and std must be given"
@@ -91,15 +90,15 @@ def normalize_data(
             mean = torch_nanmean(data, axis=0)  # type: ignore
             std = torch_nanstd(data, axis=0)
 
-        # FIX 2: For constant features, std is 0. Replace with 1 to avoid 0/0 -> NaN.
-        std[std == 0] = 1.0
+        std = torch.where(std == 0, torch.ones_like(std), std)
 
         if len(data) == 1 or normalize_positions == 1:
-            std[:] = 1.0
+            std = torch.ones_like(std)
 
         if std_only:
-            mean[:] = 0  # type: ignore
-    data = (data - mean) / std
+            mean = torch.zeros_like(mean)
+
+    data = (data - mean) / (std + 1e-8)
 
     if clip:
         data = torch.clip(data, min=-100, max=100)
