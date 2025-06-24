@@ -482,6 +482,14 @@ def _initialize_model_variables_helper(
     )
     calling_instance.model_.to(calling_instance.device_)
 
+    if (
+        calling_instance.device_.type == "cpu"
+        and calling_instance.inference_precision == torch.float16
+    ):
+        raise RuntimeError(
+            "Half-precision (torch.float16) inference is not supported on CPU. "
+        )
+
     # Build the interface_config
     _config = ModelInterfaceConfig.from_user_input(
         inference_config=calling_instance.inference_config,

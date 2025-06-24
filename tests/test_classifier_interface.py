@@ -83,8 +83,10 @@ def test_fit(
     remove_outliers_std: int | None,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if device == "cpu" and inference_precision == "autocast":
-        pytest.skip("Only GPU supports inference_precision")
+    if device == "cpu" and inference_precision in ["autocast", torch.float16]:
+        pytest.skip(
+            "CPU device does not support 'autocast' or 'torch.float16' inference."
+        )
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,
