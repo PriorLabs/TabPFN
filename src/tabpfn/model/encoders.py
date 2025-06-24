@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 import torch
@@ -10,7 +10,23 @@ from torch import nn
 
 
 # usage of custom implementations is required to support ONNX export
-def torch_nansum(x: torch.Tensor, axis=None, keepdim=False, dtype=None):
+def torch_nansum(
+    x: torch.Tensor,
+    axis: int | tuple[int, ...] | None = None,
+    keepdim: bool = False,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Computes the sum of a tensor, treating NaNs as zero.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension or dimensions to reduce.
+        keepdim: Whether the output tensor has `axis` retained or not.
+        dtype: The desired data type of the returned tensor.
+
+    Returns:
+        The sum of the tensor with NaNs treated as zero.
+    """
     nan_mask = torch.isnan(x)
     masked_input = torch.where(
         nan_mask,
@@ -20,13 +36,47 @@ def torch_nansum(x: torch.Tensor, axis=None, keepdim=False, dtype=None):
     return torch.sum(masked_input, axis=axis, keepdim=keepdim, dtype=dtype)
 
 
+@overload
+def torch_nanmean(
+    x: torch.Tensor,
+    axis: int = 0,
+    *,
+    return_nanshare: Literal[False] = False,
+    include_inf: bool = False,
+) -> torch.Tensor: ...
+
+
+@overload
+def torch_nanmean(
+    x: torch.Tensor,
+    axis: int = 0,
+    *,
+    return_nanshare: Literal[True],
+    include_inf: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+
 def torch_nanmean(
     x: torch.Tensor,
     axis: int = 0,
     *,
     return_nanshare: bool = False,
     include_inf: bool = False,
-):
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    """Computes the mean of a tensor over a given dimension, ignoring NaNs.
+
+    Designed for stability: If all inputs are NaN, the mean will be 0.0.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension to reduce.
+        return_nanshare: If True, also return the proportion of NaNs.
+        include_inf: If True, treat infinity as NaN for the purpose of the calculation.
+
+    Returns:
+        The mean of the input tensor, ignoring NaNs. If `return_nanshare` is True,
+        returns a tuple containing the mean and the share of NaNs.
+    """
     nan_mask = torch.isnan(x)
     if include_inf:
         nan_mask = torch.logical_or(nan_mask, torch.isinf(x))
@@ -36,11 +86,24 @@ def torch_nanmean(
     )
     value = torch.where(nan_mask, torch.full_like(x, 0), x).sum(axis=axis)  # type: ignore
     if return_nanshare:
-        return value / num, 1.0 - num / x.shape[axis]
+        return value / num, 1.0 - (num / x.shape[axis])
     return value / num.clip(min=1.0)
 
 
-def torch_nanstd(x: torch.Tensor, axis: int = 0):
+def torch_nanstd(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
+    """Computes the standard deviation of a tensor over a given dimension, ignoring NaNs.
+
+    This implementation is designed for stability. It clips the denominator `(num - 1)`
+    at a minimum of 1. This prevents division-by-zero errors that would produce `NaN`
+    or `inf` when calculating the standard deviation of a single data point.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension to reduce.
+
+    Returns:
+        The standard deviation of the input tensor, ignoring NaNs.
+    """
     num = torch.where(torch.isnan(x), torch.full_like(x, 0), torch.full_like(x, 1)).sum(  # type: ignore
         axis=axis,
     )
@@ -58,6 +121,32 @@ def torch_nanstd(x: torch.Tensor, axis: int = 0):
     return torch.sqrt(var)
 
 
+@overload
+def normalize_data(
+    data: torch.Tensor,
+    *,
+    normalize_positions: int = -1,
+    return_scaling: Literal[False] = False,
+    clip: bool = True,
+    std_only: bool = False,
+    mean: torch.Tensor | None = None,
+    std: torch.Tensor | None = None,
+) -> torch.Tensor: ...
+
+
+@overload
+def normalize_data(
+    data: torch.Tensor,
+    *,
+    normalize_positions: int = -1,
+    return_scaling: Literal[True],
+    clip: bool = True,
+    std_only: bool = False,
+    mean: torch.Tensor | None = None,
+    std: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]: ...
+
+
 def normalize_data(
     data: torch.Tensor,
     *,
@@ -68,16 +157,35 @@ def normalize_data(
     mean: torch.Tensor | None = None,
     std: torch.Tensor | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-    """Normalize data to mean 0 and std 1.
+    """Normalize data to mean 0 and std 1 with high numerical stability.
+
+    This function is designed to be robust against several edge cases:
+    1.  **Constant Features**: If a feature is constant, its standard deviation (`std`)
+        will be 0. This is handled by replacing `std=0` with `1` to prevent `0/0`
+        division, effectively mapping constant features to a normalized value of 0.
+    2.  **Single-Sample Normalization**: If the normalization is based on a single
+        data point, `std` is explicitly set to `1` to prevent undefined behavior.
+    3.  **Low-Precision Dtypes**: During the final division, a small epsilon (`1e-8`)
+        is added to the denominator. This prevents division by a near-zero `std`,
+        which could cause the value to overflow to infinity (`inf`), especially when
+        using low-precision dtypes like `torch.float16`.
+    4.  **Autograd Compatibility**: All inplace operations (`x[:] = ...`) have been
+        replaced with their functional equivalents (`torch.where`, `torch.ones_like`)
+        to ensure the computation graph is not corrupted, allowing gradients to be
+        computed correctly.
 
     Args:
         data: The data to normalize. (T, B, H)
-        normalize_positions: If > 0, only use the first `normalize_positions` positions for normalization.
+        normalize_positions: If > 0, only use the first `normalize_positions`
+            positions for normalization.
         return_scaling: If True, return the scaling parameters as well (mean, std).
         std_only: If True, only divide by std.
         clip: If True, clip the data to [-100, 100].
         mean: If given, use this value instead of computing it.
         std: If given, use this value instead of computing it.
+
+    Returns:
+        The normalized data tensor, or a tuple containing the data and scaling factors.
     """
     assert (mean is None) == (
         std is None
@@ -90,6 +198,7 @@ def normalize_data(
             mean = torch_nanmean(data, axis=0)  # type: ignore
             std = torch_nanstd(data, axis=0)
 
+        # Inplace assignments with functional equivalents to support autograd.
         std = torch.where(std == 0, torch.ones_like(std), std)
 
         if len(data) == 1 or normalize_positions == 1:
@@ -98,13 +207,14 @@ def normalize_data(
         if std_only:
             mean = torch.zeros_like(mean)
 
+    # Add epsilon for numerical stability, especially for float16.
     data = (data - mean) / (std + 1e-8)
 
     if clip:
         data = torch.clip(data, min=-100, max=100)
 
     if return_scaling:
-        return data, (mean, std)  # type: ignore
+        return data, (mean, std)
     return data
 
 

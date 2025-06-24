@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from tabpfn.model import encoders
@@ -13,7 +14,92 @@ from tabpfn.model.encoders import (
     RemoveEmptyFeaturesEncoderStep,
     SequentialEncoder,
     VariableNumFeaturesEncoderStep,
+    normalize_data,
+    torch_nanmean,
+    torch_nanstd,
 )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float64])
+def test_torch_nanmean(dtype):
+    """Tests that torch_nanmean correctly calculates the mean, ignoring NaNs."""
+    # Basic case
+    x = torch.tensor([1, 2, 3, 4], dtype=dtype)
+    assert torch.isclose(torch_nanmean(x), torch.tensor(2.5, dtype=dtype))
+
+    # Case with NaNs
+    x_nan = torch.tensor([1, 2, torch.nan, 4], dtype=dtype)
+    assert torch.isclose(torch_nanmean(x_nan), torch.tensor(7 / 3, dtype=dtype))
+
+    # All NaNs case should result in 0.0
+    x_all_nan = torch.tensor([torch.nan, torch.nan], dtype=dtype)
+    assert torch.isclose(torch_nanmean(x_all_nan), torch.tensor(0.0, dtype=dtype))
+
+
+def test_torch_nanstd():
+    """Tests that torch_nanstd correctly calculates std and edge cases."""
+    # Basic case
+    x = torch.tensor([1, 2, 3, 4], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x), torch.std(x))
+
+    # Case with NaNs
+    x_nan = torch.tensor([1, 2, torch.nan, 4], dtype=torch.float32)
+    expected_std = torch.std(torch.tensor([1, 2, 4], dtype=torch.float32))
+    assert torch.isclose(torch_nanstd(x_nan), expected_std)
+
+    # Edge Case: Single non-NaN value (std should be 0)
+    x_single = torch.tensor([torch.nan, 3, torch.nan], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x_single), torch.tensor(0.0))
+
+    # Edge Case: Constant values (std should be 0)
+    x_const = torch.tensor([5, 5, 5, 5], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x_const), torch.tensor(0.0))
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float64])
+@pytest.mark.parametrize(
+    "shape",
+    [(10, 3, 4), (5, 1, 2)],  # Sequence, Batch, Features
+)
+def test_normalize_data_basic(dtype, shape):
+    """Tests basic normalization properties."""
+    x = torch.randn(shape, dtype=dtype)
+    # Ensure there is variance in the data to avoid the constant feature case
+    if shape[0] > 1:
+        x[0] *= 2
+        x[1] *= -1
+
+    x_norm = normalize_data(x)
+
+    # Normalization happens along dim=0 (sequence dimension)
+    # So we check that the mean and std along that dim are correct
+    mean_of_norm = x_norm.mean(dim=0)
+    std_of_norm = x_norm.std(dim=0)
+
+    # Assert that mean is close to 0 and std is close to 1 for each feature
+    assert torch.allclose(mean_of_norm, torch.zeros_like(mean_of_norm), atol=1e-3)
+    assert torch.allclose(std_of_norm, torch.ones_like(std_of_norm), atol=1e-3)
+    assert not torch.isnan(x_norm).any()
+    assert not torch.isinf(x_norm).any()
+
+
+def test_normalize_data_constant_feature():
+    """Tests that a constant feature is normalized to zeros without producing NaNs."""
+    x = torch.ones(10, 3, 4)  # A tensor of all ones
+    x[:, :, 2] = 5.0  # Make one feature constant with value 5
+    x_norm = normalize_data(x)
+
+    # The constant feature column should be all zeros
+    assert torch.all(x_norm[:, :, 2] == 0)
+    assert not torch.isnan(x_norm).any(), "NaNs were produced for a constant feature."
+
+
+def test_normalize_data_single_sample():
+    """Tests that normalizing a single sample results in zeros without errors."""
+    x = torch.randn(1, 3, 4)  # Single sample in sequence
+    x_norm = normalize_data(x)
+    assert torch.all(x_norm == 0)
+    assert not torch.isnan(x_norm).any()
 
 
 def test_input_normalization():

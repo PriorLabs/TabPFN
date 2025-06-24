@@ -22,20 +22,13 @@ from torch import nn
 from tabpfn import TabPFNClassifier
 from tabpfn.preprocessing import PreprocessorConfig
 
+from .utils import check_cpu_float16_support
+
 devices = ["cpu"]
 if torch.cuda.is_available():
     devices.append("cuda")
 
-# --- Environment-Aware Check for CPU Float16 Support ---
-is_cpu_float16_supported = True
-try:
-    # Attempt a minimal operation that fails on older PyTorch versions on CPU
-    torch.randn(2, 2, dtype=torch.float16, device="cpu") @ torch.randn(
-        2, 2, dtype=torch.float16, device="cpu"
-    )
-except RuntimeError as e:
-    if "addmm_impl_cpu_" in str(e) or "not implemented for 'Half'" in str(e):
-        is_cpu_float16_supported = False
+is_cpu_float16_supported = check_cpu_float16_support()
 
 # TODO: test "batched" mode
 
