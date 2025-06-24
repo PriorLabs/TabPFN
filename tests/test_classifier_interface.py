@@ -26,6 +26,16 @@ devices = ["cpu"]
 if torch.cuda.is_available():
     devices.append("cuda")
 
+# --- Environment-Aware Check for CPU Float16 Support ---
+is_cpu_float16_supported = True
+try:
+    # Attempt a minimal operation that fails on older PyTorch versions on CPU
+    torch.randn(2, 2, dtype=torch.float16, device="cpu") @ torch.randn(
+        2, 2, dtype=torch.float16, device="cpu"
+    )
+except RuntimeError as e:
+    if "addmm_impl_cpu_" in str(e) or "not implemented for 'Half'" in str(e):
+        is_cpu_float16_supported = False
 
 # TODO: test "batched" mode
 
@@ -85,6 +95,14 @@ def test_fit(
 ) -> None:
     if device == "cpu" and inference_precision in ["autocast"]:
         pytest.skip("CPU device does not support 'autocast' inference.")
+
+    # Use the environment-aware check to skip only if necessary
+    if (
+        device == "cpu"
+        and inference_precision == torch.float16
+        and not is_cpu_float16_supported
+    ):
+        pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,
