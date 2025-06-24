@@ -165,7 +165,7 @@ def normalize_data(
         division, effectively mapping constant features to a normalized value of 0.
     2.  **Single-Sample Normalization**: If the normalization is based on a single
         data point, `std` is explicitly set to `1` to prevent undefined behavior.
-    3.  **Low-Precision Dtypes**: During the final division, a small epsilon (`1e-8`)
+    3.  **Low-Precision Dtypes**: During the final division, a small epsilon (`1e-16`)
         is added to the denominator. This prevents division by a near-zero `std`,
         which could cause the value to overflow to infinity (`inf`), especially when
         using low-precision dtypes like `torch.float16`.
@@ -207,8 +207,8 @@ def normalize_data(
         if std_only:
             mean = torch.zeros_like(mean)
 
-    # Add epsilon for numerical stability, especially for float16.
-    data = (data - mean) / (std + 1e-8)
+    # Add epsilon for numerical stability
+    data = (data - mean) / (std + 1e-16)
 
     if clip:
         data = torch.clip(data, min=-100, max=100)
