@@ -45,15 +45,16 @@ def torch_nanstd(x: torch.Tensor, axis: int = 0):
         axis=axis,
     )
     value = torch.where(torch.isnan(x), torch.full_like(x, 0), x).sum(axis=axis)  # type: ignore
-    mean = value / num
+    mean = value / num.clip(min=1.0)
     mean_broadcast = torch.repeat_interleave(
         mean.unsqueeze(axis),
         x.shape[axis],
         dim=axis,
     )
-    return torch.sqrt(
-        torch_nansum(torch.square(mean_broadcast - x), axis=axis) / (num - 1),  # type: ignore
+    var = torch_nansum(torch.square(mean_broadcast - x), axis=axis) / (num - 1).clip(
+        min=1.0
     )
+    return torch.sqrt(var)
 
 
 def normalize_data(
@@ -85,10 +86,13 @@ def normalize_data(
     if mean is None:
         if normalize_positions is not None and normalize_positions > 0:
             mean = torch_nanmean(data[:normalize_positions], axis=0)  # type: ignore
-            std = torch_nanstd(data[:normalize_positions], axis=0) + 1e-20
+            std = torch_nanstd(data[:normalize_positions], axis=0)
         else:
             mean = torch_nanmean(data, axis=0)  # type: ignore
-            std = torch_nanstd(data, axis=0) + 1e-20
+            std = torch_nanstd(data, axis=0)
+
+        # FIX 2: For constant features, std is 0. Replace with 1 to avoid 0/0 -> NaN.
+        std[std == 0] = 1.0
 
         if len(data) == 1 or normalize_positions == 1:
             std[:] = 1.0
@@ -401,6 +405,11 @@ class LinearInputEncoderStep(SeqEncStep):
         x = torch.cat(x, dim=-1)
         if self.replace_nan_by_zero:
             x = torch.nan_to_num(x, nan=0.0)  # type: ignore
+
+        # Ensure input tensor dtype matches the layer's weight dtype
+        # Since this layer gets input from the outside we verify the dtype
+        x = x.to(self.layer.weight.dtype)
+
         return (self.layer(x),)
 
 

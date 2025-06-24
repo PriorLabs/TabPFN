@@ -36,7 +36,7 @@ fit_modes = [
     "fit_preprocessors",
     "fit_with_cache",
 ]
-inference_precision_methods = ["auto", "autocast", torch.float64]
+inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
