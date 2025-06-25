@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import typing
 import warnings
 from collections.abc import Sequence
@@ -155,9 +156,27 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
         The inferred device
     """
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
-        return torch.device(device_type_)
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        # Detect TPU only if torch_xla is installed and a TPU device is present
+        if importlib.util.find_spec("torch_xla") is not None:
+            try:
+                import torch_xla.core.xla_model as xm
+
+                return torch.device(str(xm.xla_device()))
+            except Exception:  # noqa: BLE001,S110
+                pass
+
+        return torch.device("cpu")
+
     if isinstance(device, str):
+        if device.lower() in {"tpu", "xla"}:
+            spec = importlib.util.find_spec("torch_xla")
+            if spec is None:
+                raise ValueError("torch_xla must be installed to use TPU devices")
+            import torch_xla.core.xla_model as xm
+
+            return torch.device(str(xm.xla_device()))
         return torch.device(device)
 
     if isinstance(device, torch.device):

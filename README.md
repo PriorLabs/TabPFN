@@ -119,6 +119,8 @@ For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor`
    clf.fit(X_train, y_train)
    predictions = clf.predict(X_test)
    ```
+   The `device` argument accepts `"cpu"`, `"cuda"`, `"tpu"` or `"auto"` to select
+   the best available hardware automatically.
 
 ## 🌐 TabPFN Ecosystem
 
