@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import warnings
 from abc import abstractmethod
@@ -14,7 +15,6 @@ from typing_extensions import Self, override
 import numpy as np
 import scipy
 import torch
-from pandas.core.common import contextlib
 from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
