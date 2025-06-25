@@ -96,7 +96,7 @@ def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
     #   the original space.
     #   Borders that were transformed to extreme values are all set to the same
     #   value, the maximum of the transformed borders. Thus probabilities predicted
-    #   in these buckets have no effects. The outhermost border is set to the
+    #   in these buckets have no effects. The outermost border is set to the
     #   maximum of the transformed borders times 2, so still allow for some weight
     #   in the long tailed distribution and avoid infinite loss.
     if inplace is not True:
@@ -759,7 +759,7 @@ def get_total_memory_windows() -> float:
 
     # Initialize the structure
     mem_status = _MEMORYSTATUSEX()
-    # need to initialize lenght of structure, see microsft docs above
+    # need to initialize length of structure, see Microsoft docs above
     mem_status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
     try:
         # Use typing.cast to help mypy understand this Windows-only code
