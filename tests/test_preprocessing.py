@@ -43,8 +43,16 @@ def test_preprocessing_large_dataset():
     # Run the preprocessing step
     result = preprocessing_step.fit_transform(X, categorical_features)
 
-    # Assert the result is not None
+    # Assert the result is not None and has the correct structure
     assert result is not None
+
+    Xt = result.X
+
+    # Verify the output shape matches the input shape
+    assert Xt.shape == (num_samples, num_features)
+
+    # Verify the dtype of the output matches the dtype of the input
+    assert Xt.dtype == X.dtype
 
 
 @pytest.fixture
