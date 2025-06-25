@@ -742,7 +742,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 - If `"median"`, we return the median over the predicted distribution.
                 - If `"mode"`, we return the mode over the predicted distribution.
                 - If `"quantiles"`, we return the quantiles of the predicted
-                    distribution. The parameter `output_quantiles` determines which
+                    distribution. The parameter `quantiles` determines which
                     quantiles are returned.
                 - If `"main"`, we return the all output types above in a dict.
                 - If `"full"`, we return the full output of the model, including the

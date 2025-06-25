@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from functools import partial
-from typing import Literal
+from typing import Any, Literal
 from unittest.mock import patch
 
 import numpy as np
@@ -54,7 +54,7 @@ default_config = {
     "optimization_space": "raw_label_space",
 }
 
-param_values = {
+param_values: dict[str, list[Any]] = {
     "n_estimators": estimators,
     "device": devices,
     "fit_mode": fit_modes,
