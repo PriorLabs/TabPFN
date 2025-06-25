@@ -40,7 +40,7 @@ fit_modes = [
     "fit_with_cache",
 ]
 inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
-remove_remove_outliers_stds = [None, 12]
+remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
 all_combinations = list(
@@ -51,7 +51,7 @@ all_combinations = list(
         multiclass_decoders,
         fit_modes,
         inference_precision_methods,
-        remove_remove_outliers_stds,
+        remove_outliers_stds,
     ),
 )
 
