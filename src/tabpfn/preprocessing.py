@@ -624,7 +624,7 @@ def fit_preprocessing_one(
 
 
 def transform_labels_one(config, y_train):
-    """Transform the labels for one ensembel config.
+    """Transform the labels for one ensemble config.
         for both regression or classification.
 
     Args:
