@@ -46,6 +46,11 @@ def test_preprocessing_large_dataset():
     # Assert the result is not None
     assert result is not None
 
+    # Verify the output shape and dtype
+    Xt = result[0]
+    assert Xt.shape == (num_samples, num_features)
+    assert Xt.dtype == np.float64
+
 
 @pytest.fixture
 def data_with_zero_std():
