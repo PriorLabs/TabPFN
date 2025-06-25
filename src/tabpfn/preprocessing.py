@@ -250,7 +250,6 @@ def generate_index_permutations(
         subsample:
             Number of indices to subsample. If `int`, subsample that many
             indices. If float, subsample that fraction of indices.
-            random_state: Random number generator.
         random_state: Random number generator.
 
     Returns:
