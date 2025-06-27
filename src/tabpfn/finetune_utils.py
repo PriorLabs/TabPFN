@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import copy
+from typing import TYPE_CHECKING
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+
+if TYPE_CHECKING:
+    import numpy as np
+    import torch
 
 # TODO: temporary new file, move to
 # Separate FineTuning folder soon
@@ -68,4 +73,39 @@ def clone_model_for_evaluation(
         # or loaded, create a fresh one for eval
         eval_model = model_class(**eval_init_args)
 
+    return eval_model
+
+
+def create_evaluation_model(
+    original_model: TabPFNClassifier | TabPFNRegressor,
+    X_train: np.ndarray | torch.Tensor,
+    y_train: np.ndarray | torch.Tensor,
+    eval_init_args: dict,
+    model_class: type[TabPFNClassifier | TabPFNRegressor],
+) -> TabPFNClassifier | TabPFNRegressor:
+    """Clone ``original_model`` and fit it for evaluation.
+
+    This is a convenience wrapper around :func:`clone_model_for_evaluation`
+    that immediately fits the cloned model on ``X_train`` and ``y_train`` so it
+    can be used with :py:meth:`predict` or :py:meth:`predict_proba` in the
+    standard inference mode.
+
+    Parameters
+    ----------
+    original_model:
+        The fine-tuned model instance to clone.
+    X_train, y_train:
+        Training data used to rebuild the inference engine for evaluation.
+    eval_init_args:
+        Initialization arguments for the evaluation model instance.
+    model_class:
+        The class to instantiate (``TabPFNClassifier`` or ``TabPFNRegressor``).
+
+    Returns:
+    -------
+    TabPFNClassifier | TabPFNRegressor
+        A fitted copy of ``original_model`` ready for evaluation.
+    """
+    eval_model = clone_model_for_evaluation(original_model, eval_init_args, model_class)
+    eval_model.fit(X_train, y_train)
     return eval_model

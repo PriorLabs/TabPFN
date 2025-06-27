@@ -271,6 +271,28 @@ To store just the foundation model weights (without a fitted estimator) use
 checkpoint of the pre-trained weights so you can later create and fit a fresh
 estimator. Reload the checkpoint with ``load_model_criterion_config``.
 
+### Evaluation after batched fine-tuning
+
+When using the `fit_mode="batched"` workflow for gradient-based fine-tuning, the
+resulting model cannot directly call `.predict()` or `.predict_proba()` because
+its inference engine is optimized for training batches. Use
+`create_evaluation_model` to clone the fine-tuned weights and rebuild the
+standard inference engine:
+
+```python
+from tabpfn import create_evaluation_model, TabPFNClassifier
+
+# ``clf`` was trained with ``fit_mode="batched"`` on ``X_train`` and ``y_train``
+clf_eval = create_evaluation_model(
+    clf,
+    X_train,
+    y_train,
+    {"device": "cuda"},
+    TabPFNClassifier,
+)
+probs = clf_eval.predict_proba(X_test)
+```
+
 ### **Performance & Limitations**
 
 **Q: Can TabPFN handle missing values?**  
