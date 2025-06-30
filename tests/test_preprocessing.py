@@ -228,22 +228,24 @@ def _get_preprocessing_steps():
     return defaults + extras
 
 
+def _get_random_data(rng, n_samples, n_features, cat_inds):
+    x = rng.random((n_samples, n_features))
+    x[:, cat_inds] = rng.integers(0, 3, size=(n_samples, len(cat_inds))).astype(float)
+    return x
+
+
 def test__preprocessing_steps__transform__is_idempotent():
     """Test that calling transform multiple times on the same data
     gives the same result. This ensures transform is deterministic
     and doesn't have internal state changes.
     """
     rng = np.random.default_rng(42)
+    n_samples = 20
+    n_features = 4
+    cat_inds = [1, 3]
     for cls in _get_preprocessing_steps():
-        x = rng.random((20, 4))
-        x2 = rng.random((20, 4))
-        cat_inds = [1, 3]
-        x[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
-            rng.permutation(len(x))
-        ].astype(float)
-        x2[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
-            rng.permutation(len(x))
-        ].astype(float)
+        x = _get_random_data(rng, n_samples, n_features, cat_inds)
+        x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
         obj = cls().fit(x, cat_inds)
 
@@ -256,21 +258,17 @@ def test__preprocessing_steps__transform__is_idempotent():
 
 
 def test__preprocessing_steps__transform__no_sample_interdependence():
-    """Test that preprocessing steps (except AddFingerprintFeaturesStep) don't have
+    """Test that preprocessing steps don't have
     interdependence between samples during transform. Each sample should be
     transformed independently based only on parameters learned during fit.
     """
     rng = np.random.default_rng(42)
+    n_samples = 20
+    n_features = 4
+    cat_inds = [1, 3]
     for cls in _get_preprocessing_steps():
-        x = rng.random((20, 4))
-        x2 = rng.random((20, 4))
-        cat_inds = [1, 3]
-        x[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
-            rng.permutation(len(x))
-        ].astype(float)
-        x2[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
-            rng.permutation(len(x))
-        ].astype(float)
+        x = _get_random_data(rng, n_samples, n_features, cat_inds)
+        x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
         obj = cls().fit(x, cat_inds)
 
