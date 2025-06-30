@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 import pytest
 import torch
 
+from tabpfn.model import preprocessing
 from tabpfn.model.preprocessing import (
     DifferentiableZNormStep,
+    FeaturePreprocessingTransformerStep,
     ReshapeFeatureDistributionsStep,
 )
-
-# --- Fixtures ---
 
 
 @pytest.fixture
@@ -201,3 +203,106 @@ def test_reshape_step_append_original_logic(
     # ASSERT: Check if the number of output features matches the expected outcome
     assert Xt.shape[0] == num_samples
     assert Xt.shape[1] == expected_output_features
+
+
+def test__preprocessing_steps__transform__is_idempotent():
+    """Test that calling transform multiple times on the same data
+    gives the same result. This ensures transform is deterministic
+    and doesn't have internal state changes.
+    """
+    rng = np.random.default_rng(42)
+    defaults = [
+        cls
+        for cls in preprocessing.__dict__.values()
+        if (
+            isinstance(cls, type)
+            and issubclass(cls, FeaturePreprocessingTransformerStep)
+            and cls is not FeaturePreprocessingTransformerStep
+            and cls is not DifferentiableZNormStep  # works on torch tensors
+        )
+    ]
+    extras = [
+        partial(
+            ReshapeFeatureDistributionsStep,
+            transform_name="none",
+            append_to_original=True,
+            global_transformer_name="svd",
+            apply_to_categorical=False,
+        )
+    ]
+    for cls in defaults + extras:
+        x = rng.random((20, 4))
+        x2 = rng.random((20, 4))
+        cat_inds = [1, 3]
+        x[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
+            rng.permutation(len(x))
+        ].astype(float)
+        x2[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
+            rng.permutation(len(x))
+        ].astype(float)
+
+        obj = cls().fit(x, cat_inds)
+
+        # Calling transform multiple times should give the same result
+        result1 = obj.transform(x2)
+        result2 = obj.transform(x2)
+
+        assert (result1.X == result2.X).all(), f"Transform not idempotent for {cls}"
+        assert result1.categorical_features == result2.categorical_features
+
+
+def test__preprocessing_steps__transform__no_sample_interdependence():
+    """Test that preprocessing steps (except AddFingerprintFeaturesStep) don't have
+    interdependence between samples during transform. Each sample should be
+    transformed independently based only on parameters learned during fit.
+    """
+    rng = np.random.default_rng(42)
+    defaults = [
+        cls
+        for cls in preprocessing.__dict__.values()
+        if (
+            isinstance(cls, type)
+            and issubclass(cls, FeaturePreprocessingTransformerStep)
+            and cls is not FeaturePreprocessingTransformerStep
+            and cls is not DifferentiableZNormStep  # works on torch tensors
+        )
+    ]
+    extras = [
+        partial(
+            ReshapeFeatureDistributionsStep,
+            transform_name="none",
+            append_to_original=True,
+            global_transformer_name="svd",
+            apply_to_categorical=False,
+        )
+    ]
+
+    for cls in defaults + extras:
+        x = rng.random((20, 4))
+        x2 = rng.random((20, 4))
+        cat_inds = [1, 3]
+        x[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
+            rng.permutation(len(x))
+        ].astype(float)
+        x2[:, cat_inds] = np.round(np.linspace(0, 3, len(x))[:, None])[
+            rng.permutation(len(x))
+        ].astype(float)
+
+        obj = cls().fit(x, cat_inds)
+
+        # Test 1: Shuffling samples should give correspondingly shuffled results
+        result_normal = obj.transform(x2)
+        result_reversed = obj.transform(x2[::-1])
+        assert (
+            result_reversed.X[::-1] == result_normal.X
+        ).all(), f"Transform depends on sample order for {cls}"
+
+        # Test 2: Transforming a subset should match the subset of full transformation
+        result_full = obj.transform(x2)
+        result_subset = obj.transform(x2[:4])
+        assert (
+            result_full.X[:4] == result_subset.X
+        ).all(), f"Transform depends on other samples in batch for {cls}"
+
+        # Test 3: Categorical features should remain the same
+        assert result_full.categorical_features == result_subset.categorical_features

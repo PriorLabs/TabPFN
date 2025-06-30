@@ -1284,7 +1284,7 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
     def __init__(
         self,
         *,
-        max_features: int | None,
+        max_features: int | None = None,
         random_state: int | np.random.Generator | None = None,
     ):
         super().__init__()
