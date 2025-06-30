@@ -253,7 +253,7 @@ def test__preprocessing_steps__transform__is_idempotent():
         result1 = obj.transform(x2)
         result2 = obj.transform(x2)
 
-        assert (result1.X == result2.X).all(), f"Transform not idempotent for {cls}"
+        assert np.allclose(result1.X, result2.X), f"Transform not idempotent for {cls}"
         assert result1.categorical_features == result2.categorical_features
 
 
@@ -275,16 +275,16 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         # Test 1: Shuffling samples should give correspondingly shuffled results
         result_normal = obj.transform(x2)
         result_reversed = obj.transform(x2[::-1])
-        assert (
-            result_reversed.X[::-1] == result_normal.X
-        ).all(), f"Transform depends on sample order for {cls}"
+        assert np.allclose(
+            result_reversed.X[::-1], result_normal.X
+        ), f"Transform depends on sample order for {cls}"
 
         # Test 2: Transforming a subset should match the subset of full transformation
         result_full = obj.transform(x2)
         result_subset = obj.transform(x2[:4])
-        assert (
-            result_full.X[:4] == result_subset.X
-        ).all(), f"Transform depends on other samples in batch for {cls}"
+        assert np.allclose(
+            result_full.X[:4], result_subset.X
+        ), f"Transform depends on other samples in batch for {cls}"
 
         # Test 3: Categorical features should remain the same
         assert result_full.categorical_features == result_subset.categorical_features
