@@ -205,12 +205,7 @@ def test_reshape_step_append_original_logic(
     assert Xt.shape[1] == expected_output_features
 
 
-def test__preprocessing_steps__transform__is_idempotent():
-    """Test that calling transform multiple times on the same data
-    gives the same result. This ensures transform is deterministic
-    and doesn't have internal state changes.
-    """
-    rng = np.random.default_rng(42)
+def _get_preprocessing_steps():
     defaults = [
         cls
         for cls in preprocessing.__dict__.values()
@@ -230,7 +225,16 @@ def test__preprocessing_steps__transform__is_idempotent():
             apply_to_categorical=False,
         )
     ]
-    for cls in defaults + extras:
+    return defaults + extras
+
+
+def test__preprocessing_steps__transform__is_idempotent():
+    """Test that calling transform multiple times on the same data
+    gives the same result. This ensures transform is deterministic
+    and doesn't have internal state changes.
+    """
+    rng = np.random.default_rng(42)
+    for cls in _get_preprocessing_steps():
         x = rng.random((20, 4))
         x2 = rng.random((20, 4))
         cat_inds = [1, 3]
@@ -257,27 +261,7 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
     transformed independently based only on parameters learned during fit.
     """
     rng = np.random.default_rng(42)
-    defaults = [
-        cls
-        for cls in preprocessing.__dict__.values()
-        if (
-            isinstance(cls, type)
-            and issubclass(cls, FeaturePreprocessingTransformerStep)
-            and cls is not FeaturePreprocessingTransformerStep
-            and cls is not DifferentiableZNormStep  # works on torch tensors
-        )
-    ]
-    extras = [
-        partial(
-            ReshapeFeatureDistributionsStep,
-            transform_name="none",
-            append_to_original=True,
-            global_transformer_name="svd",
-            apply_to_categorical=False,
-        )
-    ]
-
-    for cls in defaults + extras:
+    for cls in _get_preprocessing_steps():
         x = rng.random((20, 4))
         x2 = rng.random((20, 4))
         cat_inds = [1, 3]
