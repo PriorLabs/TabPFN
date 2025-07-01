@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING
 # Importing submodules directly to avoid potential circular dependencies.
 from tabpfn.classifier import TabPFNClassifier
 from tabpfn.regressor import TabPFNRegressor
-from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 
 if TYPE_CHECKING:
     import numpy as np
