@@ -5,7 +5,8 @@ from __future__ import annotations
 import copy
 from typing import TYPE_CHECKING
 
-from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.classifier import TabPFNClassifier
+from tabpfn.regressor import TabPFNRegressor
 from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 
 if TYPE_CHECKING:
