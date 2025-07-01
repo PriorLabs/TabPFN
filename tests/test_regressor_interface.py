@@ -23,7 +23,7 @@ from tabpfn.preprocessing import PreprocessorConfig
 
 from .utils import check_cpu_float16_support
 
-devices = ["cpu"]
+devices = ["cpu:0"]
 if torch.cuda.is_available():
     devices.append("cuda")
 
@@ -80,12 +80,12 @@ def test_regressor(
     remove_outliers_std: int | None,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if device == "cpu" and inference_precision == "autocast":
+    if torch.device(device).type == "cpu" and inference_precision == "autocast":
         pytest.skip("Only GPU supports inference_precision")
 
     # Use the environment-aware check to skip only if necessary
     if (
-        device == "cpu"
+        torch.device(device).type == "cpu"
         and inference_precision == torch.float16
         and not is_cpu_float16_supported
     ):
