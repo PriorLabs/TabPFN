@@ -1,6 +1,10 @@
 from importlib.metadata import version
 
 from tabpfn.classifier import TabPFNClassifier
+from tabpfn.finetune_utils import (
+    clone_model_for_evaluation,
+    create_evaluation_model,
+)
 from tabpfn.misc.debug_versions import display_debug_info
 from tabpfn.model.loading import (
     load_fitted_tabpfn_model,
@@ -17,6 +21,8 @@ __all__ = [
     "TabPFNClassifier",
     "TabPFNRegressor",
     "__version__",
+    "clone_model_for_evaluation",
+    "create_evaluation_model",
     "display_debug_info",
     "load_fitted_tabpfn_model",
     "save_fitted_tabpfn_model",
