@@ -14,6 +14,7 @@ dependencies = [
   "einops>=0.2.0,<0.9",
   "huggingface-hub>=0.0.1,<1",
   "pydantic-settings>=2.10.1",
+  "eval-type-backport>=0.2.2",
 ]
 requires-python = ">=3.9"
 authors = [
