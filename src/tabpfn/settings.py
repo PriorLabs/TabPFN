@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from pydantic import Field, ValidationInfo, field_validator
 from pydantic_core import PydanticUndefined
@@ -42,7 +42,7 @@ class TabPFNSettings(BaseSettingsWithFilteredEmptyStrings):
     model_config = SettingsConfigDict(env_prefix="TABPFN_", env_file=".env")
 
     # Model Configuration
-    model_cache_dir: Path | None = Field(
+    model_cache_dir: Optional[Path] = Field(
         default=None,
         description="Custom directory for caching downloaded TabPFN models. "
         "If not set, uses platform-specific user cache directory.",
