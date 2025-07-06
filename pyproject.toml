@@ -12,7 +12,8 @@ dependencies = [
   "scipy>=1.11.1,<2",
   "pandas>=1.4.0,<3",
   "einops>=0.2.0,<0.9",
-  "huggingface-hub>=0.0.1,<1"
+  "huggingface-hub>=0.0.1,<1",
+  "pydantic-settings>=2.10.1",
 ]
 requires-python = ">=3.9"
 authors = [

@@ -65,6 +65,7 @@ from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
 from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn.settings import settings
 
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
@@ -198,8 +199,45 @@ def _generate_skip_logic():
     )
 
     # Special handling for CI: log a warning if skipping in a CI environment
-    if os.environ.get("CI", "false").lower() in ("true", "1", "yes"):
+    if settings.testing.ci:
         logging.warning("Skipping consistency tests due to platform mismatch in CI.")
+        # Extract reference info and current info
+        ref_os = metadata.get("os")
+        ref_python = metadata.get("python_version", "")
+
+        # Only compare major.minor versions (e.g., 3.9 instead of 3.9.1)
+        ref_python_major_minor = (
+            ".".join(ref_python.split(".")[:2]) if ref_python else ""
+        )
+        current_python_major_minor = ".".join(platform.python_version().split(".")[:2])
+
+        # Match OS exactly, but only match Python major.minor version
+        return (
+            platform.system() == ref_os
+            and current_python_major_minor == ref_python_major_minor
+        )
+    except (OSError, json.JSONDecodeError):
+        return False
+
+
+def should_run_consistency_tests():
+    """Determine if consistency tests should run on this platform.
+
+    Tests run if:
+    1. We're on the reference platform, or
+    2. FORCE_CONSISTENCY_TESTS=1 in environment
+    """
+    # Always run if explicitly forced
+    if settings.testing.force_consistency_tests:
+        return True
+
+    # Run if we're on the reference platform
+    if is_reference_platform():
+        return True
+
+    # Special handling for CI - print warning but just skip instead of failing
+    if settings.testing.ci:
+        import logging
 
         # Additionally, warn if the reference data is not from a CI-compatible platform
         if not is_ci_compatible_platform(
