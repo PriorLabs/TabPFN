@@ -19,6 +19,7 @@ import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
+from tabpfn.settings import settings
 
 try:
     import torch
@@ -399,7 +400,7 @@ def _get_pip_packages(run_lambda, patterns=None):
 
 
 def _get_cachingallocator_config():
-    return os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "")
+    return settings.pytorch_cuda_alloc_conf
 
 
 def _get_cuda_module_loading_config():
@@ -606,7 +607,7 @@ def _pretty_str(envinfo):
     return env_info_fmt.format(**mutable_dict)
 
 
-def _get_pretty_env_info():
+def _get_pretty_env_info():  # Not used anywhere??
     """Return a pretty string of environment information.
 
     This function retrieves environment information by calling the `_get_env_info`

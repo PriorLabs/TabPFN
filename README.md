@@ -234,7 +234,7 @@ This script will download the main classifier and regressor models, as well as a
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
-   - Set environment variable: `os.environ["TABPFN_MODEL_CACHE_DIR"] = "/path/to/dir"`
+   - Set environment variable: `export TABPFN_MODEL_CACHE_DIR="/path/to/dir"` (see environment variables FAQ below)
    - Default OS cache directory:
      - Windows: `%APPDATA%\tabpfn\`
      - macOS: `~/Library/Caches/tabpfn/`
@@ -244,6 +244,20 @@ This script will download the main classifier and regressor models, as well as a
 A: Try the following:
 - Download the newest version of tabpfn `pip install tabpfn --upgrade`
 - Ensure model files downloaded correctly (re-download if needed)
+
+**Q: What environment variables can I use to configure TabPFN?**
+A: TabPFN supports several environment variables for configuration:
+
+- `TABPFN_MODEL_CACHE_DIR`: Set custom directory for model downloads (default: OS-specific cache directory)
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Set to a truthy value (e.g., `1` or `true`) to allow running on CPU with large datasets (>1000 samples). Note: This will be very slow!
+- `TABPFN_PYTORCH_CUDA_ALLOC_CONF`: Configure PyTorch CUDA memory allocation (default: `max_split_size_mb:512`)
+
+Example:
+```bash
+export TABPFN_MODEL_CACHE_DIR="/path/to/models"
+export TABPFN_ALLOW_CPU_LARGE_DATASET=1
+export TABPFN_PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
+```
 
 **Q: How do I save and load a trained TabPFN model?**
 A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
