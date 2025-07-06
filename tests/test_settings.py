@@ -7,14 +7,14 @@ from pathlib import Path
 from pydantic import Field
 
 from tabpfn.settings import (
-    BaseSettingsWithFilteredEmptyStrings,
+    EmptyToDefaultSettings,
 )
 
 
 def test_empty_string_converts_to_default_with_string_field() -> None:
     """Test that empty strings convert to default values for string fields."""
 
-    class TestSettings(BaseSettingsWithFilteredEmptyStrings):
+    class TestSettings(EmptyToDefaultSettings):
         my_string: str = Field(default="default_value")
 
     # Test with empty string
@@ -33,7 +33,7 @@ def test_empty_string_converts_to_default_with_string_field() -> None:
 def test_non_empty_string_preserved() -> None:
     """Test that non-empty strings are not converted."""
 
-    class TestSettings(BaseSettingsWithFilteredEmptyStrings):
+    class TestSettings(EmptyToDefaultSettings):
         my_string: str = Field(default="default_value")
         my_path: Path | None = Field(default=None)
 
@@ -46,7 +46,7 @@ def test_non_empty_string_preserved() -> None:
 def test_field_without_default_preserves_empty_string() -> None:
     """Test that empty strings for required fields are preserved as-is."""
 
-    class TestSettings(BaseSettingsWithFilteredEmptyStrings):
+    class TestSettings(EmptyToDefaultSettings):
         required_field: str  # No default value
 
     # Empty string should be preserved for required fields without defaults
@@ -61,7 +61,7 @@ def test_field_without_default_preserves_empty_string() -> None:
 def test_non_string_types_not_affected() -> None:
     """Test that non-string types pass through unchanged."""
 
-    class TestSettings(BaseSettingsWithFilteredEmptyStrings):
+    class TestSettings(EmptyToDefaultSettings):
         my_int: int = Field(default=42)
         my_bool: bool = Field(default=True)
         my_float: float = Field(default=3.14)

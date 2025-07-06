@@ -10,8 +10,8 @@ from pydantic_core import PydanticUndefined
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class BaseSettingsWithFilteredEmptyStrings(BaseSettings):
-    """Base settings class that handles empty strings consistently."""
+class EmptyToDefaultSettings(BaseSettings):
+    """Base settings class that converts empty strings to default values."""
 
     @field_validator("*", mode="before")
     @classmethod
@@ -31,7 +31,7 @@ class BaseSettingsWithFilteredEmptyStrings(BaseSettings):
         return v
 
 
-class TabPFNSettings(BaseSettingsWithFilteredEmptyStrings):
+class TabPFNSettings(EmptyToDefaultSettings):
     """Configuration settings for TabPFN.
 
     These settings can be configured via environment variables or a .env file.
@@ -62,7 +62,7 @@ class TabPFNSettings(BaseSettingsWithFilteredEmptyStrings):
     )
 
 
-class TestingSettings(BaseSettingsWithFilteredEmptyStrings):
+class TestingSettings(EmptyToDefaultSettings):
     """Testing/Development Settings."""
 
     force_consistency_tests: bool = Field(
