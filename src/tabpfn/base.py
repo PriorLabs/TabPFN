@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
@@ -35,6 +34,7 @@ from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     RegressorDatasetConfig,
 )
+from tabpfn.settings import settings
 from tabpfn.utils import (
     infer_device_and_type,
     infer_fp16_inference_mode,
@@ -331,9 +331,7 @@ def check_cpu_warning(
         X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
         allow_cpu_override: If True, allow CPU usage with large datasets.
     """
-    allow_cpu_override = allow_cpu_override or (
-        os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
-    )
+    allow_cpu_override = allow_cpu_override or settings.tabpfn.allow_cpu_large_dataset
 
     if allow_cpu_override:
         return

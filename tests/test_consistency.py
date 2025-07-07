@@ -55,7 +55,6 @@ from __future__ import annotations
 import contextlib
 import datetime
 import json
-import os
 import pathlib
 import platform
 import sys
@@ -66,6 +65,7 @@ from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
 from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn.settings import settings
 
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
@@ -161,7 +161,7 @@ def should_run_consistency_tests():
     2. FORCE_CONSISTENCY_TESTS=1 in environment
     """
     # Always run if explicitly forced
-    if os.environ.get("FORCE_CONSISTENCY_TESTS", "0") == "1":
+    if settings.testing.force_consistency_tests:
         return True
 
     # Run if we're on the reference platform
@@ -169,7 +169,7 @@ def should_run_consistency_tests():
         return True
 
     # Special handling for CI - print warning but just skip instead of failing
-    if os.environ.get("CI", "false").lower() in ("true", "1", "yes"):
+    if settings.testing.ci:
         import logging
 
         # Get reference platform metadata
