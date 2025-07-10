@@ -174,9 +174,11 @@ class SafePowerTransformer(PowerTransformer):
         self,
         variance_threshold: float = 1e-3,
         large_value_threshold: float = 100,
-        **kwargs: Any,
+        method="yeo-johnson",
+        standardize=True,
+        copy=True,
     ):
-        super().__init__(**kwargs)
+        super().__init__(method=method, standardize=standardize, copy=copy)
         self.variance_threshold = variance_threshold
         self.large_value_threshold = large_value_threshold
 
