@@ -175,6 +175,7 @@ class SafePowerTransformer(PowerTransformer):
         variance_threshold: float = 1e-3,
         large_value_threshold: float = 100,
         method="yeo-johnson",
+        *,
         standardize=True,
         copy=True,
     ):
