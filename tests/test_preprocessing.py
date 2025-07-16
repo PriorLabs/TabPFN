@@ -312,14 +312,7 @@ def test_adaptive_quantile_transformer_with_numpy_generator():
     )
 
     # ACT & ASSERT: Ensure that fitting the transformer does not raise an error
-    try:
-        transformer.fit(X)
-    except ValueError as e:
-        pytest.fail(
-            "AdaptiveQuantileTransformer.fit() raised an unexpected ValueError.\n"
-            "This means the np.random.Generator compatibility fix is not working.\n"
-            f"Error: {e}"
-        )
+    transformer.fit(X)
 
     # Further assertion to ensure the transformer is functional
     assert hasattr(transformer, "quantiles_")
