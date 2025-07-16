@@ -166,7 +166,7 @@ def main():
         batch_size=config["finetuning"]["meta_batch_size"],
         collate_fn=meta_dataset_collator,
     )
-    loss_function = torch.nn.NLLLoss()
+    loss_function = torch.nn.CrossEntropyLoss()
 
     eval_config = {
         **classifier_config,
@@ -196,9 +196,9 @@ def main():
                 classifier.fit_from_preprocessed(
                     X_train_batch, y_train_batch, cat_ixs, confs
                 )
-                predictions = classifier.forward(X_test_batch)
+                predictions = classifier.forward(X_test_batch, return_logits=True)
                 loss = loss_function(
-                    torch.log(predictions), y_test_batch.to(config["device"])
+                    predictions, y_test_batch.to(config["device"])
                 )
                 loss.backward()
                 optimizer.step()

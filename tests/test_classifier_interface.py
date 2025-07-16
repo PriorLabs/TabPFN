@@ -14,6 +14,7 @@ import sklearn.datasets
 import torch
 from sklearn import config_context
 from sklearn.base import check_is_fitted
+from sklearn.metrics import accuracy_score, log_loss
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.estimator_checks import parametrize_with_checks
@@ -56,12 +57,20 @@ all_combinations = list(
 )
 
 
-# Wrap in fixture so it's only loaded in if a test using it is run
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y = sklearn.datasets.load_iris(return_X_y=True)
-    X, y = X[:40], y[:40]
-    return X, y  # type: ignore
+    # Take 20 samples from class 0, 20 from class 1, 20 from class 2
+    # This ensures all 3 classes are present
+    X_diverse = np.vstack([X[y == 0][:20], X[y == 1][:20], X[y == 2][:20]])
+    y_diverse = np.hstack([y[y == 0][:20], y[y == 1][:20], y[y == 2][:20]])
+
+    # Shuffle to mix them up, otherwise training data would be ordered by class
+    indices = np.arange(len(y_diverse))
+    rng = np.random.default_rng(42)
+    rng.shuffle(indices)
+
+    return X_diverse[indices].astype(np.float32), y_diverse[indices].astype(np.int64)
 
 
 @pytest.mark.parametrize(
@@ -107,6 +116,7 @@ def test_fit(
             "CLASS_SHIFT_METHOD": multiclass_decoder,
             "FEATURE_SHIFT_METHOD": feature_shift_decoder,
         },
+        random_state=42,  # Added for consistency and reproducibility
     )
 
     X, y = X_y
@@ -125,11 +135,197 @@ def test_fit(
     assert predictions.shape == (X.shape[0],), "Predictions shape is incorrect!"
 
 
-# TODO(eddiebergman): Should probably run a larger suite with different configurations
+@pytest.mark.parametrize(
+    (
+        "n_estimators",
+        "device",
+        "softmax_temperature",
+        "average_before_softmax",
+    ),
+    list(
+        product(
+            [1, 4],  # n_estimators
+            ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"],  # device
+            [0.5, 1.0, 1.5],  # softmax_temperature
+            [False, True],  # average_before_softmax
+        )
+    ),
+)
+def test_predict_logits_and_consistency(
+    X_y: tuple[np.ndarray, np.ndarray],
+    n_estimators,
+    device,
+    softmax_temperature,
+    average_before_softmax,
+):
+    """Tests the new predict_logits method and its consistency with predict_proba
+    under various configuration permutations that affect the post-processing
+    pipeline.
+    """
+    X, y = X_y
+
+    # Ensure y is float64 for consistency with original dataset type after slicing
+    y = y.astype(np.int64)
+
+    classifier = TabPFNClassifier(
+        n_estimators=n_estimators,
+        device=device,
+        softmax_temperature=softmax_temperature,
+        average_before_softmax=average_before_softmax,
+        # Disable SKLEARN_16_DECIMAL_PRECISION for this test to avoid rounding
+        # differences in predict_proba's internal output for comparison
+        inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": False},
+        random_state=42,  # Ensure reproducibility
+    )
+    classifier.fit(X, y)
+
+    # 1. Test predict_logits output properties
+    logits = classifier.predict_logits(X)
+    assert isinstance(logits, np.ndarray)
+    assert logits.shape == (X.shape[0], classifier.n_classes_)
+    assert logits.dtype == np.float32
+    assert not np.isnan(logits).any()
+    assert not np.isinf(logits).any()
+    if classifier.n_classes_ > 1:
+        assert not np.all(logits == logits[:, 0:1]), (
+            "Logits are identical across classes for all samples, indicating "
+            "trivial output."
+        )
+
+    # 2. Test consistency: softmax(logits) should match predict_proba
+    proba_from_predict_proba = classifier.predict_proba(X)
+
+    # The relationship between predict_logits and predict_proba depends on the
+    # averaging strategy.
+    if n_estimators == 1 or average_before_softmax:
+        # If there's only one estimator or we average before the softmax,
+        # then applying softmax to the (already averaged) logits should
+        # match the probabilities from predict_proba.
+        proba_from_logits = torch.nn.functional.softmax(
+            torch.from_numpy(logits), dim=-1
+        ).numpy()
+        np.testing.assert_allclose(
+            proba_from_logits,
+            proba_from_predict_proba,
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=(
+                "Probabilities derived from predict_logits do not match "
+                "predict_proba output when they should be consistent."
+            ),
+        )
+    else:
+        # If n_estimators > 1 AND we average *after* softmax, then applying
+        # softmax to the averaged logits will NOT match predict_proba.
+        # predict_proba averages the probabilities, not the logits.
+        # softmax(avg(logits)) != avg(softmax(logits))
+        proba_from_logits = torch.nn.functional.softmax(
+            torch.from_numpy(logits), dim=-1
+        ).numpy()
+        assert not np.allclose(
+            proba_from_logits, proba_from_predict_proba, atol=1e-5, rtol=1e-5
+        ), (
+            "Outputs unexpectedly matched when averaging after softmax, "
+            "indicating the logic path might be incorrect."
+        )
+
+    # 3. Quick check of predict  for completeness, derived from predict_proba
+    predicted_labels = classifier.predict(X)
+    assert predicted_labels.shape == (X.shape[0],)
+    assert predicted_labels.dtype in [
+        np.int64,
+        object,
+    ]
+
+    # 4. Basic sanity check for predict and predict_proba outcomes
+    assert accuracy_score(y, predicted_labels) >= 0.5
+    assert log_loss(y, proba_from_predict_proba) < 5.0
+
+
+def test_softmax_temperature_impact_on_logits_magnitude(
+    X_y: tuple[np.ndarray, np.ndarray],
+):
+    """Ensures softmax_temperature impacts the magnitude of raw logits as
+    expected: lower temperature -> higher magnitude (sharper distribution).
+    """
+    X, y = X_y
+    y = y.astype(np.int64)
+
+    # Model with low temperature (should produce "sharper" logits)
+    model_low_temp = TabPFNClassifier(
+        softmax_temperature=0.1, n_estimators=1, device="cpu", random_state=42
+    )
+    model_low_temp.fit(X, y)
+    logits_low_temp = model_low_temp.predict_logits(X)
+
+    # Model with high temperature (should produce "smoother" logits)
+    model_high_temp = TabPFNClassifier(
+        softmax_temperature=10.0, n_estimators=1, device="cpu", random_state=42
+    )
+    model_high_temp.fit(X, y)
+    logits_high_temp = model_high_temp.predict_logits(X)
+
+    assert np.mean(np.abs(logits_low_temp)) > np.mean(
+        np.abs(logits_high_temp)
+    ), "Low softmax temperature did not result in more extreme logits."
+
+    model_temp_one = TabPFNClassifier(
+        softmax_temperature=1.0, n_estimators=1, device="cpu", random_state=42
+    )
+    model_temp_one.fit(X, y)
+    logits_temp_one = model_temp_one.predict_logits(X)
+
+    assert not np.allclose(
+        logits_temp_one, logits_low_temp, atol=1e-6
+    ), "Logits did not change with low temperature."
+    assert not np.allclose(
+        logits_temp_one, logits_high_temp, atol=1e-6
+    ), "Logits did not change with high temperature."
+
+
+def test_balance_probabilities_alters_proba_output(
+    X_y: tuple[np.ndarray, np.ndarray],
+):
+    """Verifies that enabling `balance_probabilities` indeed changes the output
+    probabilities (assuming non-uniform class counts).
+    """
+    X_full, y_full = X_y
+
+    # Introduce artificial imbalance to ensure balancing has an effect
+    y_imbalanced = np.array(
+        [0] * 30 + [1] * 5 + [2] * 5, dtype=np.int64
+    )  # Total 40 samples
+
+    # Create a subset of X to match the length of y_imbalanced
+    X_subset = X_full[: len(y_imbalanced)]
+
+    rng = np.random.default_rng(42)  # Initialize a new Generator with a seed
+    rng.shuffle(y_imbalanced)
+
+    # Model without class balancing
+    model_no_balance = TabPFNClassifier(
+        balance_probabilities=False, n_estimators=1, device="cpu", random_state=42
+    )
+    model_no_balance.fit(X_subset, y_imbalanced)
+    proba_no_balance = model_no_balance.predict_proba(X_subset)
+
+    # Model with class balancing enabled
+    model_balance = TabPFNClassifier(
+        balance_probabilities=True, n_estimators=1, device="cpu", random_state=42
+    )
+    model_balance.fit(X_subset, y_imbalanced)
+    proba_balance = model_balance.predict_proba(X_subset)
+
+    assert not np.allclose(
+        proba_no_balance, proba_balance, atol=1e-5
+    ), "Probabilities did not change when balance_probabilities was toggled."
+
+
 @parametrize_with_checks(
     [
         TabPFNClassifier(
-            n_estimators=2, inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True}
+            n_estimators=2,
+            inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
         ),
     ],
 )
@@ -157,10 +353,8 @@ def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model.fit(X, y)
     probabilities = model.predict_proba(X)
 
-    # Check that probabilities sum to 1 for each prediction
     assert np.allclose(probabilities.sum(axis=1), 1.0)
 
-    # Check that the mean probability for each class is roughly equal
     mean_probs = probabilities.mean(axis=0)
     expected_mean = 1.0 / len(np.unique(y))
     assert np.allclose(
@@ -174,7 +368,6 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     """Test that TabPFNClassifier works correctly within a sklearn pipeline."""
     X, y = X_y
 
-    # Create a simple preprocessing pipeline
     pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -190,10 +383,8 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     pipeline.fit(X, y)
     probabilities = pipeline.predict_proba(X)
 
-    # Check that probabilities sum to 1 for each prediction
     assert np.allclose(probabilities.sum(axis=1), 1.0)
 
-    # Check that the mean probability for each class is roughly equal
     mean_probs = probabilities.mean(axis=0)
     expected_mean = 1.0 / len(np.unique(y))
     assert np.allclose(
@@ -207,7 +398,6 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
     """Test that dict configs behave identically to PreprocessorConfig objects."""
     X, y = X_y
 
-    # Define same config as both dict and object
     dict_config = {
         "name": "quantile_uni_coarse",
         "append_original": False,  # changed from default
@@ -224,7 +414,6 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         subsample_features=-1,
     )
 
-    # Create two models with same random state
     model_dict = TabPFNClassifier(
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
@@ -237,22 +426,21 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         random_state=42,
     )
 
-    # Fit both models
     model_dict.fit(X, y)
     model_obj.fit(X, y)
 
-    # Compare predictions
     pred_dict = model_dict.predict(X)
     pred_obj = model_obj.predict(X)
     np.testing.assert_array_equal(pred_dict, pred_obj)
 
-    # Compare probabilities
     prob_dict = model_dict.predict_proba(X)
     prob_obj = model_obj.predict_proba(X)
     np.testing.assert_array_almost_equal(prob_dict, prob_obj)
 
 
 class ModelWrapper(nn.Module):
+    """Wrapper for the TabPFN model for ONNX export."""
+
     def __init__(self, original_model):  # noqa: D107
         super().__init__()
         self.model = original_model
@@ -275,7 +463,7 @@ class ModelWrapper(nn.Module):
         )
 
 
-def patch_layernorm_no_affine(model: nn.Module) -> None:
+def _patch_layernorm_no_affine(model: nn.Module) -> None:
     """Workaround for ONNX export issue with LayerNorm(affine=False) in
     PyTorch <= 2.1.3.
 
@@ -286,11 +474,6 @@ def patch_layernorm_no_affine(model: nn.Module) -> None:
     `affine=False`, which means they lack the learnable 'weight' (gamma) and
     'bias' (beta) parameters.
 
-    The `test_onnx_exportable_cpu` test attempts to export the internal
-    transformer model used by `TabPFNClassifier`. This model contains such
-    `LayerNorm(affine=False)` layers. When exporting with torch 2.1.3, this
-    led to an ONNX checker error or export failure.
-
     However, testing indicated that this issue is resolved in later PyTorch
     versions; specifically, the ONNX export runs without errors on
     PyTorch 2.6.0 even without this patch.
@@ -300,8 +483,9 @@ def patch_layernorm_no_affine(model: nn.Module) -> None:
     (indicating `affine=False`), it manually adds non-learnable
     (`requires_grad=False`) parameters for 'weight' (initialized to ones) and
     'bias' (initialized to zeros). This addition satisfies the requirements
-    of the older ONNX exporter without changing the model's functional behavior,
-    as these added parameters represent an identity affine transformation.
+    of the older ONNX exporter without changing the model's functional
+    behavior, as these added parameters represent an identity affine
+    transformation.
     """
     for layer in model.modules():
         if isinstance(layer, nn.LayerNorm) and layer.weight is None:
@@ -333,11 +517,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         # this is necessary if cuda is available
         classifier.predict(X)
         # replicate the above call with random tensors of same shape
-        X = torch.randn(
+        X_tensor = torch.randn(
             (X.shape[0] * 2, 1, X.shape[1] + 1),
             generator=torch.Generator().manual_seed(42),
         )
-        y = (
+        y_tensor = (
             torch.rand(y.shape, generator=torch.Generator().manual_seed(42))
             .round()
             .to(torch.float32)
@@ -346,10 +530,10 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
-        patch_layernorm_no_affine(classifier.model_)
+        _patch_layernorm_no_affine(classifier.model_)
         torch.onnx.export(
             ModelWrapper(classifier.model_).eval(),
-            (X, y, y.shape[0], True, [[]]),
+            (X_tensor, y_tensor, y_tensor.shape[0], True, [[]]),
             io.BytesIO(),
             input_names=[
                 "X",
@@ -426,7 +610,9 @@ def test_pandas_output_config():
 
 
 def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
-    """Test that constant features are properly handled and don't affect predictions."""
+    """Test that constant features are properly handled and
+    don't affect predictions.
+    """
     X, y = X_y
 
     # Create a TabPFNClassifier with fixed random state for reproducibility
@@ -485,7 +671,14 @@ def test_classifier_with_text_and_na() -> None:
             None,
         ],
         "numeric_feature": [10, 5, 8, 15, 7, 12],
-        "all_na_column": [None, None, None, None, None, None],  # Column with all NaNs
+        "all_na_column": [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ],  # Column with all NaNs
         "target": [1, 0, 1, 1, 0, 0],
     }
 
