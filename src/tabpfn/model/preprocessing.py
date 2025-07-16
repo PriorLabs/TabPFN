@@ -117,6 +117,18 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         # and self.n_quantiles will reflect the value used for the fit.
         self.n_quantiles = effective_n_quantiles
 
+        # Convert Generator to RandomState if needed for sklearn compatibility
+        if isinstance(self.random_state, np.random.Generator):
+            # Generate a random integer to use as seed for RandomState
+            seed = int(self.random_state.integers(0, 2**31))
+            self.random_state = np.random.RandomState(seed)
+        elif hasattr(self.random_state, "bit_generator"):
+            # Handle other Generator-like objects
+            raise ValueError(
+                f"Unsupported random state type: {type(self.random_state)}. "
+                "Please provide an integer seed or np.random.RandomState object."
+            )
+
         return super().fit(X, y)
 
 

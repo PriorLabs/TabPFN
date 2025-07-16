@@ -8,6 +8,7 @@ import torch
 
 from tabpfn.model import preprocessing
 from tabpfn.model.preprocessing import (
+    AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
     FeaturePreprocessingTransformerStep,
     ReshapeFeatureDistributionsStep,
@@ -288,3 +289,38 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
 
         # Test 3: Categorical features should remain the same
         assert result_full.categorical_features == result_subset.categorical_features
+
+
+def test_adaptive_quantile_transformer_with_numpy_generator():
+    """Tests that AdaptiveQuantileTransformer can handle a np.random.Generator.
+
+    This test ensures that the transformer is compatible with NumPy's modern
+    random number generation API, which is passed down from other parts of
+    the TabPFN codebase. It replicates the conditions that previously caused a
+    ValueError in scikit-learn's check_random_state.
+    """
+    # ARRANGE: Create sample data and a modern NumPy random number generator
+    rng = np.random.default_rng(42)
+    X = rng.random((100, 10))
+
+    # ARRANGE: Instantiate the transformer with the Generator object
+    # This is the exact condition that caused the bug
+    transformer = AdaptiveQuantileTransformer(
+        output_distribution="uniform",
+        n_quantiles=10,
+        random_state=rng,
+    )
+
+    # ACT & ASSERT: Ensure that fitting the transformer does not raise an error
+    try:
+        transformer.fit(X)
+    except ValueError as e:
+        pytest.fail(
+            "AdaptiveQuantileTransformer.fit() raised an unexpected ValueError.\n"
+            "This means the np.random.Generator compatibility fix is not working.\n"
+            f"Error: {e}"
+        )
+
+    # Further assertion to ensure the transformer is functional
+    assert hasattr(transformer, "quantiles_")
+    assert transformer.quantiles_.shape == (10, 10)
