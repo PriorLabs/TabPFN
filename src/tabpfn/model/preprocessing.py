@@ -120,7 +120,7 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         # Convert Generator to RandomState if needed for sklearn compatibility
         if isinstance(self.random_state, np.random.Generator):
             # Generate a random integer to use as seed for RandomState
-            seed = int(self.random_state.integers(0, 2**31))
+            seed = int(self.random_state.integers(0, 2**32))
             self.random_state = np.random.RandomState(seed)
         elif hasattr(self.random_state, "bit_generator"):
             # Handle other Generator-like objects
