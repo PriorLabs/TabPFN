@@ -120,7 +120,17 @@ def main():
         # During evaluation, this is the number of samples from the training set given to the
         # model as context before it makes predictions on the test set.
         "n_inference_context_samples": 10000,
+        "icl_test_set_ratio": 0.1,
     }
+    batch_size = int(
+        min(
+            config["n_inference_context_samples"]
+            / (
+                1 - config["icl_test_set_ratio"]
+            ),  # so we have exactly n_inference_context_samples in train context, this should match how the model is applied,
+            config["num_samples_to_use"] * (1 - config["valid_set_ratio"]),
+        )
+    )
     config["finetuning"] = {
         # The total number of passes through the entire fine-tuning dataset.
         "epochs": 10,
@@ -130,19 +140,14 @@ def main():
         "meta_batch_size": 1,
         # The number of samples within each training data split. It's capped by
         # n_inference_context_samples to align with the evaluation setup.
-        "batch_size": int(
-            min(
-                config["n_inference_context_samples"],
-                config["num_samples_to_use"] * (1 - config["valid_set_ratio"]),
-            )
-        ),
+        "batch_size": batch_size,
     }
 
     # --- Setup Data, Model, and Dataloader ---
     X_train, X_test, y_train, y_test = prepare_data(config)
     regressor, regressor_config = setup_regressor(config)
 
-    splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
+    splitter = partial(train_test_split, test_size=config["icl_test_set_ratio"])
     # Note: `max_data_size` corresponds to the finetuning `batch_size` in the config
     training_datasets = regressor.get_preprocessed_datasets(
         X_train, y_train, splitter, max_data_size=config["finetuning"]["batch_size"]
@@ -189,6 +194,12 @@ def main():
                     _,
                     batch_y_test_raw,
                 ) = data_batch
+
+                if (
+                    X_trains_p[0].shape[1] + X_tests_p[0].shape[1]
+                    != config["finetuning"]["batch_size"]
+                ):
+                    continue  # Skip batch if batch is not "full", i.e. if it does not have the requested # of samples
 
                 regressor.normalized_bardist_ = norm_bardist[0]
                 regressor.fit_from_preprocessed(X_trains_p, y_trains_p, cat_ixs, confs)

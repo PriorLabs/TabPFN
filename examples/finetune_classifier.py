@@ -135,7 +135,17 @@ def main():
         # During evaluation, this is the number of samples from the training set given to the
         # model as context before it makes predictions on the test set.
         "n_inference_context_samples": 10000,
+        "icl_test_set_ratio": 0.1,
     }
+    batch_size = int(
+        min(
+            config["n_inference_context_samples"]
+            / (
+                1 - config["icl_test_set_ratio"]
+            ),  # so we have exactly n_inference_context_samples in train context, this should match how the model is applied,
+            config["num_samples_to_use"] * (1 - config["valid_set_ratio"]),
+        )
+    )
     config["finetuning"] = {
         # The total number of passes through the entire fine-tuning dataset.
         "epochs": 10,
@@ -145,19 +155,14 @@ def main():
         "meta_batch_size": 1,
         # The number of samples within each training data split. It's capped by
         # n_inference_context_samples to align with the evaluation setup.
-        "batch_size": int(
-            min(
-                config["n_inference_context_samples"],
-                config["num_samples_to_use"] * (1 - config["valid_set_ratio"]),
-            )
-        ),
+        "batch_size": batch_size,
     }
 
     # --- Setup Data, Model, and Dataloader ---
     X_train, X_test, y_train, y_test = prepare_data(config)
     classifier, optimizer, classifier_config = setup_model_and_optimizer(config)
 
-    splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
+    splitter = partial(train_test_split, test_size=config["icl_test_set_ratio"])
     training_datasets = classifier.get_preprocessed_datasets(
         X_train, y_train, splitter, config["finetuning"]["batch_size"]
     )
@@ -191,6 +196,12 @@ def main():
             ) in progress_bar:
                 if len(np.unique(y_train_batch)) != len(np.unique(y_test_batch)):
                     continue  # Skip batch if splits don't have all classes
+
+                if (
+                    X_train_batch[0].shape[1] + X_test_batch[0].shape[1]
+                    != config["finetuning"]["batch_size"]
+                ):
+                    continue  # Skip batch if batch is not "full", i.e. if it does not have the requested # of samples
 
                 optimizer.zero_grad()
                 classifier.fit_from_preprocessed(
