@@ -722,7 +722,6 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
     _, _ = classifier._initialize_model_variables()
 
-    # split each combined assertion into two
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
     assert classifier.model_ is not None, "model_ should be initialized for classifier"
 
