@@ -19,6 +19,7 @@ from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
 from tabpfn import TabPFNRegressor
+from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
 
 from .utils import check_cpu_float16_support
@@ -526,3 +527,50 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         assert np.all(
             quantile_prediction == 5.0
         ), "Quantile predictions are not constant as expected for full output"
+
+
+def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
+    # 1) Standalone initializer
+    model, config, norm_criterion = initialize_tabpfn_model(
+        model_path="auto",
+        which="regressor",
+        fit_mode="low_memory",
+    )
+    assert model is not None, "model should be initialized for regressor"
+    assert config is not None, "config should be initialized for regressor"
+    assert (
+        norm_criterion is not None
+    ), "norm_criterion should be initialized for regressor"
+
+    # 2) Test the sklearn-style wrapper on TabPFNRegressor
+    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    byte_size, rng = regressor._initialize_model_variables()
+
+    assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
+    assert regressor.model_ is not None, "model_ should be initialized for regressor"
+
+    assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
+    assert regressor.config_ is not None, "config_ should be initialized for regressor"
+
+    assert hasattr(regressor, "bardist_"), "regressor should have bardist_ attribute"
+    assert (
+        regressor.bardist_ is not None
+    ), "bardist_ should be initialized for regressor"
+
+    # 3) Reuse via RegressorModelSpecs
+    spec = RegressorModelSpecs(
+        model=regressor.model_,
+        config=regressor.config_,
+        norm_criterion=regressor.bardist_,
+    )
+    reg2 = TabPFNRegressor(model_path=spec)
+    byte_size2, rng2 = reg2._initialize_model_variables()
+
+    assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
+    assert reg2.model_ is not None, "model_ should be initialized for regressor2"
+
+    assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
+    assert reg2.config_ is not None, "config_ should be initialized for regressor2"
+
+    assert hasattr(reg2, "bardist_"), "regressor2 should have bardist_ attribute"
+    assert reg2.bardist_ is not None, "bardist_ should be initialized for regressor2"

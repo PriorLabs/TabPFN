@@ -450,7 +450,6 @@ def _initialize_model_variables_helper(
     and RNG object.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-
     if model_type == "regressor":
         (
             calling_instance.model_,
@@ -486,6 +485,7 @@ def _initialize_model_variables_helper(
     _config = ModelInterfaceConfig.from_user_input(
         inference_config=calling_instance.inference_config,
     )  # shorter alias
+
     calling_instance.interface_config_ = _config
 
     outlier_removal_std = _config.OUTLIER_REMOVAL_STD
