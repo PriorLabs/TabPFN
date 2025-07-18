@@ -544,7 +544,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
     regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
-    byte_size, rng = regressor._initialize_model_variables()
+    _, _ = regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
     assert regressor.model_ is not None, "model_ should be initialized for regressor"
@@ -564,7 +564,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         norm_criterion=regressor.bardist_,
     )
     reg2 = TabPFNRegressor(model_path=spec)
-    byte_size2, rng2 = reg2._initialize_model_variables()
+    _, _ = reg2._initialize_model_variables()
 
     assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
     assert reg2.model_ is not None, "model_ should be initialized for regressor2"

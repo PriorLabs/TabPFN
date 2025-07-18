@@ -720,7 +720,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
 
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
     classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
-    byte_size, rng = classifier._initialize_model_variables()
+    _, _ = classifier._initialize_model_variables()
 
     # split each combined assertion into two
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
@@ -741,7 +741,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
 
     classifier2 = TabPFNClassifier(model_path=spec)
-    byte_size2, rng2 = classifier2._initialize_model_variables()
+    _, _ = classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
     assert (
