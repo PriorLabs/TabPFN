@@ -13,7 +13,7 @@ import torch
 
 from tabpfn.settings import settings
 
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.tabpfn.pytorch_cuda_alloc_conf
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 SAVE_PEAK_MEM_FACTOR = 8
 
 # TODO(eddiebergman): pulled from `def _estimate_model_usage()`

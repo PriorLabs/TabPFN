@@ -34,6 +34,10 @@ class TabPFNSettings(BaseSettings):
         "Set to True to override the CPU limitation.",
     )
 
+
+class PytorchSettings(BaseSettings):
+    """PyTorch settings for TabPFN."""
+
     pytorch_cuda_alloc_conf: str = Field(
         default="max_split_size_mb:512",
         description="PyTorch CUDA memory allocation configuration. "
@@ -41,7 +45,7 @@ class TabPFNSettings(BaseSettings):
     )
 
 
-class TestingSettings(EmptyToDefaultSettings):
+class TestingSettings(BaseSettings):
     """Testing/Development Settings."""
 
     force_consistency_tests: bool = Field(
@@ -62,6 +66,7 @@ class Settings(BaseSettings):
 
     tabpfn: TabPFNSettings = Field(default_factory=TabPFNSettings)
     testing: TestingSettings = Field(default_factory=TestingSettings)
+    pytorch: PytorchSettings = Field(default_factory=PytorchSettings)
 
 
 settings = Settings()
