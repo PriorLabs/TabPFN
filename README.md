@@ -246,18 +246,23 @@ A: Try the following:
 - Ensure model files downloaded correctly (re-download if needed)
 
 **Q: What environment variables can I use to configure TabPFN?**
-A: TabPFN supports several environment variables for configuration:
+A: TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
 
-- `TABPFN_MODEL_CACHE_DIR`: Set custom directory for model downloads (default: OS-specific cache directory)
-- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Set to a truthy value (e.g., `1` or `true`) to allow running on CPU with large datasets (>1000 samples). Note: This will be very slow!
-- `TABPFN_PYTORCH_CUDA_ALLOC_CONF`: Configure PyTorch CUDA memory allocation (default: `max_split_size_mb:512`)
+**Model Configuration:**
+- `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
+
+**PyTorch Settings:**
+- `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`)
 
 Example:
 ```bash
 export TABPFN_MODEL_CACHE_DIR="/path/to/models"
-export TABPFN_ALLOW_CPU_LARGE_DATASET=1
-export TABPFN_PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
+export TABPFN_ALLOW_CPU_LARGE_DATASET=true
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
 ```
+
+Or simply set them in your `.env`
 
 **Q: How do I save and load a trained TabPFN model?**
 A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
