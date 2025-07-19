@@ -65,6 +65,7 @@ from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
 from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn.settings import settings
 
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
@@ -198,7 +199,7 @@ def _generate_skip_logic():
     )
 
     # Special handling for CI: log a warning if skipping in a CI environment
-    if os.environ.get("CI", "false").lower() in ("true", "1", "yes"):
+    if settings.testing.ci:
         logging.warning("Skipping consistency tests due to platform mismatch in CI.")
 
         # Additionally, warn if the reference data is not from a CI-compatible platform

@@ -36,6 +36,7 @@ from tabpfn.model.encoders import (
     VariableNumFeaturesEncoderStep,
 )
 from tabpfn.model.transformer import PerFeatureTransformer
+from tabpfn.settings import settings
 
 if TYPE_CHECKING:
     from sklearn.base import BaseEstimator
@@ -468,9 +469,8 @@ def resolve_model_path(
         model_name = model_source.default_filename
 
         # Determine the cache directory for storing models.
-        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
-        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
-            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
+        if settings.tabpfn.model_cache_dir is not None:
+            model_dir = settings.tabpfn.model_cache_dir
         else:
             model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
 

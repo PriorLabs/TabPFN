@@ -11,8 +11,9 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-# TODO(eddiebergman): Make this an option
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+from tabpfn.settings import settings
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 SAVE_PEAK_MEM_FACTOR = 8
 
 # TODO(eddiebergman): pulled from `def _estimate_model_usage()`
