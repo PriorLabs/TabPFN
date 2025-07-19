@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import io
-import sys
 from contextlib import redirect_stdout
-
-import pytest
 
 from tabpfn.misc.debug_versions import display_debug_info
 
