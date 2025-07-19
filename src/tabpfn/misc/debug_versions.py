@@ -392,6 +392,8 @@ def _get_pip_packages(run_lambda, patterns=None):
         run_lambda,
         [sys.executable, "-mpip", "list", "--format=freeze"],
     )
+    if out is None:
+        return pip_version, ""
     filtered_out = "\n".join(
         line for line in out.splitlines() if any(name in line for name in patterns)
     )
@@ -400,7 +402,7 @@ def _get_pip_packages(run_lambda, patterns=None):
 
 
 def _get_cachingallocator_config():
-    return settings.pytorch_cuda_alloc_conf
+    return settings.tabpfn.pytorch_cuda_alloc_conf
 
 
 def _get_cuda_module_loading_config():
@@ -605,21 +607,6 @@ def _pretty_str(envinfo):
         )
     mutable_dict["cpu_info"] = envinfo.cpu_info
     return env_info_fmt.format(**mutable_dict)
-
-
-def _get_pretty_env_info():  # Not used anywhere??
-    """Return a pretty string of environment information.
-
-    This function retrieves environment information by calling the `_get_env_info`
-    function and then formats the information into a human-readable string.
-    The retrieved environment information is listed in the documentation of
-    `_get_env_info`. This function is used in `python collect_env.py` when reporting
-    a bug.
-
-    Returns:
-        str: A pretty string of the environment information.
-    """
-    return _pretty_str(_get_env_info())
 
 
 def _get_deps_info():

@@ -66,7 +66,7 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit",
-  "ruff",
+  "ruff==0.8.6",
   "mypy",
   # Test
   "pytest",
