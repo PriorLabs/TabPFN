@@ -214,37 +214,6 @@ def _generate_skip_logic():
     return True, reason
 
 
-def should_run_consistency_tests():
-    """Determine if consistency tests should run on this platform.
-
-    Tests run if:
-    1. We're on the reference platform, or
-    2. FORCE_CONSISTENCY_TESTS=1 in environment
-    """
-    # Always run if explicitly forced
-    if settings.testing.force_consistency_tests:
-        return True
-
-    # Run if we're on the reference platform
-    if is_reference_platform():
-        return True
-
-    # Special handling for CI - print warning but just skip instead of failing
-    if settings.testing.ci:
-        import logging
-
-        # Additionally, warn if the reference data is not from a CI-compatible platform
-        if not is_ci_compatible_platform(
-            ref_platform["os"], ref_platform["python_version"]
-        ):
-            logging.warning(
-                f"WARNING: Reference platform ({ref_platform['description']}) "
-                f"is not a supported CI config. Consider regenerating reference data."
-            )
-
-    return True, reason
-
-
 # Generate the skip condition and reason when the module is loaded
 _SHOULD_SKIP, _SKIP_REASON = _generate_skip_logic()
 
