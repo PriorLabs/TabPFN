@@ -10,28 +10,7 @@ from pydantic_core import PydanticUndefined
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class EmptyToDefaultSettings(BaseSettings):
-    """Base settings class that converts empty strings to default values."""
-
-    @field_validator("*", mode="before")
-    @classmethod
-    def empty_to_default(cls, v: Any, info: ValidationInfo) -> Any:
-        """Convert empty strings to default values.
-
-        Only if the field has a default value.
-        """
-        if (
-            isinstance(v, str)
-            and not v.strip()
-            and info.field_name
-            and (field_info := cls.model_fields.get(info.field_name))
-            and field_info.default is not PydanticUndefined
-        ):
-            return field_info.default
-        return v
-
-
-class TabPFNSettings(EmptyToDefaultSettings):
+class TabPFNSettings(BaseSettings):
     """Configuration settings for TabPFN.
 
     These settings can be configured via environment variables or a .env file.
