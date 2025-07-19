@@ -605,9 +605,9 @@ def get_y_encoder(
 def load_model_from_config(
     *,
     config: ModelConfig,
-    loss_criterion: (
-        nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution
-    ),
+    loss_criterion: nn.BCEWithLogitsLoss
+    | nn.CrossEntropyLoss
+    | FullSupportBarDistribution,
     load_for_inference: bool = True,
 ) -> PerFeatureTransformer:
     """Loads a model from a given config.
