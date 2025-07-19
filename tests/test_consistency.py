@@ -201,23 +201,17 @@ def _generate_skip_logic():
     # Special handling for CI: log a warning if skipping in a CI environment
     if settings.testing.ci:
         logging.warning("Skipping consistency tests due to platform mismatch in CI.")
-        # Extract reference info and current info
-        ref_os = metadata.get("os")
-        ref_python = metadata.get("python_version", "")
 
-        # Only compare major.minor versions (e.g., 3.9 instead of 3.9.1)
-        ref_python_major_minor = (
-            ".".join(ref_python.split(".")[:2]) if ref_python else ""
-        )
-        current_python_major_minor = ".".join(platform.python_version().split(".")[:2])
+        # Additionally, warn if the reference data is not from a CI-compatible platform
+        if not is_ci_compatible_platform(
+            ref_platform["os"], ref_platform["python_version"]
+        ):
+            logging.warning(
+                f"WARNING: Reference platform ({ref_platform['description']}) "
+                f"is not a supported CI config. Consider regenerating reference data."
+            )
 
-        # Match OS exactly, but only match Python major.minor version
-        return (
-            platform.system() == ref_os
-            and current_python_major_minor == ref_python_major_minor
-        )
-    except (OSError, json.JSONDecodeError):
-        return False
+    return True, reason
 
 
 def should_run_consistency_tests():
