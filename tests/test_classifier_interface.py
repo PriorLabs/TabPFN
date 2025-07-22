@@ -336,6 +336,7 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
+            device="cpu",
         ),
     ],
 )
@@ -343,9 +344,6 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
-    if estimator.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
-
     float64_checks = (
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
@@ -401,7 +399,7 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "classifier",
                 TabPFNClassifier(
-                    n_estimators=2, # Fewer estimators for faster testing
+                    n_estimators=2,  # Fewer estimators for faster testing
                 ),
             ),
         ],

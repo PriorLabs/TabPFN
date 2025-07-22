@@ -132,14 +132,11 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
+@parametrize_with_checks([TabPFNRegressor(n_estimators=2, device="cpu")])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
-    if estimator.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
-
     float64_checks = (
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
@@ -173,7 +170,8 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "regressor",
                 TabPFNRegressor(
-                    n_estimators=2, device="cpu",  # Fewer estimators for faster testing
+                    n_estimators=2,
+                    device="cpu",  # Fewer estimators for faster testing
                 ),
             ),
         ],
@@ -229,20 +227,16 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
     model_dict = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
+        device="cpu",
         random_state=42,
     )
-
-    if model_dict.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     model_obj = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
+        device="cpu",
         random_state=42,
     )
-
-    if model_obj.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     # Fit both models
     model_dict.fit(X, y)
@@ -492,9 +486,8 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model = TabPFNRegressor(
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Get predictions on original data
@@ -514,9 +507,8 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model_with_constants = TabPFNRegressor(
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-    if model_with_constants.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
