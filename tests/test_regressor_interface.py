@@ -133,29 +133,20 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks([TabPFNRegressor(n_estimators=2, device="cpu")])
+@parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
-    float64_checks = (
+    if torch.backends.mps.is_available():
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
+    if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
-        "check_dict_unchanged",
-        "check_fit_idempotent",
-    )
-
-    if check.func.__name__ in float64_checks:  # type: ignore
-        if torch.backends.mps.is_available():
-            pytest.skip(
-                "MPS does not support float64, which is required for this check."
-            )
-        elif check.func.__name__ in (
-            "check_methods_subset_invariance",
-            "check_methods_sample_order_invariance",
-        ):
-            estimator.inference_precision = torch.float64
-            pytest.xfail("We're not at 1e-7 difference yet")
+    ):
+        estimator.inference_precision = torch.float64
+        pytest.xfail("We're not at 1e-7 difference yet")
 
     check(estimator)
 

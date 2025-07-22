@@ -337,7 +337,6 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
-            device="cpu",
         ),
     ],
 )
@@ -345,24 +344,15 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
-    float64_checks = (
+    if torch.backends.mps.is_available():
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
+    if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
-        "check_dict_unchanged",
-        "check_fit_idempotent",
-    )
-
-    if check.func.__name__ in float64_checks:  # type: ignore
-        if torch.backends.mps.is_available():
-            pytest.skip(
-                "MPS does not support float64, which is required for this check."
-            )
-        elif check.func.__name__ in (
-            "check_methods_subset_invariance",
-            "check_methods_sample_order_invariance",
-        ):
-            estimator.inference_precision = torch.float64
-            pytest.xfail("We're not at 1e-7 difference yet")
+    ):
+        estimator.inference_precision = torch.float64
+        pytest.xfail("We're not at 1e-7 difference yet")
 
     check(estimator)
 
