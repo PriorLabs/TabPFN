@@ -29,6 +29,8 @@ from .utils import check_cpu_float16_support
 devices = ["cpu"]
 if torch.cuda.is_available():
     devices.append("cuda")
+if torch.backends.mps.is_available():
+    devices.append("mps")
 
 is_cpu_float16_supported = check_cpu_float16_support()
 
@@ -106,6 +108,8 @@ def test_fit(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
+    if device == "mps" and inference_precision == torch.float64:
+        pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,
@@ -345,7 +349,7 @@ def test_sklearn_compatible_estimator(
 
     if check.func.__name__ in float64_checks:  # type: ignore
         if torch.backends.mps.is_available():
-            pytest.xfail(
+            pytest.skip(
                 "MPS does not support float64, which is required for this check."
             )
         elif check.func.__name__ in (
