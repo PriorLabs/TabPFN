@@ -111,16 +111,6 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def _suppress_hf_token_warning() -> None:
-    """Suppress warning about missing HuggingFace token."""
-    import warnings
-
-    # Filter warnings about HF_TOKEN
-    warnings.filterwarnings(
-        "ignore", message="The secret HF_TOKEN does not exist.*", category=UserWarning
-    )
-
-
 def _try_huggingface_downloads(
     base_path: Path,
     source: ModelSource,

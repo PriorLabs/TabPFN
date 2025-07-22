@@ -227,12 +227,14 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
 
     model_obj = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
 
     # Fit both models
@@ -339,7 +341,7 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNRegressor(n_estimators=n_estimators)
+    model = TabPFNRegressor(n_estimators=n_estimators, device="cpu")
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -471,7 +473,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNRegressor with fixed random state for reproducibility
-    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
     model.fit(X, y)
 
     # Get predictions on original data
@@ -488,7 +490,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNRegressor(n_estimators=2, random_state=42)
+    model_with_constants = TabPFNRegressor(
+        n_estimators=2, random_state=42, device="cpu"
+    )
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
