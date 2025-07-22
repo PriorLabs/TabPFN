@@ -132,7 +132,10 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
+@parametrize_with_checks([TabPFNRegressor(
+    n_estimators=2,
+    device="cuda" if torch.cuda.is_available() else "cpu",
+)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
@@ -227,14 +230,14 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
-        device="cpu",
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     model_obj = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
-        device="cpu",
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     # Fit both models
@@ -301,7 +304,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
+        regressor = TabPFNRegressor(
+            n_estimators=1,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            random_state=43,
+        )
         # load the model so we can access it via classifier.model_
         regressor.fit(X, y)
         # this is necessary if cuda is available
@@ -341,7 +348,9 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNRegressor(n_estimators=n_estimators, device="cpu")
+    model = TabPFNRegressor(
+        n_estimators=n_estimators, device="cuda" if torch.cuda.is_available() else "cpu"
+    )
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -369,7 +378,11 @@ def test_overflow():
     X, y = X[:20], y[:20]
 
     # Create and fit the regressor
-    regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42)
+    regressor = TabPFNRegressor(
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
+    )
 
     regressor.fit(X, y)
 
@@ -380,7 +393,7 @@ def test_overflow():
 def test_cpu_large_dataset_warning():
     """Test that a warning is raised when using CPU with large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor(device="cpu")
+    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
 
     # Create synthetic data slightly above the warning threshold
     rng = np.random.default_rng(seed=42)
@@ -402,20 +415,26 @@ def test_cpu_large_dataset_warning_override():
     X_large = rng.random((1001, 10))
     y_large = rng.random(1001)
 
-    model = TabPFNRegressor(device="cpu")
+    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
     with pytest.raises(
         RuntimeError, match="Running on CPU with more than 1000 samples is not"
     ):
         model.fit(X_large, y_large)
 
     # -- Test overrides
-    model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=True)
+    model = TabPFNRegressor(
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        ignore_pretraining_limits=True,
+    )
     model.fit(X_large, y_large)
 
     # Set environment variable to allow large datasets to avoid RuntimeError
     os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
     try:
-        model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=False)
+        model = TabPFNRegressor(
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            ignore_pretraining_limits=False,
+        )
         model.fit(X_large, y_large)
     finally:
         # Clean up environment variable
@@ -425,7 +444,7 @@ def test_cpu_large_dataset_warning_override():
 def test_cpu_large_dataset_error():
     """Test that an error is raised when using CPU with very large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor(device="cpu")
+    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
 
     # Create synthetic data above the error threshold
     rng = np.random.default_rng(seed=42)
@@ -473,7 +492,11 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNRegressor with fixed random state for reproducibility
-    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    model = TabPFNRegressor(
+        n_estimators=2,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
     model.fit(X, y)
 
     # Get predictions on original data
@@ -491,7 +514,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     # Create and fit a new model with the same random state
     model_with_constants = TabPFNRegressor(
-        n_estimators=2, random_state=42, device="cpu"
+        n_estimators=2,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
     model_with_constants.fit(X_with_constants, y)
 
@@ -568,7 +593,11 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     ), "norm_criterion should be initialized for regressor"
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
-    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor = TabPFNRegressor(
+        model_path="auto",
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
+    )
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"

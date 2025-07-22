@@ -261,14 +261,20 @@ def test_softmax_temperature_impact_on_logits_magnitude(
 
     # Model with low temperature (should produce "sharper" logits)
     model_low_temp = TabPFNClassifier(
-        softmax_temperature=0.1, n_estimators=1, device="cpu", random_state=42
+        softmax_temperature=0.1,
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
     )
     model_low_temp.fit(X, y)
     logits_low_temp = model_low_temp.predict_logits(X)
 
     # Model with high temperature (should produce "smoother" logits)
     model_high_temp = TabPFNClassifier(
-        softmax_temperature=10.0, n_estimators=1, device="cpu", random_state=42
+        softmax_temperature=10.0,
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
     )
     model_high_temp.fit(X, y)
     logits_high_temp = model_high_temp.predict_logits(X)
@@ -278,7 +284,10 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     ), "Low softmax temperature did not result in more extreme logits."
 
     model_temp_one = TabPFNClassifier(
-        softmax_temperature=1.0, n_estimators=1, device="cpu", random_state=42
+        softmax_temperature=1.0,
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
     )
     model_temp_one.fit(X, y)
     logits_temp_one = model_temp_one.predict_logits(X)
@@ -314,14 +323,20 @@ def test_balance_probabilities_alters_proba_output(
 
     # Model without class balancing
     model_no_balance = TabPFNClassifier(
-        balance_probabilities=False, n_estimators=1, device="cpu", random_state=42
+        balance_probabilities=False,
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
     )
     model_no_balance.fit(X_subset, y_imbalanced)
     proba_no_balance = model_no_balance.predict_proba(X_subset)
 
     # Model with class balancing enabled
     model_balance = TabPFNClassifier(
-        balance_probabilities=True, n_estimators=1, device="cpu", random_state=42
+        balance_probabilities=True,
+        n_estimators=1,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
     )
     model_balance.fit(X_subset, y_imbalanced)
     proba_balance = model_balance.predict_proba(X_subset)
@@ -336,6 +351,7 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
+            device="cuda" if torch.cuda.is_available() else "cpu",
         ),
     ],
 )
@@ -371,6 +387,7 @@ def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     model = TabPFNClassifier(
         balance_probabilities=True,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     model.fit(X, y)
@@ -398,6 +415,7 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
                 "classifier",
                 TabPFNClassifier(
                     n_estimators=2,  # Fewer estimators for faster testing
+                    device="cuda" if torch.cuda.is_available() else "cpu",
                 ),
             ),
         ],
@@ -441,12 +459,14 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     model_obj = TabPFNClassifier(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
     )
 
     model_dict.fit(X, y)
@@ -513,7 +533,10 @@ def _patch_layernorm_no_affine(model: nn.Module) -> None:
     for layer in model.modules():
         if isinstance(layer, nn.LayerNorm) and layer.weight is None:
             # Build tensors on the same device/dtype as the layer's buffer
-            device = next(layer.parameters(), torch.tensor([], device="cpu")).device
+            device = next(
+                layer.parameters(),
+                torch.tensor([], device="cuda" if torch.cuda.is_available() else "cpu"),
+            ).device
             dtype = getattr(layer, "weight_dtype", torch.float32)
 
             gamma = torch.ones(layer.normalized_shape, dtype=dtype, device=device)
@@ -534,7 +557,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
-        classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
+        classifier = TabPFNClassifier(
+            n_estimators=1,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+            random_state=42,
+        )
         # load the model so we can access it via classifier.model_
         classifier.fit(X, y)
         # this is necessary if cuda is available
@@ -577,7 +604,11 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
+    model = TabPFNClassifier(
+        n_estimators=n_estimators,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -608,7 +639,11 @@ def test_pandas_output_config():
     )
 
     # Initialize TabPFN
-    model = TabPFNClassifier(n_estimators=1, random_state=42)
+    model = TabPFNClassifier(
+        n_estimators=1,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
 
     # Get default predictions
     model.fit(X, y)
@@ -639,7 +674,11 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNClassifier with fixed random state for reproducibility
-    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model = TabPFNClassifier(
+        n_estimators=2,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
     model.fit(X, y)
 
     # Get predictions on original data
@@ -713,7 +752,9 @@ def test_classifier_with_text_and_na() -> None:
     y = df["target"]
 
     # Initialize and fit TabPFN on data with text+NA and a column with all NAs
-    classifier = TabPFNClassifier(device="cpu", n_estimators=2)
+    classifier = TabPFNClassifier(
+        device="cuda" if torch.cuda.is_available() else "cpu", n_estimators=2
+    )
 
     # This should now work without raising errors
     classifier.fit(X, y)
@@ -739,7 +780,11 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert norm_criterion is None, "norm_criterion should be None for classifier"
 
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
-    classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
+    classifier = TabPFNClassifier(
+        model_path="auto",
+        device="cuda" if torch.cuda.is_available() else "cpu",
+        random_state=42,
+    )
     classifier._initialize_model_variables()
 
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
@@ -759,7 +804,9 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     new_config = classifier.config_
     spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
 
-    classifier2 = TabPFNClassifier(model_path=spec)
+    classifier2 = TabPFNClassifier(
+        model_path=spec, device="cuda" if torch.cuda.is_available() else "cpu"
+    )
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
