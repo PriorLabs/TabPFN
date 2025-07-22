@@ -344,7 +344,7 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
     return use_instead_path
 
 
-@overload  # type: ignore[no-overload-impl]
+@overload
 def load_model_criterion_config(
     model_path: str | Path | None,
     *,
@@ -372,7 +372,7 @@ def load_model_criterion_config(
 ) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, ModelConfig]: ...
 
 
-def load_model_criterion_config(  # type: ignore[no-redef]
+def load_model_criterion_config(
     model_path: None | str | Path,
     *,
     check_bar_distribution_criterion: bool,
