@@ -393,6 +393,7 @@ def _get_pip_packages(run_lambda, patterns=None):
         [sys.executable, "-mpip", "list", "--format=freeze"],
     )
     if out is None:
+        # Happens when pip is not available or when the command fails
         return pip_version, ""
     filtered_out = "\n".join(
         line for line in out.splitlines() if any(name in line for name in patterns)
