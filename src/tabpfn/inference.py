@@ -515,7 +515,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             )
             with (
                 autocast_ctx,
-                torch.inference_mode(),
+                torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(
                     *(style, X_full, y_train),
