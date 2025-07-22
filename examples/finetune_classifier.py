@@ -22,8 +22,8 @@ def predict(self, X):
 def predict_proba(self, X):
     self.base_estimator.predict_proba(X)
 
-Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as support
-for the Apple Silicon (MPS) backend is still under development.
+Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
+support for the Apple Silicon (MPS) backend is still under development.
 """
 
 from functools import partial
