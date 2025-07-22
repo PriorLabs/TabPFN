@@ -132,10 +132,14 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks([TabPFNRegressor(
-    n_estimators=2,
-    device="cuda" if torch.cuda.is_available() else "cpu",
-)])
+@parametrize_with_checks(
+    [
+        TabPFNRegressor(
+            n_estimators=2,
+            device="cuda" if torch.cuda.is_available() else "cpu",
+        )
+    ]
+)
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
