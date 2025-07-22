@@ -359,7 +359,7 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
-    if estimator.device_ == "mps":
+    if estimator.device == "mps":
         pytest.skip("MPS is not supported for this test.")
 
     float64_checks = (
