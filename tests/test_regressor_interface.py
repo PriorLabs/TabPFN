@@ -434,9 +434,6 @@ def test_cpu_large_dataset_error():
     # Create a CPU model
     model = TabPFNRegressor(device="cpu")
 
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
-
     # Create synthetic data above the error threshold
     rng = np.random.default_rng(seed=42)
     X_large = rng.random((1501, 10))

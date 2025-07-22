@@ -678,9 +678,8 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model_with_constants = TabPFNClassifier(
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-    if model_with_constants.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
@@ -736,9 +735,7 @@ def test_classifier_with_text_and_na() -> None:
     y = df["target"]
 
     # Initialize and fit TabPFN on data with text+NA and a column with all NAs
-    classifier = TabPFNClassifier(n_estimators=2)
-    if classifier.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    classifier = TabPFNClassifier(n_estimators=2, device="cpu")
 
     # This should now work without raising errors
     classifier.fit(X, y)
