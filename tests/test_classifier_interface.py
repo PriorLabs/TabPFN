@@ -261,23 +261,15 @@ def test_softmax_temperature_impact_on_logits_magnitude(
 
     # Model with low temperature (should produce "sharper" logits)
     model_low_temp = TabPFNClassifier(
-        softmax_temperature=0.1,
-        n_estimators=1,
-        random_state=42,
+        softmax_temperature=0.1, n_estimators=1, device="cpu", random_state=42
     )
-    if model_low_temp.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_low_temp.fit(X, y)
     logits_low_temp = model_low_temp.predict_logits(X)
 
     # Model with high temperature (should produce "smoother" logits)
     model_high_temp = TabPFNClassifier(
-        softmax_temperature=10.0,
-        n_estimators=1,
-        random_state=42,
+        softmax_temperature=10.0, n_estimators=1, device="cpu", random_state=42
     )
-    if model_high_temp.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_high_temp.fit(X, y)
     logits_high_temp = model_high_temp.predict_logits(X)
 
@@ -286,12 +278,8 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     ), "Low softmax temperature did not result in more extreme logits."
 
     model_temp_one = TabPFNClassifier(
-        softmax_temperature=1.0,
-        n_estimators=1,
-        random_state=42,
+        softmax_temperature=1.0, n_estimators=1, device="cpu", random_state=42
     )
-    if model_temp_one.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_temp_one.fit(X, y)
     logits_temp_one = model_temp_one.predict_logits(X)
 
@@ -326,23 +314,15 @@ def test_balance_probabilities_alters_proba_output(
 
     # Model without class balancing
     model_no_balance = TabPFNClassifier(
-        balance_probabilities=False,
-        n_estimators=1,
-        random_state=42,
+        balance_probabilities=False, n_estimators=1, device="cpu", random_state=42
     )
-    if model_no_balance.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_no_balance.fit(X_subset, y_imbalanced)
     proba_no_balance = model_no_balance.predict_proba(X_subset)
 
     # Model with class balancing enabled
     model_balance = TabPFNClassifier(
-        balance_probabilities=True,
-        n_estimators=1,
-        random_state=42,
+        balance_probabilities=True, n_estimators=1, device="cpu", random_state=42
     )
-    if model_balance.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model_balance.fit(X_subset, y_imbalanced)
     proba_balance = model_balance.predict_proba(X_subset)
 
@@ -394,10 +374,8 @@ def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     model = TabPFNClassifier(
         balance_probabilities=True,
+        device="cpu",
     )
-
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     model.fit(X, y)
     probabilities = model.predict_proba(X)
@@ -422,13 +400,12 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             ("scaler", StandardScaler()),
             (
                 "classifier",
-                TabPFNClassifier(n_estimators=2),  # Fewer estimators for faster testing
+                TabPFNClassifier(
+                    n_estimators=2, # Fewer estimators for faster testing
+                ),
             ),
         ],
     )
-
-    if pipeline.steps[-1][1].device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     pipeline.fit(X, y)
     probabilities = pipeline.predict_proba(X)
@@ -546,10 +523,7 @@ def _patch_layernorm_no_affine(model: nn.Module) -> None:
     for layer in model.modules():
         if isinstance(layer, nn.LayerNorm) and layer.weight is None:
             # Build tensors on the same device/dtype as the layer's buffer
-            device = next(
-                layer.parameters(),
-                torch.tensor([], device="cuda" if torch.cuda.is_available() else "cpu"),
-            ).device
+            device = next(layer.parameters(), torch.tensor([], device="cpu")).device
             dtype = getattr(layer, "weight_dtype", torch.float32)
 
             gamma = torch.ones(layer.normalized_shape, dtype=dtype, device=device)
@@ -570,12 +544,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
-        classifier = TabPFNClassifier(
-            n_estimators=1,
-            random_state=42,
-        )
-        if classifier.device == "mps":
-            pytest.skip("MPS is not supported for this test.")
+        classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
 
         # load the model so we can access it via classifier.model_
         classifier.fit(X, y)
@@ -806,9 +775,8 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     classifier = TabPFNClassifier(
         model_path="auto",
         random_state=42,
+        device="cpu",
     )
-    if classifier.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     classifier._initialize_model_variables()
 
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
@@ -830,9 +798,8 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
 
     classifier2 = TabPFNClassifier(
         model_path=spec,
+        device="cpu",
     )
-    if classifier2.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"

@@ -132,13 +132,7 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks(
-    [
-        TabPFNRegressor(
-            n_estimators=2,
-        )
-    ]
-)
+@parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
@@ -179,13 +173,11 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "regressor",
                 TabPFNRegressor(
-                    n_estimators=2,  # Fewer estimators for faster testing
+                    n_estimators=2, device="cpu",  # Fewer estimators for faster testing
                 ),
             ),
         ],
     )
-    if pipeline.steps[-1][1].device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     pipeline.fit(X, y)
     predictions = pipeline.predict(X)
@@ -316,12 +308,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(
-            n_estimators=1,
-            random_state=43,
-        )
-        if regressor.device == "mps":
-            pytest.skip("MPS is not supported for this test.")
+        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=4)
         # load the model so we can access it via classifier.model_
         regressor.fit(X, y)
         # this is necessary if cuda is available
@@ -363,9 +350,8 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
 
     model = TabPFNRegressor(
         n_estimators=n_estimators,
+        device="cpu",
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -393,13 +379,7 @@ def test_overflow():
     X, y = X[:20], y[:20]
 
     # Create and fit the regressor
-    regressor = TabPFNRegressor(
-        n_estimators=1,
-        random_state=42,
-    )
-
-    if regressor.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42)
 
     regressor.fit(X, y)
 
@@ -439,15 +419,14 @@ def test_cpu_large_dataset_warning_override():
         model.fit(X_large, y_large)
 
     # -- Test overrides
-    model = TabPFNRegressor(
-        ignore_pretraining_limits=True,
-    )
+    model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=True)
     model.fit(X_large, y_large)
 
     # Set environment variable to allow large datasets to avoid RuntimeError
     os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
     try:
         model = TabPFNRegressor(
+            device="cpu",
             ignore_pretraining_limits=False,
         )
         model.fit(X_large, y_large)
@@ -486,9 +465,7 @@ def test_pandas_output_config():
     )
 
     # Initialize TabPFN
-    model = TabPFNRegressor(n_estimators=1, random_state=42)
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    model = TabPFNRegressor(n_estimators=1, random_state=42, device="cpu")
 
     # Get default predictions
     model.fit(X, y)
@@ -561,7 +538,7 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, _ = X_y
     y_constant = np.full(X.shape[0], 5.0)  # Create a constant target array
 
-    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
     model.fit(X, y_constant)
 
     predictions = model.predict(X)
@@ -615,12 +592,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     ), "norm_criterion should be initialized for regressor"
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
-    regressor = TabPFNRegressor(
-        model_path="auto",
-        random_state=42,
-    )
-    if regressor.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
