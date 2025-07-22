@@ -410,10 +410,7 @@ def test_overflow():
 def test_cpu_large_dataset_warning():
     """Test that a warning is raised when using CPU with large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor()
-
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    model = TabPFNRegressor(device="cpu")
 
     # Create synthetic data slightly above the warning threshold
     rng = np.random.default_rng(seed=42)
@@ -435,9 +432,7 @@ def test_cpu_large_dataset_warning_override():
     X_large = rng.random((1001, 10))
     y_large = rng.random(1001)
 
-    model = TabPFNRegressor()
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
+    model = TabPFNRegressor(device="cpu")
     with pytest.raises(
         RuntimeError, match="Running on CPU with more than 1000 samples is not"
     ):
@@ -447,8 +442,6 @@ def test_cpu_large_dataset_warning_override():
     model = TabPFNRegressor(
         ignore_pretraining_limits=True,
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model.fit(X_large, y_large)
 
     # Set environment variable to allow large datasets to avoid RuntimeError
@@ -457,8 +450,6 @@ def test_cpu_large_dataset_warning_override():
         model = TabPFNRegressor(
             ignore_pretraining_limits=False,
         )
-        if model.device == "mps":
-            pytest.skip("MPS is not supported for this test.")
         model.fit(X_large, y_large)
     finally:
         # Clean up environment variable
@@ -468,7 +459,7 @@ def test_cpu_large_dataset_warning_override():
 def test_cpu_large_dataset_error():
     """Test that an error is raised when using CPU with very large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor()
+    model = TabPFNRegressor(device="cpu")
 
     if model.device == "mps":
         pytest.skip("MPS is not supported for this test.")
