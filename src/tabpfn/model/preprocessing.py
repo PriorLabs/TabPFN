@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import warnings
 from abc import abstractmethod
@@ -14,7 +15,6 @@ from typing_extensions import Self, override
 import numpy as np
 import scipy
 import torch
-from pandas.core.common import contextlib
 from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
@@ -82,6 +82,56 @@ class KDITransformerWithNaN(KDITransformer):
         return X  # type: ignore
 
 
+class AdaptiveQuantileTransformer(QuantileTransformer):
+    """A QuantileTransformer that automatically adapts the 'n_quantiles' parameter
+    based on the number of samples provided during the 'fit' method.
+
+    This fixes an issue in older versions of scikit-learn where the 'n_quantiles'
+    parameter could not exceed the number of samples in the input data.
+
+    This code prevents errors that occur when the requested 'n_quantiles' is
+    greater than the number of available samples in the input data (X).
+    This situation can arises because we first initialize the transformer
+    based on total samples and then subsample.
+    """
+
+    def __init__(self, *, n_quantiles: int = 1000, **kwargs: Any) -> None:
+        # Store the user's desired n_quantiles to use as an upper bound
+        self._user_n_quantiles = n_quantiles
+        # Initialize parent with this, but it will be adapted in fit
+        super().__init__(n_quantiles=n_quantiles, **kwargs)
+
+    def fit(
+        self, X: np.ndarray, y: np.ndarray | None = None
+    ) -> AdaptiveQuantileTransformer:
+        n_samples = X.shape[0]
+
+        # Adapt n_quantiles for this fit: min of user's preference and available samples
+        # Ensure n_quantiles is at least 1
+        effective_n_quantiles = max(
+            1, min(self._user_n_quantiles, n_samples, self.subsample)
+        )
+
+        # Set self.n_quantiles to the effective value BEFORE calling super().fit()
+        # This ensures the parent class uses the adapted value for fitting
+        # and self.n_quantiles will reflect the value used for the fit.
+        self.n_quantiles = effective_n_quantiles
+
+        # Convert Generator to RandomState if needed for sklearn compatibility
+        if isinstance(self.random_state, np.random.Generator):
+            # Generate a random integer to use as seed for RandomState
+            seed = int(self.random_state.integers(0, 2**32))
+            self.random_state = np.random.RandomState(seed)
+        elif hasattr(self.random_state, "bit_generator"):
+            # Handle other Generator-like objects
+            raise ValueError(
+                f"Unsupported random state type: {type(self.random_state)}. "
+                "Please provide an integer seed or np.random.RandomState object."
+            )
+
+        return super().fit(X, y)
+
+
 ALPHAS = (
     0.05,
     0.1,
@@ -136,9 +186,12 @@ class SafePowerTransformer(PowerTransformer):
         self,
         variance_threshold: float = 1e-3,
         large_value_threshold: float = 100,
-        **kwargs: Any,
+        method="yeo-johnson",
+        *,
+        standardize=True,
+        copy=True,
     ):
-        super().__init__(**kwargs)
+        super().__init__(method=method, standardize=standardize, copy=copy)
         self.variance_threshold = variance_threshold
         self.large_value_threshold = large_value_threshold
 
@@ -385,7 +438,7 @@ class SequentialFeatureTransformer(UserList):
 
     def fit_transform(
         self,
-        X: np.ndarray,
+        X: np.ndarray | torch.tensor,
         categorical_features: list[int],
     ) -> _TransformResult:
         """Fit and transform the data using the fitted pipeline.
@@ -404,7 +457,9 @@ class SequentialFeatureTransformer(UserList):
         self.categorical_features_ = categorical_features
         return _TransformResult(X, categorical_features)
 
-    def fit(self, X: np.ndarray, categorical_features: list[int]) -> Self:
+    def fit(
+        self, X: np.ndarray | torch.tensor, categorical_features: list[int]
+    ) -> Self:
         """Fit all the steps in the pipeline.
 
         Args:
@@ -449,8 +504,13 @@ class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):
         self.sel_: list[bool] | None = None
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
-        sel_ = ((X[0:1, :] == X).mean(axis=0) < 1.0).tolist()
+    def _fit(
+        self, X: np.ndarray | torch.Tensor, categorical_features: list[int]
+    ) -> list[int]:
+        if isinstance(X, torch.Tensor):
+            sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
+        else:
+            sel_ = ((X[0:1, :] == X).mean(axis=0) < 1.0).tolist()
 
         if not any(sel_):
             raise ValueError(
@@ -466,7 +526,9 @@ class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):
         ]
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray | torch.Tensor, *, is_test: bool = False
+    ) -> np.ndarray:
         assert self.sel_ is not None, "You must call fit first"
         return X[:, self.sel_]
 
@@ -485,6 +547,9 @@ class AddFingerprintFeaturesStep(FeaturePreprocessingTransformerStep):
     If `is_test = True`, it keeps the first hash even if there are collisions.
     If `is_test = False`, it handles hash collisions by counting up and rehashing
     until a unique hash is found.
+    The idea is basically to add a random feature to help the model distinguish between
+    identical rows. We use hashing to make sure the result does not depend on the order
+    of the rows.
     """
 
     def __init__(self, random_state: int | np.random.Generator | None = None):
@@ -492,35 +557,46 @@ class AddFingerprintFeaturesStep(FeaturePreprocessingTransformerStep):
         self.random_state = random_state
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self, X: np.ndarray | torch.Tensor, categorical_features: list[int]
+    ) -> list[int]:
         _, rng = infer_random_state(self.random_state)
         self.rnd_salt_ = int(rng.integers(0, 2**16))
         return [*categorical_features]
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
-        X_h = np.zeros(X.shape[0], dtype=X.dtype)
+    def _transform(
+        self, X: np.ndarray | torch.Tensor, *, is_test: bool = False
+    ) -> np.ndarray | torch.Tensor:
+        X_det = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else X
 
+        # no detach necessary for numpy
+        X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
         if is_test:
             # Keep the first hash even if there are collisions
-            salted_X = X + self.rnd_salt_
+            salted_X = X_det + self.rnd_salt_
             for i, row in enumerate(salted_X):
                 h = float_hash_arr(row + self.rnd_salt_)
                 X_h[i] = h
         else:
             # Handle hash collisions by counting up and rehashing
             seen_hashes = set()
-            salted_X = X + self.rnd_salt_
+            salted_X = X_det + self.rnd_salt_
             for i, row in enumerate(salted_X):
                 h = float_hash_arr(row)
                 add_to_hash = 0
-                while h in seen_hashes:
+                while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
                     h = float_hash_arr(row + add_to_hash)
                 X_h[i] = h
                 seen_hashes.add(h)
 
-        return np.concatenate([X, X_h.reshape(-1, 1)], axis=1)
+        if isinstance(X, torch.Tensor):
+            return torch.cat(
+                [X, torch.from_numpy(X_h).float().reshape(-1, 1).to(X.device)], dim=1
+            )
+        else:  # noqa: RET505
+            return np.concatenate([X, X_h.reshape(-1, 1)], axis=1)
 
 
 class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
@@ -540,8 +616,10 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
         self.index_permutation_: list[int] | None = None
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
-        static_seed, rng = infer_random_state(self.random_state)
+    def _fit(
+        self, X: np.ndarray | torch.tensor, categorical_features: list[int]
+    ) -> list[int]:
+        _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
             index_permutation = np.roll(
                 np.arange(X.shape[1]),
@@ -553,8 +631,10 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
             index_permutation = np.arange(X.shape[1]).tolist()
         else:
             raise ValueError(f"Unknown shuffle method {self.shuffle_method}")
-
-        self.index_permutation_ = index_permutation
+        if isinstance(X, torch.Tensor):
+            self.index_permutation_ = torch.tensor(index_permutation, dtype=torch.long)
+        else:
+            self.index_permutation_ = index_permutation
 
         return [
             new_idx
@@ -578,6 +658,8 @@ class NoneTransformer(FunctionTransformer):
 
 class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
     """Reshape the feature distributions using different transformations."""
+
+    APPEND_TO_ORIGINAL_THRESHOLD = 500
 
     @staticmethod
     def get_column_types(X: np.ndarray) -> list[str]:
@@ -656,9 +738,9 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                     ),
                     (
                         "other",
-                        QuantileTransformer(
+                        AdaptiveQuantileTransformer(
                             output_distribution="normal",
-                            n_quantiles=num_examples // 10,
+                            n_quantiles=max(num_examples // 10, 2),
                             random_state=random_state,
                         ),
                         # "other" or "ordinal"
@@ -717,32 +799,32 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 inverse_func=np.log,
                 check_inverse=False,
             ),
-            "quantile_uni_coarse": QuantileTransformer(
+            "quantile_uni_coarse": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 10, 2),
                 random_state=random_state,
             ),
-            "quantile_norm_coarse": QuantileTransformer(
+            "quantile_norm_coarse": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 10, 2),
                 random_state=random_state,
             ),
-            "quantile_uni": QuantileTransformer(
+            "quantile_uni": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=max(num_examples // 5, 2),
                 random_state=random_state,
             ),
-            "quantile_norm": QuantileTransformer(
+            "quantile_norm": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=max(num_examples // 5, 2),
                 random_state=random_state,
             ),
-            "quantile_uni_fine": QuantileTransformer(
+            "quantile_uni_fine": AdaptiveQuantileTransformer(
                 output_distribution="uniform",
                 n_quantiles=num_examples,
                 random_state=random_state,
             ),
-            "quantile_norm_fine": QuantileTransformer(
+            "quantile_norm_fine": AdaptiveQuantileTransformer(
                 output_distribution="normal",
                 n_quantiles=num_examples,
                 random_state=random_state,
@@ -757,7 +839,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 [
                     (
                         "norm",
-                        QuantileTransformer(
+                        AdaptiveQuantileTransformer(
                             output_distribution="normal",
                             n_quantiles=max(num_examples // 10, 2),
                             random_state=random_state,
@@ -826,7 +908,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         *,
         transform_name: str = "safepower",
         apply_to_categorical: bool = False,
-        append_to_original: bool = False,
+        append_to_original: bool | Literal["auto"] = False,
         subsample_features: float = -1,
         global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
@@ -890,6 +972,13 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         transformers = []
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
+
+        append_decision = n_features < self.APPEND_TO_ORIGINAL_THRESHOLD
+        self.append_to_original = (
+            append_decision
+            if self.append_to_original == "auto"
+            else self.append_to_original
+        )
 
         # -------- Append to original ------
         # If we append to original, all the categorical indices are kept in place
@@ -1190,7 +1279,13 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
         if self.categorical_transformer_ is None:
             return X
 
-        transformed = self.categorical_transformer_.transform(X)
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", message=".*Found unknown categories in col.*"
+            )  # These warnings are expected when transforming test data
+            transformed = self.categorical_transformer_.transform(X)
         if self.categorical_transform_name.endswith("_shuffled"):
             for col, mapping in self.random_mappings_.items():
                 not_nan_mask = ~np.isnan(transformed[:, col])  # type: ignore
@@ -1204,7 +1299,7 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
     def __init__(
         self,
         *,
-        max_features: int | None,
+        max_features: int | None = None,
         random_state: int | np.random.Generator | None = None,
     ):
         super().__init__()
@@ -1276,3 +1371,21 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
         poly_features_xs = X[:, self.poly_factor_1_idx] * X[:, self.poly_factor_2_idx]
 
         return np.hstack((X, poly_features_xs))
+
+
+class DifferentiableZNormStep(FeaturePreprocessingTransformerStep):
+    def __init__(self):
+        super().__init__()
+
+        self.means = torch.tensor([])
+        self.stds = torch.tensor([])
+
+    def _fit(self, X: torch.Tensor, categorical_features: list[int]) -> list[int]:
+        self.means = X.mean(dim=0, keepdim=True)
+        self.stds = X.std(dim=0, keepdim=True)
+        return categorical_features
+
+    def _transform(self, X: torch.Tensor, *, is_test=False):  # noqa: ARG002
+        assert X.shape[1] == self.means.shape[1]
+        assert X.shape[1] == self.stds.shape[1]
+        return (X - self.means) / self.stds

@@ -148,8 +148,7 @@ class BarDistribution(nn.Module):
         return probs.log()
 
     def __setstate__(self, state: dict) -> None:
-        if "bucket_widths" in state:
-            del state["bucket_widths"]
+        state.pop("bucket_widths", None)
         super().__setstate__(state)
         self.__dict__.setdefault("append_mean_pred", False)
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, overload
 
 import numpy as np
 import torch
@@ -10,7 +10,23 @@ from torch import nn
 
 
 # usage of custom implementations is required to support ONNX export
-def torch_nansum(x: torch.Tensor, axis=None, keepdim=False, dtype=None):
+def torch_nansum(
+    x: torch.Tensor,
+    axis: int | tuple[int, ...] | None = None,
+    keepdim: bool = False,
+    dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Computes the sum of a tensor, treating NaNs as zero.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension or dimensions to reduce.
+        keepdim: Whether the output tensor has `axis` retained or not.
+        dtype: The desired data type of the returned tensor.
+
+    Returns:
+        The sum of the tensor with NaNs treated as zero.
+    """
     nan_mask = torch.isnan(x)
     masked_input = torch.where(
         nan_mask,
@@ -20,13 +36,47 @@ def torch_nansum(x: torch.Tensor, axis=None, keepdim=False, dtype=None):
     return torch.sum(masked_input, axis=axis, keepdim=keepdim, dtype=dtype)
 
 
+@overload
+def torch_nanmean(
+    x: torch.Tensor,
+    axis: int = 0,
+    *,
+    return_nanshare: Literal[False] = False,
+    include_inf: bool = False,
+) -> torch.Tensor: ...
+
+
+@overload
+def torch_nanmean(
+    x: torch.Tensor,
+    axis: int = 0,
+    *,
+    return_nanshare: Literal[True],
+    include_inf: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]: ...
+
+
 def torch_nanmean(
     x: torch.Tensor,
     axis: int = 0,
     *,
     return_nanshare: bool = False,
     include_inf: bool = False,
-):
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+    """Computes the mean of a tensor over a given dimension, ignoring NaNs.
+
+    Designed for stability: If all inputs are NaN, the mean will be 0.0.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension to reduce.
+        return_nanshare: If True, also return the proportion of NaNs.
+        include_inf: If True, treat infinity as NaN for the purpose of the calculation.
+
+    Returns:
+        The mean of the input tensor, ignoring NaNs. If `return_nanshare` is True,
+        returns a tuple containing the mean and the share of NaNs.
+    """
     nan_mask = torch.isnan(x)
     if include_inf:
         nan_mask = torch.logical_or(nan_mask, torch.isinf(x))
@@ -36,24 +86,65 @@ def torch_nanmean(
     )
     value = torch.where(nan_mask, torch.full_like(x, 0), x).sum(axis=axis)  # type: ignore
     if return_nanshare:
-        return value / num, 1.0 - num / x.shape[axis]
+        return value / num, 1.0 - (num / x.shape[axis])
     return value / num.clip(min=1.0)
 
 
-def torch_nanstd(x: torch.Tensor, axis: int = 0):
+def torch_nanstd(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
+    """Computes the standard deviation of a tensor over a given dimension, ignoring NaNs.
+
+    This implementation is designed for stability. It clips the denominator `(num - 1)`
+    at a minimum of 1. This prevents division-by-zero errors that would produce `NaN`
+    or `inf` when calculating the standard deviation of a single data point.
+
+    Args:
+        x: The input tensor.
+        axis: The dimension to reduce.
+
+    Returns:
+        The standard deviation of the input tensor, ignoring NaNs.
+    """
     num = torch.where(torch.isnan(x), torch.full_like(x, 0), torch.full_like(x, 1)).sum(  # type: ignore
         axis=axis,
     )
     value = torch.where(torch.isnan(x), torch.full_like(x, 0), x).sum(axis=axis)  # type: ignore
-    mean = value / num
+    mean = value / num.clip(min=1.0)
     mean_broadcast = torch.repeat_interleave(
         mean.unsqueeze(axis),
         x.shape[axis],
         dim=axis,
     )
-    return torch.sqrt(
-        torch_nansum(torch.square(mean_broadcast - x), axis=axis) / (num - 1),  # type: ignore
+    # Clip the denominator to avoid division by zero when num=1
+    var = torch_nansum(torch.square(mean_broadcast - x), axis=axis) / (num - 1).clip(
+        min=1.0
     )
+    return torch.sqrt(var)
+
+
+@overload
+def normalize_data(
+    data: torch.Tensor,
+    *,
+    normalize_positions: int = -1,
+    return_scaling: Literal[False] = False,
+    clip: bool = True,
+    std_only: bool = False,
+    mean: torch.Tensor | None = None,
+    std: torch.Tensor | None = None,
+) -> torch.Tensor: ...
+
+
+@overload
+def normalize_data(
+    data: torch.Tensor,
+    *,
+    normalize_positions: int = -1,
+    return_scaling: Literal[True],
+    clip: bool = True,
+    std_only: bool = False,
+    mean: torch.Tensor | None = None,
+    std: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]: ...
 
 
 def normalize_data(
@@ -66,42 +157,64 @@ def normalize_data(
     mean: torch.Tensor | None = None,
     std: torch.Tensor | None = None,
 ) -> torch.Tensor | tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
-    """Normalize data to mean 0 and std 1.
+    """Normalize data to mean 0 and std 1 with high numerical stability.
+
+    This function is designed to be robust against several edge cases:
+    1.  **Constant Features**: If a feature is constant, its standard deviation (`std`)
+        will be 0. This is handled by replacing `std=0` with `1` to prevent `0/0`
+        division, effectively mapping constant features to a normalized value of 0.
+    2.  **Single-Sample Normalization**: If the normalization is based on a single
+        data point, `std` is explicitly set to `1` to prevent undefined behavior.
+    3.  **Low-Precision Dtypes**: During the final division, a small epsilon (`1e-16`)
+        is added to the denominator. This prevents division by a near-zero `std`,
+        which could cause the value to overflow to infinity (`inf`), especially when
+        using low-precision dtypes like `torch.float16`.
+    4.  **Autograd Compatibility**: All inplace operations (`x[:] = ...`) have been
+        replaced with their functional equivalents (`torch.where`, `torch.ones_like`)
+        to ensure the computation graph is not corrupted, allowing gradients to be
+        computed correctly.
 
     Args:
         data: The data to normalize. (T, B, H)
-        normalize_positions: If > 0, only use the first `normalize_positions` positions for normalization.
+        normalize_positions: If > 0, only use the first `normalize_positions`
+            positions for normalization.
         return_scaling: If True, return the scaling parameters as well (mean, std).
         std_only: If True, only divide by std.
         clip: If True, clip the data to [-100, 100].
         mean: If given, use this value instead of computing it.
         std: If given, use this value instead of computing it.
+
+    Returns:
+        The normalized data tensor, or a tuple containing the data and scaling factors.
     """
-    # TODO(eddiebergman): I feel like this function is easier to just do what you need
-    # where you need it, rather than supporting all these variations
     assert (mean is None) == (
         std is None
     ), "Either both or none of mean and std must be given"
     if mean is None:
         if normalize_positions is not None and normalize_positions > 0:
             mean = torch_nanmean(data[:normalize_positions], axis=0)  # type: ignore
-            std = torch_nanstd(data[:normalize_positions], axis=0) + 1e-20
+            std = torch_nanstd(data[:normalize_positions], axis=0)
         else:
             mean = torch_nanmean(data, axis=0)  # type: ignore
-            std = torch_nanstd(data, axis=0) + 1e-20
+            std = torch_nanstd(data, axis=0)
+
+        # Inplace assignments with functional equivalents to support autograd.
+        std = torch.where(std == 0, torch.ones_like(std), std)
 
         if len(data) == 1 or normalize_positions == 1:
-            std[:] = 1.0
+            std = torch.ones_like(std)
 
         if std_only:
-            mean[:] = 0  # type: ignore
-    data = (data - mean) / std
+            mean = torch.zeros_like(mean)
+
+    # Add epsilon for numerical stability
+    data = (data - mean) / (std + 1e-16)
 
     if clip:
         data = torch.clip(data, min=-100, max=100)
 
     if return_scaling:
-        return data, (mean, std)  # type: ignore
+        return data, (mean, std)
     return data
 
 
@@ -241,44 +354,6 @@ class SequentialEncoder(nn.Sequential, InputEncoder):
         return input[self.output_key] if self.output_key is not None else input
 
 
-class LinearInputEncoder(nn.Module):
-    """A simple linear input encoder."""
-
-    def __init__(
-        self,
-        num_features: int,
-        emsize: int,
-        replace_nan_by_zero: bool = False,
-        bias: bool = True,
-    ):
-        """Initialize the LinearInputEncoder.
-
-        Args:
-            num_features: The number of input features.
-            emsize: The embedding size, i.e. the number of output features.
-            replace_nan_by_zero: Whether to replace NaN values in the input by zero.
-            bias: Whether to use a bias term in the linear layer.
-        """
-        super().__init__()
-        self.layer = nn.Linear(num_features, emsize, bias=bias)
-        self.replace_nan_by_zero = replace_nan_by_zero
-
-    def forward(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
-        """Apply the linear transformation to the input.
-
-        Args:
-            *x: The input tensors to concatenate and transform.
-            **kwargs: Unused keyword arguments.
-
-        Returns:
-            A tuple containing the transformed tensor.
-        """
-        x = torch.cat(x, dim=-1)  # type: ignore
-        if self.replace_nan_by_zero:
-            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
-        return (self.layer(x),)
-
-
 class SeqEncStep(nn.Module):
     """Abstract base class for sequential encoder steps.
 
@@ -385,8 +460,12 @@ class SeqEncStep(nn.Module):
         else:
             assert not cache_trainset_representation
             out = self._forward(*args, **kwargs)
+            # TODO: I think nothing is using _forward now
 
-        assert isinstance(out, tuple)
+        assert isinstance(
+            out,
+            tuple,
+        ), f"out is not a tuple: {out}, type: {type(out)}, class: {self.__class__.__name__}"
         assert len(out) == len(self.out_keys)
         state.update({out_key: out[i] for i, out_key in enumerate(self.out_keys)})
         return state
@@ -434,7 +513,12 @@ class LinearInputEncoderStep(SeqEncStep):
         """
         x = torch.cat(x, dim=-1)
         if self.replace_nan_by_zero:
-            x = torch.nan_to_num(x, nan=0.0)
+            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
+
+        # Ensure input tensor dtype matches the layer's weight dtype
+        # Since this layer gets input from the outside we verify the dtype
+        x = x.to(self.layer.weight.dtype)
+
         return (self.layer(x),)
 
 
@@ -471,7 +555,11 @@ class NanHandlingEncoderStep(SeqEncStep):
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments (unused).
         """
-        self.feature_means_ = torch_nanmean(x[:single_eval_pos], axis=0)
+        self.feature_means_ = torch_nanmean(
+            x[:single_eval_pos],
+            axis=0,
+            include_inf=True,
+        )
 
     def _transform(
         self,
@@ -502,7 +590,6 @@ class NanHandlingEncoderStep(SeqEncStep):
         # replace nans with the mean of the corresponding feature
         x = x.clone()  # clone to avoid inplace operations
         x[nan_mask] = self.feature_means_.unsqueeze(0).expand_as(x)[nan_mask]
-
         return x, nans_indicator
 
 
@@ -529,7 +616,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             x: The input tensor.
             **kwargs: Additional keyword arguments (unused).
         """
-        # self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
         """Remove empty features from the input tensor.
@@ -541,8 +628,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        # return (select_features(x, self.sel),)
-        return (x,)
+        return (select_features(x, self.sel),)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
@@ -647,12 +733,14 @@ class VariableNumFeaturesEncoderStep(SeqEncStep):
             A tuple containing the transformed tensor of shape (seq_len, batch_size, num_features).
         """
         if x.shape[2] == 0:
-            return torch.zeros(
-                x.shape[0],
-                x.shape[1],
-                self.num_features,
-                device=x.device,
-                dtype=x.dtype,
+            return (
+                torch.zeros(
+                    x.shape[0],
+                    x.shape[1],
+                    self.num_features,
+                    device=x.device,
+                    dtype=x.dtype,
+                ),
             )
         if self.normalize_by_used_features:
             if self.normalize_by_sqrt:
@@ -796,7 +884,6 @@ class InputNormalizationEncoderStep(SeqEncStep):
                 mean=self.mean_for_normalization,
                 std=self.std_for_normalization,
             )
-
         return (x,)
 
 

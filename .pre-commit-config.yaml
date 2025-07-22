@@ -29,7 +29,7 @@ repos:
     rev: v1.14.1
     hooks:
       - id: mypy
-        exclude: "test_comm_task"  # Pre-commit mypy hates this one, crashes on (l106)
+        exclude: '^src/.*\.py$' #  mypy disabled on precommit as it's also disabled in CI
         additional_dependencies:
           - "types-pyyaml"
           - "types-psutil"

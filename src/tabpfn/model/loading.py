@@ -2,25 +2,29 @@
 
 from __future__ import annotations
 
-import dataclasses
+import contextlib
+import json
 import logging
-import math
 import os
+import shutil
 import sys
+import tempfile
 import urllib.request
 import urllib.response
 import warnings
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Literal, overload
+from typing import TYPE_CHECKING, Literal, cast, overload
 from urllib.error import URLError
 
+import joblib
 import torch
 from torch import nn
 
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.config import InferenceConfig
+from tabpfn.inference import InferenceEngine
+from tabpfn.model.bar_distribution import BarDistribution, FullSupportBarDistribution
+from tabpfn.model.config import ModelConfig
 from tabpfn.model.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
@@ -32,6 +36,11 @@ from tabpfn.model.encoders import (
     VariableNumFeaturesEncoderStep,
 )
 from tabpfn.model.transformer import PerFeatureTransformer
+
+if TYPE_CHECKING:
+    from sklearn.base import BaseEstimator
+
+    from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +69,11 @@ class ModelSource:
             "tabpfn-v2-classifier-od3j1g5m.ckpt",
             "tabpfn-v2-classifier-vutqq28w.ckpt",
             "tabpfn-v2-classifier-znskzxi4.ckpt",
+            "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
-            default_filename="tabpfn-v2-classifier.ckpt",
+            default_filename="tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
             filenames=filenames,
         )
 
@@ -126,8 +136,6 @@ def _try_huggingface_downloads(
         model_name: Optional specific model name to download.
         suppress_warnings: Whether to suppress HF token warnings.
     """
-    if suppress_warnings:
-        _suppress_hf_token_warning()
     """Try to download models and config using the HuggingFace Hub API."""
     try:
         from huggingface_hub import hf_hub_download
@@ -152,34 +160,40 @@ def _try_huggingface_downloads(
     # Create parent directory if it doesn't exist
     base_path.parent.mkdir(parents=True, exist_ok=True)
 
-    try:
-        # Download model checkpoint
-        local_path = hf_hub_download(
-            repo_id=source.repo_id,
-            filename=filename,
-            local_dir=base_path.parent,
-        )
-        # Move model file to desired location
-        Path(local_path).rename(base_path)
+    warning_context = (
+        warnings.catch_warnings() if suppress_warnings else contextlib.nullcontext()
+    )
 
-        # Download config.json
+    with warning_context:
+        if suppress_warnings:
+            warnings.filterwarnings("ignore")
+
         try:
-            config_path = base_path.parent / "config.json"
-            config_local_path = hf_hub_download(
+            # Download model checkpoint
+            local_path = hf_hub_download(
                 repo_id=source.repo_id,
-                filename="config.json",
+                filename=filename,
                 local_dir=base_path.parent,
             )
-            if Path(config_local_path) != config_path:
-                Path(config_local_path).rename(config_path)
-            config_path.unlink()
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to download config.json: {e!s}")
-            # Continue even if config.json download fails
+            # Move model file to desired location
+            Path(local_path).rename(base_path)
 
-        logger.info(f"Successfully downloaded to {base_path}")
-    except Exception as e:
-        raise Exception("HuggingFace download failed!") from e
+            # Download config.json only to increment the download counter. We do not
+            # actually use this file so it is removed immediately after download.
+            try:
+                config_local_path = hf_hub_download(
+                    repo_id=source.repo_id,
+                    filename="config.json",
+                    local_dir=base_path.parent,
+                )
+                Path(config_local_path).unlink(missing_ok=True)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Failed to download config.json: {e!s}")
+                # Continue even if config.json download fails
+
+            logger.info(f"Successfully downloaded to {base_path}")
+        except Exception as e:
+            raise Exception("HuggingFace download failed!") from e
 
 
 def _try_direct_downloads(
@@ -287,7 +301,7 @@ def download_all_models(to: Path) -> None:
             download_model(
                 to=to / ckpt_name,
                 version="v2",
-                which=model_type,  # type: ignore
+                which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
 
@@ -349,11 +363,10 @@ def load_model_criterion_config(
     version: Literal["v2"],
     which: Literal["classifier"],
     download: bool,
-    model_seed: int,
 ) -> tuple[
     PerFeatureTransformer,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
-    InferenceConfig,
+    ModelConfig,
 ]: ...
 
 
@@ -366,33 +379,7 @@ def load_model_criterion_config(
     version: Literal["v2"],
     which: Literal["regressor"],
     download: bool,
-    model_seed: int,
-) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, InferenceConfig]: ...
-
-
-def resolve_model_path(
-    model_path: None | str | Path,
-    which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
-) -> tuple[Path, Path, str, str]:
-    if model_path is None:
-        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
-        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
-            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
-        else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        model_name = f"tabpfn-{version}-{which}.ckpt"
-        model_path = model_dir / model_name
-    else:
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
-
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    return model_path, model_dir, model_name, which
+) -> tuple[PerFeatureTransformer, FullSupportBarDistribution, ModelConfig]: ...
 
 
 def load_model_criterion_config(  # type: ignore[no-redef]
@@ -403,11 +390,10 @@ def load_model_criterion_config(  # type: ignore[no-redef]
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
     download: bool,
-    model_seed: int,
 ) -> tuple[
     PerFeatureTransformer,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    InferenceConfig,
+    ModelConfig,
 ]:
     """Load the model, criterion, and config from the given path.
 
@@ -422,7 +408,6 @@ def load_model_criterion_config(  # type: ignore[no-redef]
         which: Whether the model is a regressor or classifier.
         version: The version of the model.
         download: Whether to download the model if it doesn't exist.
-        model_seed: The seed of the model.
 
     Returns:
         The model, criterion, and config.
@@ -439,20 +424,11 @@ def load_model_criterion_config(  # type: ignore[no-redef]
                 f"\nmodel path: {model_path}",
             )
 
-        # NOTE: We use warnings as:
-        # * Logging is only visible if the user has logging enabled,
-        #   which for the majority of people using Python, this is not
-        #   the case.
-        # * `print` has no way to easily be disabled from the outside.
-        warnings.warn(
-            f"Downloading model to {model_path}.",
-            UserWarning,
-            stacklevel=2,
-        )
+        logger.info(f"Downloading model to {model_path}.")
         res = download_model(
             model_path,
             version=version,
-            which=which,  # type: ignore
+            which=cast("Literal['classifier', 'regressor']", which),
             model_name=model_name,
         )
         if res != "ok":
@@ -464,7 +440,7 @@ def load_model_criterion_config(  # type: ignore[no-redef]
                 f"Then place it at: {model_path}",
             ) from res[0]
 
-    loaded_model, criterion, config = load_model(path=model_path, model_seed=model_seed)
+    loaded_model, criterion, config = load_model(path=model_path)
     loaded_model.cache_trainset_representation = cache_trainset_representation
     if check_bar_distribution_criterion and not isinstance(
         criterion,
@@ -478,8 +454,52 @@ def load_model_criterion_config(  # type: ignore[no-redef]
     return loaded_model, criterion, config
 
 
+def resolve_model_path(
+    model_path: None | str | Path,
+    which: Literal["regressor", "classifier"],
+    version: Literal["v2"] = "v2",
+) -> tuple[Path, Path, str, str]:
+    """Resolves the model path, using the official default model if no path is provided.
+
+    Args:
+        model_path: An optional path to a model file. If None, the default
+            model for the given `which` and `version` will be used, resolving
+            to the local cache directory.
+        which: The type of model ('regressor' or 'classifier').
+        version: The model version (currently only 'v2').
+
+    Returns:
+        A tuple containing the resolved model Path, the parent directory Path,
+        the model's filename, and the model type.
+    """
+    if model_path is None:
+        # Get the source information to find the official default model filename.
+        model_source = _get_model_source(ModelVersion(version), ModelType(which))
+        model_name = model_source.default_filename
+
+        # Determine the cache directory for storing models.
+        USER_TABPFN_CACHE_DIR_LOCATION = os.environ.get("TABPFN_MODEL_CACHE_DIR", "")
+        if USER_TABPFN_CACHE_DIR_LOCATION.strip() != "":
+            model_dir = Path(USER_TABPFN_CACHE_DIR_LOCATION)
+        else:
+            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
+
+        # Construct the full path to the default model.
+        model_path = model_dir / model_name
+    else:
+        # If a path is provided, simply parse it.
+        if not isinstance(model_path, (str, Path)):
+            raise ValueError(f"Invalid model_path: {model_path}")
+
+        model_path = Path(model_path)
+        model_dir = model_path.parent
+        model_name = model_path.name
+
+    return model_path, model_dir, model_name, which
+
+
 def get_loss_criterion(
-    config: InferenceConfig,
+    config: ModelConfig,
 ) -> nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution:
     # NOTE: We don't seem to have any of these
     if config.max_num_classes == 2:
@@ -497,40 +517,6 @@ def get_loss_criterion(
     borders = borders * 3  # Used to be `config.get("bucket_scaling", 3)`
 
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
-
-
-def _preprocess_config(config: dict) -> InferenceConfig:
-    config["task_type"]
-    batch_size = config["batch_size"]
-    agg_k_grads = config.get("aggregate_k_gradients")
-
-    if agg_k_grads is None:
-        if not math.log(batch_size, 2).is_integer():
-            raise ValueError(f"batch_size must be pow of 2, got {config['batch_size']}")
-
-        second_dim_tokens = config.get("num_global_att_tokens ", config["seq_len"])
-        memory_factor = (
-            batch_size
-            * config["nlayers"]
-            * config["emsize"]
-            * config["seq_len"]
-            * second_dim_tokens
-        )
-        standard_memory_factor = 16 * 12 * 512 * 1200 * 1200
-        agg_k_grads = math.ceil(memory_factor / (standard_memory_factor * 1.1))
-        config["aggregate_k_gradients"] = agg_k_grads
-
-        # Make sure that batch size is power of two
-        config["batch_size"] = int(
-            math.pow(2, math.floor(math.log(batch_size / agg_k_grads, 2))),
-        )
-        config["num_steps"] = math.ceil(config["num_steps"] * agg_k_grads)
-
-        # Make sure that batch_size_per_gp_sample is power of two
-        assert math.log(config["batch_size_per_gp_sample"], 2) % 1 == 0
-
-    config.setdefault("recompute_attn", False)
-    return InferenceConfig.from_dict(config)
 
 
 def get_encoder(  # noqa: PLR0913
@@ -626,73 +612,25 @@ def get_y_encoder(
     return SequentialEncoder(*steps, output_key="output")
 
 
-def load_model(
+def load_model_from_config(
     *,
-    path: Path,
-    model_seed: int,
-) -> tuple[
-    PerFeatureTransformer,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    InferenceConfig,
-]:
-    """Loads a model from a given path.
+    config: ModelConfig,
+    loss_criterion: nn.BCEWithLogitsLoss
+    | nn.CrossEntropyLoss
+    | FullSupportBarDistribution,
+    load_for_inference: bool = True,
+) -> PerFeatureTransformer:
+    """Loads a model from a given config.
 
     Args:
-        path: Path to the checkpoint
-        model_seed: The seed to use for the model
+        config: The config to load the model from.
+        loss_criterion: The loss function object created from the given config.
+        load_for_inference: Whether to load the model for inference. Controls whether
+            the model is set to evaluation mode and whether the trainset representation
+            is cached.
     """
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weightes_only=None` is the default value. In the future this will default to
-    # `True`, dissallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
-
-    assert "state_dict" in checkpoint
-    assert "config" in checkpoint
-
-    state_dict = checkpoint["state_dict"]
-    config = _preprocess_config(checkpoint["config"])
-
-    criterion_state_keys = [k for k in state_dict if "criterion." in k]
-    loss_criterion = get_loss_criterion(config)
-    if isinstance(loss_criterion, FullSupportBarDistribution):
-        # Remove from state dict
-        criterion_state = {
-            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
-        }
-        loss_criterion.load_state_dict(criterion_state)
-    else:
-        assert len(criterion_state_keys) == 0, criterion_state_keys
-
-    # Old decision tree for n_out, made equivalent:
-    # > if config.max_num_classes == 2:
-    # >   loss = Losses.bce           (n_out -> 1)
-    # > elif config.max_num_classes > 2:
-    # >   loss = Losses.ce            (n_out -> config.max_num_classes)
-    # > else:
-    # >   create_bar_distribution ... (n_out -> loss.num_bars)
-    #
-    # > if loss is bardist:
-    # >   n_out = loss.num_bars
-    # > elif loss is CrossEntropyLoss:
-    # >   n_out = config.max_num_classes
-    # > else:
-    # >  n_out = 1
-    n_out: int
-    if config.max_num_classes == 2:
-        n_out = 1
-    elif config.max_num_classes > 2:
-        n_out = config.max_num_classes
-    else:
-        assert config.max_num_classes == 0
-        assert isinstance(loss_criterion, FullSupportBarDistribution)
-        n_out = loss_criterion.num_bars
-
     model = PerFeatureTransformer(
-        seed=model_seed,
+        config=config,
         # Things that were explicitly passed inside `build_model()`
         encoder=get_encoder(
             num_features=config.features_per_group,
@@ -713,58 +651,102 @@ def load_model(
             nan_handling_y_encoder=config.nan_handling_y_encoder,
             max_num_classes=config.max_num_classes,
         ),
-        nhead=config.nhead,
-        ninp=config.emsize,
-        nhid=config.emsize * config.nhid_factor,
-        nlayers=config.nlayers,
-        features_per_group=config.features_per_group,
-        cache_trainset_representation=True,
-        #
-        # Based on not being present in config or otherwise, these were default values
-        init_method=None,
-        decoder_dict={"standard": (None, n_out)},
+        cache_trainset_representation=load_for_inference,
         use_encoder_compression_layer=False,
+        n_out=get_n_out(config, loss_criterion),
         #
         # These were extra things passed in through `**model_extra_args`
         # or `**extra_model_kwargs` and were present in the config
-        recompute_attn=config.recompute_attn,
-        recompute_layer=config.recompute_layer,
         feature_positional_embedding=config.feature_positional_embedding,
-        use_separate_decoder=config.use_separate_decoder,
         #
         # These are things that had default values from config.get() but were not
         # present in any config.
         layer_norm_with_elementwise_affine=False,
-        nlayers_decoder=None,
-        pre_norm=False,
-        #
-        # These seem to map to `**layer_config` in the init of `PerFeatureTransformer`
-        # Which got passed to the `PerFeatureEncoderLayer(**layer_config)`
-        multiquery_item_attention=config.multiquery_item_attention,  # False
-        multiquery_item_attention_for_test_set=config.multiquery_item_attention_for_test_set,  # True  # noqa: E501
-        # Is either 1.0 or None in the configs, which lead to the default of 1.0 anywho
-        attention_init_gain=(
-            config.attention_init_gain
-            if config.attention_init_gain is not None
-            else 1.0
-        ),
-        # Is True, False in the config or not present,
-        # with the default of the `PerFeatureEncoderLayer` being False,
-        # which is what the value would have mapped to if the config had not present
-        two_sets_of_queries=(
-            config.two_sets_of_queries
-            if config.two_sets_of_queries is not None
-            else False
-        ),
     )
+    if load_for_inference:
+        model.eval()
+    return model
 
+
+def load_model(
+    *,
+    path: Path,
+) -> tuple[
+    PerFeatureTransformer,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+    ModelConfig,
+]:
+    """Loads a model from a given path. Only for inference.
+
+    Args:
+        path: Path to the checkpoint
+    """
+    # Catch the `FutureWarning` that torch raises. This should be dealt with!
+    # The warning is raised due to `torch.load`, which advises against ckpt
+    # files that contain non-tensor data.
+    # This `weightes_only=None` is the default value. In the future this will default to
+    # `True`, dissallowing loading of arbitrary objects.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
+
+    assert "state_dict" in checkpoint
+    assert "config" in checkpoint
+
+    state_dict = checkpoint["state_dict"]
+    config = ModelConfig.from_dict(ModelConfig.upgrade_config(checkpoint["config"]))
+
+    criterion_state_keys = [k for k in state_dict if "criterion." in k]
+    loss_criterion = get_loss_criterion(config)
+    if isinstance(loss_criterion, FullSupportBarDistribution):
+        # Remove from state dict
+        criterion_state = {
+            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
+        }
+        loss_criterion.load_state_dict(criterion_state)
+    else:
+        assert len(criterion_state_keys) == 0, criterion_state_keys
+
+    model = load_model_from_config(config=config, loss_criterion=loss_criterion)
     model.load_state_dict(state_dict)
     model.eval()
+
     return model, loss_criterion, config
 
 
-# NOTE: This function doesn't seem to be used anywhere.
-def save_tabpfn_model(model: nn.Module, save_path: Path | str) -> None:
+def get_n_out(
+    config: ModelConfig,
+    loss: nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+) -> int:
+    """Works out the number of outputs of the model."""
+    if config.max_num_classes == 2:
+        return 1
+    if config.max_num_classes > 2 and isinstance(loss, nn.CrossEntropyLoss):
+        return config.max_num_classes
+    if config.max_num_classes == 0 and isinstance(loss, BarDistribution):
+        return loss.num_bars
+    raise ValueError(
+        "Unknown configuration: "
+        f"max_num_classes={config.max_num_classes} and loss={type(loss)}"
+    )
+
+
+def save_tabpfn_model(
+    model: TabPFNRegressor | TabPFNClassifier, save_path: Path | str
+) -> None:
+    """Save the underlying TabPFN foundation model to ``save_path``.
+
+    This writes only the base pre-trained weights and configuration. It does
+    **not** store a fitted :class:`TabPFNRegressor`/``Classifier`` instance.
+    The resulting file is merely a checkpoint consumed by
+    :func:`load_model_criterion_config` to build a new estimator.
+
+    Args:
+        model:
+            The internal model object of a ``TabPFN`` estimator.
+        save_path:
+            Path to save the checkpoint to.
+    """
     # Get model state dict
     model_state = model.model_.state_dict()
 
@@ -778,11 +760,134 @@ def save_tabpfn_model(model: nn.Module, save_path: Path | str) -> None:
     else:
         state_dict = model_state
 
-    # Convert Config object to dictionary and add necessary fields
-    config_dict = dataclasses.asdict(model.config_)
-
     # Create checkpoint with correct structure
-    checkpoint = {"state_dict": state_dict, "config": config_dict}
+    checkpoint = {"state_dict": state_dict, "config": model.config_}
 
     # Save the checkpoint
     torch.save(checkpoint, save_path)
+
+
+def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
+    """Persist a fitted TabPFN estimator to ``path``.
+
+    This stores the initialization parameters and the fitted state, but crucially
+    omits the large foundation model weights for efficiency.
+    """
+    if not hasattr(estimator, "executor_"):
+        raise RuntimeError("Estimator must be fitted before saving.")
+
+    path = Path(path)
+    if path.suffix != ".tabpfn_fit":
+        raise ValueError("Path must end with .tabpfn_fit")
+
+    # Attributes that are handled separately or should not be saved.
+    blacklist = {"model_", "executor_", "config_", "device_"}
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # 1. Save init parameters to JSON
+        params = estimator.get_params(deep=False)
+        params = {
+            k: (str(v) if isinstance(v, torch.dtype) else v) for k, v in params.items()
+        }
+        params["__class_name__"] = estimator.__class__.__name__
+        with (tmp / "init_params.json").open("w") as f:
+            json.dump(params, f)
+
+        # 2. Automatically save all scikit-learn fitted attributes
+        fitted_attrs = {
+            key: value
+            for key, value in vars(estimator).items()
+            if key.endswith("_") and key not in blacklist
+        }
+        joblib.dump(fitted_attrs, tmp / "fitted_attrs.joblib")
+
+        # 3. Save the InferenceEngine state without the model weights
+        estimator.executor_.save_state_expect_model_weights(
+            tmp / "executor_state.joblib"
+        )
+
+        # 4. Create the final zip archive
+        shutil.make_archive(str(path).replace(".tabpfn_fit", ""), "zip", tmp)
+        shutil.move(str(path).replace(".tabpfn_fit", "") + ".zip", path)
+
+
+def _extract_archive(path: Path, tmp: Path) -> None:
+    import zipfile
+
+    with zipfile.ZipFile(path, "r") as archive:
+        for member in archive.namelist():
+            member_path = (tmp / member).resolve()
+            if not str(member_path).startswith(str(tmp.resolve())):
+                raise ValueError(f"Unsafe file path detected: {member}")
+            archive.extract(member, tmp)
+
+
+def load_fitted_tabpfn_model(
+    path: Path | str, *, device: str | torch.device = "cpu"
+) -> BaseEstimator:
+    """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
+    from copy import deepcopy
+    from importlib import import_module
+
+    path = Path(path)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp = Path(tmpdir)
+
+        # Extract the archive to a temporary directory
+        _extract_archive(path, tmp)
+
+        # 1. Load init params and create a fresh estimator instance
+        with (tmp / "init_params.json").open() as f:
+            params = json.load(f)
+
+        saved_cls_name = params.pop("__class_name__")
+        if isinstance(params.get("inference_precision"), str) and params[
+            "inference_precision"
+        ].startswith("torch."):
+            dtype_name = params["inference_precision"].split(".")[1]
+            params["inference_precision"] = getattr(torch, dtype_name)
+        params["device"] = device
+
+        if saved_cls_name == "TabPFNClassifier":
+            cls = import_module("tabpfn.classifier").TabPFNClassifier
+        elif saved_cls_name == "TabPFNRegressor":
+            cls = import_module("tabpfn.regressor").TabPFNRegressor
+        else:
+            raise TypeError(f"Unknown estimator class '{saved_cls_name}'")
+
+        est = cls(**params)
+        # This is critical: it loads the base model weights into `est.model_`
+        est._initialize_model_variables()
+
+        # 2. Restore all other fitted attributes
+        fitted_attrs = joblib.load(tmp / "fitted_attrs.joblib")
+        for key, value in fitted_attrs.items():
+            setattr(est, key, value)
+
+        # 3. Load the InferenceEngine state
+        est.executor_ = InferenceEngine.load_state(tmp / "executor_state.joblib")
+
+        # 4. Re-link the foundation model with the loaded engine
+        if hasattr(est.executor_, "model") and est.executor_.model is None:
+            est.executor_.model = est.model_
+
+        if hasattr(est.executor_, "models") and est.executor_.models is None:
+            est.executor_.models = [
+                deepcopy(est.model_) for _ in range(len(est.executor_.ensemble_configs))
+            ]
+
+        # 5. Move all torch components to the target device
+        est.device_ = torch.device(device)
+        if hasattr(est.executor_, "model") and est.executor_.model is not None:
+            est.executor_.model.to(est.device_)
+        if hasattr(est.executor_, "models"):
+            est.executor_.models = [m.to(est.device_) for m in est.executor_.models]
+
+        # Restore other potential torch objects from fitted_attrs
+        for key, value in vars(est).items():
+            if key.endswith("_") and hasattr(value, "to"):
+                setattr(est, key, value.to(est.device_))
+
+        return est

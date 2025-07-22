@@ -322,7 +322,7 @@ def _get_windows_version(run_lambda):
     ret = _run_and_read_all(run_lambda, powershell_cmd)
     try:
         obj = json.loads(ret)
-        ret = f'{obj["Caption"]} ({obj["Version"]} {obj["OSArchitecture"]})'
+        ret = f"{obj['Caption']} ({obj['Version']} {obj['OSArchitecture']})"
     except ValueError as e:
         ret += f"\n{e}"
     return ret
