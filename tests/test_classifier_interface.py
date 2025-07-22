@@ -399,7 +399,8 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "classifier",
                 TabPFNClassifier(
-                    n_estimators=2,  # Fewer estimators for faster testing
+                    n_estimators=2,
+                    device="cpu",  # Fewer estimators for faster testing
                 ),
             ),
         ],
@@ -443,19 +444,15 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-
-    if model_dict.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     model_obj = TabPFNClassifier(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-
-    if model_obj.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     model_dict.fit(X, y)
     model_obj.fit(X, y)
@@ -589,9 +586,8 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNClassifier(
         n_estimators=n_estimators,
         random_state=42,
+        device="cpu",
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -625,9 +621,8 @@ def test_pandas_output_config():
     model = TabPFNClassifier(
         n_estimators=1,
         random_state=42,
+        device="cpu",
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
 
     # Get default predictions
     model.fit(X, y)
@@ -661,9 +656,8 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model = TabPFNClassifier(
         n_estimators=2,
         random_state=42,
+        device="cpu",
     )
-    if model.device == "mps":
-        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Get predictions on original data

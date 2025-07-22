@@ -604,7 +604,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         config=regressor.config_,
         norm_criterion=regressor.bardist_,
     )
-    reg2 = TabPFNRegressor(model_path=spec)
+    reg2 = TabPFNRegressor(model_path=spec, device="cpu")
     reg2._initialize_model_variables()
 
     assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
