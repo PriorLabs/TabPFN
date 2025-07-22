@@ -137,7 +137,7 @@ def initialize_tabpfn_model(
         if which == "classifier":
             # The classifier's bar distribution is not used;
             # pass check_bar_distribution_criterion=False
-            model, _, config_ = load_model_criterion_config(
+            model, _, config = load_model_criterion_config(
                 model_path=model_path,
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
@@ -148,7 +148,7 @@ def initialize_tabpfn_model(
             norm_criterion = None
         else:
             # The regressor's bar distribution is required
-            model, bardist, config_ = load_model_criterion_config(
+            model, bardist, config = load_model_criterion_config(
                 model_path=model_path,
                 check_bar_distribution_criterion=True,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
@@ -450,7 +450,6 @@ def _initialize_model_variables_helper(
     and RNG object.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-
     if model_type == "regressor":
         (
             calling_instance.model_,
@@ -486,6 +485,7 @@ def _initialize_model_variables_helper(
     _config = ModelInterfaceConfig.from_user_input(
         inference_config=calling_instance.inference_config,
     )  # shorter alias
+
     calling_instance.interface_config_ = _config
 
     outlier_removal_std = _config.OUTLIER_REMOVAL_STD
