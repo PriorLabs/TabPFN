@@ -136,7 +136,6 @@ def test_regressor(
     [
         TabPFNRegressor(
             n_estimators=2,
-            device="cuda" if torch.cuda.is_available() else "cpu",
         )
     ]
 )
@@ -144,6 +143,9 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
+    if estimator.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
+
     float64_checks = (
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
@@ -182,6 +184,8 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             ),
         ],
     )
+    if pipeline.steps[-1][1].device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     pipeline.fit(X, y)
     predictions = pipeline.predict(X)
@@ -234,15 +238,19 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    if model_dict.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     model_obj = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    if model_obj.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # Fit both models
     model_dict.fit(X, y)
@@ -310,9 +318,10 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     with torch.no_grad():
         regressor = TabPFNRegressor(
             n_estimators=1,
-            device="cuda" if torch.cuda.is_available() else "cpu",
             random_state=43,
         )
+        if regressor.device == "mps":
+            pytest.skip("MPS is not supported for this test.")
         # load the model so we can access it via classifier.model_
         regressor.fit(X, y)
         # this is necessary if cuda is available
@@ -353,8 +362,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     n_estimators = 3
 
     model = TabPFNRegressor(
-        n_estimators=n_estimators, device="cuda" if torch.cuda.is_available() else "cpu"
+        n_estimators=n_estimators,
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -384,9 +395,11 @@ def test_overflow():
     # Create and fit the regressor
     regressor = TabPFNRegressor(
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+
+    if regressor.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     regressor.fit(X, y)
 
@@ -397,7 +410,10 @@ def test_overflow():
 def test_cpu_large_dataset_warning():
     """Test that a warning is raised when using CPU with large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
+    model = TabPFNRegressor()
+
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # Create synthetic data slightly above the warning threshold
     rng = np.random.default_rng(seed=42)
@@ -419,7 +435,9 @@ def test_cpu_large_dataset_warning_override():
     X_large = rng.random((1001, 10))
     y_large = rng.random(1001)
 
-    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
+    model = TabPFNRegressor()
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     with pytest.raises(
         RuntimeError, match="Running on CPU with more than 1000 samples is not"
     ):
@@ -427,18 +445,20 @@ def test_cpu_large_dataset_warning_override():
 
     # -- Test overrides
     model = TabPFNRegressor(
-        device="cuda" if torch.cuda.is_available() else "cpu",
         ignore_pretraining_limits=True,
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model.fit(X_large, y_large)
 
     # Set environment variable to allow large datasets to avoid RuntimeError
     os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
     try:
         model = TabPFNRegressor(
-            device="cuda" if torch.cuda.is_available() else "cpu",
             ignore_pretraining_limits=False,
         )
+        if model.device == "mps":
+            pytest.skip("MPS is not supported for this test.")
         model.fit(X_large, y_large)
     finally:
         # Clean up environment variable
@@ -448,7 +468,10 @@ def test_cpu_large_dataset_warning_override():
 def test_cpu_large_dataset_error():
     """Test that an error is raised when using CPU with very large datasets."""
     # Create a CPU model
-    model = TabPFNRegressor(device="cuda" if torch.cuda.is_available() else "cpu")
+    model = TabPFNRegressor()
+
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # Create synthetic data above the error threshold
     rng = np.random.default_rng(seed=42)
@@ -473,6 +496,8 @@ def test_pandas_output_config():
 
     # Initialize TabPFN
     model = TabPFNRegressor(n_estimators=1, random_state=42)
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # Get default predictions
     model.fit(X, y)
@@ -499,8 +524,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model = TabPFNRegressor(
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Get predictions on original data
@@ -520,8 +546,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model_with_constants = TabPFNRegressor(
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model_with_constants.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
@@ -599,9 +626,10 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
     regressor = TabPFNRegressor(
         model_path="auto",
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if regressor.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"

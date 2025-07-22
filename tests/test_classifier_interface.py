@@ -263,9 +263,10 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_low_temp = TabPFNClassifier(
         softmax_temperature=0.1,
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if model_low_temp.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_low_temp.fit(X, y)
     logits_low_temp = model_low_temp.predict_logits(X)
 
@@ -273,9 +274,10 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_high_temp = TabPFNClassifier(
         softmax_temperature=10.0,
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if model_high_temp.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_high_temp.fit(X, y)
     logits_high_temp = model_high_temp.predict_logits(X)
 
@@ -286,9 +288,10 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_temp_one = TabPFNClassifier(
         softmax_temperature=1.0,
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if model_temp_one.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_temp_one.fit(X, y)
     logits_temp_one = model_temp_one.predict_logits(X)
 
@@ -325,9 +328,10 @@ def test_balance_probabilities_alters_proba_output(
     model_no_balance = TabPFNClassifier(
         balance_probabilities=False,
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if model_no_balance.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_no_balance.fit(X_subset, y_imbalanced)
     proba_no_balance = model_no_balance.predict_proba(X_subset)
 
@@ -335,9 +339,10 @@ def test_balance_probabilities_alters_proba_output(
     model_balance = TabPFNClassifier(
         balance_probabilities=True,
         n_estimators=1,
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if model_balance.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_balance.fit(X_subset, y_imbalanced)
     proba_balance = model_balance.predict_proba(X_subset)
 
@@ -351,7 +356,6 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
-            device="cuda" if torch.cuda.is_available() else "cpu",
         ),
     ],
 )
@@ -390,8 +394,10 @@ def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     model = TabPFNClassifier(
         balance_probabilities=True,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     model.fit(X, y)
     probabilities = model.predict_proba(X)
@@ -416,13 +422,13 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             ("scaler", StandardScaler()),
             (
                 "classifier",
-                TabPFNClassifier(
-                    n_estimators=2,  # Fewer estimators for faster testing
-                    device="cuda" if torch.cuda.is_available() else "cpu",
-                ),
+                TabPFNClassifier(n_estimators=2),  # Fewer estimators for faster testing
             ),
         ],
     )
+
+    if pipeline.steps[-1][1].device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     pipeline.fit(X, y)
     probabilities = pipeline.predict_proba(X)
@@ -462,15 +468,19 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    if model_dict.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     model_obj = TabPFNClassifier(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+
+    if model_obj.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     model_dict.fit(X, y)
     model_obj.fit(X, y)
@@ -562,9 +572,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     with torch.no_grad():
         classifier = TabPFNClassifier(
             n_estimators=1,
-            device="cuda" if torch.cuda.is_available() else "cpu",
             random_state=42,
         )
+        if classifier.device == "mps":
+            pytest.skip("MPS is not supported for this test.")
+
         # load the model so we can access it via classifier.model_
         classifier.fit(X, y)
         # this is necessary if cuda is available
@@ -610,8 +622,9 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNClassifier(
         n_estimators=n_estimators,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -645,8 +658,9 @@ def test_pandas_output_config():
     model = TabPFNClassifier(
         n_estimators=1,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # Get default predictions
     model.fit(X, y)
@@ -680,8 +694,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model = TabPFNClassifier(
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model.fit(X, y)
 
     # Get predictions on original data
@@ -702,8 +717,9 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     model_with_constants = TabPFNClassifier(
         n_estimators=2,
         random_state=42,
-        device="cuda" if torch.cuda.is_available() else "cpu",
     )
+    if model_with_constants.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
@@ -759,9 +775,9 @@ def test_classifier_with_text_and_na() -> None:
     y = df["target"]
 
     # Initialize and fit TabPFN on data with text+NA and a column with all NAs
-    classifier = TabPFNClassifier(
-        device="cuda" if torch.cuda.is_available() else "cpu", n_estimators=2
-    )
+    classifier = TabPFNClassifier(n_estimators=2)
+    if classifier.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
 
     # This should now work without raising errors
     classifier.fit(X, y)
@@ -789,9 +805,10 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
     classifier = TabPFNClassifier(
         model_path="auto",
-        device="cuda" if torch.cuda.is_available() else "cpu",
         random_state=42,
     )
+    if classifier.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     classifier._initialize_model_variables()
 
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
@@ -812,8 +829,10 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
 
     classifier2 = TabPFNClassifier(
-        model_path=spec, device="cuda" if torch.cuda.is_available() else "cpu"
+        model_path=spec,
     )
+    if classifier2.device == "mps":
+        pytest.skip("MPS is not supported for this test.")
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
