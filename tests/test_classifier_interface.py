@@ -90,7 +90,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 )
 def test_fit(
     n_estimators: int,
-    device: Literal["cuda", "cpu"],
+    device: Literal["cuda", "mps", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     multiclass_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
@@ -359,6 +359,9 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
+    if estimator.device_ == "mps":
+        pytest.skip("MPS is not supported for this test.")
+
     float64_checks = (
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
@@ -696,7 +699,11 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNClassifier(n_estimators=2, random_state=42)
+    model_with_constants = TabPFNClassifier(
+        n_estimators=2,
+        random_state=42,
+        device="cuda" if torch.cuda.is_available() else "cpu",
+    )
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
