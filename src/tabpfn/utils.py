@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import typing
 from collections.abc import Sequence
@@ -40,6 +41,21 @@ if TYPE_CHECKING:
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
+def get_autocast_context(
+    device: torch.device, *, enabled: bool
+) -> contextlib.AbstractContextManager:
+    """Returns a torch.autocast context manager, disabling it for MPS devices.
+
+    Args:
+        device: The torch device being used.
+        enabled: Whether to enable autocast.
+
+    Returns:
+        A context manager for autocasting.
+    """
+    if device.type == "mps":
+        return contextlib.nullcontext()
+    return torch.autocast(device.type, enabled=enabled)
 
 def _get_embeddings(
     model: TabPFNClassifier | TabPFNRegressor,

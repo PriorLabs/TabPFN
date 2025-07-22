@@ -19,6 +19,7 @@ import torch
 
 from tabpfn.model.memory import MemoryUsageEstimator
 from tabpfn.preprocessing import fit_preprocessing
+from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
     from tabpfn.model.preprocessing import SequentialFeatureTransformer
@@ -237,13 +238,8 @@ class InferenceEngineOnDemand(InferenceEngine):
                 y_train = y_train.type(self.force_inference_dtype)  # type: ignore  # noqa: PLW2901
 
             style = None
-            autocast_ctx = (
-                contextlib.nullcontext()
-                if device.type == "mps"
-                else torch.autocast(device.type, enabled=autocast)
-            )
             with (
-                autocast_ctx,
+                get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 output = self.model(
@@ -508,13 +504,8 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 pass
 
             style = None
-            autocast_ctx = (
-                contextlib.nullcontext()
-                if device.type == "mps"
-                else torch.autocast(device.type, enabled=autocast)
-            )
             with (
-                autocast_ctx,
+                get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(
@@ -621,13 +612,8 @@ class InferenceEngineCacheKV(InferenceEngine):
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
             # at once to generate the KV cache
-            autocast_ctx = (
-                contextlib.nullcontext()
-                if device.type == "mps"
-                else torch.autocast(device.type, enabled=autocast)
-            )
             with (
-                autocast_ctx,
+                get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 ens_model.forward(
@@ -691,13 +677,8 @@ class InferenceEngineCacheKV(InferenceEngine):
             if self.force_inference_dtype is not None:
                 model = model.type(self.force_inference_dtype)  # noqa: PLW2901
                 X_test = X_test.type(self.force_inference_dtype)
-            autocast_ctx = (
-                contextlib.nullcontext()
-                if device.type == "mps"
-                else torch.autocast(device.type, enabled=autocast)
-            )
             with (
-                autocast_ctx,
+                get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 output = model(
