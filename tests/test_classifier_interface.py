@@ -47,7 +47,7 @@ inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
-all_combinations = list(
+_base_combos = list(
     product(
         estimators,
         devices,
@@ -58,6 +58,12 @@ all_combinations = list(
         remove_outliers_stds,
     ),
 )
+
+all_combinations = []
+for combo in _base_combos:
+    _, device, *_ = combo
+    mark = pytest.mark.skip_on_ci_mps if device == "mps" else ()
+    all_combinations.append(pytest.param(*combo, marks=mark))
 
 
 @pytest.fixture(scope="module")
@@ -337,6 +343,7 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
+            device="cpu",
         ),
     ],
 )
@@ -344,15 +351,11 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
-    if torch.backends.mps.is_available():
-        pytest.skip("MPS does not support float64, which is required for this check.")
-
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
     ):
         estimator.inference_precision = torch.float64
-        pytest.xfail("We're not at 1e-7 difference yet")
 
     check(estimator)
 
