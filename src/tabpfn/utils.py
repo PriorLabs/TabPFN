@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
+
 def get_autocast_context(
     device: torch.device, *, enabled: bool
 ) -> contextlib.AbstractContextManager:
@@ -56,6 +57,7 @@ def get_autocast_context(
     if device.type == "mps":
         return contextlib.nullcontext()
     return torch.autocast(device.type, enabled=enabled)
+
 
 def _get_embeddings(
     model: TabPFNClassifier | TabPFNRegressor,
