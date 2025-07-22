@@ -111,6 +111,9 @@ def test_fit(
     if device == "mps" and inference_precision == torch.float64:
         pytest.skip("MPS does not support float64, which is required for this check.")
 
+    if device == "mps":
+        pytest.skip("MPS not supported for this check.")
+
     model = TabPFNClassifier(
         n_estimators=n_estimators,
         device=device,

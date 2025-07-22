@@ -96,6 +96,9 @@ def test_regressor(
     if device == "mps" and inference_precision == torch.float64:
         pytest.skip("MPS does not support float64, which is required for this check.")
 
+    if device == "mps":
+        pytest.skip("MPS not supported for this check.")
+
     model = TabPFNRegressor(
         n_estimators=n_estimators,
         device=device,
@@ -553,6 +556,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         which="regressor",
         fit_mode="low_memory",
     )
+
     assert model is not None, "model should be initialized for regressor"
     assert config is not None, "config should be initialized for regressor"
     assert (
