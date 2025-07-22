@@ -236,7 +236,20 @@ class MemoryUsageEstimator:
 
     @classmethod
     def _get_mps_free_memory(cls) -> float:
-        """Get free memory for MPS devices."""
+        """Get available free memory for MPS devices.
+
+        Tries to use `torch.mps.recommended_max_memory()` (available in
+        PyTorch >= 2.5.0). As a fallback for older versions, it uses the
+        `pyobjc-framework-Metal` library to query the Metal device API
+        directly.
+
+        Raises:
+            ImportError: If `pyobjc-framework-Metal` is required but not installed.
+            RuntimeError: If no MPS device can be found.
+
+        Returns:
+            The estimated free memory in bytes.
+        """
         if hasattr(torch.mps, "recommended_max_memory"):
             recommended = torch.mps.recommended_max_memory()
             if recommended is not None:

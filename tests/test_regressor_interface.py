@@ -93,10 +93,11 @@ def test_regressor(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
-    if device == "mps" and inference_precision == torch.float64:
-        pytest.skip("MPS does not support float64, which is required for this check.")
-
     if device == "mps":
+        if inference_precision == torch.float64:
+            pytest.skip(
+                "MPS does not support float64, which is required for this check."
+            )
         pytest.skip("MPS not supported for this check.")
 
     model = TabPFNRegressor(
