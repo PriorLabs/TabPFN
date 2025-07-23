@@ -44,32 +44,16 @@ inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
-all_combinations = [
-    pytest.param(
-        n_estimators,
-        device,
-        feature_shift_decoder,
-        fit_mode,
-        inference_precision_method,
-        remove_outliers_std,
-        marks=pytest.mark.skip_on_ci_mps if device == "mps" else (),
-    )
-    for (
-        n_estimators,
-        device,
-        feature_shift_decoder,
-        fit_mode,
-        inference_precision_method,
-        remove_outliers_std,
-    ) in product(
+all_combinations = list(
+    product(
         estimators,
         devices,
         feature_shift_decoders,
         fit_modes,
         inference_precision_methods,
         remove_outliers_stds,
-    )
-]
+    ),
+)
 
 
 # Wrap in fixture so it's only loaded in if a test using it is run

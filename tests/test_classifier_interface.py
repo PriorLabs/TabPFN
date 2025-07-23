@@ -27,10 +27,14 @@ from tabpfn.utils import infer_device_and_type
 
 from .utils import check_cpu_float16_support
 
+exclude_devices = {
+    d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
+}
+
 devices = ["cpu"]
-if torch.cuda.is_available():
+if torch.cuda.is_available() and "cuda" not in exclude_devices:
     devices.append("cuda")
-if torch.backends.mps.is_available():
+if torch.backends.mps.is_available() and "mps" not in exclude_devices:
     devices.append("mps")
 
 is_cpu_float16_supported = check_cpu_float16_support()
@@ -48,26 +52,8 @@ inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
-all_combinations = [
-    pytest.param(
-        n_estimators,
-        device,
-        feature_shift_decoder,
-        multiclass_decoder,
-        fit_mode,
-        inference_precision_method,
-        remove_outliers_std,
-        marks=pytest.mark.skip_on_ci_mps if device == "mps" else (),
-    )
-    for (
-        n_estimators,
-        device,
-        feature_shift_decoder,
-        multiclass_decoder,
-        fit_mode,
-        inference_precision_method,
-        remove_outliers_std,
-    ) in product(
+all_combinations = list(
+    product(
         estimators,
         devices,
         feature_shift_decoders,
@@ -75,9 +61,8 @@ all_combinations = [
         fit_modes,
         inference_precision_methods,
         remove_outliers_stds,
-    )
-]
-
+    ),
+)
 
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
