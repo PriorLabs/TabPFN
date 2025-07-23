@@ -780,8 +780,6 @@ class DatasetCollectionWithPreprocessing(Dataset):
             Stores the input dataset configuration collection.
         split_fn (Callable): Stores the splitting function.
         rng (np.random.Generator): Stores the random number generator.
-        Full_Y_mean (float): Stores the mean of the full target variable.
-        Full_Y_std (float): Stores the standard deviation of the full target variable.
         n_workers (int): Stores the number of workers for preprocessing.
     """
 
@@ -790,16 +788,12 @@ class DatasetCollectionWithPreprocessing(Dataset):
         split_fn,
         rng,
         dataset_config_collection,
-        Full_Y_mean,
-        Full_Y_std,
         n_workers=1,
     ):
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
         self.n_workers = n_workers
-        self.Full_Y_mean = Full_Y_mean
-        self.Full_Y_std = Full_Y_std
 
     def __len__(self):
         return len(self.configs)
@@ -897,14 +891,8 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # Compute target variable Z-transform standardization
         # based on statistics of training set
         if regression_task:
-            if (
-                self.Full_Y_mean is None and self.Full_Y_std is None
-            ):  # Normalized on batched y
-                train_mean = np.mean(y_train_raw)
-                train_std = np.std(y_train_raw)
-            else:  # Normalized on full target variable
-                train_mean = self.Full_Y_mean
-                train_std = self.Full_Y_std
+            train_mean = np.mean(y_train_raw)
+            train_std = np.std(y_train_raw)
             y_test_standardized = (y_test_raw - train_mean) / train_std
             y_train_standardized = (y_train_raw - train_mean) / train_std
             raw_space_bardist_ = FullSupportBarDistribution(

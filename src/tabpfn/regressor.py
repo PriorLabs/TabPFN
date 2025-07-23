@@ -434,7 +434,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         y_raw: YType | list[YType],
         split_fn: Callable,
         max_data_size: None | int = 10000,
-        normalize_on_full_target: Literal["full", "batch"] = "batch",
     ) -> DatasetCollectionWithPreprocessing:
         """Transforms raw input data into a collection of datasets,
         with varying preprocessings.
@@ -463,7 +462,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             split_fn,
             max_data_size,
             model_type="regressor",
-            normalize_on_full_target=normalize_on_full_target,
         )
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:

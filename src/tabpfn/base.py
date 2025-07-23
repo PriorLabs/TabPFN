@@ -8,7 +8,6 @@ import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
 
-import numpy as np
 import torch
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
@@ -45,6 +44,7 @@ from tabpfn.utils import (
 )
 
 if TYPE_CHECKING:
+    import numpy as np
     import pandas as pd
 
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
@@ -370,7 +370,6 @@ def get_preprocessed_datasets_helper(
     split_fn: Callable,
     max_data_size: int | None,
     model_type: Literal["regressor", "classifier"],
-    normalize_on_full_target: Literal["full", "batch"] = "batch",
 ) -> DatasetCollectionWithPreprocessing:
     """Helper function to create a DatasetCollectionWithPreprocessing.
     Relies on methods from the calling_instance for specific initializations.
@@ -384,8 +383,6 @@ def get_preprocessed_datasets_helper(
         max_data_size: Maximum allowed number of samples within one dataset.
         If None, datasets are not splitted.
         model_type: The type of the model.
-        normalize_on_full_target: Normalize the full target variable,
-        or by batch.
     """
     if not isinstance(X_raw, list):
         X_raw = [X_raw]
@@ -397,17 +394,6 @@ def get_preprocessed_datasets_helper(
         _, rng = calling_instance._initialize_model_variables()
     else:
         static_seed, rng = infer_random_state(calling_instance.random_state)
-
-    if normalize_on_full_target == "full":
-        Full_Y_mean = np.mean(y_raw)
-        Full_Y_std = np.std(y_raw)
-    elif normalize_on_full_target == "batch":
-        Full_Y_mean = None
-        Full_Y_std = None
-    else:
-        raise ValueError(
-            f"Invalid normalize_on_full_target: {normalize_on_full_target}"
-        )
 
     X_split, y_split = [], []
     for X_item, y_item in zip(X_raw, y_raw):
@@ -449,9 +435,7 @@ def get_preprocessed_datasets_helper(
 
         dataset_config_collection.append(dataset_config)
 
-    return DatasetCollectionWithPreprocessing(
-        split_fn, rng, dataset_config_collection, Full_Y_mean, Full_Y_std
-    )
+    return DatasetCollectionWithPreprocessing(split_fn, rng, dataset_config_collection)
 
 
 def _initialize_model_variables_helper(
