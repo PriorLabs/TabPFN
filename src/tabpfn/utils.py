@@ -178,7 +178,7 @@ def _cancel_nan_borders(
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     """Infers the appropriate PyTorch device based on the input and environment
-    configuration.
+    configuration
 
     Rules:
     1. If `device` is `None` or "auto":
@@ -191,8 +191,7 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
 
     Environment:
         TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
-        (e.g., "cuda,mps"). This allows us to easily exclude "mps" on the
-        CI pipeline.
+        (e.g., "cuda,mps"). This allows excluding "mps" on the CI pipeline.
 
     Args:
         device (str | torch.device | None): The device specification. Can be:
