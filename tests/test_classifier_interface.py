@@ -59,14 +59,15 @@ all_combinations = [
         remove_outliers_std,
         marks=pytest.mark.skip_on_ci_mps if device == "mps" else (),
     )
-    for n_estimators,
+    for (
+        n_estimators,
         device,
         feature_shift_decoder,
         multiclass_decoder,
         fit_mode,
         inference_precision_method,
-        remove_outliers_std
-    in product(
+        remove_outliers_std,
+    ) in product(
         estimators,
         devices,
         feature_shift_decoders,
@@ -355,6 +356,8 @@ skip_on_mps_auto = pytest.mark.skipif(
         "TABPFN_EXCLUDE_DEVICES=mps in your environment."
     ),
 )
+
+
 @skip_on_mps_auto
 @parametrize_with_checks(
     [
