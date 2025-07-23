@@ -160,7 +160,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     bardist_: FullSupportBarDistribution
     """The bar distribution of the target variable, used by the model."""
 
-    normalized_bardist_: FullSupportBarDistribution
+    raw_space_bardist_: FullSupportBarDistribution
     """The normalized bar distribution used for computing the predictions."""
 
     use_autocast_: bool
@@ -434,6 +434,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         y_raw: YType | list[YType],
         split_fn: Callable,
         max_data_size: None | int = 10000,
+        normalize_on_full_target: Literal["full", "batch"] = "batch",
     ) -> DatasetCollectionWithPreprocessing:
         """Transforms raw input data into a collection of datasets,
         with varying preprocessings.
@@ -452,6 +453,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             split_fn: A function to dissect a dataset into train and test partition.
             max_data_size: Maximum allowed number of samples within one dataset.
             If None, datasets are not splitted.
+            normalize_on_full_target: Normalize the full target variable,
+            or by batch.
         """
         return get_preprocessed_datasets_helper(
             self,
@@ -460,6 +463,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             split_fn,
             max_data_size,
             model_type="regressor",
+            normalize_on_full_target=normalize_on_full_target,
         )
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
@@ -672,7 +676,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
-        self.normalized_bardist_ = FullSupportBarDistribution(
+        self.raw_space_bardist_ = FullSupportBarDistribution(
             self.bardist_.borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
 
@@ -823,7 +827,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logit_to_output = partial(
             _logits_to_output,
             logits=logits,
-            criterion=self.normalized_bardist_,
+            criterion=self.raw_space_bardist_,
             quantiles=quantiles,
         )
         if output_type in ["full", "main"]:
@@ -851,7 +855,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 # Return full output with criterion and logits
                 return FullOutputDict(
                     **main_outputs,
-                    criterion=self.normalized_bardist_,
+                    criterion=self.raw_space_bardist_,
                     logits=logits,
                 )
 

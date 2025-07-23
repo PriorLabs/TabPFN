@@ -181,25 +181,27 @@ def main():
             for data_batch in progress_bar:
                 optimizer.zero_grad()
                 (
-                    X_trains_p,
-                    X_tests_p,
-                    y_trains_p,
-                    y_test_std,
+                    X_trains_preprocessed,
+                    X_tests_preprocessed,
+                    y_trains_preprocessed,
+                    y_test_standardized,
                     cat_ixs,
                     confs,
-                    norm_bardist,
+                    raw_space_bardist_,
                     bardist,
                     _,
                     batch_y_test_raw,
                 ) = data_batch
 
-                regressor.normalized_bardist_ = norm_bardist[0]
-                regressor.fit_from_preprocessed(X_trains_p, y_trains_p, cat_ixs, confs)
-                logits, _, _ = regressor.forward(X_tests_p)
+                regressor.raw_space_bardist_ = raw_space_bardist_[0]
+                regressor.fit_from_preprocessed(
+                    X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+                )
+                logits, _, _ = regressor.forward(X_tests_preprocessed)
 
                 # For regression, the loss function is part of the preprocessed data
-                loss_fn = norm_bardist[0]
-                y_target = y_test_std
+                loss_fn = raw_space_bardist_[0]
+                y_target = y_test_standardized
 
                 loss = loss_fn(logits, y_target.to(config["device"])).mean()
                 loss.backward()

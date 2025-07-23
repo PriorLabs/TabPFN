@@ -770,7 +770,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             must hold the raw data (`X_raw`, `y_raw`), categorical feature
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
-            fields (`y_full_standardised`, `normalized_bardist_`).
+            fields (`y_full_standardised`, `raw_space_bardist_`).
         n_workers (int, optional): The number of workers to use for potentially
             parallelized preprocessing steps (passed to `fit_preprocessing`).
             Defaults to 1.
@@ -780,14 +780,26 @@ class DatasetCollectionWithPreprocessing(Dataset):
             Stores the input dataset configuration collection.
         split_fn (Callable): Stores the splitting function.
         rng (np.random.Generator): Stores the random number generator.
+        Full_Y_mean (float): Stores the mean of the full target variable.
+        Full_Y_std (float): Stores the standard deviation of the full target variable.
         n_workers (int): Stores the number of workers for preprocessing.
     """
 
-    def __init__(self, split_fn, rng, dataset_config_collection, n_workers=1):
+    def __init__(
+        self,
+        split_fn,
+        rng,
+        dataset_config_collection,
+        Full_Y_mean,
+        Full_Y_std,
+        n_workers=1,
+    ):
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
         self.n_workers = n_workers
+        self.Full_Y_mean = Full_Y_mean
+        self.Full_Y_std = Full_Y_std
 
     def __len__(self):
         return len(self.configs)
@@ -839,7 +851,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
                   indices corresponding to each preprocessed X_train/X_test.
                 * `conf` (List): The list of preprocessing configurations used.
-                * `normalized_bardist_` (FullSupportBarDistribution): Binning class
+                * `raw_space_bardist_` (FullSupportBarDistribution): Binning class
                   for target variable (specific to the regression config).
                 * `bardist_` (FullSupportBarDistribution): Binning class for
                   target variable (specific to the regression config).
@@ -884,17 +896,20 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
         # Compute target variable Z-transform standardization
         # based on statistics of training set
-        # Note: Since we compute normalized_bardist_ here,
-        # it is not set as an attribute of the Regressor class
-        # This however makes also sense when considering that
-        # this attribute changes on every dataset
         if regression_task:
-            train_mean = np.mean(y_train_raw)
-            train_std = np.std(y_train_raw)
+            if (
+                self.Full_Y_mean is None and self.Full_Y_std is None
+            ):  # Normalized on batched y
+                train_mean = np.mean(y_train_raw)
+                train_std = np.std(y_train_raw)
+            else:  # Normalized on full target variable
+                train_mean = self.Full_Y_mean
+                train_std = self.Full_Y_std
             y_test_standardized = (y_test_raw - train_mean) / train_std
             y_train_standardized = (y_train_raw - train_mean) / train_std
-            normalized_bardist_ = FullSupportBarDistribution(
-                bardist_.borders * train_std + train_mean
+            raw_space_bardist_ = FullSupportBarDistribution(
+                bardist_.borders * train_std
+                + train_mean  # Inverse normalization back to raw space
             ).float()
 
         y_train = y_train_standardized if regression_task else y_train_raw
@@ -953,7 +968,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # Also return raw_target variable because of flexiblity
         # in optimisation space -> see examples/
         # Also return corresponding target variable binning
-        # classes normalized_bardist_ and bardist_
+        # classes raw_space_bardist_ and bardist_
         if regression_task:
             return (
                 X_trains_preprocessed,
@@ -962,7 +977,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 y_test_standardized,
                 cat_ixs,
                 conf,
-                normalized_bardist_,
+                raw_space_bardist_,
                 bardist_,
                 x_test_raw,
                 y_test_raw,
