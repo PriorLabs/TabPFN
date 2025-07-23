@@ -114,12 +114,8 @@ def test_fit(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
-    if device == "mps":
-        if inference_precision == torch.float64:
-            pytest.skip(
-                "MPS does not support float64, which is required for this check."
-            )
-        pytest.skip("MPS not supported for this check.")
+    if device == "mps" and inference_precision == torch.float64:
+        pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,
@@ -343,7 +339,6 @@ def test_balance_probabilities_alters_proba_output(
         TabPFNClassifier(
             n_estimators=2,
             inference_config={"USE_SKLEARN_16_DECIMAL_PRECISION": True},
-            device="cpu",
         ),
     ],
 )
@@ -366,7 +361,6 @@ def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     model = TabPFNClassifier(
         balance_probabilities=True,
-        device="cpu",
     )
 
     model.fit(X, y)
@@ -393,8 +387,7 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "classifier",
                 TabPFNClassifier(
-                    n_estimators=2,
-                    device="cpu",  # Fewer estimators for faster testing
+                    n_estimators=2,  # Fewer estimators for faster testing
                 ),
             ),
         ],
@@ -438,14 +431,12 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
         random_state=42,
-        device="cpu",
     )
 
     model_obj = TabPFNClassifier(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
         random_state=42,
-        device="cpu",
     )
 
     model_dict.fit(X, y)
@@ -534,7 +525,6 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     with torch.no_grad():
         classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
-
         # load the model so we can access it via classifier.model_
         classifier.fit(X, y)
         # this is necessary if cuda is available
@@ -577,11 +567,7 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNClassifier(
-        n_estimators=n_estimators,
-        random_state=42,
-        device="cpu",
-    )
+    model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -612,11 +598,7 @@ def test_pandas_output_config():
     )
 
     # Initialize TabPFN
-    model = TabPFNClassifier(
-        n_estimators=1,
-        random_state=42,
-        device="cpu",
-    )
+    model = TabPFNClassifier(n_estimators=1, random_state=42)
 
     # Get default predictions
     model.fit(X, y)
@@ -647,11 +629,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNClassifier with fixed random state for reproducibility
-    model = TabPFNClassifier(
-        n_estimators=2,
-        random_state=42,
-        device="cpu",
-    )
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
     model.fit(X, y)
 
     # Get predictions on original data
@@ -669,11 +647,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNClassifier(
-        n_estimators=2,
-        random_state=42,
-        device="cpu",
-    )
+    model_with_constants = TabPFNClassifier(n_estimators=2, random_state=42)
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
@@ -729,7 +703,7 @@ def test_classifier_with_text_and_na() -> None:
     y = df["target"]
 
     # Initialize and fit TabPFN on data with text+NA and a column with all NAs
-    classifier = TabPFNClassifier(n_estimators=2, device="cpu")
+    classifier = TabPFNClassifier(device="cpu", n_estimators=2)
 
     # This should now work without raising errors
     classifier.fit(X, y)
@@ -755,11 +729,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert norm_criterion is None, "norm_criterion should be None for classifier"
 
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
-    classifier = TabPFNClassifier(
-        model_path="auto",
-        random_state=42,
-        device="cpu",
-    )
+    classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
     classifier._initialize_model_variables()
 
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
@@ -779,10 +749,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     new_config = classifier.config_
     spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
 
-    classifier2 = TabPFNClassifier(
-        model_path=spec,
-        device="cpu",
-    )
+    classifier2 = TabPFNClassifier(model_path=spec)
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"

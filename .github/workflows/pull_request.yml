@@ -80,5 +80,5 @@ jobs:
 
       - name: Run Tests (exclude MPS params)
         run: |
+          export TABPFN_EXCLUDE_DEVICES=mps
           pytest tests/ -m "not skip_on_ci_mps"
-        shell: bash

@@ -82,7 +82,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 )
 def test_regressor(
     n_estimators: int,
-    device: Literal["cuda", "cpu"],
+    device: Literal["cuda", "mps", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
@@ -99,12 +99,8 @@ def test_regressor(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
-    if device == "mps":
-        if inference_precision == torch.float64:
-            pytest.skip(
-                "MPS does not support float64, which is required for this check."
-            )
-        pytest.skip("MPS not supported for this check.")
+    if device == "mps" and inference_precision == torch.float64:
+        pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNRegressor(
         n_estimators=n_estimators,
@@ -139,7 +135,7 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-@parametrize_with_checks([TabPFNRegressor(n_estimators=2, device="cpu")])
+@parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
@@ -164,8 +160,7 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             (
                 "regressor",
                 TabPFNRegressor(
-                    n_estimators=2,
-                    device="cpu",  # Fewer estimators for faster testing
+                    n_estimators=2,  # Fewer estimators for faster testing
                 ),
             ),
         ],
@@ -221,14 +216,12 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
     model_dict = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [dict_config]},
         n_estimators=2,
-        device="cpu",
         random_state=42,
     )
 
     model_obj = TabPFNRegressor(
         inference_config={"PREPROCESS_TRANSFORMS": [object_config]},
         n_estimators=2,
-        device="cpu",
         random_state=42,
     )
 
@@ -296,7 +289,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=4)
+        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
         # load the model so we can access it via classifier.model_
         regressor.fit(X, y)
         # this is necessary if cuda is available
@@ -336,10 +329,7 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     X, y = X_y
     n_estimators = 3
 
-    model = TabPFNRegressor(
-        n_estimators=n_estimators,
-        device="cpu",
-    )
+    model = TabPFNRegressor(n_estimators=n_estimators)
     model.fit(X, y)
 
     # Cast to Literal type for mypy
@@ -413,10 +403,7 @@ def test_cpu_large_dataset_warning_override():
     # Set environment variable to allow large datasets to avoid RuntimeError
     os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
     try:
-        model = TabPFNRegressor(
-            device="cpu",
-            ignore_pretraining_limits=False,
-        )
+        model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=False)
         model.fit(X_large, y_large)
     finally:
         # Clean up environment variable
@@ -450,7 +437,7 @@ def test_pandas_output_config():
     )
 
     # Initialize TabPFN
-    model = TabPFNRegressor(n_estimators=1, random_state=42, device="cpu")
+    model = TabPFNRegressor(n_estimators=1, random_state=42)
 
     # Get default predictions
     model.fit(X, y)
@@ -474,11 +461,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNRegressor with fixed random state for reproducibility
-    model = TabPFNRegressor(
-        n_estimators=2,
-        random_state=42,
-        device="cpu",
-    )
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
     model.fit(X, y)
 
     # Get predictions on original data
@@ -495,11 +478,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNRegressor(
-        n_estimators=2,
-        random_state=42,
-        device="cpu",
-    )
+    model_with_constants = TabPFNRegressor(n_estimators=2, random_state=42)
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
@@ -521,7 +500,7 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, _ = X_y
     y_constant = np.full(X.shape[0], 5.0)  # Create a constant target array
 
-    model = TabPFNRegressor(n_estimators=2, random_state=42, device="cpu")
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
     model.fit(X, y_constant)
 
     predictions = model.predict(X)
@@ -567,7 +546,6 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         which="regressor",
         fit_mode="low_memory",
     )
-
     assert model is not None, "model should be initialized for regressor"
     assert config is not None, "config should be initialized for regressor"
     assert (
@@ -595,7 +573,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
         config=regressor.config_,
         norm_criterion=regressor.bardist_,
     )
-    reg2 = TabPFNRegressor(model_path=spec, device="cpu")
+    reg2 = TabPFNRegressor(model_path=spec)
     reg2._initialize_model_variables()
 
     assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
