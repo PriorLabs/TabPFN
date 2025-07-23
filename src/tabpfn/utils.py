@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import os
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
@@ -184,12 +185,14 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     Returns:
         The inferred device
     """
+    exclude_devices = os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+
     if (device is None) or (isinstance(device, str) and device == "auto"):
         device_type_ = (
             "cuda"
-            if torch.cuda.is_available()
+            if torch.cuda.is_available() and "cuda" not in exclude_devices
             else "mps"
-            if torch.backends.mps.is_available()
+            if torch.backends.mps.is_available() and "mps" not in exclude_devices
             else "cpu"
         )
         return torch.device(device_type_)
