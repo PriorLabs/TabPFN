@@ -80,6 +80,5 @@ jobs:
 
       - name: Run Tests (exclude MPS params)
         env:
-          PYTEST_ADDOPTS: -m "not skip_on_ci_mps"
           TABPFN_EXCLUDE_DEVICES: "mps"
         run: pytest tests/

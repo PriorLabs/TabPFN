@@ -91,9 +91,6 @@ log_cli = false
 log_level = "DEBUG"
 xfail_strict = true
 addopts = "--durations=10 -vv"
-markers = [
-  "skip_on_ci_mps: MPS-parametrized cases to skip on CI but run locally"
-]
 
 # https://github.com/charliermarsh/ruff
 [tool.ruff]
