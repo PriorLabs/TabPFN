@@ -64,6 +64,7 @@ all_combinations = list(
     ),
 )
 
+
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y = sklearn.datasets.load_iris(return_X_y=True)
@@ -332,19 +333,6 @@ def test_balance_probabilities_alters_proba_output(
     ), "Probabilities did not change when balance_probabilities was toggled."
 
 
-_auto_device = infer_device_and_type(device="auto")
-skip_on_mps_auto = pytest.mark.skipif(
-    _auto_device.type == "mps",
-    reason=(
-        f"Detected device={_auto_device.type!r}, "
-        "skipping sklearn-compat tests. "
-        "If you want to run them anyway, set "
-        "TABPFN_EXCLUDE_DEVICES=mps in your environment."
-    ),
-)
-
-
-@skip_on_mps_auto
 @parametrize_with_checks(
     [
         TabPFNClassifier(
@@ -357,6 +345,10 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
+    _auto_device = infer_device_and_type(device="auto")
+    if _auto_device.type == "mps":
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",

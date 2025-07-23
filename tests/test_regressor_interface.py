@@ -130,24 +130,15 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
-_auto_device = infer_device_and_type(device="auto")
-skip_on_mps_auto = pytest.mark.skipif(
-    _auto_device.type == "mps",
-    reason=(
-        f"Detected device={_auto_device.type!r}, "
-        "skipping sklearn-compat tests. "
-        "If you want to run them anyway, set "
-        "TABPFN_EXCLUDE_DEVICES=mps in your environment."
-    ),
-)
-
-
-@skip_on_mps_auto
 @parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
+    _auto_device = infer_device_and_type(device="auto")
+    if _auto_device.type == "mps":
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
