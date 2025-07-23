@@ -178,7 +178,7 @@ def _cancel_nan_borders(
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     """Infers the appropriate PyTorch device based on the input and environment
-    configuration
+    configuration.
 
     Rules:
     1. If `device` is `None` or "auto":
