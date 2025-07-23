@@ -21,6 +21,7 @@ from torch import nn
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.utils import infer_device_and_type
 
 from .utils import check_cpu_float16_support
 
@@ -43,22 +44,31 @@ inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
-_base_combos = list(
-    product(
+all_combinations = [
+    pytest.param(
+        n_estimators,
+        device,
+        feature_shift_decoder,
+        fit_mode,
+        inference_precision_method,
+        remove_outliers_std,
+        marks=pytest.mark.skip_on_ci_mps if device == "mps" else (),
+    )
+    for n_estimators,
+        device,
+        feature_shift_decoder,
+        fit_mode,
+        inference_precision_method,
+        remove_outliers_std
+    in product(
         estimators,
         devices,
         feature_shift_decoders,
         fit_modes,
         inference_precision_methods,
         remove_outliers_stds,
-    ),
-)
-
-all_combinations = []
-for combo in _base_combos:
-    _, device, *_ = combo
-    mark = pytest.mark.skip_on_ci_mps if device == "mps" else ()
-    all_combinations.append(pytest.param(*combo, marks=mark))
+    )
+]
 
 
 # Wrap in fixture so it's only loaded in if a test using it is run
@@ -135,6 +145,16 @@ def test_regressor(
 
 
 # TODO: Should probably run a larger suite with different configurations
+skip_on_mps_auto = pytest.mark.skipif(
+    infer_device_and_type(device="auto").type == "mps",
+    reason=(
+        f"Detected device={infer_device_and_type(device="auto").type!r}, "
+        "skipping sklearn-compat tests. "
+        "If you want to run them anyway, set "
+        "TABPFN_EXCLUDE_DEVICES=mps in your environment."
+    ),
+)
+@skip_on_mps_auto
 @parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
@@ -146,6 +166,7 @@ def test_sklearn_compatible_estimator(
     ):
         estimator.inference_precision = torch.float64
         pytest.xfail("We're not at 1e-7 difference yet")
+
     check(estimator)
 
 

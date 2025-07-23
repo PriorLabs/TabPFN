@@ -203,7 +203,11 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     Returns:
         The inferred device
     """
-    exclude_devices = os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+    exclude_devices = {
+        d.strip()
+        for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+        if d.strip()
+    }
 
     if (device is None) or (isinstance(device, str) and device == "auto"):
         device_type_ = (
