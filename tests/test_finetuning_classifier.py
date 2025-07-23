@@ -266,7 +266,7 @@ def test_get_preprocessed_datasets_basic():
     X = rng.normal(size=(100, 4)).astype(np.float32)
     y = rng.integers(0, 3, size=100)
 
-    clf = TabPFNClassifier(device="cuda" if torch.cuda.is_available() else "cpu")
+    clf = TabPFNClassifier()
     # This should return a DatasetCollectionWithPreprocessing
     dataset = clf.get_preprocessed_datasets(X, y, split_fn=train_test_split)
     assert hasattr(dataset, "__getitem__")
