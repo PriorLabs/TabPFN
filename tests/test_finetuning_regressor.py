@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import nullcontext
 from functools import partial
 from typing import Any, Literal
 from unittest.mock import patch
@@ -150,7 +151,7 @@ def test_regressor_dataset_and_collator_batches_type(
     """
     X, y = synthetic_regression_data
     dataset_collection = ft_regressor_instance.get_preprocessed_datasets(
-        X, y, train_test_split, 100
+        X, y, train_test_split, max_data_size=10
     )
     batch_size = 1
     dl = DataLoader(
@@ -213,7 +214,7 @@ def test_tabpfn_regressor_finetuning_loop(
     )
 
     datasets_list = reg.get_preprocessed_datasets(
-        X_train, y_train, train_test_split, 100
+        X_train, y_train, train_test_split, max_data_size=10
     )
 
     batch_size = 1
@@ -223,107 +224,113 @@ def test_tabpfn_regressor_finetuning_loop(
 
     optim_impl = Adam(reg.model_.parameters(), lr=1e-5)
 
-    if inference_precision == torch.float64:
-        pass
-        # TODO: check that it fails with the right error
+    # Fine-tuning with multiple estimators is not supported as the forward
+    # pass cannot differentiably handle multiple, potentially different,
+    # target transformations.
+    context = pytest.raises(NotImplementedError) if n_estimators > 1 else nullcontext()
 
-    elif fit_mode in [
-        "fit_preprocessors",
-        "fit_with_cache",
-        "low_memory",
-    ]:
-        # TODO: check that it fails with the right error
-        pass
-    else:
-        for data_batch in my_dl_train:
-            optim_impl.zero_grad()
+    with context:
+        if inference_precision == torch.float64:
+            pass
+            # TODO: check that it fails with the right error
 
-            (
-                X_trains_preprocessed,
-                X_tests_preprocessed,
-                y_trains_preprocessed,
-                y_test_standardized,
-                cat_ixs,
-                confs,
-                normalized_bardist_,
-                bar_distribution,
-                batch_x_test_raw,
-                batch_y_test_raw,
-            ) = data_batch
+        elif fit_mode in [
+            "fit_preprocessors",
+            "fit_with_cache",
+            "low_memory",
+        ]:
+            # TODO: check that it fails with the right error
+            pass
+        else:
+            for data_batch in my_dl_train:
+                optim_impl.zero_grad()
 
-            reg.fit_from_preprocessed(
-                X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
-            )
+                (
+                    X_trains_preprocessed,
+                    X_tests_preprocessed,
+                    y_trains_preprocessed,
+                    y_test_standardized,
+                    cat_ixs,
+                    confs,
+                    normalized_bardist_,
+                    bar_distribution,
+                    batch_x_test_raw,
+                    batch_y_test_raw,
+                ) = data_batch
 
-            reg.normalized_bardist_ = normalized_bardist_[0]
+                reg.fit_from_preprocessed(
+                    X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+                )
 
-            averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
+                reg.normalized_bardist_ = normalized_bardist_[0]
 
-            # --- Basic Shape Checks ---
-            assert (
-                averaged_pred_logits.ndim == 3
-            ), f"Expected 3D output, got {averaged_pred_logits.shape}"
+                averaged_pred_logits = reg.forward(X_tests_preprocessed)
 
-            # Batch Size
-            assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
-            assert averaged_pred_logits.shape[0] == batch_size
-            assert averaged_pred_logits.shape[0] == X_tests_preprocessed[0].shape[0]
-            assert averaged_pred_logits.shape[0] == y_test_standardized.shape[0]
+                # --- Basic Shape Checks ---
+                assert (
+                    averaged_pred_logits.ndim == 3
+                ), f"Expected 3D output, got {averaged_pred_logits.shape}"
 
-            # N_samples
-            assert averaged_pred_logits.shape[1] == batch_y_test_raw.shape[1]
-            assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
+                # Batch Size
+                assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
+                assert averaged_pred_logits.shape[0] == batch_size
+                assert averaged_pred_logits.shape[0] == X_tests_preprocessed[0].shape[0]
+                assert averaged_pred_logits.shape[0] == y_test_standardized.shape[0]
 
-            # N_bins
-            n_borders_bardist = reg.bardist_.borders.shape[0]
-            assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
-            n_borders_norm_crit = reg.normalized_bardist_.borders.shape[0]
-            assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
+                # N_samples
+                assert averaged_pred_logits.shape[1] == batch_y_test_raw.shape[1]
+                assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
 
-            assert len(X_tests_preprocessed) == reg.n_estimators
-            assert len(X_trains_preprocessed) == reg.n_estimators
-            assert len(y_trains_preprocessed) == reg.n_estimators
-            assert reg.model_ is not None, "Model not initialized after fit"
-            assert hasattr(
-                reg, "bardist_"
-            ), "Regressor missing 'bardist_' attribute after fit"
-            assert hasattr(
-                reg, "normalized_bardist_"
-            ), "Regressor missing 'normalized_bardist_' attribute after fit"
-            assert reg.bardist_ is not None, "reg.bardist_ is None"
+                # N_bins
+                n_borders_bardist = reg.bardist_.borders.shape[0]
+                assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
+                n_borders_norm_crit = reg.normalized_bardist_.borders.shape[0]
+                assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
 
-            lossfn = None
-            if optimization_space == "raw_label_space":
-                lossfn = reg.bardist_
-            elif optimization_space == "preprocessed":
-                lossfn = reg.normalized_bardist_
-            else:
-                raise ValueError("Need to define optimization space")
+                assert len(X_tests_preprocessed) == reg.n_estimators
+                assert len(X_trains_preprocessed) == reg.n_estimators
+                assert len(y_trains_preprocessed) == reg.n_estimators
+                assert reg.model_ is not None, "Model not initialized after fit"
+                assert hasattr(
+                    reg, "bardist_"
+                ), "Regressor missing 'bardist_' attribute after fit"
+                assert hasattr(
+                    reg, "normalized_bardist_"
+                ), "Regressor missing 'normalized_bardist_' attribute after fit"
+                assert reg.bardist_ is not None, "reg.bardist_ is None"
 
-            nll_loss_per_sample = lossfn(
-                averaged_pred_logits, batch_y_test_raw.to(device)
-            )
-            loss = nll_loss_per_sample.mean()
+                lossfn = None
+                if optimization_space == "raw_label_space":
+                    lossfn = reg.bardist_
+                elif optimization_space == "preprocessed":
+                    lossfn = reg.normalized_bardist_
+                else:
+                    raise ValueError("Need to define optimization space")
 
-            # --- Gradient Check ---
-            loss.backward()
-            optim_impl.step()
+                nll_loss_per_sample = lossfn(
+                    averaged_pred_logits, batch_y_test_raw.to(device)
+                )
+                loss = nll_loss_per_sample.mean()
 
-            assert torch.isfinite(loss).all(), f"Loss is not finite: {loss.item()}"
+                # --- Gradient Check ---
+                loss.backward()
+                optim_impl.step()
 
-            gradients_found = False
-            for param in reg.model_.parameters():
-                if (
-                    param.requires_grad
-                    and param.grad is not None
-                    and param.grad.abs().sum().item() > 1e-12
-                ):
-                    gradients_found = True
-                    break
-            assert gradients_found, "No non-zero gradients found."
+                assert torch.isfinite(loss).all(), f"Loss is not finite: {loss.item()}"
 
-            reg.model_.zero_grad()
-            break  # Only test one batch
+                gradients_found = False
+                for param in reg.model_.parameters():
+                    if (
+                        param.requires_grad
+                        and param.grad is not None
+                        and param.grad.abs().sum().item() > 1e-12
+                    ):
+                        gradients_found = True
+                        break
+                assert gradients_found, "No non-zero gradients found."
+
+                reg.model_.zero_grad()
+                break  # Only test one batch
 
 
 def test_finetuning_consistency_bar_distribution(
@@ -335,6 +342,7 @@ def test_finetuning_consistency_bar_distribution(
     """
     common_seed = 10
     test_set_size = 0.2
+    max_data_size = None
 
     reg_standard = std_regressor_instance
     reg_batched = ft_regressor_instance
@@ -357,7 +365,7 @@ def test_finetuning_consistency_bar_distribution(
     reg_standard.predict(X_test_raw, output_type="mean")
 
     datasets_list = reg_batched.get_preprocessed_datasets(
-        x_full_raw, y_full_raw, splitfn, max_data_size=1000
+        x_full_raw, y_full_raw, splitfn, max_data_size=max_data_size
     )
 
     batch_size = 1
@@ -464,6 +472,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         n_total = 20
         n_features = 10
         n_estimators = 1
+        max_data_size = None
 
         X, y = sklearn.datasets.make_regression(
             n_samples=n_total, n_features=n_features, random_state=common_seed
@@ -513,7 +522,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         # (get_prep -> fit_prep -> forward -> Capture Tensor)
 
         datasets_list = reg_batched.get_preprocessed_datasets(
-            X, y, splitfn, max_data_size=1000
+            X, y, splitfn, max_data_size=max_data_size
         )
 
         # Fit FT regressor

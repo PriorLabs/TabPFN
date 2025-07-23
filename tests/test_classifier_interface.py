@@ -165,7 +165,7 @@ def test_predict_logits_and_consistency(
     """
     X, y = X_y
 
-    # Ensure y is int64 for consistency with classification tasks
+    # Ensure y is float64 for consistency with original dataset type after slicing
     y = y.astype(np.int64)
 
     classifier = TabPFNClassifier(

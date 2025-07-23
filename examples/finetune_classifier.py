@@ -197,7 +197,9 @@ def main():
                     X_train_batch, y_train_batch, cat_ixs, confs
                 )
                 predictions = classifier.forward(X_test_batch, return_logits=True)
-                loss = loss_function(predictions, y_test_batch.to(config["device"]))
+                loss = loss_function(
+                    predictions, y_test_batch.to(config["device"])
+                )
                 loss.backward()
                 optimizer.step()
 
