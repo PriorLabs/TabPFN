@@ -80,5 +80,6 @@ jobs:
 
       - name: Run Tests (exclude MPS params)
         env:
+          # MPS excluded since github CI device has very low MPS memory
           TABPFN_EXCLUDE_DEVICES: "mps"
         run: pytest tests/
