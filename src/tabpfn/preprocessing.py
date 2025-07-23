@@ -847,7 +847,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 * `conf` (List): The list of preprocessing configurations used.
                 * `raw_space_bardist_` (FullSupportBarDistribution): Binning class
                   for target variable (specific to the regression config).
-                * `bardist_` (FullSupportBarDistribution): Binning class for
+                * `znorm_space_bardist_` (FullSupportBarDistribution): Binning class for
                   target variable (specific to the regression config).
                 * `x_test_raw` (torch.Tensor): Original, unprocessed test feature
                   tensor.
@@ -873,7 +873,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
-            bardist_ = config.bardist_
+            znorm_space_bardist_ = config.bardist_
         elif isinstance(config, ClassifierDatasetConfig):
             conf = config.config
             x_full_raw = config.X_raw
@@ -896,7 +896,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             y_test_standardized = (y_test_raw - train_mean) / train_std
             y_train_standardized = (y_train_raw - train_mean) / train_std
             raw_space_bardist_ = FullSupportBarDistribution(
-                bardist_.borders * train_std
+                znorm_space_bardist_.borders * train_std
                 + train_mean  # Inverse normalization back to raw space
             ).float()
 
@@ -956,7 +956,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # Also return raw_target variable because of flexiblity
         # in optimisation space -> see examples/
         # Also return corresponding target variable binning
-        # classes raw_space_bardist_ and bardist_
+        # classes raw_space_bardist_ and znorm_space_bardist_
         if regression_task:
             return (
                 X_trains_preprocessed,
@@ -966,7 +966,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 cat_ixs,
                 conf,
                 raw_space_bardist_,
-                bardist_,
+                znorm_space_bardist_,
                 x_test_raw,
                 y_test_raw,
             )
