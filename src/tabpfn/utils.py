@@ -177,10 +177,28 @@ def _cancel_nan_borders(
 
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
-    """Infer the device and data type from the given device string.
+    """Infers the appropriate PyTorch device based on the input and environment
+    configuration.
+
+    Rules:
+    1. If `device` is `None` or "auto":
+       - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
+       - Otherwise picks "mps" if available and not excluded
+       - Falls back to "cpu"
+    2. If `device` is a string, converts it to a torch.device
+    3. If already a torch.device, returns as-is
+    4. Otherwise raises ValueError
+
+    Environment:
+        TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
+        (e.g., "cuda,mps"). This allows us to easily exclude "mps" on the
+        CI pipeline.
 
     Args:
-        device: The device to infer the type from.
+        device (str | torch.device | None): The device specification. Can be:
+            - `None` or `"auto"` for automatic inference.
+            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
+            - A `torch.device` instance.
 
     Returns:
         The inferred device
