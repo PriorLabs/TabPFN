@@ -148,7 +148,7 @@ def test_regressor(
 skip_on_mps_auto = pytest.mark.skipif(
     infer_device_and_type(device="auto").type == "mps",
     reason=(
-        f"Detected device={infer_device_and_type(device="auto").type!r}, "
+        f"Detected device={infer_device_and_type(device='auto').type!r}, "
         "skipping sklearn-compat tests. "
         "If you want to run them anyway, set "
         "TABPFN_EXCLUDE_DEVICES=mps in your environment."
