@@ -347,10 +347,11 @@ def test_balance_probabilities_alters_proba_output(
     ), "Probabilities did not change when balance_probabilities was toggled."
 
 
+_auto_device = infer_device_and_type(device="auto")
 skip_on_mps_auto = pytest.mark.skipif(
-    infer_device_and_type(device="auto").type == "mps",
+    _auto_device.type == "mps",
     reason=(
-        f"Detected device={infer_device_and_type(device='auto').type!r}, "
+        f"Detected device={_auto_device.type!r}, "
         "skipping sklearn-compat tests. "
         "If you want to run them anyway, set "
         "TABPFN_EXCLUDE_DEVICES=mps in your environment."
