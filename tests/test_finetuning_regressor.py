@@ -167,7 +167,7 @@ def test_regressor_dataset_and_collator_batches_type(
             y_test_standardized,
             cat_ixs,
             confs,
-            normalized_bardist_,
+            raw_space_bardist_,
             bar_distribution,
             x_test_raw,
             y_test_raw,
@@ -182,7 +182,7 @@ def test_regressor_dataset_and_collator_batches_type(
         for conf in confs:
             for c in conf:
                 assert isinstance(c, RegressorEnsembleConfig)
-        for ren_crit in normalized_bardist_:
+        for ren_crit in raw_space_bardist_:
             assert isinstance(ren_crit, FullSupportBarDistribution)
         for bar_dist in bar_distribution:
             assert isinstance(bar_dist, BarDistribution)
@@ -245,7 +245,7 @@ def test_tabpfn_regressor_finetuning_loop(
                 y_test_standardized,
                 cat_ixs,
                 confs,
-                normalized_bardist_,
+                raw_space_bardist_,
                 bar_distribution,
                 batch_x_test_raw,
                 batch_y_test_raw,
@@ -255,7 +255,7 @@ def test_tabpfn_regressor_finetuning_loop(
                 X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
             )
 
-            reg.normalized_bardist_ = normalized_bardist_[0]
+            reg.raw_space_bardist_ = raw_space_bardist_[0]
 
             averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
 
@@ -277,7 +277,7 @@ def test_tabpfn_regressor_finetuning_loop(
             # N_bins
             n_borders_bardist = reg.bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
-            n_borders_norm_crit = reg.normalized_bardist_.borders.shape[0]
+            n_borders_norm_crit = reg.raw_space_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
 
             assert len(X_tests_preprocessed) == reg.n_estimators
@@ -288,15 +288,15 @@ def test_tabpfn_regressor_finetuning_loop(
                 reg, "bardist_"
             ), "Regressor missing 'bardist_' attribute after fit"
             assert hasattr(
-                reg, "normalized_bardist_"
-            ), "Regressor missing 'normalized_bardist_' attribute after fit"
+                reg, "raw_space_bardist_"
+            ), "Regressor missing 'raw_space_bardist_' attribute after fit"
             assert reg.bardist_ is not None, "reg.bardist_ is None"
 
             lossfn = None
             if optimization_space == "raw_label_space":
-                lossfn = reg.bardist_
+                lossfn = reg.raw_space_bardist_
             elif optimization_space == "preprocessed":
-                lossfn = reg.normalized_bardist_
+                lossfn = reg.bardist_
             else:
                 raise ValueError("Need to define optimization space")
 
@@ -375,7 +375,7 @@ def test_finetuning_consistency_bar_distribution(
         y_test_standardized,
         cat_ixs,
         confs,
-        normalized_bardist_,
+        raw_space_bardist_,
         bar_distribution,
         batch_x_test_raw,
         batch_y_test_raw,
@@ -412,28 +412,28 @@ def test_finetuning_consistency_bar_distribution(
         atol=1e-5,
     )
 
-    normalized_bardist_ = normalized_bardist_[0]
-    reg_batched.normalized_bardist_ = normalized_bardist_
+    raw_space_bardist_ = raw_space_bardist_[0]
+    reg_batched.raw_space_bardist_ = raw_space_bardist_
 
     torch.testing.assert_close(
-        normalized_bardist_.borders,
-        reg_batched.normalized_bardist_.borders,
+        raw_space_bardist_.borders,
+        reg_batched.raw_space_bardist_.borders,
         rtol=1e-5,
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
     )
 
     torch.testing.assert_close(
-        normalized_bardist_.borders,
-        reg_standard.normalized_bardist_.borders,
+        raw_space_bardist_.borders,
+        reg_standard.raw_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
     )
 
     torch.testing.assert_close(
-        reg_standard.normalized_bardist_.borders,
-        reg_batched.normalized_bardist_.borders,
+        reg_standard.raw_space_bardist_.borders,
+        reg_batched.raw_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
