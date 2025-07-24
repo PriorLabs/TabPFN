@@ -161,7 +161,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The bar distribution of the target variable, used by the model."""
 
     raw_space_bardist_: FullSupportBarDistribution
-    """The bar distribution in the raw target space, used for computing the 
+    """The bar distribution in the raw target space, used for computing the
     predictions."""
 
     use_autocast_: bool
