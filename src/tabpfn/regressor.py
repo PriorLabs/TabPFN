@@ -161,7 +161,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The bar distribution of the target variable, used by the model."""
 
     raw_space_bardist_: FullSupportBarDistribution
-    """The normalized bar distribution used for computing the predictions."""
+    """The bar distribution in the raw target space, used for computing the 
+    predictions."""
 
     use_autocast_: bool
     """Whether torch's autocast should be used."""
@@ -452,8 +453,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             split_fn: A function to dissect a dataset into train and test partition.
             max_data_size: Maximum allowed number of samples within one dataset.
             If None, datasets are not splitted.
-            normalize_on_full_target: Normalize the full target variable,
-            or by batch.
         """
         return get_preprocessed_datasets_helper(
             self,

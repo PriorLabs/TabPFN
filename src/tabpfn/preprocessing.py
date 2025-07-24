@@ -770,7 +770,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             must hold the raw data (`X_raw`, `y_raw`), categorical feature
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
-            fields (`y_full_standardised`, `raw_space_bardist_`).
+            fields (`bardist_`).
         n_workers (int, optional): The number of workers to use for potentially
             parallelized preprocessing steps (passed to `fit_preprocessing`).
             Defaults to 1.
