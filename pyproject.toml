@@ -8,11 +8,13 @@ version = "2.1.0"
 dependencies = [
   "torch>=2.1,<3",
   "scikit-learn>=1.2.0,<1.7",
-  "typing_extensions>=4.4.0",
+  "typing_extensions>=4.12.0",
   "scipy>=1.11.1,<2",
   "pandas>=1.4.0,<3",
   "einops>=0.2.0,<0.9",
-  "huggingface-hub>=0.0.1,<1"
+  "huggingface-hub>=0.0.1,<1",
+  "pydantic-settings>=2.10.1",
+  "eval-type-backport>=0.2.2", # Needed for python 3.9 compatibility
 ]
 requires-python = ">=3.9"
 authors = [
@@ -64,7 +66,7 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit",
-  "ruff",
+  "ruff==0.8.6",
   "mypy",
   # Test
   "pytest",

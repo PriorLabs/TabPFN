@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
+import os
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
@@ -39,6 +41,23 @@ if TYPE_CHECKING:
     from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
+
+
+def get_autocast_context(
+    device: torch.device, *, enabled: bool
+) -> contextlib.AbstractContextManager:
+    """Returns a torch.autocast context manager, disabling it for MPS devices.
+
+    Args:
+        device: The torch device being used.
+        enabled: Whether to enable autocast.
+
+    Returns:
+        A context manager for autocasting.
+    """
+    if device.type == "mps":
+        return contextlib.nullcontext()
+    return torch.autocast(device.type, enabled=enabled)
 
 
 def _get_embeddings(
@@ -158,16 +177,45 @@ def _cancel_nan_borders(
 
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
-    """Infer the device and data type from the given device string.
+    """Infers the appropriate PyTorch device based on the input and environment
+    configuration.
+
+    Rules:
+    1. If `device` is `None` or "auto":
+       - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
+       - Otherwise picks "mps" if available and not excluded
+       - Falls back to "cpu"
+    2. If `device` is a string, converts it to a torch.device
+    3. If already a torch.device, returns as-is
+    4. Otherwise raises ValueError
+
+    Environment:
+        TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
+        (e.g., "cuda,mps"). This allows excluding "mps" on the CI pipeline.
 
     Args:
-        device: The device to infer the type from.
+        device (str | torch.device | None): The device specification. Can be:
+            - `None` or `"auto"` for automatic inference.
+            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
+            - A `torch.device` instance.
 
     Returns:
         The inferred device
     """
+    exclude_devices = {
+        d.strip()
+        for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+        if d.strip()
+    }
+
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
+        device_type_ = (
+            "cuda"
+            if torch.cuda.is_available() and "cuda" not in exclude_devices
+            else "mps"
+            if torch.backends.mps.is_available() and "mps" not in exclude_devices
+            else "cpu"
+        )
         return torch.device(device_type_)
     if isinstance(device, str):
         return torch.device(device)

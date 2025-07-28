@@ -11,8 +11,9 @@ from typing import Any, Literal
 import numpy as np
 import torch
 
-# TODO(eddiebergman): Make this an option
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:512"
+from tabpfn.settings import settings
+
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 SAVE_PEAK_MEM_FACTOR = 8
 
 # TODO(eddiebergman): pulled from `def _estimate_model_usage()`
@@ -235,6 +236,51 @@ class MemoryUsageEstimator:
         return cls.convert_bytes_to_unit(total_mem_bytes, unit)
 
     @classmethod
+    def _get_mps_free_memory(cls) -> float:
+        """Get available free memory for MPS devices.
+
+        Tries to use `torch.mps.recommended_max_memory()` (available in
+        PyTorch >= 2.5.0). As a fallback for older versions, it uses the
+        `pyobjc-framework-Metal` library to query the Metal device API
+        directly.
+
+        Raises:
+            ImportError: If `pyobjc-framework-Metal` is required but not installed.
+            RuntimeError: If no MPS device can be found.
+
+        Returns:
+            The estimated free memory in bytes.
+        """
+        if hasattr(torch.mps, "recommended_max_memory"):
+            recommended = torch.mps.recommended_max_memory()
+            if recommended is not None:
+                allocated = torch.mps.current_allocated_memory()
+                return recommended - allocated
+
+        try:
+            # Fallback to using Metal API if torch.mps.recommended_max_memory is
+            # not available as it is only available in PyTorch 2.5.0 and later.
+            from Metal import MTLCreateSystemDefaultDevice
+        except ImportError as err:
+            raise ImportError(
+                "pyobjc-framework-Metal is required to access the Metal "
+                "APIs for determining available free memory for MPS devices. "
+                "Please install it via `pip install pyobjc-framework-Metal`."
+            ) from err
+
+        mtl_device = MTLCreateSystemDefaultDevice()
+        if mtl_device is None:
+            raise RuntimeError("No MPS device found.")
+
+        recommended = mtl_device.recommendedMaxWorkingSetSize()
+        allocated = (
+            torch.mps.current_allocated_memory()
+            if hasattr(torch.mps, "current_allocated_memory")
+            else 0
+        )
+        return recommended - allocated
+
+    @classmethod
     def get_max_free_memory(
         cls,
         device: torch.device,
@@ -297,17 +343,7 @@ class MemoryUsageEstimator:
             a = torch.cuda.memory_allocated(0)
             free_memory = t - a  # free inside reserved
         elif device.type.startswith("mps"):
-            # It seems like we would want to use the following functions:
-            #    * torch.mps.recommended_max_memory
-            #    * torch.mps.current_allocated_memory
-            # Not entirely sure of the behavior of the first function
-            # so this might not work as intended.
-            raise NotImplementedError(
-                "Memory estimation for MPS devices is not currently supported."
-                " If you have experience with getting memory information for MPS"
-                " devices, we would gladly appreciate a contribution!"
-                "",
-            )
+            free_memory = cls._get_mps_free_memory()
         else:
             raise ValueError(f"Unknown device {device}")
 

@@ -234,7 +234,7 @@ This script will download the main classifier and regressor models, as well as a
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
-   - Set environment variable: `os.environ["TABPFN_MODEL_CACHE_DIR"] = "/path/to/dir"`
+   - Set environment variable: `export TABPFN_MODEL_CACHE_DIR="/path/to/dir"` (see environment variables FAQ below)
    - Default OS cache directory:
      - Windows: `%APPDATA%\tabpfn\`
      - macOS: `~/Library/Caches/tabpfn/`
@@ -244,6 +244,25 @@ This script will download the main classifier and regressor models, as well as a
 A: Try the following:
 - Download the newest version of tabpfn `pip install tabpfn --upgrade`
 - Ensure model files downloaded correctly (re-download if needed)
+
+**Q: What environment variables can I use to configure TabPFN?**
+A: TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
+
+**Model Configuration:**
+- `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
+
+**PyTorch Settings:**
+- `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`). See [PyTorch CUDA documentation](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) for more information.
+
+Example:
+```bash
+export TABPFN_MODEL_CACHE_DIR="/path/to/models"
+export TABPFN_ALLOW_CPU_LARGE_DATASET=true
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
+```
+
+Or simply set them in your `.env`
 
 **Q: How do I save and load a trained TabPFN model?**
 A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload

@@ -585,7 +585,7 @@ class AddFingerprintFeaturesStep(FeaturePreprocessingTransformerStep):
             for i, row in enumerate(salted_X):
                 h = float_hash_arr(row)
                 add_to_hash = 0
-                while h in seen_hashes:
+                while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
                     h = float_hash_arr(row + add_to_hash)
                 X_h[i] = h

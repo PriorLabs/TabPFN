@@ -248,8 +248,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If `"auto"`, the device is
-                `"cuda"` if available, otherwise `"cpu"`.
+                The device to use for inference with TabPFN. If set to "auto", the
+                device is selected based on availability in the following order of
+                priority: "cuda", "mps", and then "cpu". You can also set the device
+                manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
                 supported devices.

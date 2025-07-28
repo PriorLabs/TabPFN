@@ -21,13 +21,21 @@ from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
 from tabpfn import TabPFNClassifier
+from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.utils import infer_device_and_type
 
 from .utils import check_cpu_float16_support
 
+exclude_devices = {
+    d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
+}
+
 devices = ["cpu"]
-if torch.cuda.is_available():
+if torch.cuda.is_available() and "cuda" not in exclude_devices:
     devices.append("cuda")
+if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+    devices.append("mps")
 
 is_cpu_float16_supported = check_cpu_float16_support()
 
@@ -87,7 +95,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 )
 def test_fit(
     n_estimators: int,
-    device: Literal["cuda", "cpu"],
+    device: Literal["cuda", "mps", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     multiclass_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
@@ -105,6 +113,8 @@ def test_fit(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
+    if device == "mps" and inference_precision == torch.float64:
+        pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
         n_estimators=n_estimators,
@@ -335,6 +345,10 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNClassifier,
     check: Callable[[TabPFNClassifier], None],
 ) -> None:
+    _auto_device = infer_device_and_type(device="auto")
+    if _auto_device.type == "mps":
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
@@ -704,3 +718,53 @@ def test_classifier_with_text_and_na() -> None:
     # Check output shapes
     assert probabilities.shape == (X.shape[0], len(np.unique(y)))
     assert predictions.shape == (X.shape[0],)
+
+
+def test_initialize_model_variables_classifier_sets_required_attributes() -> None:
+    # 1) Standalone initializer
+    model, config, norm_criterion = initialize_tabpfn_model(
+        model_path="auto",
+        which="classifier",
+        fit_mode="low_memory",
+    )
+    assert model is not None, "model should be initialized for classifier"
+    assert config is not None, "config should be initialized for classifier"
+    assert norm_criterion is None, "norm_criterion should be None for classifier"
+
+    # 2) Test the sklearn-style wrapper on TabPFNClassifier
+    classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
+    classifier._initialize_model_variables()
+
+    assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
+    assert classifier.model_ is not None, "model_ should be initialized for classifier"
+
+    assert hasattr(classifier, "config_"), "classifier should have config_ attribute"
+    assert (
+        classifier.config_ is not None
+    ), "config_ should be initialized for classifier"
+
+    assert not hasattr(
+        classifier, "bardist_"
+    ), "classifier should not have bardist_ attribute"
+
+    # 3) Reuse via ClassifierModelSpecs
+    new_model_state = classifier.model_
+    new_config = classifier.config_
+    spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
+
+    classifier2 = TabPFNClassifier(model_path=spec)
+    classifier2._initialize_model_variables()
+
+    assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
+    assert (
+        classifier2.model_ is not None
+    ), "model_ should be initialized for classifier2"
+
+    assert hasattr(classifier2, "config_"), "classifier2 should have config_ attribute"
+    assert (
+        classifier2.config_ is not None
+    ), "config_ should be initialized for classifier2"
+
+    assert not hasattr(
+        classifier2, "bardist_"
+    ), "classifier2 should not have bardist_ attribute"

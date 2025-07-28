@@ -61,10 +61,12 @@ import platform
 
 import numpy as np
 import pytest
+import torch
 from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
 from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn.settings import settings
 
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
@@ -198,7 +200,7 @@ def _generate_skip_logic():
     )
 
     # Special handling for CI: log a warning if skipping in a CI environment
-    if os.environ.get("CI", "false").lower() in ("true", "1", "yes"):
+    if settings.testing.ci:
         logging.warning("Skipping consistency tests due to platform mismatch in CI.")
 
         # Additionally, warn if the reference data is not from a CI-compatible platform
@@ -224,12 +226,13 @@ platform_specific = pytest.mark.skipif(
 
 
 # Test data generators for reproducible datasets
-def get_tiny_classification_data(*, seed_modifier=0):
+def get_tiny_classification_data(*, seed_modifier=0, as_tensors=False):
     """Get a tiny fixed classification dataset for testing.
 
     Args:
         seed_modifier: Optional modifier to the random seed, used in tests
                       to create intentionally different data
+        as_tensors: Optional modifier to return data as PyTorch tensors
     """
     random_state = check_random_state(FIXED_RANDOM_SEED + seed_modifier)
     X = random_state.rand(10, 5)  # 10 samples, 5 features
@@ -239,6 +242,8 @@ def get_tiny_classification_data(*, seed_modifier=0):
     X_train, X_test = X[:7], X[7:]
     y_train = y[:7]
 
+    if as_tensors:
+        return torch.tensor(X_train), torch.tensor(y_train), torch.tensor(X_test)
     return X_train, y_train, X_test
 
 
@@ -442,6 +447,34 @@ class TestTinyClassifier(ConsistencyTest):
     @platform_specific
     def test_consistency(self):
         """Test prediction consistency on a very small classification dataset."""
+        self.run_test()
+
+
+class TestTinyClassifierDifferentiableInput(ConsistencyTest):
+    """Test prediction consistency for a tiny binary classifier."""
+
+    def get_dataset_name(self):
+        return "tiny_diff_input_classifier"
+
+    def get_test_data(self):
+        return get_tiny_classification_data(as_tensors=True)
+
+    def get_model(self):
+        return TabPFNClassifier(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="cpu",
+            differentiable_input=True,
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict_proba(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on a very small classification dataset,
+        using differentiable input.
+        """
         self.run_test()
 
 

@@ -3,6 +3,9 @@
 This script demonstrates the complete workflow, including data loading and preparation
 for the Bike Sharing Demand dataset, model configuration, the fine-tuning loop,
 and performance evaluation for a regression task.
+
+Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
+support for the Apple Silicon (MPS) backend is still under development.
 """
 
 from functools import partial

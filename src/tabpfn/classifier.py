@@ -220,8 +220,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If `"auto"`, the device
-                is `"cuda"` if available, otherwise `"cpu"`.
+                The device to use for inference with TabPFN. If set to "auto", the
+                device is selected based on availability in the following order of
+                priority: "cuda", "mps", and then "cpu". You can also set the device
+                manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
                 supported devices.
@@ -834,10 +836,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
 
             # Process the config_list (which is now guaranteed to be a list)
-            if config_list is not None:
-                output_batch = []
-                for i, batch_config in enumerate(config_list):
-                    assert isinstance(batch_config, ClassifierEnsembleConfig)
+            output_batch = []
+            for i, batch_config in enumerate(config_list):
+                assert isinstance(batch_config, ClassifierEnsembleConfig)
+                # If class_permutation is None - class shifting is disabled
+                # So we slice to self.n_classes_ to ensure the output tensor matches
+                # the expected number of classes
+                if batch_config.class_permutation is None:
+                    output_batch.append(processed_output[:, i, : self.n_classes_])
+                else:
                     # make sure the processed_output num_classes are the same.
                     if len(batch_config.class_permutation) != self.n_classes_:
                         use_perm = np.arange(self.n_classes_)
@@ -846,11 +853,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                         )
                     else:
                         use_perm = batch_config.class_permutation
+
                     output_batch.append(processed_output[:, i, use_perm])
 
-                output_all = torch.stack(output_batch, dim=1)
-
-            outputs.append(output_all)
+            outputs.append(torch.stack(output_batch, dim=1))
 
         # --- Post-processing Pipeline ---
         # 'outputs' contains the raw, unscaled logits from each estimator.
