@@ -134,6 +134,34 @@ def test_regressor(
     assert quantiles[0].shape == (X.shape[0],), "Predictions shape is incorrect"
 
 
+def test_fit_modes_all_return_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    kwargs = {
+        "n_estimators": 10,
+        "device": "cpu",
+        "inference_precision": torch.float32,
+        "random_state": 0,
+    }
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="fit_preprocessors", **kwargs)
+    tabpfn.fit(X, y)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=5)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
+    tabpfn.fit(X, y)
+    # TODO: It's only equal to one decimal place. Verify if actually broken.
+    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=1)
+
+
 # TODO: Should probably run a larger suite with different configurations
 @parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(

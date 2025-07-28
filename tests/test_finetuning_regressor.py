@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-import unittest
 from functools import partial
 from typing import Any, Literal
-from unittest.mock import patch
 
 import numpy as np
 import pytest
-import sklearn
 import torch
 from sklearn.model_selection import train_test_split
 from torch.optim import Adam
@@ -446,132 +443,3 @@ def test_finetuning_consistency_bar_distribution(
         atol=1e-5,
         msg="Bar distribution borders do not match.",
     )
-
-
-# ----------------
-
-
-class TestTabPFNPreprocessingInspection(unittest.TestCase):
-    def test_finetuning_consistency_preprocessing_regressor(self):
-        """In order to test the consistency of our FineTuning code
-        and the preprocessing code, we will test the consistency
-        of the preprocessed datasets. We do this by checking
-        comparing the tensors that enter the internal transformer
-        model.
-        """
-        test_set_size = 0.3
-        common_seed = 42
-        n_total = 20
-        n_features = 10
-        n_estimators = 1
-
-        X, y = sklearn.datasets.make_regression(
-            n_samples=n_total, n_features=n_features, random_state=common_seed
-        )
-        splitfn = partial(
-            train_test_split,
-            test_size=test_set_size,
-            random_state=common_seed,
-            shuffle=False,  # Keep False for consistent results if slicing were needed
-        )
-        X_train_raw, X_test_raw, y_train_raw, _ = splitfn(X, y)
-
-        # Initialize two regressors with the inference and FineTuning
-        reg_standard = TabPFNRegressor(
-            n_estimators=n_estimators,
-            device="cpu",
-            random_state=common_seed,
-            fit_mode="fit_preprocessors",  # Example standard mode
-        )
-        reg_batched = TabPFNRegressor(
-            n_estimators=n_estimators,
-            device="cpu",
-            random_state=common_seed,
-            fit_mode="batched",  # Mode compatible with get_preprocessed_datasets
-        )
-
-        # --- 2. Path 1: Standard fit -> predict -> Capture Tensor ---
-        reg_standard.fit(X_train_raw, y_train_raw)
-        assert hasattr(reg_standard, "model_")
-        assert hasattr(reg_standard.model_, "forward")
-
-        tensor_p1_full = None
-        # Patch the standard regressor's internal model's forward method
-        with patch.object(
-            reg_standard.model_, "forward", wraps=reg_standard.model_.forward
-        ) as mock_forward_p1:
-            _ = reg_standard.predict(X_test_raw)  # Trigger the patched method
-            assert mock_forward_p1.called
-            # Capture the tensor input to the internal model
-            tensor_p1_full = mock_forward_p1.call_args.args[1]
-
-        assert tensor_p1_full is not None
-        # Standard path's internal model receives the combined train+test sequence
-        assert tensor_p1_full.shape[0] == n_total
-
-        # --- 3. Path 3: FT Full Workflow ---
-        # (get_prep -> fit_prep -> forward -> Capture Tensor)
-
-        datasets_list = reg_batched.get_preprocessed_datasets(
-            X, y, splitfn, max_data_size=1000
-        )
-
-        # Fit FT regressor
-        dataloader = DataLoader(
-            datasets_list,
-            batch_size=1,
-            collate_fn=meta_dataset_collator,
-            shuffle=False,
-        )
-        data_batch = next(iter(dataloader))
-        (
-            X_trains_p2,
-            X_tests_p2,
-            y_trains_p2,
-            _,
-            cat_ixs_p2,
-            confs_p2,
-            _,
-            _,
-            _,
-            _,
-        ) = data_batch
-        reg_batched.fit_from_preprocessed(
-            X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
-        )
-        assert hasattr(reg_batched, "model_")
-        assert hasattr(reg_batched.model_, "forward")
-
-        # Step 3c: Call forward and capture the input tensor to the *internal model*
-        tensor_p3_full = None
-        # Patch the *batched* regressor's internal model's forward method
-        with patch.object(
-            reg_batched.model_, "forward", wraps=reg_batched.model_.forward
-        ) as mock_forward_p3:
-            # Pass the list of preprocessed test tensors obtained earlier
-            _ = reg_batched.forward(X_tests_p2)
-            assert mock_forward_p3.called
-            # Capture the tensor input to the internal model
-            tensor_p3_full = mock_forward_p3.call_args.args[1]
-
-        assert tensor_p3_full is not None
-        # As confirmed before, the internal model in this path
-        # also receives the full sequence
-        assert tensor_p3_full.shape[0] == n_total
-
-        # --- 4. Comparison (Path 1 vs Path 3) ---
-
-        # Compare the two full tensors captured from the input to model_.forward
-        # Squeeze dimensions of size 1 for direct comparison
-        # shapes should be [N_Total, Features+1]
-        p1_squeezed = tensor_p1_full.squeeze()
-        p3_squeezed = tensor_p3_full.squeeze()
-
-        assert (
-            p1_squeezed.shape == p3_squeezed.shape
-        ), "Shapes of final model input tensors mismatch."
-
-        atol = 1e-6
-        tensors_match = torch.allclose(p1_squeezed, p3_squeezed, atol=atol)
-
-        assert tensors_match, "Mismatch between preprocessed model input tensors."

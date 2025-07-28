@@ -145,6 +145,31 @@ def test_fit(
     assert predictions.shape == (X.shape[0],), "Predictions shape is incorrect!"
 
 
+def test_fit_modes_all_return_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 0}
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier(fit_mode="fit_preprocessors", **kwargs)
+    tabpfn.fit(X, y)
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
+    np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
+    np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+
 @pytest.mark.parametrize(
     (
         "n_estimators",
