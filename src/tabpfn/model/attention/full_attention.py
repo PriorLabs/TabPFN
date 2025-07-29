@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import math
 from functools import partial
 from typing import TYPE_CHECKING
@@ -592,13 +591,16 @@ class MultiHeadAttention(Attention):
             # kwarg enable_gqa
             # Check if enable_gqa is supported by trying to call the function with
             # the parameter
-            with contextlib.suppress(TypeError, RuntimeError):
+            try:
                 _ = torch.nn.functional.scaled_dot_product_attention(
                     torch.empty(1, 1, 1, 1),
                     torch.empty(1, 1, 1, 1),
                     torch.empty(1, 1, 1, 1),
                     enable_gqa=True,
                 )
+                USE_TORCH_2_GQA = True
+            except (TypeError, RuntimeError):
+                pass
 
             # if torch.cuda.is_available():
             #     device = torch.cuda.current_device()
@@ -609,7 +611,7 @@ class MultiHeadAttention(Attention):
             # USE_TORCH_2_GQA = nvidia_compute_capability >= "8" and TORCH_2_SUPPORTS_GQ
             # The code above hangs on multi-gpu settings,
             # so we use a temporary solution:
-            USE_TORCH_2_GQA = True  # TODO
+            # USE_TORCH_2_GQA = True  # TODO
             # TODO: add logging for something like this
             # if use_flash_attention and USE_TORCH_2_GQA:
             # print("Using FlashAttention might be slower than torch's implementation,
