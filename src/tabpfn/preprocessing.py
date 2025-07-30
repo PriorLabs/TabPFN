@@ -75,7 +75,7 @@ class RegressorDatasetConfig(BaseDatasetConfig):
     # 1. The new field. Make it keyword-only and optional in the __init__.
     #    It's still conceptually required, which we'll enforce in __post_init__.
     znorm_space_bardist_: FullSupportBarDistribution | None = field(
-        default=None, kw_only=True
+        default=None
     )
 
     # 2. The old field, as an InitVar.
