@@ -6,8 +6,9 @@ different members.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -71,7 +72,64 @@ class ClassifierDatasetConfig(BaseDatasetConfig):
 class RegressorDatasetConfig(BaseDatasetConfig):
     """Regression Dataset + Model Configuration class."""
 
-    bardist_: FullSupportBarDistribution
+    # 1. The new field. Make it keyword-only and optional in the __init__.
+    #    It's still conceptually required, which we'll enforce in __post_init__.
+    znorm_space_bardist_: FullSupportBarDistribution | None = field(
+        default=None, kw_only=True
+    )
+
+    # 2. The old field, as an InitVar.
+    bardist_: InitVar[FullSupportBarDistribution | None] = None
+
+    def __post_init__(self, bardist_: FullSupportBarDistribution | None):
+        # 3. Robust validation logic.
+        new_name_provided = self.znorm_space_bardist_ is not None
+        old_name_provided = bardist_ is not None
+
+        if new_name_provided and old_name_provided:
+            raise TypeError(
+                "Cannot specify both `bardist_` (deprecated) and "
+                "`znorm_space_bardist_`."
+            )
+
+        if old_name_provided:
+            warnings.warn(
+                "`bardist_` is deprecated during initialization. "
+                "Use `znorm_space_bardist_` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            # Assign the value from the old name to the new one.
+            self.znorm_space_bardist_ = bardist_
+
+        # 4. Final check: Ensure the required field was actually set one way or another.
+        if self.znorm_space_bardist_ is None:
+            raise TypeError(
+                "__init__() missing 1 required argument: either 'znorm_space_bardist_'"
+                " or the deprecated 'bardist_'"
+            )
+
+    # Your @property and @setter are correct and can stay as they are.
+    @property
+    def bardist_(self) -> FullSupportBarDistribution:  # noqa: F811
+        """DEPRECATED: Please use `znorm_space_bardist_` instead."""
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.znorm_space_bardist_
+
+    @bardist_.setter
+    def bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.znorm_space_bardist_ = value
 
 
 @dataclass(frozen=True, eq=True)
@@ -770,7 +828,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             must hold the raw data (`X_raw`, `y_raw`), categorical feature
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
-            fields (`bardist_`).
+            fields (`znorm_space_bardist_`).
         n_workers (int, optional): The number of workers to use for potentially
             parallelized preprocessing steps (passed to `fit_preprocessing`).
             Defaults to 1.
@@ -873,7 +931,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
-            znorm_space_bardist_ = config.bardist_
+            znorm_space_bardist_ = config.znorm_space_bardist_
         elif isinstance(config, ClassifierDatasetConfig):
             conf = config.config
             x_full_raw = config.X_raw
