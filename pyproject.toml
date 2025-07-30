@@ -13,8 +13,12 @@ dependencies = [
   "pandas>=1.4.0,<3",
   "einops>=0.2.0,<0.9",
   "huggingface-hub>=0.0.1,<1",
+  "pydantic>=2.8.0",
   "pydantic-settings>=2.10.1",
-  "eval-type-backport>=0.2.2", # Needed for python 3.9 compatibility
+  # eval-type-backport is required on Python 3.9 to enable support for "X | Y" notation
+  # for union types in Pydantic.
+  # Once Python 3.10 is the minimum version, this can be removed.
+  "eval-type-backport>=0.2.2",
 ]
 requires-python = ">=3.9"
 authors = [
@@ -66,10 +70,11 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit",
-  "ruff==0.8.6",
-  "mypy",
+  "ruff==0.8.6", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==1.17.0", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest",
+  "pytest-xdist",
   "onnx", # required for onnx export tests
   "psutil", # required for testing internal memory tool on windows
   # Docs
@@ -226,7 +231,7 @@ exclude = [
 "__init__.py" = ["I002"]
 "examples/*" = ["INP001", "I002", "E741", "D101", "D103", "T20", "D415", "ERA001", "E402", "E501", "BLE001"]
 "docs/*" = ["INP001"]
-"src/tabpfn/model/*.py" = [
+"src/tabpfn/architectures/base/*.py" = [
   # Documentation
   "D100",
   "D101",
@@ -235,9 +240,9 @@ exclude = [
   "D107",
 ]
 # TODO(eddiebergman): There's a lot of typing and ruff problems detected here
-"src/tabpfn/model/multi_head_attention.py" = [
+"src/tabpfn/architectures/base/multi_head_attention.py" = [
 ]
-"src/tabpfn/model/encoders.py" = [
+"src/tabpfn/architectures/base/encoders.py" = [
   "PT018",
   "ARG002",
   "E501",
@@ -247,7 +252,7 @@ exclude = [
   "FBT002",
   "A001",
 ]
-"src/tabpfn/model/loading.py" = [
+"src/tabpfn/model_loading.py" = [
   "C901"
 ]
 "src/tabpfn/*.py" = [
@@ -309,8 +314,8 @@ disable_error_code = ["var-annotated"]
 # TODO(eddiebergman): Too much to deal with right now
 [[tool.mypy.overrides]]
 module = [
-  "tabpfn.model.multi_head_attention",
-  "tabpfn.model.encoders"
+  "tabpfn.architectures.base.multi_head_attention",
+  "tabpfn.architectures.base.encoders"
 ]
 ignore_errors = true
 

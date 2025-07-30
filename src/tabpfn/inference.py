@@ -17,13 +17,13 @@ import joblib
 import numpy as np
 import torch
 
-from tabpfn.model.memory import MemoryUsageEstimator
+from tabpfn.architectures.base.memory import MemoryUsageEstimator
 from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
-    from tabpfn.model.preprocessing import SequentialFeatureTransformer
-    from tabpfn.model.transformer import PerFeatureTransformer
+    from tabpfn.architectures.base.preprocessing import SequentialFeatureTransformer
+    from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
 
 
@@ -142,7 +142,7 @@ class InferenceEngineOnDemand(InferenceEngine):
     cat_ix: list[int]
     static_seed: int
     n_workers: int
-    model: PerFeatureTransformer
+    model: Architecture
     force_inference_dtype: torch.dtype | None
 
     @classmethod
@@ -152,7 +152,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         y_train: np.ndarray,
         *,
         cat_ix: list[int],
-        model: PerFeatureTransformer,
+        model: Architecture,
         ensemble_configs: Sequence[EnsembleConfig],
         rng: np.random.Generator,
         n_workers: int,
@@ -237,16 +237,15 @@ class InferenceEngineOnDemand(InferenceEngine):
                 X_full = X_full.type(self.force_inference_dtype)
                 y_train = y_train.type(self.force_inference_dtype)  # type: ignore  # noqa: PLW2901
 
-            style = None
             with (
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 output = self.model(
-                    *(style, X_full, y_train),
+                    X_full,
+                    y_train,
                     only_return_standard_out=only_return_standard_out,
                     categorical_inds=batched_cat_ix,
-                    single_eval_pos=len(y_train),
                 )
 
             output = output if isinstance(output, dict) else output.squeeze(1)
@@ -275,7 +274,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
     X_trains: list[torch.Tensor]
     y_trains: list[torch.Tensor]
     cat_ix: list[list[list[int]]]
-    model: PerFeatureTransformer
+    model: Architecture
     ensemble_configs: Sequence[EnsembleConfig]
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
@@ -287,7 +286,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         y_trains: list[torch.Tensor],
         *,
         cat_ix: list[list[list[int]]],
-        model: PerFeatureTransformer,
+        model: Architecture,
         ensemble_configs: Sequence[EnsembleConfig],
         force_inference_dtype: torch.dtype | None,
         inference_mode: bool,
@@ -331,7 +330,6 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         self.model = self.model.to(device)
         ensemble_size = len(self.X_trains)
         for i in range(ensemble_size):
-            single_eval_pos = self.X_trains[i].size(-2)  # End of train data
             train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
             train_y_batch = self.y_trains[i]
             train_x_full = train_x_full.to(device)
@@ -340,20 +338,15 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
                 train_x_full = train_x_full.type(self.force_inference_dtype)
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
 
-            style = None
             with (
                 torch.autocast(device.type, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(
-                    *(
-                        style,
-                        train_x_full.transpose(0, 1),
-                        train_y_batch.transpose(0, 1),
-                    ),
+                    train_x_full.transpose(0, 1),
+                    train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
                     categorical_inds=list([cat_item[i] for cat_item in self.cat_ix]),  # noqa: C411
-                    single_eval_pos=single_eval_pos,
                 )
 
             yield output, self.ensemble_configs[i]
@@ -383,7 +376,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     cat_ixs: Sequence[list[int]]
     ensemble_configs: Sequence[EnsembleConfig]
     preprocessors: Sequence[SequentialFeatureTransformer]
-    model: PerFeatureTransformer
+    model: Architecture
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
     no_preprocessing: bool = False
@@ -395,7 +388,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         y_train: np.ndarray | torch.Tensor,
         *,
         cat_ix: list[int],
-        model: PerFeatureTransformer,
+        model: Architecture,
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
         rng: np.random.Generator,
@@ -503,16 +496,15 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             else:
                 pass
 
-            style = None
             with (
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(
-                    *(style, X_full, y_train),
+                    X_full,
+                    y_train,
                     only_return_standard_out=only_return_standard_out,
                     categorical_inds=batched_cat_ix,
-                    single_eval_pos=len(y_train),
                 )
 
             output = output if isinstance(output, dict) else output.squeeze(1)
@@ -539,7 +531,7 @@ class InferenceEngineCacheKV(InferenceEngine):
     preprocessors: list[SequentialFeatureTransformer]
     ensemble_configs: list[EnsembleConfig]
     cat_ixs: Sequence[list[int]]
-    models: list[PerFeatureTransformer]
+    models: list[Architecture]
     n_train_samples: list[int]
     force_inference_dtype: torch.dtype | None
 
@@ -552,7 +544,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         cat_ix: list[int],
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
-        model: PerFeatureTransformer,
+        model: Architecture,
         device: torch.device,
         rng: np.random.Generator,
         dtype_byte_size: int,
@@ -587,7 +579,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             n_workers=n_workers,
             parallel_mode="as-ready",
         )
-        models: list[PerFeatureTransformer] = []
+        models: list[Architecture] = []
         preprocessors: list[SequentialFeatureTransformer] = []
         correct_order_configs: list[EnsembleConfig] = []
         cat_ixs: Sequence[list[int]] = []
@@ -617,10 +609,10 @@ class InferenceEngineCacheKV(InferenceEngine):
                 torch.inference_mode(),
             ):
                 ens_model.forward(
-                    *(None, X, y),
+                    X,
+                    y,
                     only_return_standard_out=only_return_standard_out,
                     categorical_inds=batched_preprocessor_cat_ix,
-                    single_eval_pos=len(X),
                 )
 
             if device.type != "cpu":
@@ -672,7 +664,6 @@ class InferenceEngineCacheKV(InferenceEngine):
             )
 
             model = model.to(device)  # noqa: PLW2901
-            style = None
 
             if self.force_inference_dtype is not None:
                 model = model.type(self.force_inference_dtype)  # noqa: PLW2901
@@ -682,10 +673,10 @@ class InferenceEngineCacheKV(InferenceEngine):
                 torch.inference_mode(),
             ):
                 output = model(
-                    *(style, X_test, None),
+                    X_test,
+                    y=None,
                     only_return_standard_out=only_return_standard_out,
                     categorical_inds=batched_cat_ix,
-                    single_eval_pos=None,
                 )
 
             # TODO(eddiebergman): This is not really what we want.

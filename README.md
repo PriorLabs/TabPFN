@@ -271,7 +271,7 @@ it later with :func:`load_fitted_tabpfn_model` (or the corresponding
 
 ```python
 from tabpfn import TabPFNRegressor
-from tabpfn.model.loading import (
+from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
     save_fitted_tabpfn_model,
 )

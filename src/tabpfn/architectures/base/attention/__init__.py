@@ -21,7 +21,6 @@ class Attention(ABC, nn.Module):
         use_cached_kv: bool = False,
         reuse_first_head_kv: bool = False,
         only_cache_first_head_kv: bool = False,
-        use_second_set_of_queries: bool = False,
         save_peak_mem_factor: int | None = None,
         add_input: bool = False,
         allow_inplace: bool = False,
@@ -51,8 +50,6 @@ class Attention(ABC, nn.Module):
                 first head.
             save_peak_mem_factor: Loops over the batch dimension rather than processing
                 it in parallel, to reduce memory usage.
-            use_second_set_of_queries: About to be removed in
-                https://github.com/PriorLabs/TabPFN-private/pull/7
             add_input: If True, returns (x+the output of attention), i.e. enables a
                 residual connection. If False, just returns the output of attention.
             allow_inplace: By setting this to True, the caller indicates that 'x' is not

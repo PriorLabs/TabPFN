@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.model import bar_distribution
+from tabpfn.architectures.base import bar_distribution
 
 
 def test_cdf_out_of_bounds():

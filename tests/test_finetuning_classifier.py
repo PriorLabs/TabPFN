@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from functools import partial
-from typing import Any, Literal
+from typing import Literal
 from unittest.mock import patch
 
 import numpy as np
@@ -51,7 +51,7 @@ default_config = {
     "inference_precision": "auto",
 }
 
-param_values: dict[str, list[Any]] = {
+param_values: dict[str, list] = {
     "n_estimators": estimators,
     "device": devices,
     "fit_mode": fit_modes,
@@ -581,8 +581,8 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
                 len(call_args_list) > 0
             ), "No calls recorded for standard model_.forward."
             if len(call_args_list[0].args) > 1:
-                tensor_p1_full = call_args_list[0].args[1]
-                tensor_p1_full = mock_forward_p1.call_args.args[1]
+                tensor_p1_full = call_args_list[0].args[0]
+                tensor_p1_full = mock_forward_p1.call_args.args[0]
 
             else:
                 self.fail(
@@ -658,7 +658,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
                 len(call_args_list) > 0
             ), "No calls recorded for batched model_.forward."
             if len(call_args_list[0].args) > 1:
-                tensor_p2_full = mock_forward_p2.call_args.args[1]
+                tensor_p2_full = mock_forward_p2.call_args.args[0]
             else:
                 self.fail(
                     f"Batched model_.forward call had "
