@@ -113,15 +113,17 @@ class ModelConfig:
         return cls(**selected_config)
 
     @classmethod
-    def upgrade_config(cls, config: dict[str, Any]) -> dict[str, Any]:
+    def upgrade_config(cls, config: dict[str, Any] | ModelConfig) -> dict[str, Any]:
         """Upgrade old configs to match the current config.
 
-        This allows backwards compatibility with  checkpoints.
+        This allows backwards compatibility with checkpoints.
         Raises a ValueError if the config is not compatible with the current code.
         """
         # The dates are to help us remove upgrades when they get very old.
-
         config = deepcopy(config)
+        # If a ModelConfig instance is passed, convert it to a dict first.
+        if isinstance(config, ModelConfig):
+            config = dataclasses.asdict(config)
 
         # Config changed on 2025-05-22
         # Some keys were previously allowed to be None, and replaced with a default
