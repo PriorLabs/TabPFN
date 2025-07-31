@@ -6,6 +6,7 @@ import sys
 import tempfile
 import typing
 from itertools import product
+from pathlib import Path
 from typing import Callable, Literal
 from unittest import mock
 
@@ -602,15 +603,13 @@ def test_saving_and_loading_model_with_weights():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Save the model state
-        save_path = os.path.join(tmpdir, "model.ckp")
+        save_path = Path(tmpdir) / "model.ckp"
         save_tabpfn_model(regressor, save_path)
 
         # Load the model state
         with torch.serialization.safe_globals([ModelConfig]):
             model, config, criterion = initialize_tabpfn_model(
-                save_path,
-                "regressor",
-                fit_mode="low_memory"
+                save_path, "regressor", fit_mode="low_memory"
             )
         regressor = TabPFNRegressor(
             model_path=RegressorModelSpecs(
