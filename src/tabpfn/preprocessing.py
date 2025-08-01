@@ -72,15 +72,11 @@ class ClassifierDatasetConfig(BaseDatasetConfig):
 class RegressorDatasetConfig(BaseDatasetConfig):
     """Regression Dataset + Model Configuration class."""
 
-    # 1. The new field. Make it keyword-only and optional in the __init__.
-    #    It's still conceptually required, which we'll enforce in __post_init__.
     znorm_space_bardist_: FullSupportBarDistribution | None = field(default=None)
 
-    # 2. The old field, as an InitVar.
     bardist_: InitVar[FullSupportBarDistribution | None] = None
 
     def __post_init__(self, bardist_: FullSupportBarDistribution | None):
-        # 3. Robust validation logic.
         new_name_provided = self.znorm_space_bardist_ is not None
         old_name_provided = bardist_ is not None
 
@@ -97,17 +93,14 @@ class RegressorDatasetConfig(BaseDatasetConfig):
                 DeprecationWarning,
                 stacklevel=2,
             )
-            # Assign the value from the old name to the new one.
             self.znorm_space_bardist_ = bardist_
 
-        # 4. Final check: Ensure the required field was actually set one way or another.
         if self.znorm_space_bardist_ is None:
             raise TypeError(
                 "__init__() missing 1 required argument: either 'znorm_space_bardist_'"
                 " or the deprecated 'bardist_'"
             )
 
-    # Your @property and @setter are correct and can stay as they are.
     @property
     def bardist_(self) -> FullSupportBarDistribution:  # noqa: F811
         """DEPRECATED: Please use `znorm_space_bardist_` instead."""
@@ -902,9 +895,11 @@ class DatasetCollectionWithPreprocessing(Dataset):
                   indices corresponding to each preprocessed X_train/X_test.
                 * `conf` (List): The list of preprocessing configurations used.
                 * `raw_space_bardist_` (FullSupportBarDistribution): Binning class
-                  for target variable (specific to the regression config).
+                  for target variable (specific to the regression config). The
+                  calculations will be on raw data in raw space.
                 * `znorm_space_bardist_` (FullSupportBarDistribution): Binning class for
-                  target variable (specific to the regression config).
+                  target variable (specific to the regression config). The calculations
+                  will be on standardized data in znorm space.
                 * `x_test_raw` (torch.Tensor): Original, unprocessed test feature
                   tensor.
                 * `y_test_raw` (torch.Tensor): Original, unprocessed test target
