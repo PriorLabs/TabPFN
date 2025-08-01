@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import typing
+import warnings
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
@@ -155,11 +156,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_outputs_: Literal[1]  # We only support single output
     """The number of outputs the model supports. Only 1 for now"""
 
-    bardist_: FullSupportBarDistribution
-    """The bar distribution of the target variable, used by the model."""
+    znorm_space_bardist_: FullSupportBarDistribution
+    """The bar distribution of the target variable, used by the model.
+    This is the bar distribution in the normalized target space.
+    """
 
-    normalized_bardist_: FullSupportBarDistribution
-    """The normalized bar distribution used for computing the predictions."""
+    raw_space_bardist_: FullSupportBarDistribution
+    """The bar distribution in the raw target space, used for computing the
+    predictions."""
 
     use_autocast_: bool
     """Whether torch's autocast should be used."""
@@ -414,6 +418,52 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
+    @property
+    def norm_bardist_(self) -> FullSupportBarDistribution:
+        """WARNING: DEPRECATED. Please use `raw_space_bardist_` instead.
+        This attribute will be removed in a future version.
+        """
+        warnings.warn(
+            "`norm_bardist_` is deprecated and will be removed in a future version. "
+            "Please use `raw_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.raw_space_bardist_
+
+    @norm_bardist_.setter
+    def norm_bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`norm_bardist_` is deprecated and will be removed in a future version. "
+            "Please use `raw_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.raw_space_bardist_ = value
+
+    @property
+    def bardist_(self) -> FullSupportBarDistribution:
+        """WARNING: DEPRECATED. Please use `znorm_space_bardist_` instead.
+        This attribute will be removed in a future version.
+        """
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.znorm_space_bardist_
+
+    @bardist_.setter
+    def bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.znorm_space_bardist_ = value
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -552,11 +602,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             random_state=rng,
         )
 
-        self.bardist_ = self.bardist_.to(self.device_)
+        self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.device_)
 
         assert len(ensemble_configs) == self.n_estimators
 
-        return ensemble_configs, X, y, self.bardist_
+        return ensemble_configs, X, y, self.znorm_space_bardist_
 
     def fit_from_preprocessed(
         self,
@@ -643,7 +693,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if not hasattr(self, "model_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y, self.bardist_ = (
+            ensemble_configs, X, y, self.znorm_space_bardist_ = (
                 self._initialize_dataset_preprocessing(X, y, rng)
             )
         else:  # already fitted and prompt_tuning mode: no cat. features
@@ -658,7 +708,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.constant_value_ = y[0] if self.is_constant_target_ else None
 
         if self.is_constant_target_:
-            self.bardist_ = FullSupportBarDistribution(
+            self.znorm_space_bardist_ = FullSupportBarDistribution(
                 borders=torch.tensor(
                     [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
                 )
@@ -670,8 +720,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
-        self.normalized_bardist_ = FullSupportBarDistribution(
-            self.bardist_.borders * self.y_train_std_ + self.y_train_mean_,
+        self.raw_space_bardist_ = FullSupportBarDistribution(
+            self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
 
         # Create the inference engine
@@ -802,7 +852,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             translate_probs_across_borders(
                 logits,
                 frm=torch.as_tensor(borders_t, device=self.device_),
-                to=self.bardist_.borders.to(self.device_),
+                to=self.znorm_space_bardist_.borders.to(self.device_),
             )
             for logits, borders_t in zip(outputs, borders)
         ]
@@ -821,7 +871,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logit_to_output = partial(
             _logits_to_output,
             logits=logits,
-            criterion=self.normalized_bardist_,
+            criterion=self.raw_space_bardist_,
             quantiles=quantiles,
         )
         if output_type in ["full", "main"]:
@@ -849,7 +899,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 # Return full output with criterion and logits
                 return FullOutputDict(
                     **main_outputs,
-                    criterion=self.normalized_bardist_,
+                    criterion=self.raw_space_bardist_,
                     logits=logits,
                 )
 
@@ -918,7 +968,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         check_is_fitted(self)
 
-        std_borders = self.bardist_.borders.cpu().numpy()
+        std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
         outputs: list[torch.Tensor] = []
         borders: list[np.ndarray] = []
 
@@ -1010,7 +1060,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type == "full":
             return FullOutputDict(
                 **main_outputs,
-                criterion=self.bardist_,
+                criterion=self.znorm_space_bardist_,
                 logits=torch.zeros((n_samples, 1)),
             )
         return main_outputs

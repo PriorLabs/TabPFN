@@ -6,8 +6,9 @@ different members.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import InitVar, dataclass, field
 from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -71,7 +72,55 @@ class ClassifierDatasetConfig(BaseDatasetConfig):
 class RegressorDatasetConfig(BaseDatasetConfig):
     """Regression Dataset + Model Configuration class."""
 
-    bardist_: FullSupportBarDistribution
+    znorm_space_bardist_: FullSupportBarDistribution | None = field(default=None)
+
+    bardist_: InitVar[FullSupportBarDistribution | None] = None
+
+    def __post_init__(self, bardist_: FullSupportBarDistribution | None):
+        new_name_provided = self.znorm_space_bardist_ is not None
+        old_name_provided = bardist_ is not None
+
+        if new_name_provided and old_name_provided:
+            raise TypeError(
+                "Cannot specify both `bardist_` (deprecated) and "
+                "`znorm_space_bardist_`."
+            )
+
+        if old_name_provided:
+            warnings.warn(
+                "`bardist_` is deprecated during initialization. "
+                "Use `znorm_space_bardist_` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.znorm_space_bardist_ = bardist_
+
+        if self.znorm_space_bardist_ is None:
+            raise TypeError(
+                "__init__() missing 1 required argument: either 'znorm_space_bardist_'"
+                " or the deprecated 'bardist_'"
+            )
+
+    @property
+    def bardist_(self) -> FullSupportBarDistribution:  # noqa: F811
+        """DEPRECATED: Please use `znorm_space_bardist_` instead."""
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.znorm_space_bardist_
+
+    @bardist_.setter
+    def bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.znorm_space_bardist_ = value
 
 
 @dataclass(frozen=True, eq=True)
@@ -770,7 +819,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             must hold the raw data (`X_raw`, `y_raw`), categorical feature
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
-            fields (`y_full_standardised`, `normalized_bardist_`).
+            fields (`znorm_space_bardist_`).
         n_workers (int, optional): The number of workers to use for potentially
             parallelized preprocessing steps (passed to `fit_preprocessing`).
             Defaults to 1.
@@ -783,7 +832,13 @@ class DatasetCollectionWithPreprocessing(Dataset):
         n_workers (int): Stores the number of workers for preprocessing.
     """
 
-    def __init__(self, split_fn, rng, dataset_config_collection, n_workers=1):
+    def __init__(
+        self,
+        split_fn,
+        rng,
+        dataset_config_collection,
+        n_workers=1,
+    ):
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
@@ -839,10 +894,12 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
                   indices corresponding to each preprocessed X_train/X_test.
                 * `conf` (List): The list of preprocessing configurations used.
-                * `normalized_bardist_` (FullSupportBarDistribution): Binning class
-                  for target variable (specific to the regression config).
-                * `bardist_` (FullSupportBarDistribution): Binning class for
-                  target variable (specific to the regression config).
+                * `raw_space_bardist_` (FullSupportBarDistribution): Binning class
+                  for target variable (specific to the regression config). The
+                  calculations will be on raw data in raw space.
+                * `znorm_space_bardist_` (FullSupportBarDistribution): Binning class for
+                  target variable (specific to the regression config). The calculations
+                  will be on standardized data in znorm space.
                 * `x_test_raw` (torch.Tensor): Original, unprocessed test feature
                   tensor.
                 * `y_test_raw` (torch.Tensor): Original, unprocessed test target
@@ -867,7 +924,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
-            bardist_ = config.bardist_
+            znorm_space_bardist_ = config.znorm_space_bardist_
         elif isinstance(config, ClassifierDatasetConfig):
             conf = config.config
             x_full_raw = config.X_raw
@@ -884,17 +941,14 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
         # Compute target variable Z-transform standardization
         # based on statistics of training set
-        # Note: Since we compute normalized_bardist_ here,
-        # it is not set as an attribute of the Regressor class
-        # This however makes also sense when considering that
-        # this attribute changes on every dataset
         if regression_task:
             train_mean = np.mean(y_train_raw)
             train_std = np.std(y_train_raw)
             y_test_standardized = (y_test_raw - train_mean) / train_std
             y_train_standardized = (y_train_raw - train_mean) / train_std
-            normalized_bardist_ = FullSupportBarDistribution(
-                bardist_.borders * train_std + train_mean
+            raw_space_bardist_ = FullSupportBarDistribution(
+                znorm_space_bardist_.borders * train_std
+                + train_mean  # Inverse normalization back to raw space
             ).float()
 
         y_train = y_train_standardized if regression_task else y_train_raw
@@ -953,7 +1007,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # Also return raw_target variable because of flexiblity
         # in optimisation space -> see examples/
         # Also return corresponding target variable binning
-        # classes normalized_bardist_ and bardist_
+        # classes raw_space_bardist_ and znorm_space_bardist_
         if regression_task:
             return (
                 X_trains_preprocessed,
@@ -962,8 +1016,8 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 y_test_standardized,
                 cat_ixs,
                 conf,
-                normalized_bardist_,
-                bardist_,
+                raw_space_bardist_,
+                znorm_space_bardist_,
                 x_test_raw,
                 y_test_raw,
             )
