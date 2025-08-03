@@ -122,13 +122,17 @@ class ModelConfig(ArchitectureConfig):
 
         # Config changed on 2025-06-04
         if config.get("canonical_y_encoder", False) is not False:
-            raise ValueError("Current version only supports canonical_y_encoder=False")
+            raise FutureWarning(
+                "Current version only supports canonical_y_encoder=False"
+            )
         if config.get("bias", False) is not False:
-            raise ValueError("Current version only supports bias=False")
+            raise FutureWarning("Current version only supports bias=False")
 
         # Config changed on 2025-07-09
         if config.pop("two_sets_of_queries", False):
-            raise ValueError("`two_sets_of_queries` is no longer supported in config")
+            raise FutureWarning(
+                "`two_sets_of_queries` is no longer supported in config"
+            )
 
         return config
 
