@@ -16,8 +16,13 @@
 > On CPU, only small datasets (≲1000 samples) are feasible.
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
-### Notebook
-The best way to get started and run test TabPFN functionalities is via our [Interactive Colab Tutorial](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
+### Interactive Colab notebook
+> [!TIP]
+> **Interactive Notebook Tutorial**
+>
+> Dive right in with our interactive Colab notebook! It's the best way to get a hands-on feel for TabPFN, walking you through installation, classification, and regression examples.
+>
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
 ### Installation
 Official installation (pip)
