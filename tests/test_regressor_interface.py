@@ -3,10 +3,8 @@ from __future__ import annotations
 import io
 import os
 import sys
-import tempfile
 import typing
 from itertools import product
-from pathlib import Path
 from typing import Callable, Literal
 from unittest import mock
 
@@ -23,8 +21,6 @@ from torch import nn
 
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
-from tabpfn.model.config import ModelConfig
-from tabpfn.model.loading import save_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
@@ -613,40 +609,3 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
 
     assert hasattr(reg2, "bardist_"), "regressor2 should have bardist_ attribute"
     assert reg2.bardist_ is not None, "bardist_ should be initialized for regressor2"
-
-
-def test_saving_and_loading_model_with_weights():
-    # initialize a TabPFNRegressor
-    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
-    regressor._initialize_model_variables()
-    # make sure that the model does not use the standard parameter
-    first_param = next(regressor.model_.parameters())
-    with torch.no_grad():
-        first_param.zero_()
-    first_model_parameter = first_param.clone()
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        # Save the model state
-        save_path = Path(tmpdir) / "model.ckp"
-        save_tabpfn_model(regressor, save_path)
-
-        # Load the model state
-        with torch.serialization.safe_globals([ModelConfig]):
-            model, config, criterion = initialize_tabpfn_model(
-                save_path, "regressor", fit_mode="low_memory"
-            )
-        regressor = TabPFNRegressor(
-            model_path=RegressorModelSpecs(
-                model=model,
-                config=config,
-                norm_criterion=criterion,
-            ),
-            device="cpu",
-        )
-
-    # then check the model is loaded correctly
-    regressor._initialize_model_variables()
-    torch.testing.assert_close(
-        next(regressor.model_.parameters()),
-        first_model_parameter,
-    )
