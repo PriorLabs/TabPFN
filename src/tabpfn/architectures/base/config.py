@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from copy import deepcopy
 from typing import Any, Literal, Optional
 from typing_extensions import Self
@@ -122,16 +123,24 @@ class ModelConfig(ArchitectureConfig):
 
         # Config changed on 2025-06-04
         if config.get("canonical_y_encoder", False) is not False:
-            raise FutureWarning(
-                "Current version only supports canonical_y_encoder=False"
+            warnings.warn(
+                "Current version only supports canonical_y_encoder=False",
+                category=FutureWarning,
+                stacklevel=2,
             )
         if config.get("bias", False) is not False:
-            raise FutureWarning("Current version only supports bias=False")
+            warnings.warn(
+                "Current version only supports bias=False",
+                category=FutureWarning,
+                stacklevel=2,
+            )
 
         # Config changed on 2025-07-09
         if config.pop("two_sets_of_queries", False):
-            raise FutureWarning(
-                "`two_sets_of_queries` is no longer supported in config"
+            warnings.warn(
+                "`two_sets_of_queries` is no longer supported in config",
+                category=FutureWarning,
+                stacklevel=2,
             )
 
         return config
