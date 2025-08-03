@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from copy import deepcopy
 from typing import Any, Literal, Optional
@@ -85,15 +86,23 @@ class ModelConfig(ArchitectureConfig):
     """
 
     @classmethod
-    def upgrade_config(cls, config: dict[str, Any]) -> dict[str, Any]:
+    def upgrade_config(cls, config: dict[str, Any] | ModelConfig) -> dict[str, Any]:
         """Upgrade old configs to match the current config.
 
         This allows backwards compatibility with  checkpoints.
         Raises a ValueError if the config is not compatible with the current code.
         """
         # The dates are to help us remove upgrades when they get very old.
-
-        config = deepcopy(config)
+        if isinstance(config, ModelConfig):
+            # If a ModelConfig instance is passed, convert it to a dict first.
+            config = dataclasses.asdict(config)
+        elif isinstance(config, dict):
+            # If a dict is passed, we can use it directly.
+            config = deepcopy(config)
+        else:
+            raise TypeError(
+                f"Expected ModelConfig or dict, got {type(config).__name__}"
+            )
 
         # Config changed on unknown date
         try:
