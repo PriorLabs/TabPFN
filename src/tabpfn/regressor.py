@@ -35,6 +35,7 @@ from sklearn.base import (
     check_is_fitted,
 )
 
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
     _initialize_model_variables_helper,
@@ -44,11 +45,7 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import (
-    load_fitted_tabpfn_model,
-    save_fitted_tabpfn_model,
-)
+from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
@@ -76,9 +73,10 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
+    from tabpfn.architectures.interface import ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
-    from tabpfn.model.config import ModelConfig
+    from tabpfn.inference import InferenceEngine
 
     try:
         from sklearn.base import Tags
@@ -127,8 +125,12 @@ RegressionResultType = Union[
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFNRegressor class."""
 
-    config_: ModelConfig
-    """The configuration of the loaded model to be used for inference."""
+    config_: ArchitectureConfig
+    """The configuration of the loaded model to be used for inference.
+
+    The concrete type of this config is defined by the arhitecture in use and should be
+    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    """
 
     interface_config_: ModelInterfaceConfig
     """Additional configuration of the interface for expert users."""

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import torch
 
-from tabpfn.model.attention.full_attention import MultiHeadAttention
-from tabpfn.model.config import ModelConfig
+from tabpfn.architectures.base.attention.full_attention import MultiHeadAttention
+from tabpfn.architectures.base.config import ModelConfig
 
 
 def test_attention():
@@ -20,7 +20,6 @@ def test_attention():
         max_num_classes=1,
         remove_duplicate_features=False,
         num_buckets=1000,
-        max_num_features=85,
         nlayers=2,
     )
 
