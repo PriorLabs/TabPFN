@@ -9,10 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Added a new `predict_logits()` method to `TabPFNClassifier` to return raw model outputs (logits). This is useful for model explainability tasks (e.g., with SHAP) that benefit from unnormalized, additive outputs.
+- Support for MPS device: TabPFN can run on local Apple MPS Accelerator.
 
 ### Changed
 - Increased the default value of the `n_estimators` parameter in `TabPFNClassifier` from `4` to `8`. This change aims to improve average accuracy by default, with the trade-off of increased inference time and memory usage. ([#384](https://github.com/PriorLabs/TabPFN/pull/384))
 - Refactored the internal prediction logic for `TabPFNClassifier` for improved clarity, modularity, and maintainability.
+- Regression finetuning outputs are renamed to more clearly reflect their purpose.
+- Updated the Colab Notebook to include more of TabPFNs functionality (Row embeddings, string input data, missing value imputation, time series forecasting).
+- Classifier finetunging now operates on the logits directly.
+
+### Bug fix
+- @benraha fixed a bug with differentiable inputs to the TabPFNClassifer.
+- @zhengaq fixed a bug when a row was completely consisting of missing values.
+- @rosenyu304 fixed a bug with the random number generator for old sklearn versions.
 
 ## [2.1.0] - 2025-07-04
 

@@ -18,14 +18,8 @@ import torch
 from sklearn.utils.validation import joblib
 from torch.utils.data import Dataset
 
-from tabpfn.constants import (
-    CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
-    MAXIMUM_FEATURE_SHIFT,
-    PARALLEL_MODE_TO_RETURN_AS,
-    SUPPORTS_RETURN_AS,
-)
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.preprocessing import (
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.base.preprocessing import (
     AddFingerprintFeaturesStep,
     DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
@@ -35,6 +29,12 @@ from tabpfn.model.preprocessing import (
     ReshapeFeatureDistributionsStep,
     SequentialFeatureTransformer,
     ShuffleFeaturesStep,
+)
+from tabpfn.constants import (
+    CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
+    MAXIMUM_FEATURE_SHIFT,
+    PARALLEL_MODE_TO_RETURN_AS,
+    SUPPORTS_RETURN_AS,
 )
 from tabpfn.utils import infer_random_state
 

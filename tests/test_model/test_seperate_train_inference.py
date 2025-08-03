@@ -3,9 +3,9 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.model import encoders
-from tabpfn.model.config import ModelConfig
-from tabpfn.model.transformer import PerFeatureTransformer
+from tabpfn.architectures.base import encoders
+from tabpfn.architectures.base.config import ModelConfig
+from tabpfn.architectures.base.transformer import PerFeatureTransformer
 
 
 @pytest.mark.parametrize(
@@ -25,7 +25,7 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
             max_num_classes=1,
             remove_duplicate_features=False,
             num_buckets=1000,
-            max_num_features=85,
+            feature_positional_embedding=None,
         ),
         encoder=encoders.SequentialEncoder(
             encoders.InputNormalizationEncoderStep(
@@ -46,7 +46,6 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
     for p in model.parameters():
         p.add_(0.01)  # make it more interesting, not anymore mean 0
 
-    model.feature_positional_embedding = None  # 'subspace'
     for layer in model.transformer_encoder.layers:
         layer.multiquery_item_attention_for_test_set = (
             multiquery_item_attention_for_test_set
@@ -77,11 +76,11 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
     )
 
     torch.manual_seed(12345)
-    model(x_train, y, single_eval_pos=n_train)
-    logits1 = model(x_test, None, single_eval_pos=0)
+    model(x_train, y)
+    logits1 = model(x_test, y=None)
 
     torch.manual_seed(12345)
-    logits1a = model(train_x=x_train, train_y=y, test_x=x_test)
+    logits1a = model(x=torch.concat([x_train, x_test]), y=y)
 
     assert logits1.float() == pytest.approx(
         logits1a.float(), abs=1e-5

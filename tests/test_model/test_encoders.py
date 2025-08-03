@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 import torch
 
-from tabpfn.model import encoders
-from tabpfn.model.encoders import (
+from tabpfn.architectures.base import encoders
+from tabpfn.architectures.base.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     NanHandlingEncoderStep,

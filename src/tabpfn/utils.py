@@ -21,6 +21,10 @@ from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
 from torch import nn
 
+from tabpfn.architectures.base.encoders import (
+    MulticlassClassificationTargetEncoder,
+    SequentialEncoder,
+)
 from tabpfn.constants import (
     DEFAULT_NUMPY_PREPROCESSING_DTYPE,
     NA_PLACEHOLDER,
@@ -28,10 +32,6 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.model.encoders import (
-    MulticlassClassificationTargetEncoder,
-    SequentialEncoder,
-)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin

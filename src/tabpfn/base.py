@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
 
 import torch
 
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.config import ModelInterfaceConfig
 
 # --- TabPFN imports ---
@@ -26,8 +27,7 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import load_model_criterion_config
+from tabpfn.model_loading import load_model_criterion_config
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
     ClassifierDatasetConfig,
@@ -47,15 +47,14 @@ if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
 
-    from tabpfn.model.bar_distribution import FullSupportBarDistribution
-    from tabpfn.model.config import ModelConfig
-    from tabpfn.model.transformer import PerFeatureTransformer
+    from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
 
 
 class BaseModelSpecs:
     """Base class for model specifications."""
 
-    def __init__(self, model: PerFeatureTransformer, config: ModelConfig):
+    def __init__(self, model: Architecture, config: ArchitectureConfig):
         self.model = model
         self.config = config
 
@@ -71,8 +70,8 @@ class RegressorModelSpecs(BaseModelSpecs):
 
     def __init__(
         self,
-        model: PerFeatureTransformer,
-        config: ModelConfig,
+        model: Architecture,
+        config: ArchitectureConfig,
         norm_criterion: FullSupportBarDistribution,
     ):
         super().__init__(model, config)
@@ -215,7 +214,7 @@ def create_inference_engine(  # noqa: PLR0913
     *,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model: PerFeatureTransformer,
+    model: Architecture,
     ensemble_configs: Any,
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
