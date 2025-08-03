@@ -537,7 +537,7 @@ def infer_categorical_features(
 
     for ix, col in enumerate(X.T):
         # Calculate total distinct values once, treating NaN as a category.
-        num_distinct = pd.Series(col).nunique() + int(pd.Series(col).hasnans)
+        num_distinct = (s := pd.Series(col)).nunique() + int(s.hasnans)
         if ix in maybe_categoricals:
             if num_distinct <= max_unique_for_category:
                 indices.append(ix)
