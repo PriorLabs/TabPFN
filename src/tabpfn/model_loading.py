@@ -79,7 +79,6 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-regressor.ckpt",
             "tabpfn-v2-regressor-09gpqh39.ckpt",
             "tabpfn-v2-regressor-2noar4o2.ckpt",
-            "tabpfn-v2-regressor-5wof9ojf.ckpt",
             "tabpfn-v2-regressor-wyl4o83o.ckpt",
         ]
         return cls(
