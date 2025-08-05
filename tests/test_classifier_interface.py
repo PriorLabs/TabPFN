@@ -22,6 +22,7 @@ from torch import nn
 
 from tabpfn import TabPFNClassifier
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
+from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
@@ -737,10 +738,11 @@ def test_classifier_with_text_and_na() -> None:
     assert predictions.shape == (X.shape[0],)
 
 
-def test_initialize_model_variables_classifier_sets_required_attributes() -> None:
+@pytest.mark.parametrize("model_path", ModelSource.get_classifier_v2().filenames)
+def test_initialize_model_variables_classifier_sets_required_attributes(model_path: str) -> None:
     # 1) Standalone initializer
     model, config, norm_criterion = initialize_tabpfn_model(
-        model_path="auto",
+        model_path=model_path,
         which="classifier",
         fit_mode="low_memory",
     )
