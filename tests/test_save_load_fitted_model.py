@@ -1,7 +1,6 @@
 # tests/test_save_load_fitted_model.py
 from __future__ import annotations
 
-import os
 from copy import deepcopy
 from pathlib import Path
 
