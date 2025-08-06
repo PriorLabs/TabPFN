@@ -20,12 +20,11 @@ from tabpfn.architectures.base.bar_distribution import (
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.utils import meta_dataset_collator
+from utils import get_pytest_devices
 
 rng = np.random.default_rng(42)
 
-devices = ["cpu"]
-if torch.cuda.is_available():
-    devices.append("cuda")
+devices = get_pytest_devices()
 
 fit_modes = [
     "batched",
