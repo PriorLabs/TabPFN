@@ -14,7 +14,7 @@ import tempfile
 import urllib.request
 import urllib.response
 import warnings
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast, overload
@@ -612,7 +612,7 @@ def save_tabpfn_model(
         state_dict = model_state
 
     # Create checkpoint with correct structure
-    checkpoint = {"state_dict": state_dict, "config": model.config_}
+    checkpoint = {"state_dict": state_dict, "config": asdict(model.config_)}
 
     # Save the checkpoint
     torch.save(checkpoint, save_path)

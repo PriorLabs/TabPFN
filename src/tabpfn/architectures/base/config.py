@@ -92,7 +92,6 @@ class ModelConfig(ArchitectureConfig):
         Raises a ValueError if the config is not compatible with the current code.
         """
         # The dates are to help us remove upgrades when they get very old.
-
         config = deepcopy(config)
 
         # Config changed on unknown date
