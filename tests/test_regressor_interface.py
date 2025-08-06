@@ -24,17 +24,9 @@ from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
-from .utils import check_cpu_float16_support
+from .utils import check_cpu_float16_support, get_pytest_devices
 
-exclude_devices = {
-    d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
-}
-
-devices = ["cpu:0"]
-if torch.cuda.is_available() and "cuda" not in exclude_devices:
-    devices.append("cuda")
-if torch.backends.mps.is_available() and "mps" not in exclude_devices:
-    devices.append("mps")
+devices = get_pytest_devices()
 
 # --- Environment-Aware Check for CPU Float16 Support ---
 is_cpu_float16_supported = check_cpu_float16_support()
@@ -52,7 +44,7 @@ estimators = [1, 2]
 all_combinations = list(
     product(
         estimators,
-        list(set(devices) - {"mps", "tpu"}),  # device,
+        devices,  # device,
         feature_shift_decoders,
         fit_modes,
         inference_precision_methods,
