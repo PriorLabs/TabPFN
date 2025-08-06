@@ -46,7 +46,7 @@ param_order = [
 
 default_config = {
     "n_estimators": 1,
-    "device": "cpu",
+    "device": "auto",
     "fit_mode": "batched",
     "inference_precision": "auto",
 }
@@ -545,7 +545,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         # Initialize two classifiers with the necessary modes
         clf_standard = TabPFNClassifier(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="fit_preprocessors",  # A standard mode that preprocesses on fit
         )
@@ -553,7 +553,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         #  and fit_from_preprocessed
         clf_batched = TabPFNClassifier(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="batched",
         )

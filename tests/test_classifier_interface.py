@@ -322,7 +322,7 @@ def test_balance_probabilities_alters_proba_output(
 def test_fit_modes_all_return_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    kwargs = {"n_estimators": 2, "device": "cpu", "random_state": 0}
+    kwargs = {"n_estimators": 2, "device": "auto", "random_state": 0}
     X, y = X_y
 
     torch.random.manual_seed(0)
@@ -717,7 +717,7 @@ def test_classifier_with_text_and_na() -> None:
     y = df["target"]
 
     # Initialize and fit TabPFN on data with text+NA and a column with all NAs
-    classifier = TabPFNClassifier(device="cpu", n_estimators=2)
+    classifier = TabPFNClassifier(device="auto", n_estimators=2)
 
     # This should now work without raising errors
     classifier.fit(X, y)
