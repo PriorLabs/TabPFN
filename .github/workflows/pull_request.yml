@@ -84,7 +84,8 @@ jobs:
   test_gpu:
     name: Test on GPU
     # This job runs only after all CPU tests in the matrix pass
-    needs: test_compatibility
+    # TODO: Enable "needs" after verifying GPU runner works
+    # needs: test_compatibility
     # This label must match your self-hosted or GitHub-hosted GPU runner
     runs-on: ubuntu-22.04-4core-gpu
     steps:
