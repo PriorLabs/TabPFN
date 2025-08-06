@@ -183,8 +183,8 @@ def main():
                 (
                     X_trains_preprocessed,
                     X_tests_preprocessed,
-                    y_trains_preprocessed,
-                    y_test_standardized,
+                    y_trains_znorm,
+                    y_test_znorm,
                     cat_ixs,
                     confs,
                     raw_space_bardist_,
@@ -196,13 +196,13 @@ def main():
                 regressor.raw_space_bardist_ = raw_space_bardist_[0]
                 regressor.bardist_ = znorm_space_bardist_[0]
                 regressor.fit_from_preprocessed(
-                    X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+                    X_trains_preprocessed, y_trains_znorm, cat_ixs, confs
                 )
                 logits, _, _ = regressor.forward(X_tests_preprocessed)
 
                 # For regression, the loss function is part of the preprocessed data
                 loss_fn = znorm_space_bardist_[0]
-                y_target = y_test_standardized
+                y_target = y_test_znorm
 
                 loss = loss_fn(logits, y_target.to(config["device"])).mean()
                 loss.backward()
