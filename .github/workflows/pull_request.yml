@@ -122,7 +122,9 @@ jobs:
         run: pytest tests/
 
   # -------------------------------------------------------------------
-  # GPU: depends on the Ubuntu 3.13 job above
+  # GPU: To save compute we only want to execute this workflow once
+  # a CPU workflow has passed. Hence, this workflow depends on the
+  # ubuntu-latest 3.13 workflow above.
   # -------------------------------------------------------------------
   test_gpu:
     name: Test on GPU
