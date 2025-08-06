@@ -55,11 +55,6 @@ Check if your platform is CI-compatible:
 python tests/test_consistency.py --print-platform
 ```
 
-Update reference values (ideally on a CI-compatible platform):
-```bash
-python tests/test_consistency.py --update-reference
-```
-
 > **Important:** If creating reference values on a non-compatible platform, you must manually edit the platform metadata to match the closest CI platform. Otherwise, tests will fail in CI environments.
 
 Run tests on a different platform:

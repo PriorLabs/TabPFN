@@ -6,6 +6,7 @@ import sys
 import typing
 from itertools import product
 from typing import Callable, Literal
+from unittest import mock
 
 import numpy as np
 import pytest
@@ -19,13 +20,21 @@ from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
 from tabpfn import TabPFNRegressor
+from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.utils import infer_device_and_type
 
 from .utils import check_cpu_float16_support
 
+exclude_devices = {
+    d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
+}
+
 devices = ["cpu:0"]
-if torch.cuda.is_available():
+if torch.cuda.is_available() and "cuda" not in exclude_devices:
     devices.append("cuda")
+if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+    devices.append("mps")
 
 # --- Environment-Aware Check for CPU Float16 Support ---
 is_cpu_float16_supported = check_cpu_float16_support()
@@ -73,7 +82,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 )
 def test_regressor(
     n_estimators: int,
-    device: Literal["cuda", "cpu"],
+    device: Literal["cuda", "mps", "cpu"],
     feature_shift_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
@@ -90,6 +99,8 @@ def test_regressor(
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
+    if torch.device(device).type == "mps" and inference_precision == torch.float64:
+        pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNRegressor(
         n_estimators=n_estimators,
@@ -123,18 +134,51 @@ def test_regressor(
     assert quantiles[0].shape == (X.shape[0],), "Predictions shape is incorrect"
 
 
+def test_fit_modes_all_return_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    kwargs = {
+        "n_estimators": 10,
+        "device": "cpu",
+        "inference_precision": torch.float32,
+        "random_state": 0,
+    }
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="fit_preprocessors", **kwargs)
+    tabpfn.fit(X, y)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=5)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
+    tabpfn.fit(X, y)
+    # TODO: It's only equal to one decimal place. Verify if actually broken.
+    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=1)
+
+
 # TODO: Should probably run a larger suite with different configurations
 @parametrize_with_checks([TabPFNRegressor(n_estimators=2)])
 def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
+    _auto_device = infer_device_and_type(device="auto")
+    if _auto_device.type == "mps":
+        pytest.skip("MPS does not support float64, which is required for this check.")
+
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
     ):
         estimator.inference_precision = torch.float64
         pytest.xfail("We're not at 1e-7 difference yet")
+
     check(estimator)
 
 
@@ -255,15 +299,12 @@ class ModelWrapper(nn.Module):
         self,
         X,
         y,
-        single_eval_pos,
         only_return_standard_out,
         categorical_inds,
     ):
         return self.model(
-            None,
             X,
             y,
-            single_eval_pos=single_eval_pos,
             only_return_standard_out=only_return_standard_out,
             categorical_inds=categorical_inds,
         )
@@ -297,12 +338,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         }
         torch.onnx.export(
             ModelWrapper(regressor.model_).eval(),
-            (X, y, y.shape[0], True, [[]]),
+            (X, y, True, [[]]),
             io.BytesIO(),
             input_names=[
                 "X",
                 "y",
-                "single_eval_pos",
                 "only_return_standard_out",
                 "categorical_inds",
             ],
@@ -389,14 +429,10 @@ def test_cpu_large_dataset_warning_override():
     model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=True)
     model.fit(X_large, y_large)
 
-    # Set environment variable to allow large datasets to avoid RuntimeError
-    os.environ["TABPFN_ALLOW_CPU_LARGE_DATASET"] = "1"
-    try:
+    # Mock the settings to allow large datasets to avoid RuntimeError
+    with mock.patch("tabpfn.base.settings.tabpfn.allow_cpu_large_dataset", new=True):
         model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=False)
         model.fit(X_large, y_large)
-    finally:
-        # Clean up environment variable
-        os.environ.pop("TABPFN_ALLOW_CPU_LARGE_DATASET")
 
 
 def test_cpu_large_dataset_error():
@@ -526,3 +562,50 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         assert np.all(
             quantile_prediction == 5.0
         ), "Quantile predictions are not constant as expected for full output"
+
+
+def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
+    # 1) Standalone initializer
+    model, config, norm_criterion = initialize_tabpfn_model(
+        model_path="auto",
+        which="regressor",
+        fit_mode="low_memory",
+    )
+    assert model is not None, "model should be initialized for regressor"
+    assert config is not None, "config should be initialized for regressor"
+    assert (
+        norm_criterion is not None
+    ), "norm_criterion should be initialized for regressor"
+
+    # 2) Test the sklearn-style wrapper on TabPFNRegressor
+    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor._initialize_model_variables()
+
+    assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
+    assert regressor.model_ is not None, "model_ should be initialized for regressor"
+
+    assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
+    assert regressor.config_ is not None, "config_ should be initialized for regressor"
+
+    assert hasattr(regressor, "bardist_"), "regressor should have bardist_ attribute"
+    assert (
+        regressor.bardist_ is not None
+    ), "bardist_ should be initialized for regressor"
+
+    # 3) Reuse via RegressorModelSpecs
+    spec = RegressorModelSpecs(
+        model=regressor.model_,
+        config=regressor.config_,
+        norm_criterion=regressor.bardist_,
+    )
+    reg2 = TabPFNRegressor(model_path=spec)
+    reg2._initialize_model_variables()
+
+    assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
+    assert reg2.model_ is not None, "model_ should be initialized for regressor2"
+
+    assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
+    assert reg2.config_ is not None, "config_ should be initialized for regressor2"
+
+    assert hasattr(reg2, "bardist_"), "regressor2 should have bardist_ attribute"
+    assert reg2.bardist_ is not None, "bardist_ should be initialized for regressor2"

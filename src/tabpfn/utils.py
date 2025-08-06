@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
+import os
 import typing
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -20,6 +21,10 @@ from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
 from torch import nn
 
+from tabpfn.architectures.base.encoders import (
+    MulticlassClassificationTargetEncoder,
+    SequentialEncoder,
+)
 from tabpfn.constants import (
     DEFAULT_NUMPY_PREPROCESSING_DTYPE,
     NA_PLACEHOLDER,
@@ -27,10 +32,6 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.model.encoders import (
-    MulticlassClassificationTargetEncoder,
-    SequentialEncoder,
-)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -40,6 +41,23 @@ if TYPE_CHECKING:
     from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
+
+
+def get_autocast_context(
+    device: torch.device, *, enabled: bool
+) -> contextlib.AbstractContextManager:
+    """Returns a torch.autocast context manager, disabling it for MPS devices.
+
+    Args:
+        device: The torch device being used.
+        enabled: Whether to enable autocast.
+
+    Returns:
+        A context manager for autocasting.
+    """
+    if device.type == "mps":
+        return contextlib.nullcontext()
+    return torch.autocast(device.type, enabled=enabled)
 
 
 def _get_embeddings(
@@ -159,16 +177,45 @@ def _cancel_nan_borders(
 
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
-    """Infer the device and data type from the given device string.
+    """Infers the appropriate PyTorch device based on the input and environment
+    configuration.
+
+    Rules:
+    1. If `device` is `None` or "auto":
+       - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
+       - Otherwise picks "mps" if available and not excluded
+       - Falls back to "cpu"
+    2. If `device` is a string, converts it to a torch.device
+    3. If already a torch.device, returns as-is
+    4. Otherwise raises ValueError
+
+    Environment:
+        TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
+        (e.g., "cuda,mps"). This allows excluding "mps" on the CI pipeline.
 
     Args:
-        device: The device to infer the type from.
+        device (str | torch.device | None): The device specification. Can be:
+            - `None` or `"auto"` for automatic inference.
+            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
+            - A `torch.device` instance.
 
     Returns:
         The inferred device
     """
+    exclude_devices = {
+        d.strip()
+        for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+        if d.strip()
+    }
+
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
+        device_type_ = (
+            "cuda"
+            if torch.cuda.is_available() and "cuda" not in exclude_devices
+            else "mps"
+            if torch.backends.mps.is_available() and "mps" not in exclude_devices
+            else "cpu"
+        )
         return torch.device(device_type_)
     if isinstance(device, str):
         return torch.device(device)
@@ -394,36 +441,19 @@ def validate_Xy_fit(
         assert len(X.shape) == 2
         estimator.n_features_in_ = X.shape[1]
 
-    if X.shape[1] > max_num_features:
-        if not ignore_pretraining_limits:
-            raise ValueError(
-                f"Number of features {X.shape[1]} in the input data is greater than "
-                f"the maximum number of features {max_num_features} officially "
-                "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
-                "to override this error!",
-            )
-
-        warnings.warn(
-            f"Number of features {X.shape[1]} is greater than the maximum "
-            f"Number of features {max_num_features} supported by the model."
-            " You may see degraded performance.",
-            UserWarning,
-            stacklevel=2,
+    if X.shape[1] > max_num_features and not ignore_pretraining_limits:
+        raise ValueError(
+            f"Number of features {X.shape[1]} in the input data is greater than "
+            f"the maximum number of features {max_num_features} officially "
+            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
+            "to override this error!",
         )
-    if X.shape[0] > max_num_samples:
-        if not ignore_pretraining_limits:
-            raise ValueError(
-                f"Number of samples {X.shape[0]} in the input data is greater than "
-                f"the maximum number of samples {max_num_samples} officially supported"
-                f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
-                f"error!",
-            )
-        warnings.warn(
-            f"Number of samples {X.shape[0]} is greater than the maximum "
-            f"Number of samples {max_num_samples} supported by the model."
-            " You may see degraded performance.",
-            UserWarning,
-            stacklevel=2,
+    if X.shape[0] > max_num_samples and not ignore_pretraining_limits:
+        raise ValueError(
+            f"Number of samples {X.shape[0]} in the input data is greater than "
+            f"the maximum number of samples {max_num_samples} officially supported"
+            f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
+            f"error!",
         )
 
     if is_classifier(estimator) and not estimator.differentiable_input:

@@ -9,10 +9,7 @@ from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNRegressor
-from tabpfn.model.loading import (
-    load_fitted_tabpfn_model,
-    save_fitted_tabpfn_model,
-)
+from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 
 # Train a regressor on GPU
 X, y = load_diabetes(return_X_y=True)

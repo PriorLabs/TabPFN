@@ -14,7 +14,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNRegressor
-from tabpfn.model.bar_distribution import (
+from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
@@ -503,7 +503,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             _ = reg_standard.predict(X_test_raw)  # Trigger the patched method
             assert mock_forward_p1.called
             # Capture the tensor input to the internal model
-            tensor_p1_full = mock_forward_p1.call_args.args[1]
+            tensor_p1_full = mock_forward_p1.call_args.args[0]
 
         assert tensor_p1_full is not None
         # Standard path's internal model receives the combined train+test sequence
@@ -552,7 +552,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             _ = reg_batched.forward(X_tests_p2)
             assert mock_forward_p3.called
             # Capture the tensor input to the internal model
-            tensor_p3_full = mock_forward_p3.call_args.args[1]
+            tensor_p3_full = mock_forward_p3.call_args.args[0]
 
         assert tensor_p3_full is not None
         # As confirmed before, the internal model in this path

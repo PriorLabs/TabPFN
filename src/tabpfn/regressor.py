@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import logging
 import typing
 from collections.abc import Callable, Sequence
 from functools import partial
@@ -34,6 +35,7 @@ from sklearn.base import (
     check_is_fitted,
 )
 
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
     _initialize_model_variables_helper,
@@ -43,11 +45,7 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import (
-    load_fitted_tabpfn_model,
-    save_fitted_tabpfn_model,
-)
+from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
@@ -75,9 +73,10 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
+    from tabpfn.architectures.interface import ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
-    from tabpfn.model.config import ModelConfig
+    from tabpfn.inference import InferenceEngine
 
     try:
         from sklearn.base import Tags
@@ -126,8 +125,12 @@ RegressionResultType = Union[
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFNRegressor class."""
 
-    config_: ModelConfig
-    """The configuration of the loaded model to be used for inference."""
+    config_: ArchitectureConfig
+    """The configuration of the loaded model to be used for inference.
+
+    The concrete type of this config is defined by the arhitecture in use and should be
+    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    """
 
     interface_config_: ModelInterfaceConfig
     """Additional configuration of the interface for expert users."""
@@ -247,8 +250,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If `"auto"`, the device is
-                `"cuda"` if available, otherwise `"cpu"`.
+                The device to use for inference with TabPFN. If set to "auto", the
+                device is selected based on availability in the following order of
+                priority: "cuda", "mps", and then "cpu". You can also set the device
+                manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
                 supported devices.
@@ -580,6 +585,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
+        if self.fit_mode != "batched":
+            logging.warning(
+                "The model was not in 'batched' mode. "
+                "Automatically switching to 'batched' mode for finetuning."
+            )
+            self.fit_mode = "batched"
+
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "model_") or not no_refit:
             byte_size, rng = self._initialize_model_variables()
@@ -588,14 +600,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.device_
             )
             rng = None
-
-        if self.fit_mode != "batched":
-            raise ValueError(
-                "The fit_from_preprocessed function"
-                " is only supported in the batched fit_mode."
-                " Since in other fit_modes the preprocessing"
-                " is done as part of the inference engine"
-            )
 
         # Create the inference engine
         self.executor_ = create_inference_engine(
@@ -630,6 +634,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self
         """
         ensemble_configs: list[RegressorEnsembleConfig]
+
+        if self.fit_mode == "batched":
+            logging.warning(
+                "The model was in 'batched' mode, likely after finetuning. "
+                "Automatically switching to 'fit_preprocessors' mode for standard "
+                "prediction. The model will be re-initialized."
+            )
+            self.fit_mode = "fit_preprocessors"
+
         if not hasattr(self, "model_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
             ensemble_configs, X, y, self.bardist_ = (
@@ -639,11 +652,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.device_
-            )
-
-        if self.fit_mode == "batched":
-            raise ValueError(
-                "The fit() function is not supported in 'batched' fit_mode."
             )
 
         assert len(ensemble_configs) == self.n_estimators
