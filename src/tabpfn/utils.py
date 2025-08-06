@@ -709,7 +709,7 @@ def update_encoder_params(
     if not hasattr(norm_layer, "remove_outliers"):
         raise ValueError(
             "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
-            "this will break TabPFN sklearn wrapper"
+            "this will break the TabPFN sklearn wrapper"
         )
     norm_layer.remove_outliers = (remove_outliers_std is not None) and (
         remove_outliers_std > 0
