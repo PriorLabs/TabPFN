@@ -697,7 +697,7 @@ def update_encoder_params(
     # and inference
     if not hasattr(model, "encoder"):
         raise ValueError(
-            "Model does not have an encoder, this will break TabPFN sklearn wrapper"
+            "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
         )
 
     encoder = model.encoder
