@@ -6,7 +6,6 @@ import torch
 from tabpfn.architectures.base import encoders
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
-from tests.utils import get_pytest_devices
 
 
 @pytest.mark.parametrize(
@@ -56,7 +55,7 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
     model.reset_save_peak_mem_factor(None)
     model.empty_trainset_representation_cache()
 
-    device = get_pytest_devices()[0]
+    device = "cpu"
 
     n_train = 10
     n_features = 10
