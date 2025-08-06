@@ -155,7 +155,7 @@ def test_fit(
     list(
         product(
             [1, 4],  # n_estimators
-            ["cpu", "cuda"] if torch.cuda.is_available() else ["cpu"],  # device
+            list(set(devices) - {"mps", "tpu"}),  # device
             [0.5, 1.0, 1.5],  # softmax_temperature
             [False, True],  # average_before_softmax
         )

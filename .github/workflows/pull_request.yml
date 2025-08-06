@@ -122,4 +122,5 @@ jobs:
       - name: Run GPU Test Suite
         env:
           CUDA_VISIBLE_DEVICES: "0"
+          TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0" # skip cpu based tests that were run separately
         run: pytest tests/
