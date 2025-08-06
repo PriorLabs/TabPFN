@@ -693,8 +693,12 @@ def update_encoder_params(
     if remove_outliers_std is not None and remove_outliers_std <= 0:
         raise ValueError("remove_outliers_std must be greater than 0")
 
+    # TODO: find a less hacky way to change settings during training
+    # and inference
     if not hasattr(model, "encoder"):
-        return
+        raise ValueError(
+            "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+        )
 
     encoder = model.encoder
 
@@ -702,6 +706,11 @@ def update_encoder_params(
     norm_layer = next(
         e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
     )
+    if not hasattr(norm_layer, "remove_outliers"):
+        raise ValueError(
+            "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
+            "this will break the TabPFN sklearn wrapper"
+        )
     norm_layer.remove_outliers = (remove_outliers_std is not None) and (
         remove_outliers_std > 0
     )
