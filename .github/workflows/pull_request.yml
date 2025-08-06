@@ -36,7 +36,10 @@ jobs:
           - os: windows-latest
             python-version: "3.9"
             dependency-set: minimum
-          # REMOVED ubuntu-latest 3.13 here which is executed in separate workflow
+          # ubuntu-latest 3.13 maximum is not included here because it is executed
+          # as a separate workflow below. This is because we wish to gate the GPU
+          # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
+          # separate workflow.
           - os: macos-latest
             python-version: "3.13"
             dependency-set: maximum
