@@ -109,16 +109,15 @@ jobs:
       - name: Generate requirements file
         run: python scripts/generate_dependencies.py maximum
 
-      - name: Install CUDA dependencies
-        shell: bash
+      - name: Install dependencies
         run: |
-          # Install PyTorch with CUDA support first
-          uv pip install --system torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-          # Install remaining dependencies
           uv pip install --system --no-deps .
           uv pip install --system -r requirements.txt
           uv pip install --system pytest psutil
-          # ONNX is not installed as this job uses Python 3.13
+          if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
+            uv pip install --system onnx
+          fi
+        shell: bash
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
