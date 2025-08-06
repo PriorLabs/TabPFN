@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import math
 from functools import partial
 from typing import TYPE_CHECKING
