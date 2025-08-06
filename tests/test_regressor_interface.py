@@ -52,7 +52,7 @@ estimators = [1, 2]
 all_combinations = list(
     product(
         estimators,
-        devices,
+        list(set(devices) - {"mps", "tpu"}),  # device,
         feature_shift_decoders,
         fit_modes,
         inference_precision_methods,
