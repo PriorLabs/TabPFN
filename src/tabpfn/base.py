@@ -428,7 +428,7 @@ def get_preprocessed_datasets_helper(
                 X_raw=X_mod,
                 y_raw=y_mod,
                 cat_ix=current_cat_ix,
-                bardist_=bardist_,
+                znorm_space_bardist_=bardist_,
             )
         else:
             raise ValueError(f"Invalid model_type: {model_type}")
@@ -451,7 +451,7 @@ def _initialize_model_variables_helper(
         (
             calling_instance.model_,
             calling_instance.config_,
-            calling_instance.bardist_,
+            calling_instance.znorm_space_bardist_,
         ) = initialize_tabpfn_model(
             model_path=calling_instance.model_path,
             which="regressor",

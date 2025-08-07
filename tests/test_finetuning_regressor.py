@@ -275,7 +275,7 @@ def test_tabpfn_regressor_finetuning_loop(
             assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
 
             # N_bins
-            n_borders_bardist = reg.bardist_.borders.shape[0]
+            n_borders_bardist = reg.znorm_space_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
             n_borders_norm_crit = reg.raw_space_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
@@ -285,18 +285,18 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(y_trains_preprocessed) == reg.n_estimators
             assert reg.model_ is not None, "Model not initialized after fit"
             assert hasattr(
-                reg, "bardist_"
-            ), "Regressor missing 'bardist_' attribute after fit"
+                reg, "znorm_space_bardist_"
+            ), "Regressor missing 'znorm_space_bardist_' attribute after fit"
             assert hasattr(
                 reg, "raw_space_bardist_"
             ), "Regressor missing 'raw_space_bardist_' attribute after fit"
-            assert reg.bardist_ is not None, "reg.bardist_ is None"
+            assert reg.znorm_space_bardist_ is not None, "reg.znorm_space_bardist_ is None"
 
             lossfn = None
             if optimization_space == "raw_label_space":
                 lossfn = reg.raw_space_bardist_
             elif optimization_space == "preprocessed":
-                lossfn = reg.bardist_
+                lossfn = reg.znorm_space_bardist_
             else:
                 raise ValueError("Need to define optimization space")
 
@@ -440,8 +440,8 @@ def test_finetuning_consistency_bar_distribution(
     )
 
     torch.testing.assert_close(
-        reg_standard.bardist_.borders,
-        reg_batched.bardist_.borders,
+        reg_standard.znorm_space_bardist_.borders,
+        reg_batched.znorm_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Bar distribution borders do not match.",

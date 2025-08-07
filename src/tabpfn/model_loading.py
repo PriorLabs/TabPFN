@@ -602,9 +602,9 @@ def save_tabpfn_model(
     model_state = model.model_.state_dict()
 
     # Get bardist state dict and prefix with 'criterion.'
-    if hasattr(model, "bardist_") and model.bardist_ is not None:
+    if hasattr(model, "znorm_space_bardist_") and model.znorm_space_bardist_ is not None:
         bardist_state = {
-            f"criterion.{k}": v for k, v in model.bardist_.state_dict().items()
+            f"criterion.{k}": v for k, v in model.znorm_space_bardist_.state_dict().items()
         }
         # Combine model and bardist states
         state_dict = {**model_state, **bardist_state}
