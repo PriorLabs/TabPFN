@@ -261,9 +261,9 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_high_temp.fit(X, y)
     logits_high_temp = model_high_temp.predict_logits(X)
 
-    assert np.mean(np.abs(logits_low_temp)) > np.mean(
-        np.abs(logits_high_temp)
-    ), "Low softmax temperature did not result in more extreme logits."
+    assert np.mean(np.abs(logits_low_temp)) > np.mean(np.abs(logits_high_temp)), (
+        "Low softmax temperature did not result in more extreme logits."
+    )
 
     model_temp_one = TabPFNClassifier(
         softmax_temperature=1.0, n_estimators=1, device="cpu", random_state=42
@@ -271,12 +271,12 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_temp_one.fit(X, y)
     logits_temp_one = model_temp_one.predict_logits(X)
 
-    assert not np.allclose(
-        logits_temp_one, logits_low_temp, atol=1e-6
-    ), "Logits did not change with low temperature."
-    assert not np.allclose(
-        logits_temp_one, logits_high_temp, atol=1e-6
-    ), "Logits did not change with high temperature."
+    assert not np.allclose(logits_temp_one, logits_low_temp, atol=1e-6), (
+        "Logits did not change with low temperature."
+    )
+    assert not np.allclose(logits_temp_one, logits_high_temp, atol=1e-6), (
+        "Logits did not change with high temperature."
+    )
 
 
 def test_balance_probabilities_alters_proba_output(
@@ -314,9 +314,9 @@ def test_balance_probabilities_alters_proba_output(
     model_balance.fit(X_subset, y_imbalanced)
     proba_balance = model_balance.predict_proba(X_subset)
 
-    assert not np.allclose(
-        proba_no_balance, proba_balance, atol=1e-5
-    ), "Probabilities did not change when balance_probabilities was toggled."
+    assert not np.allclose(proba_no_balance, proba_balance, atol=1e-5), (
+        "Probabilities did not change when balance_probabilities was toggled."
+    )
 
 
 @pytest.mark.skip(reason="No longer passes now dataset has been shrunk.")
@@ -733,7 +733,9 @@ def test_classifier_with_text_and_na() -> None:
 
 
 @pytest.mark.parametrize("model_path", ModelSource.get_classifier_v2().filenames)
-def test_initialize_model_variables_classifier_sets_required_attributes(model_path: str) -> None:
+def test_initialize_model_variables_classifier_sets_required_attributes(
+    model_path: str,
+) -> None:
     # 1) Standalone initializer
     model, config, norm_criterion = initialize_tabpfn_model(
         model_path=model_path,
@@ -752,13 +754,13 @@ def test_initialize_model_variables_classifier_sets_required_attributes(model_pa
     assert classifier.model_ is not None, "model_ should be initialized for classifier"
 
     assert hasattr(classifier, "config_"), "classifier should have config_ attribute"
-    assert (
-        classifier.config_ is not None
-    ), "config_ should be initialized for classifier"
+    assert classifier.config_ is not None, (
+        "config_ should be initialized for classifier"
+    )
 
-    assert not hasattr(
-        classifier, "bardist_"
-    ), "classifier should not have bardist_ attribute"
+    assert not hasattr(classifier, "bardist_"), (
+        "classifier should not have bardist_ attribute"
+    )
 
     # 3) Reuse via ClassifierModelSpecs
     new_model_state = classifier.model_
@@ -769,15 +771,15 @@ def test_initialize_model_variables_classifier_sets_required_attributes(model_pa
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
-    assert (
-        classifier2.model_ is not None
-    ), "model_ should be initialized for classifier2"
+    assert classifier2.model_ is not None, (
+        "model_ should be initialized for classifier2"
+    )
 
     assert hasattr(classifier2, "config_"), "classifier2 should have config_ attribute"
-    assert (
-        classifier2.config_ is not None
-    ), "config_ should be initialized for classifier2"
+    assert classifier2.config_ is not None, (
+        "config_ should be initialized for classifier2"
+    )
 
-    assert not hasattr(
-        classifier2, "bardist_"
-    ), "classifier2 should not have bardist_ attribute"
+    assert not hasattr(classifier2, "bardist_"), (
+        "classifier2 should not have bardist_ attribute"
+    )

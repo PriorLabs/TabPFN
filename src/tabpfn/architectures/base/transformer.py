@@ -610,9 +610,9 @@ class PerFeatureTransformer(Architecture):
         use_cached_embeddings: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if use_cached_embeddings and self.cached_embeddings is not None:
-            assert (
-                data_dags is None
-            ), "Caching embeddings is not supported with data_dags at this point."
+            assert data_dags is None, (
+                "Caching embeddings is not supported with data_dags at this point."
+            )
             x += self.cached_embeddings[None, None]
             return x, y
 
@@ -662,9 +662,9 @@ class PerFeatureTransformer(Architecture):
 
         self.cached_embeddings = None
         if cache_embeddings and embs is not None:
-            assert (
-                data_dags is None
-            ), "Caching embeddings is not supported with data_dags at this point."
+            assert data_dags is None, (
+                "Caching embeddings is not supported with data_dags at this point."
+            )
             self.cached_embeddings = embs
 
         # TODO(old) should this go into encoder?
