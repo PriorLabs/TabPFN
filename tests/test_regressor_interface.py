@@ -587,7 +587,9 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
     assert regressor.config_ is not None, "config_ should be initialized for regressor"
 
-    assert hasattr(regressor, "znorm_space_bardist_"), "regressor should have znorm_space_bardist_ attribute"
+    assert hasattr(
+        regressor, "znorm_space_bardist_"
+    ), "regressor should have znorm_space_bardist_ attribute"
     assert (
         regressor.znorm_space_bardist_ is not None
     ), "znorm_space_bardist_ should be initialized for regressor"
@@ -607,5 +609,9 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
     assert reg2.config_ is not None, "config_ should be initialized for regressor2"
 
-    assert hasattr(reg2, "znorm_space_bardist_"), "regressor2 should have znorm_space_bardist_ attribute"
-    assert reg2.znorm_space_bardist_ is not None, "znorm_space_bardist_ should be initialized for regressor2"
+    assert hasattr(
+        reg2, "znorm_space_bardist_"
+    ), "regressor2 should have znorm_space_bardist_ attribute"
+    assert (
+        reg2.znorm_space_bardist_ is not None
+    ), "znorm_space_bardist_ should be initialized for regressor2"

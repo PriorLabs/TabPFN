@@ -290,7 +290,9 @@ def test_tabpfn_regressor_finetuning_loop(
             assert hasattr(
                 reg, "raw_space_bardist_"
             ), "Regressor missing 'raw_space_bardist_' attribute after fit"
-            assert reg.znorm_space_bardist_ is not None, "reg.znorm_space_bardist_ is None"
+            assert (
+                reg.znorm_space_bardist_ is not None
+            ), "reg.znorm_space_bardist_ is None"
 
             lossfn = None
             if optimization_space == "raw_label_space":
