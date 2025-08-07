@@ -20,6 +20,8 @@ jobs:
 
   test_compatibility:
     name: Test Package Compatibility
+    # This job will only start after linting succeeds
+    needs: check_python_linting
     strategy:
       fail-fast: false
       matrix:
@@ -34,9 +36,10 @@ jobs:
           - os: windows-latest
             python-version: "3.9"
             dependency-set: minimum
-          - os: ubuntu-latest
-            python-version: "3.13"
-            dependency-set: maximum
+          # ubuntu-latest 3.13 maximum is not included here because it is executed
+          # as a separate workflow below. This is because we wish to gate the GPU
+          # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
+          # separate workflow.
           - os: macos-latest
             python-version: "3.13"
             dependency-set: maximum
@@ -65,11 +68,8 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system --no-deps .
-          # onnx is required for onnx export tests
-          # we don't install all dev dependencies here for speed
           uv pip install --system -r requirements.txt
           uv pip install --system pytest psutil
-          # onnx is not supported on python 3.13 yet https://github.com/onnx/onnx/issues/6339
           if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
             uv pip install --system onnx
           fi
@@ -80,6 +80,90 @@ jobs:
 
       - name: Run Tests (exclude MPS params)
         env:
-          # MPS excluded since github CI device has very low MPS memory
           TABPFN_EXCLUDE_DEVICES: "mps"
+        run: pytest tests/
+
+  # -------------------------------------------------------------------
+  # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
+  # -------------------------------------------------------------------
+  test_ubuntu_latest_313:
+    name: Test Ubuntu-latest (Py 3.13)
+    needs: check_python_linting
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+
+      - name: Generate requirements file
+        run: python scripts/generate_dependencies.py maximum
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system --no-deps .
+          uv pip install --system -r requirements.txt
+          uv pip install --system pytest psutil
+          # onnx is not supported on Python 3.13 yet
+        shell: bash
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - name: Run Tests (exclude MPS params)
+        env:
+          TABPFN_EXCLUDE_DEVICES: "mps"
+        run: pytest tests/
+
+  # -------------------------------------------------------------------
+  # GPU: To save compute we only want to execute this workflow once
+  # a CPU workflow has passed. Hence, this workflow depends on the
+  # ubuntu-latest 3.13 workflow above.
+  # -------------------------------------------------------------------
+  test_gpu:
+    name: Test on GPU
+    needs: test_ubuntu_latest_313
+    runs-on: ubuntu-22.04-4core-gpu
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+          architecture: x64
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+
+      - name: Generate requirements file
+        run: python scripts/generate_dependencies.py maximum
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system --no-deps .
+          uv pip install --system -r requirements.txt
+          uv pip install --system pytest psutil
+          # (No onnx — Python 3.13)
+        shell: bash
+
+      - name: Initialize submodules
+        run: git submodule update --init --recursive
+
+      - name: Run GPU Test Suite
+        env:
+          CUDA_VISIBLE_DEVICES: "0"
+          # skip cpu based tests that were run separately
+          TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
         run: pytest tests/

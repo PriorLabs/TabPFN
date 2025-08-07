@@ -1,6 +1,29 @@
 from __future__ import annotations
 
+import os
+
 import torch
+
+
+def get_pytest_devices() -> list[str]:
+    exclude_devices = {
+        d.strip()
+        for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+        if d.strip()
+    }
+
+    devices = []
+    if "cpu" not in exclude_devices:
+        devices.append("cpu")
+    if torch.cuda.is_available() and "cuda" not in exclude_devices:
+        devices.append("cuda")
+    if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+        devices.append("mps")
+
+    if len(devices) == 0:
+        raise RuntimeError("No devices available for testing.")
+
+    return devices
 
 
 def check_cpu_float16_support() -> bool:
