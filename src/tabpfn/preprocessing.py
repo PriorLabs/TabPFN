@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import InitVar, dataclass, field
+from dataclasses import dataclass, field
 from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -74,38 +74,13 @@ class RegressorDatasetConfig(BaseDatasetConfig):
 
     znorm_space_bardist_: FullSupportBarDistribution | None = field(default=None)
 
-    bardist_: InitVar[FullSupportBarDistribution | None] = None
-
-    def __post_init__(self, bardist_: FullSupportBarDistribution | None):
-        new_name_provided = self.znorm_space_bardist_ is not None
-        old_name_provided = bardist_ is not None
-
-        if new_name_provided and old_name_provided:
-            raise TypeError(
-                "Cannot specify both `bardist_` (deprecated) and "
-                "`znorm_space_bardist_`."
-            )
-
-        if old_name_provided:
-            warnings.warn(
-                "`bardist_` is deprecated during initialization. "
-                "Use `znorm_space_bardist_` instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            self.znorm_space_bardist_ = bardist_
-
-        if self.znorm_space_bardist_ is None:
-            raise TypeError(
-                "__init__() missing 1 required argument: either 'znorm_space_bardist_'"
-                " or the deprecated 'bardist_'"
-            )
-
     @property
-    def bardist_(self) -> FullSupportBarDistribution:  # noqa: F811
-        """DEPRECATED: Please use `znorm_space_bardist_` instead."""
+    def bardist_(self) -> FullSupportBarDistribution:
+        """DEPRECATED: Accessing `bardist_` is deprecated.
+        Use `znorm_space_bardist_` instead.
+        """
         warnings.warn(
-            "`bardist_` is deprecated and will be removed. "
+            "`bardist_` is deprecated and will be removed in a future version. "
             "Please use `znorm_space_bardist_` instead.",
             DeprecationWarning,
             stacklevel=2,
@@ -114,8 +89,11 @@ class RegressorDatasetConfig(BaseDatasetConfig):
 
     @bardist_.setter
     def bardist_(self, value: FullSupportBarDistribution) -> None:
+        """DEPRECATED: Setting `bardist_` is deprecated.
+        Use `znorm_space_bardist_`.
+        """
         warnings.warn(
-            "`bardist_` is deprecated and will be removed. "
+            "`bardist_` is deprecated and will be removed in a future version. "
             "Please use `znorm_space_bardist_` instead.",
             DeprecationWarning,
             stacklevel=2,
