@@ -21,11 +21,11 @@ from tabpfn.architectures.base.bar_distribution import (
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.utils import meta_dataset_collator
 
+from .utils import get_pytest_devices
+
 rng = np.random.default_rng(42)
 
-devices = ["cpu"]
-if torch.cuda.is_available():
-    devices.append("cuda")
+devices = get_pytest_devices()
 
 fit_modes = [
     "batched",
@@ -479,13 +479,13 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         # Initialize two regressors with the inference and FineTuning
         reg_standard = TabPFNRegressor(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="fit_preprocessors",  # Example standard mode
         )
         reg_batched = TabPFNRegressor(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="batched",  # Mode compatible with get_preprocessed_datasets
         )

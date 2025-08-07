@@ -1,11 +1,17 @@
 # tests/test_save_load_fitted_model.py
 from __future__ import annotations
 
+from copy import deepcopy
+from pathlib import Path
+
 import numpy as np
 import pytest
+import torch
 from sklearn.datasets import make_classification, make_regression
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.model_loading import save_tabpfn_model
 
 
 # --- Fixtures for data ---
@@ -80,3 +86,45 @@ def test_loading_mismatched_types_raises_error(regression_data, tmp_path):
         TypeError, match="Attempting to load a 'TabPFNRegressor' as 'TabPFNClassifier'"
     ):
         TabPFNClassifier.load_from_fit_state(path)
+
+
+def test_saving_and_loading_model_with_weights(tmp_path):
+    """Tests that the saving format of the `save_tabpfn_model` method is compatible with
+    the loading interface of `initialize_tabpfn_model`.
+    """
+    # initialize a TabPFNRegressor
+    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor._initialize_model_variables()
+
+    # make sure that the model does not use the standard parameter
+    first_param = next(regressor.model_.parameters())
+    with torch.no_grad():
+        first_param.zero_()
+    first_model_parameter = first_param.clone()
+    config_before_saving = deepcopy(regressor.config_)
+
+    # Save the model state
+    save_path = Path(tmp_path) / "model.ckp"
+    save_tabpfn_model(regressor, save_path)
+
+    # Load the model state
+    model, config, criterion = initialize_tabpfn_model(
+        save_path, "regressor", fit_mode="low_memory"
+    )
+    regressor = TabPFNRegressor(
+        model_path=RegressorModelSpecs(
+            model=model,
+            config=config,
+            norm_criterion=criterion,
+        ),
+        device="cpu",
+    )
+
+    # then check the model is loaded correctly
+    regressor._initialize_model_variables()
+    torch.testing.assert_close(
+        next(regressor.model_.parameters()),
+        first_model_parameter,
+    )
+    # Check that the config is the same
+    assert regressor.config_ == config_before_saving

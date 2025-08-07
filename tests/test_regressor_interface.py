@@ -24,17 +24,9 @@ from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
-from .utils import check_cpu_float16_support
+from .utils import check_cpu_float16_support, get_pytest_devices
 
-exclude_devices = {
-    d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
-}
-
-devices = ["cpu"]
-if torch.cuda.is_available() and "cuda" not in exclude_devices:
-    devices.append("cuda")
-if torch.backends.mps.is_available() and "mps" not in exclude_devices:
-    devices.append("mps")
+devices = get_pytest_devices()
 
 # --- Environment-Aware Check for CPU Float16 Support ---
 is_cpu_float16_supported = check_cpu_float16_support()
@@ -52,7 +44,7 @@ estimators = [1, 2]
 all_combinations = list(
     product(
         estimators,
-        devices,
+        devices,  # device,
         feature_shift_decoders,
         fit_modes,
         inference_precision_methods,
@@ -89,17 +81,17 @@ def test_regressor(
     remove_outliers_std: int | None,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if device == "cpu" and inference_precision == "autocast":
+    if torch.device(device).type == "cpu" and inference_precision == "autocast":
         pytest.skip("Only GPU supports inference_precision")
 
     # Use the environment-aware check to skip only if necessary
     if (
-        device == "cpu"
+        torch.device(device).type == "cpu"
         and inference_precision == torch.float16
         and not is_cpu_float16_supported
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
-    if device == "mps" and inference_precision == torch.float64:
+    if torch.device(device).type == "mps" and inference_precision == torch.float64:
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNRegressor(

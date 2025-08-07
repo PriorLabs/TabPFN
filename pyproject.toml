@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
   "torch>=2.1,<3",
   "scikit-learn>=1.2.0,<1.7",
@@ -71,7 +71,7 @@ dev = [
   # Lint/format
   "pre-commit",
   "ruff==0.8.6", # This version must be the same as in .pre-commit-config.yaml
-  "mypy==1.17.0", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==1.17.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest",
   "pytest-xdist",
