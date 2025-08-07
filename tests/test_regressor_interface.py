@@ -572,7 +572,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes(model_pat
     ), "norm_criterion should be initialized for regressor"
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
-    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor = TabPFNRegressor(model_path=model_path, device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"

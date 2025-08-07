@@ -745,7 +745,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes(model_pa
     assert norm_criterion is None, "norm_criterion should be None for classifier"
 
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
-    classifier = TabPFNClassifier(model_path="auto", device="cpu", random_state=42)
+    classifier = TabPFNClassifier(model_path=model_path, device="cpu", random_state=42)
     classifier._initialize_model_variables()
 
     assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
