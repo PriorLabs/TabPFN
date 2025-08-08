@@ -7,7 +7,7 @@ different members.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, is_dataclass, fields
 from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -205,7 +205,7 @@ class PreprocessorConfig:
 
 
 @dataclass
-class ProcessedDataset:
+class ProcessedDatasetConfig:
     """Holds the processed data for a single dataset configuration.
 
     This dataclass provides a structured container for the various outputs
@@ -214,18 +214,18 @@ class ProcessedDataset:
     tasks.
 
     Attributes:
-        x_train_preprocessed (list[torch.Tensor]): List of preprocessed
+        x_train_preprocessed (List[torch.Tensor]): List of preprocessed
             training feature tensors, one for each ensemble member.
-        x_test_preprocessed (list[torch.Tensor]): List of preprocessed
+        x_test_preprocessed (List[torch.Tensor]): List of preprocessed
             test feature tensors, one for each ensemble member.
-        y_train_znormed (list[torch.Tensor]): List of preprocessed
+        y_train_znormed (List[torch.Tensor]): List of preprocessed
             training target tensors, one for each ensemble member.
         y_test_znormed (torch.Tensor): The test target tensor. For classification,
             this is the raw, unprocessed tensor. For regression, this is the
             standardized tensor.
-        cat_ixs (list[Optional[list[int]]]): List of categorical feature
+        cat_ixs (List[Optional[List[int]]]): List of categorical feature
             indices for each preprocessed feature set.
-        configs (list[EnsembleConfig]): The list of `EnsembleConfig` objects
+        configs (List): The list of `EnsembleConfig` objects
             used for this dataset.
         x_test_raw (Optional[torch.Tensor]): Original, unprocessed test
             feature tensor. Only available for regression tasks.
@@ -239,12 +239,12 @@ class ProcessedDataset:
             for regression tasks.
     """
 
-    x_train_preprocessed: list[torch.Tensor]
-    x_test_preprocessed: list[torch.Tensor]
-    y_train_znormed: list[torch.Tensor]
+    x_train_preprocessed: List[torch.Tensor]
+    x_test_preprocessed: List[torch.Tensor]
+    y_train_znormed: List[torch.Tensor]
     y_test_znormed: torch.Tensor
-    cat_ixs: list[list[int] | None]
-    configs: list[EnsembleConfig]
+    cat_ixs: List[Optional[List[int]]] | None
+    configs: List[EnsembleConfig]
     x_test_raw: torch.Tensor | None = None
     y_test_raw: torch.Tensor | None = None
     normalized_bardist: FullSupportBarDistribution | None = None
@@ -1001,14 +1001,15 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # in optimisation space -> see examples/
         # Also return corresponding target variable binning
         # classes normalized_bardist_ and bardist_
+        # Use the ProcessedDatasetConfig for return
         if regression_task:
-            return ProcessedDataset(
+            return ProcessedDatasetConfig(
                 x_train_preprocessed=X_trains_preprocessed,
                 x_test_preprocessed=X_tests_preprocessed,
                 y_train_znormed=y_trains_preprocessed,
                 y_test_znormed=y_test_standardized,
-                cat_ixs=list(cat_ixs),
-                configs=list(conf),
+                cat_ixs=cat_ixs,
+                configs=conf,
                 normalized_bardist=normalized_bardist_,
                 bardist=bardist_,
                 x_test_raw=x_test_raw,
@@ -1016,11 +1017,321 @@ class DatasetCollectionWithPreprocessing(Dataset):
             )
 
         # Return structured data for classification
-        return ProcessedDataset(
+        return ProcessedDatasetConfig(
             x_train_preprocessed=X_trains_preprocessed,
             x_test_preprocessed=X_tests_preprocessed,
             y_train_znormed=y_trains_preprocessed,
             y_test_znormed=y_test_raw,
-            cat_ixs=list(cat_ixs),
-            configs=list(conf),
+            cat_ixs=cat_ixs,
+            configs=conf,
         )
+
+
+
+def meta_dataset_collator(
+    batch: list[ProcessedDatasetConfig],
+) -> ProcessedDatasetConfig:
+    """
+    Collates a batch of ProcessedDatasetConfig objects.
+
+    This function is designed for a batch_size of 1. It takes the single
+    dataclass instance from the batch and structures its contents for model
+    consumption by adding a "batch" dimension of size 1 to all tensors.
+    Non-tensor metadata (like configs or bardist) are wrapped in a list.
+
+    Args:
+        batch: A list containing a single ProcessedDatasetConfig object.
+
+    Returns:
+        A new ProcessedDatasetConfig instance where all attributes have been
+        structured into a batch of size 1.
+    """
+    assert len(batch) == 1, "This collator is only implemented for a batch size of 1."
+
+    # The batch is a list with one item: our dataclass instance.
+    item = batch[0]
+    collated_attrs = {}
+
+    # Iterate through all fields of the dataclass (e.g., 'x_train_preprocessed', 'bardist')
+    for field in fields(ProcessedDatasetConfig):
+        attr_name = field.name
+        value = getattr(item, attr_name)
+
+        if isinstance(value, list) and value and isinstance(value[0], torch.Tensor):
+            # This handles fields like x_train_preprocessed (List[torch.Tensor])
+            # Add a batch dimension to each tensor in the list.
+            collated_attrs[attr_name] = [t.unsqueeze(0) for t in value]
+        elif isinstance(value, torch.Tensor):
+            # This handles single tensors like y_test_znormed.
+            # Add a batch dimension.
+            collated_attrs[attr_name] = value.unsqueeze(0)
+        else:
+            # This is the key part for your question!
+            # This handles all non-tensor metadata:
+            # - bardist and normalized_bardist (FullSupportBarDistribution or None)
+            # - configs (List[EnsembleConfig])
+            # - cat_ixs (List[Optional[List[int]]])
+            # We simply wrap the value in a list to represent the batch.
+            collated_attrs[attr_name] = [value]
+
+    # Create the final collated batch object from the processed attributes.
+    return ProcessedDatasetConfig(**collated_attrs)
+
+
+
+
+
+
+################################################# Old
+
+
+# class DatasetCollectionWithPreprocessing(Dataset):
+#     """Manages a collection of dataset configurations for lazy processing.
+
+#     This class acts as a meta-dataset where each item corresponds to a
+#     single, complete dataset configuration (e.g., raw features, raw labels,
+#     preprocessing details defined in `RegressorDatasetConfig` or
+#     `ClassifierDatasetConfig`). When an item is accessed via `__getitem__`,
+#     it performs the following steps on the fly:
+
+#     1.  Retrieves the specified dataset configuration.
+#     2.  Splits the raw data into training and testing sets using the provided
+#         `split_fn` and a random seed derived from `rng`. For regression,
+#         both raw and pre-standardized targets might be split.
+#     3.  Fits preprocessors (defined in the dataset configuration's `config`
+#         attribute) on the *training* data using the `fit_preprocessing`
+#         utility. This may result in multiple preprocessed versions
+#         if the configuration specifies an ensemble of preprocessing pipelines.
+#         For regression we also standardise the target variable.
+#     4.  Applies the fitted preprocessors to the *testing* features (`x_test_raw`).
+#     5.  Converts relevant outputs to `torch.Tensor` objects.
+#     6.  Returns the preprocessed data splits along with other relevant
+#         information (like raw test data, configs) as a tuple.
+
+#     This approach is memory-efficient, especially when dealing with many
+#     datasets or configurations, as it avoids loading and preprocessing
+#     everything simultaneously.
+
+#     Args:
+#         split_fn (Callable): A function compatible with scikit-learn's
+#             `train_test_split` signature (e.g.,
+#             `sklearn.model_selection.train_test_split`). It's used to split
+#             the raw data (X, y) into train and test sets. It will receive
+#             `X`, `y`, and `random_state` as arguments.
+#         rng (np.random.Generator): A NumPy random number generator instance
+#             used for generating the split seed and potentially within the
+#             preprocessing steps defined in the configs.
+#         dataset_config_collection (
+#             Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]
+#         ): A sequence containing dataset configuration objects. Each object
+#             must hold the raw data (`X_raw`, `y_raw`), categorical feature
+#             indices (`cat_ix`), and the specific preprocessing configurations
+#             (`config`) for that dataset. Regression configs require additional
+#             fields (`y_full_standardised`, `normalized_bardist_`).
+#         n_workers (int, optional): The number of workers to use for potentially
+#             parallelized preprocessing steps (passed to `fit_preprocessing`).
+#             Defaults to 1.
+
+#     Attributes:
+#         configs (Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]):
+#             Stores the input dataset configuration collection.
+#         split_fn (Callable): Stores the splitting function.
+#         rng (np.random.Generator): Stores the random number generator.
+#         n_workers (int): Stores the number of workers for preprocessing.
+#     """
+
+#     def __init__(self, split_fn, rng, dataset_config_collection, n_workers=1):
+#         self.configs = dataset_config_collection
+#         self.split_fn = split_fn
+#         self.rng = rng
+#         self.n_workers = n_workers
+
+#     def __len__(self):
+#         return len(self.configs)
+
+#     def __getitem__(self, index):  # noqa: C901, PLR0912
+#         """Retrieves, splits, and preprocesses the dataset config at the index.
+
+#         Performs train/test splitting and applies potentially multiple
+#         preprocessing pipelines defined in the dataset's configuration.
+
+#         Args:
+#             index (int): The index of the dataset configuration in the
+#                 `dataset_config_collection` to process.
+
+#         Returns:
+#             Tuple: A tuple containing the processed data and metadata. Each
+#                 element in the tuple is a list whose length equals the number
+#                 of estimators in the TabPFN ensemble. As such each element
+#                 in the list corresponds to the preprocessed data/configs for a
+#                 single ensemble member.
+
+#                 The structure depends on the task type derived from the dataset
+#                 configuration object (`RegressorDatasetConfig` or
+#                 `ClassifierDatasetConfig`):
+
+#                 For **Classification** tasks (`ClassifierDatasetConfig`):
+#                 * `X_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   training feature tensors (one per preprocessing pipeline).
+#                 * `X_tests_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   test feature tensors (one per preprocessing pipeline).
+#                 * `y_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   training target tensors (one per preprocessing pipeline).
+#                 * `y_test_raw` (torch.Tensor): Original, unprocessed test target
+#                   tensor.
+#                 * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
+#                   indices corresponding to each preprocessed X_train/X_test.
+#                 * `conf` (List): The list of preprocessing configurations used for
+#                   this dataset (usually reflects ensemble settings).
+
+#                 For **Regression** tasks (`RegressorDatasetConfig`):
+#                 * `X_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   training feature tensors.
+#                 * `X_tests_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   test feature tensors.
+#                 * `y_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
+#                   *standardized* training target tensors.
+#                 * `y_test_standardized` (torch.Tensor): *Standardized* test target
+#                   tensor (derived from `y_full_standardised`).
+#                 * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
+#                   indices corresponding to each preprocessed X_train/X_test.
+#                 * `conf` (List): The list of preprocessing configurations used.
+#                 * `normalized_bardist_` (FullSupportBarDistribution): Binning class
+#                   for target variable (specific to the regression config).
+#                 * `bardist_` (FullSupportBarDistribution): Binning class for
+#                   target variable (specific to the regression config).
+#                 * `x_test_raw` (torch.Tensor): Original, unprocessed test feature
+#                   tensor.
+#                 * `y_test_raw` (torch.Tensor): Original, unprocessed test target
+#                   tensor.
+
+#         Raises:
+#             IndexError: If the index is out of the bounds of the dataset collection.
+#             ValueError: If the dataset configuration type at the index is not
+#                         recognized (neither `RegressorDatasetConfig` nor
+#                         `ClassifierDatasetConfig`).
+#             AssertionError: If sanity checks during processing fail (e.g.,
+#                             standardized mean not close to zero in regression).
+#         """
+#         if index < 0 or index >= len(self):
+#             raise IndexError("Index out of bounds.")
+
+#         config = self.configs[index]
+
+#         # Check type of Dataset Config
+#         if isinstance(config, RegressorDatasetConfig):
+#             conf = config.config
+#             x_full_raw = config.X_raw
+#             y_full_raw = config.y_raw
+#             cat_ix = config.cat_ix
+#             bardist_ = config.bardist_
+#         elif isinstance(config, ClassifierDatasetConfig):
+#             conf = config.config
+#             x_full_raw = config.X_raw
+#             y_full_raw = config.y_raw
+#             cat_ix = config.cat_ix
+#         else:
+#             raise ValueError(f"Invalid dataset config type: {type(config)}")
+
+#         regression_task = isinstance(config, RegressorDatasetConfig)
+
+#         x_train_raw, x_test_raw, y_train_raw, y_test_raw = self.split_fn(
+#             x_full_raw, y_full_raw
+#         )
+
+#         # Compute target variable Z-transform standardization
+#         # based on statistics of training set
+#         # Note: Since we compute normalized_bardist_ here,
+#         # it is not set as an attribute of the Regressor class
+#         # This however makes also sense when considering that
+#         # this attribute changes on every dataset
+#         if regression_task:
+#             train_mean = np.mean(y_train_raw)
+#             train_std = np.std(y_train_raw)
+#             y_test_standardized = (y_test_raw - train_mean) / train_std
+#             y_train_standardized = (y_train_raw - train_mean) / train_std
+#             normalized_bardist_ = FullSupportBarDistribution(
+#                 bardist_.borders * train_std + train_mean
+#             ).float()
+
+#         y_train = y_train_standardized if regression_task else y_train_raw
+
+#         itr = fit_preprocessing(
+#             configs=conf,
+#             X_train=x_train_raw,
+#             y_train=y_train,
+#             random_state=self.rng,
+#             cat_ix=cat_ix,
+#             n_workers=self.n_workers,
+#             parallel_mode="block",
+#         )
+#         (
+#             configs,
+#             preprocessors,
+#             X_trains_preprocessed,
+#             y_trains_preprocessed,
+#             cat_ixs,
+#         ) = list(zip(*itr))
+#         X_trains_preprocessed = list(X_trains_preprocessed)
+#         y_trains_preprocessed = list(y_trains_preprocessed)
+
+#         ## Process test data for all ensemble estimators.
+#         X_tests_preprocessed = []
+#         for _, estim_preprocessor in zip(configs, preprocessors):
+#             X_tests_preprocessed.append(estim_preprocessor.transform(x_test_raw).X)
+
+#         ## Convert to tensors.
+#         for i in range(len(X_trains_preprocessed)):
+#             if not isinstance(X_trains_preprocessed[i], torch.Tensor):
+#                 X_trains_preprocessed[i] = torch.as_tensor(
+#                     X_trains_preprocessed[i], dtype=torch.float32
+#                 )
+#             if not isinstance(X_tests_preprocessed[i], torch.Tensor):
+#                 X_tests_preprocessed[i] = torch.as_tensor(
+#                     X_tests_preprocessed[i], dtype=torch.float32
+#                 )
+#             if not isinstance(y_trains_preprocessed[i], torch.Tensor):
+#                 y_trains_preprocessed[i] = torch.as_tensor(
+#                     y_trains_preprocessed[i], dtype=torch.float32
+#                 )
+
+#         if regression_task and not isinstance(y_test_standardized, torch.Tensor):
+#             y_test_standardized = torch.from_numpy(y_test_standardized)
+#             if torch.is_floating_point(y_test_standardized):
+#                 y_test_standardized = y_test_standardized.float()
+#             else:
+#                 y_test_standardized = y_test_standardized.long()
+
+#         x_train_raw = torch.from_numpy(x_train_raw)
+#         x_test_raw = torch.from_numpy(x_test_raw)
+#         y_train_raw = torch.from_numpy(y_train_raw)
+#         y_test_raw = torch.from_numpy(y_test_raw)
+
+#         # Also return raw_target variable because of flexiblity
+#         # in optimisation space -> see examples/
+#         # Also return corresponding target variable binning
+#         # classes normalized_bardist_ and bardist_
+#         if regression_task:
+#             return (
+#                 X_trains_preprocessed,
+#                 X_tests_preprocessed,
+#                 y_trains_preprocessed,
+#                 y_test_standardized,
+#                 cat_ixs,
+#                 conf,
+#                 normalized_bardist_,
+#                 bardist_,
+#                 x_test_raw,
+#                 y_test_raw,
+#             )
+
+#         return (
+#             X_trains_preprocessed,
+#             X_tests_preprocessed,
+#             y_trains_preprocessed,
+#             y_test_raw,
+#             cat_ixs,
+#             conf,
+#         )
+
+
