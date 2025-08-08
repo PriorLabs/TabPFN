@@ -14,17 +14,17 @@ def test_pad_tensors_2d_and_1d():
     # 2D tensors (features)
     tensors_2d = [torch.ones((2, 3)), torch.ones((3, 2)), torch.ones((1, 4))]
     padded = pad_tensors(tensors_2d, padding_val=-1, labels=False)
-    assert all(t.shape == (3, 4) for t in padded), (
-        f"Expected shape (3, 4), got {[t.shape for t in padded]}"
-    )
+    assert all(
+        t.shape == (3, 4) for t in padded
+    ), f"Expected shape (3, 4), got {[t.shape for t in padded]}"
     assert padded[0][2, 3] == -1, "Padding value not set correctly for 2D case."
 
     # 1D tensors (labels)
     tensors_1d = [torch.arange(3), torch.arange(5), torch.arange(2)]
     padded_1d = pad_tensors(tensors_1d, padding_val=99, labels=True)
-    assert all(t.shape == (5,) for t in padded_1d), (
-        f"Expected shape (5,), got {[t.shape for t in padded_1d]}"
-    )
+    assert all(
+        t.shape == (5,) for t in padded_1d
+    ), f"Expected shape (5,), got {[t.shape for t in padded_1d]}"
     assert padded_1d[0][3] == 99, "Padding value not set correctly for 1D case."
 
 

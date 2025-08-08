@@ -297,9 +297,9 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     processed_dataset_item = dataset_collection[item_index]
 
     assert isinstance(processed_dataset_item, tuple)
-    assert len(processed_dataset_item) == 6, (
-        "Item tuple should have 4 elements for classification"
-    )
+    assert (
+        len(processed_dataset_item) == 6
+    ), "Item tuple should have 4 elements for classification"
 
     (
         X_trains_preprocessed,
@@ -339,16 +339,16 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
     )
 
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
-    assert len(dataset_collection) == len(datasets), (
-        "Collection should contain one item per dataset"
-    )
+    assert len(dataset_collection) == len(
+        datasets
+    ), "Collection should contain one item per dataset"
 
     for item_index in range(len(datasets)):
         processed_dataset_item = dataset_collection[item_index]
         assert isinstance(processed_dataset_item, tuple)
-        assert len(processed_dataset_item) == 6, (
-            "Item tuple should have 6 elements for classification"
-        )
+        assert (
+            len(processed_dataset_item) == 6
+        ), "Item tuple should have 6 elements for classification"
         (
             X_trains_preprocessed,
             X_tests_preprocessed,
@@ -385,14 +385,14 @@ def test_dataset_and_collator_with_dataloader_uniform(
         assert isinstance(batch, tuple)
         X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = batch
         for est_tensor in X_trains:
-            assert isinstance(est_tensor, torch.Tensor), (
-                "Each estimator's batch should be a tensor."
-            )
+            assert isinstance(
+                est_tensor, torch.Tensor
+            ), "Each estimator's batch should be a tensor."
             assert est_tensor.shape[0] == batch_size
         for est_tensor in y_trains:
-            assert isinstance(est_tensor, torch.Tensor), (
-                "Each estimator's batch should be a tensor for labels."
-            )
+            assert isinstance(
+                est_tensor, torch.Tensor
+            ), "Each estimator's batch should be a tensor for labels."
             assert est_tensor.shape[0] == batch_size
         break  # Only check one batch
 
@@ -469,9 +469,9 @@ def test_forward_runs(classifier_instance, classification_data):
     assert preds.shape[0] == X_test.shape[0], "Mismatch in test sample count"
     assert preds.shape[1] == clf.n_classes_, "Mismatch in class count"
     probs_sum = preds.sum(dim=1)
-    assert torch.allclose(probs_sum, torch.ones_like(probs_sum), atol=1e-5), (
-        "Probabilities do not sum to 1"
-    )
+    assert torch.allclose(
+        probs_sum, torch.ones_like(probs_sum), atol=1e-5
+    ), "Probabilities do not sum to 1"
 
 
 def test_fit_from_preprocessed_runs(classifier_instance, classification_data) -> None:
@@ -501,9 +501,9 @@ def test_fit_from_preprocessed_runs(classifier_instance, classification_data) ->
 
         # TODO: verify number of classes, "Mismatch in class count"
         probs_sum = preds.sum(dim=1)
-        assert torch.allclose(probs_sum, torch.ones_like(probs_sum), atol=1e-5), (
-            "Probabilities do not sum to 1"
-        )
+        assert torch.allclose(
+            probs_sum, torch.ones_like(probs_sum), atol=1e-5
+        ), "Probabilities do not sum to 1"
         break  # Only need to check one batch for this test
 
 
@@ -577,9 +577,9 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
 
             # Capture the tensor input 'x' (usually the second positional argument)
             call_args_list = mock_forward_p1.call_args_list
-            assert len(call_args_list) > 0, (
-                "No calls recorded for standard model_.forward."
-            )
+            assert (
+                len(call_args_list) > 0
+            ), "No calls recorded for standard model_.forward."
             if len(call_args_list[0].args) > 1:
                 tensor_p1_full = call_args_list[0].args[0]
                 tensor_p1_full = mock_forward_p1.call_args.args[0]
@@ -590,9 +590,9 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
                     f"unexpected arguments: {call_args_list[0].args}"
                 )
 
-        assert tensor_p1_full is not None, (
-            "Failed to capture tensor from standard path."
-        )
+        assert (
+            tensor_p1_full is not None
+        ), "Failed to capture tensor from standard path."
         # Shape might be [1, N_Total, Features+1] or similar. Check the actual shape.
         # Example assertion: Check if the sequence length matches n_total
         assert tensor_p1_full.shape[0] == n_total, (
@@ -654,9 +654,9 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
 
             # Capture the tensor input 'x' (assuming same argument position as Path 1)
             call_args_list = mock_forward_p2.call_args_list
-            assert len(call_args_list) > 0, (
-                "No calls recorded for batched model_.forward."
-            )
+            assert (
+                len(call_args_list) > 0
+            ), "No calls recorded for batched model_.forward."
             if len(call_args_list[0].args) > 1:
                 tensor_p2_full = mock_forward_p2.call_args.args[0]
             else:
@@ -693,9 +693,9 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
             p2_squeezed = tensor_p2_full
 
         # Final check of shapes after potential squeeze
-        assert p1_squeezed.shape == p2_squeezed.shape, (
-            "Shapes of final model input tensors mismatch after squeeze. "
-        )
+        assert (
+            p1_squeezed.shape == p2_squeezed.shape
+        ), "Shapes of final model input tensors mismatch after squeeze. "
 
         # Visual inspection snippet
 

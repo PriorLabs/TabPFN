@@ -281,13 +281,13 @@ class MultiHeadAttention(Attention):
         Else, keys and values are attained by applying the respective linear
         transformations to 'x' (self attention).
         """
-        assert not (cache_kv and use_cached_kv), (
-            "Cannot cache and use cached keys and values at the same time."
-        )
+        assert not (
+            cache_kv and use_cached_kv
+        ), "Cannot cache and use cached keys and values at the same time."
 
-        assert not x.requires_grad or (not self.has_cached_kv and not cache_kv), (
-            "Saving keys and values is only supported during inference."
-        )
+        assert not x.requires_grad or (
+            not self.has_cached_kv and not cache_kv
+        ), "Saving keys and values is only supported during inference."
         x, x_kv, x_shape_after_transpose = self._rearrange_inputs_to_flat_batch(x, x_kv)
 
         nhead_kv = 1 if reuse_first_head_kv else self._nhead_kv
@@ -363,9 +363,9 @@ class MultiHeadAttention(Attention):
         torch.Tensor | None,
         torch.Tensor | None,
     ]:
-        assert not (cache_kv and use_cached_kv), (
-            "You cannot both cache new KV and use the cached KV at once."
-        )
+        assert not (
+            cache_kv and use_cached_kv
+        ), "You cannot both cache new KV and use the cached KV at once."
         if reuse_first_head_kv:
             assert x is not x_kv, (
                 "x and x_kv must be different tensors. That means reuse_first_head_kv"
@@ -376,9 +376,9 @@ class MultiHeadAttention(Attention):
 
         k = v = kv = None
         if use_cached_kv:
-            assert self.has_cached_kv, (
-                "You try to use cached keys and values but the cache is empty."
-            )
+            assert (
+                self.has_cached_kv
+            ), "You try to use cached keys and values but the cache is empty."
             k = k_cache
             v = v_cache
             kv = kv_cache

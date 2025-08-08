@@ -260,9 +260,9 @@ def test_tabpfn_regressor_finetuning_loop(
             averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
 
             # --- Basic Shape Checks ---
-            assert averaged_pred_logits.ndim == 3, (
-                f"Expected 3D output, got {averaged_pred_logits.shape}"
-            )
+            assert (
+                averaged_pred_logits.ndim == 3
+            ), f"Expected 3D output, got {averaged_pred_logits.shape}"
 
             # Batch Size
             assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
@@ -284,12 +284,12 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(X_trains_preprocessed) == reg.n_estimators
             assert len(y_trains_preprocessed) == reg.n_estimators
             assert reg.model_ is not None, "Model not initialized after fit"
-            assert hasattr(reg, "bardist_"), (
-                "Regressor missing 'bardist_' attribute after fit"
-            )
-            assert hasattr(reg, "normalized_bardist_"), (
-                "Regressor missing 'normalized_bardist_' attribute after fit"
-            )
+            assert hasattr(
+                reg, "bardist_"
+            ), "Regressor missing 'bardist_' attribute after fit"
+            assert hasattr(
+                reg, "normalized_bardist_"
+            ), "Regressor missing 'normalized_bardist_' attribute after fit"
             assert reg.bardist_ is not None, "reg.bardist_ is None"
 
             lossfn = None
@@ -567,9 +567,9 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         p1_squeezed = tensor_p1_full.squeeze()
         p3_squeezed = tensor_p3_full.squeeze()
 
-        assert p1_squeezed.shape == p3_squeezed.shape, (
-            "Shapes of final model input tensors mismatch."
-        )
+        assert (
+            p1_squeezed.shape == p3_squeezed.shape
+        ), "Shapes of final model input tensors mismatch."
 
         atol = 1e-6
         tensors_match = torch.allclose(p1_squeezed, p3_squeezed, atol=atol)

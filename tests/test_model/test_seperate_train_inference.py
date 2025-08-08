@@ -82,6 +82,6 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
     torch.manual_seed(12345)
     logits1a = model(x=torch.concat([x_train, x_test]), y=y)
 
-    assert logits1.float() == pytest.approx(logits1a.float(), abs=1e-5), (
-        f"{logits1} != {logits1a}"
-    )
+    assert logits1.float() == pytest.approx(
+        logits1a.float(), abs=1e-5
+    ), f"{logits1} != {logits1a}"
