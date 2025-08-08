@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetune_utils import clone_model_for_evaluation
-from tabpfn.utils import meta_dataset_collator
+from tabpfn.preprocessing import meta_dataset_collator
 
 
 def prepare_data(config: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -140,7 +140,8 @@ def main():
     }
 
     # --- Setup Data, Model, and Dataloader ---
-    X_train, X_test, y_train, y_test = prepare_data(config)
+    # X_train, X_test, y_train, y_test = prepare_data(config)
+    X_train, X_test, y_train, y_test = torch.rand(10, 3), torch.rand(2, 3), torch.randint(0, 1, (10,)), torch.randint(0, 1, (2,))
     classifier, optimizer, classifier_config = setup_model_and_optimizer(config)
 
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
@@ -167,23 +168,23 @@ def main():
         if epoch > 0:
             # Finetuning Step
             progress_bar = tqdm(finetuning_dataloader, desc=f"Finetuning Epoch {epoch}")
-            for (
-                X_train_batch,
-                X_test_batch,
-                y_train_batch,
-                y_test_batch,
-                cat_ixs,
-                confs,
-            ) in progress_bar:
-                if len(np.unique(y_train_batch)) != len(np.unique(y_test_batch)):
-                    continue  # Skip batch if splits don't have all classes
+            for data_batch in progress_bar:
+                # Skip data_batch if splits don't have all classes
+                if len(np.unique(data_batch.y_train_znormed[0].squeeze().cpu())) != len(np.unique(data_batch.y_test_znormed.squeeze().cpu())):
+                    continue
 
                 optimizer.zero_grad()
+
+                # Unwrap metadata from the list added by the collator
+                cat_ixs_unwrapped = data_batch.cat_ixs
+                confs_unwrapped = data_batch.configs
+                print(f"confs_unwrapped: {len(confs_unwrapped)}")
+
                 classifier.fit_from_preprocessed(
-                    X_train_batch, y_train_batch, cat_ixs, confs
+                    data_batch.x_train_preprocessed, data_batch.y_train_znormed, cat_ixs_unwrapped, confs_unwrapped
                 )
-                predictions = classifier.forward(X_test_batch, return_logits=True)
-                loss = loss_function(predictions, y_test_batch.to(config["device"]))
+                predictions = classifier.forward(data_batch.x_test_preprocessed, return_logits=True)
+                loss = loss_function(predictions, data_batch.y_test_znormed.to(config["device"]))
                 loss.backward()
                 optimizer.step()
 

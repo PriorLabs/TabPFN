@@ -226,7 +226,7 @@ def test_tabpfn_classifier_finetuning_loop(
             y_te_raw = (
                 data_batch.y_test_znormed
             )  # This holds the raw y_test for classification
-            cat_ixs = data_batch.cat_ixs[0]
+            cat_ixs = data_batch.cat_ixs
             confs = data_batch.configs[0]
             # print(f"data_batch.cat_ixs: {data_batch.cat_ixs}")
 
