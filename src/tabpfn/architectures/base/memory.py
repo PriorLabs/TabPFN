@@ -63,9 +63,9 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
         **kwargs: Any,
     ) -> torch.Tensor:
         assert isinstance(self, torch.nn.Module)
-        assert (
-            save_peak_mem_factor is None or allow_inplace
-        ), "The parameter save_peak_mem_factor only supported with 'allow_inplace' set."
+        assert save_peak_mem_factor is None or allow_inplace, (
+            "The parameter save_peak_mem_factor only supported with 'allow_inplace' set."
+        )
         assert isinstance(x, torch.Tensor)
 
         tensor_inputs = list(tuple(self.parameters()) + tuple(args))
@@ -344,6 +344,19 @@ class MemoryUsageEstimator:
             free_memory = t - a  # free inside reserved
         elif device.type.startswith("mps"):
             free_memory = cls._get_mps_free_memory()
+        elif device.type.startswith("xla"):
+            # need to import torch_xla to access memory info, which is an optional
+            # dependency.
+            try:
+                import torch_xla.core.xla_model as xm  # noqa: PLC0415
+            except ImportError as e:
+                raise ImportError(
+                    "torch_xla is required to access XLA device memory info. "
+                    "Please install it via `pip install tabpfn[tpu]`.",
+                ) from e
+
+            mem_info = xm.get_memory_info(xm.xla_device())
+            free_memory = mem_info["bytes_limit"] - mem_info["bytes_used"]
         else:
             raise ValueError(f"Unknown device {device}")
 

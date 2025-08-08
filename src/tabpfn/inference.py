@@ -496,9 +496,16 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             else:
                 pass
 
+            # torch_xla doesn't support torch.inference_mode() due to stricter tensor version tracking requirements
+            # Use torch.no_grad() instead to disable gradients without triggering XLA's version_counter errors
+            inference_context = (
+                torch.no_grad()
+                if device.type == "xla"
+                else torch.inference_mode(self.inference_mode)
+            )
             with (
                 get_autocast_context(device, enabled=autocast),
-                torch.inference_mode(self.inference_mode),
+                inference_context,
             ):
                 output = self.model(
                     X_full,

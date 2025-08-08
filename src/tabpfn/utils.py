@@ -176,6 +176,16 @@ def _cancel_nan_borders(
     return borders, logit_cancel_mask
 
 
+def xla_is_available() -> bool:
+    """Check if XLA is available."""
+    try:
+        import torch_xla  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     """Infers the appropriate PyTorch device based on the input and environment
     configuration.
@@ -184,6 +194,7 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     1. If `device` is `None` or "auto":
        - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
        - Otherwise picks "mps" if available and not excluded
+       - Otherwise picks "xla" if available and not excluded
        - Falls back to "cpu"
     2. If `device` is a string, converts it to a torch.device
     3. If already a torch.device, returns as-is
@@ -196,7 +207,7 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
     Args:
         device (str | torch.device | None): The device specification. Can be:
             - `None` or `"auto"` for automatic inference.
-            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
+            - A string like `"cuda"`, `"cpu"`, `"mps"`, or `"xla"`.
             - A `torch.device` instance.
 
     Returns:
@@ -214,6 +225,8 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
             if torch.cuda.is_available() and "cuda" not in exclude_devices
             else "mps"
             if torch.backends.mps.is_available() and "mps" not in exclude_devices
+            else "xla"
+            if xla_is_available() and "xla" not in exclude_devices
             else "cpu"
         )
         return torch.device(device_type_)
@@ -616,7 +629,7 @@ def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
 # However we don't really need the full BarDistribution class and this was
 # put here to make that a bit more obvious in terms of what was going on.
 def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
-    ys = ys.repeat(logits.shape[:-1] + (1,))
+    ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
     y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
 

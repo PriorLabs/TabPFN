@@ -186,7 +186,7 @@ def _yeojohnson(x, lmbda=None):
 
     if np.issubdtype(x.dtype, np.complexfloating):
         raise ValueError(
-            "Yeo-Johnson transformation is not defined for " "complex numbers."
+            "Yeo-Johnson transformation is not defined for complex numbers."
         )
 
     if np.issubdtype(x.dtype, np.integer):
@@ -563,9 +563,9 @@ class SequentialFeatureTransformer(UserList):
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical feature.
         """
-        assert (
-            len(self) > 0
-        ), "The SequentialFeatureTransformer must have at least one step."
+        assert len(self) > 0, (
+            "The SequentialFeatureTransformer must have at least one step."
+        )
         self.fit_transform(X, categorical_features)
         return self
 
@@ -575,9 +575,9 @@ class SequentialFeatureTransformer(UserList):
         Args:
             X: 2d array of shape (n_samples, n_features).
         """
-        assert (
-            len(self) > 0
-        ), "The SequentialFeatureTransformer must have at least one step."
+        assert len(self) > 0, (
+            "The SequentialFeatureTransformer must have at least one step."
+        )
         assert self.categorical_features_ is not None, (
             "The SequentialFeatureTransformer must be fit before it"
             " can be used to transform."
@@ -742,9 +742,9 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
         assert self.index_permutation_ is not None, "You must call fit first"
-        assert (
-            len(self.index_permutation_) == X.shape[1]
-        ), "The number of features must not change after fit"
+        assert len(self.index_permutation_) == X.shape[1], (
+            "The number of features must not change after fit"
+        )
         return X[:, self.index_permutation_]
 
 

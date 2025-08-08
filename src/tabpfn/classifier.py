@@ -223,7 +223,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             device:
                 The device to use for inference with TabPFN. If set to "auto", the
                 device is selected based on availability in the following order of
-                priority: "cuda", "mps", and then "cpu". You can also set the device
+                priority: "cuda", "mps", "xla", and then "cpu". You can also set the device
                 manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
