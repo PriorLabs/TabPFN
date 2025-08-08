@@ -21,6 +21,7 @@ from torch import nn
 
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
@@ -556,10 +557,13 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         ), "Quantile predictions are not constant as expected for full output"
 
 
-def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
+@pytest.mark.parametrize("model_path", ModelSource.get_regressor_v2().filenames)
+def test_initialize_model_variables_regressor_sets_required_attributes(
+    model_path: str,
+) -> None:
     # 1) Standalone initializer
     model, config, norm_criterion = initialize_tabpfn_model(
-        model_path="auto",
+        model_path=model_path,
         which="regressor",
         fit_mode="low_memory",
     )
@@ -570,7 +574,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     ), "norm_criterion should be initialized for regressor"
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
-    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor = TabPFNRegressor(model_path=model_path, device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
