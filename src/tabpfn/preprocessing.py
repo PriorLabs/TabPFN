@@ -7,7 +7,7 @@ different members.
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass, is_dataclass, fields
+from dataclasses import dataclass, fields
 from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
@@ -239,12 +239,12 @@ class ProcessedDatasetConfig:
             for regression tasks.
     """
 
-    x_train_preprocessed: List[torch.Tensor]
-    x_test_preprocessed: List[torch.Tensor]
-    y_train_znormed: List[torch.Tensor]
+    x_train_preprocessed: list[torch.Tensor]
+    x_test_preprocessed: list[torch.Tensor]
+    y_train_znormed: list[torch.Tensor]
     y_test_znormed: torch.Tensor
-    cat_ixs: List[Optional[List[int]]] | None
-    configs: List[EnsembleConfig]
+    cat_ixs: list[list[int] | None] | None
+    configs: list[EnsembleConfig]
     x_test_raw: torch.Tensor | None = None
     y_test_raw: torch.Tensor | None = None
     normalized_bardist: FullSupportBarDistribution | None = None
@@ -1027,12 +1027,10 @@ class DatasetCollectionWithPreprocessing(Dataset):
         )
 
 
-
 def meta_dataset_collator(
     batch: list[ProcessedDatasetConfig],
 ) -> ProcessedDatasetConfig:
-    """
-    Collates a batch of ProcessedDatasetConfig objects.
+    """Collates a batch of ProcessedDatasetConfig objects.
 
     This function is designed for a batch_size of 1. It takes the single
     dataclass instance from the batch and structures its contents for model
@@ -1052,7 +1050,8 @@ def meta_dataset_collator(
     item = batch[0]
     collated_attrs = {}
 
-    # Iterate through all fields of the dataclass (e.g., 'x_train_preprocessed', 'bardist')
+    # Iterate through all fields of the dataclass
+    # (e.g., 'x_train_preprocessed', 'bardist')
     for field in fields(ProcessedDatasetConfig):
         attr_name = field.name
         value = getattr(item, attr_name)
@@ -1076,10 +1075,6 @@ def meta_dataset_collator(
 
     # Create the final collated batch object from the processed attributes.
     return ProcessedDatasetConfig(**collated_attrs)
-
-
-
-
 
 
 ################################################# Old
@@ -1149,7 +1144,7 @@ def meta_dataset_collator(
 #     def __len__(self):
 #         return len(self.configs)
 
-#     def __getitem__(self, index):  # noqa: C901, PLR0912
+#     def __getitem__(self, index):
 #         """Retrieves, splits, and preprocesses the dataset config at the index.
 
 #         Performs train/test splitting and applies potentially multiple
@@ -1333,5 +1328,3 @@ def meta_dataset_collator(
 #             cat_ixs,
 #             conf,
 #         )
-
-
