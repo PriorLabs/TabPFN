@@ -203,6 +203,7 @@ class PreprocessorConfig:
             differentiable=config_dict.get("differentiable", False),
         )
 
+
 @dataclass
 class ProcessedDataset:
     """Holds the processed data for a single dataset configuration.
@@ -243,7 +244,7 @@ class ProcessedDataset:
     y_train_znormed: list[torch.Tensor]
     y_test_znormed: torch.Tensor
     cat_ixs: list[list[int] | None]
-    configs: list["EnsembleConfig"]
+    configs: list[EnsembleConfig]
     x_test_raw: torch.Tensor | None = None
     y_test_raw: torch.Tensor | None = None
     normalized_bardist: FullSupportBarDistribution | None = None
@@ -1007,11 +1008,11 @@ class DatasetCollectionWithPreprocessing(Dataset):
                 y_train_znormed=y_trains_preprocessed,
                 y_test_znormed=y_test_standardized,
                 cat_ixs=list(cat_ixs),
-                configs=list(processed_configs),
+                configs=list(conf),
                 normalized_bardist=normalized_bardist_,
                 bardist=bardist_,
-                x_test_raw=torch.from_numpy(x_test_raw),
-                y_test_raw=y_test_raw_tensor,
+                x_test_raw=x_test_raw,
+                y_test_raw=y_test_raw,
             )
 
         # Return structured data for classification
@@ -1019,7 +1020,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             x_train_preprocessed=X_trains_preprocessed,
             x_test_preprocessed=X_tests_preprocessed,
             y_train_znormed=y_trains_preprocessed,
-            y_test_znormed=y_test_raw_tensor,
+            y_test_znormed=y_test_raw,
             cat_ixs=list(cat_ixs),
-            configs=list(processed_configs),
+            configs=list(conf),
         )
