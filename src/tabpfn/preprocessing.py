@@ -217,9 +217,9 @@ class ProcessedDataset:
             training feature tensors, one for each ensemble member.
         x_test_preprocessed (list[torch.Tensor]): List of preprocessed
             test feature tensors, one for each ensemble member.
-        y_train_preprocessed (list[torch.Tensor]): List of preprocessed
+        y_train_znormed (list[torch.Tensor]): List of preprocessed
             training target tensors, one for each ensemble member.
-        y_test (torch.Tensor): The test target tensor. For classification,
+        y_test_znormed (torch.Tensor): The test target tensor. For classification,
             this is the raw, unprocessed tensor. For regression, this is the
             standardized tensor.
         cat_ixs (list[Optional[list[int]]]): List of categorical feature
@@ -240,8 +240,8 @@ class ProcessedDataset:
 
     x_train_preprocessed: list[torch.Tensor]
     x_test_preprocessed: list[torch.Tensor]
-    y_train_preprocessed: list[torch.Tensor]
-    y_test: torch.Tensor
+    y_train_znormed: list[torch.Tensor]
+    y_test_znormed: torch.Tensor
     cat_ixs: list[list[int] | None]
     configs: list["EnsembleConfig"]
     x_test_raw: torch.Tensor | None = None
@@ -1001,24 +1001,25 @@ class DatasetCollectionWithPreprocessing(Dataset):
         # Also return corresponding target variable binning
         # classes normalized_bardist_ and bardist_
         if regression_task:
-            return (
-                X_trains_preprocessed,
-                X_tests_preprocessed,
-                y_trains_preprocessed,
-                y_test_standardized,
-                cat_ixs,
-                conf,
-                normalized_bardist_,
-                bardist_,
-                x_test_raw,
-                y_test_raw,
+            return ProcessedDataset(
+                x_train_preprocessed=X_trains_preprocessed,
+                x_test_preprocessed=X_tests_preprocessed,
+                y_train_znormed=y_trains_preprocessed,
+                y_test_znormed=y_test_standardized,
+                cat_ixs=list(cat_ixs),
+                configs=list(processed_configs),
+                normalized_bardist=normalized_bardist_,
+                bardist=bardist_,
+                x_test_raw=torch.from_numpy(x_test_raw),
+                y_test_raw=y_test_raw_tensor,
             )
 
-        return (
-            X_trains_preprocessed,
-            X_tests_preprocessed,
-            y_trains_preprocessed,
-            y_test_raw,
-            cat_ixs,
-            conf,
+        # Return structured data for classification
+        return ProcessedDataset(
+            x_train_preprocessed=X_trains_preprocessed,
+            x_test_preprocessed=X_tests_preprocessed,
+            y_train_znormed=y_trains_preprocessed,
+            y_test_znormed=y_test_raw_tensor,
+            cat_ixs=list(cat_ixs),
+            configs=list(processed_configs),
         )
