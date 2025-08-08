@@ -18,10 +18,10 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
     ProcessedDatasetConfig,
-    meta_dataset_collator, # New
+    meta_dataset_collator,  # New
 )
-# from tabpfn.utils import meta_dataset_collator # Old
 
+# from tabpfn.utils import meta_dataset_collator # Old
 from .utils import get_pytest_devices
 
 rng = np.random.default_rng(42)
@@ -214,16 +214,18 @@ def test_tabpfn_classifier_finetuning_loop(
 
     else:
         for data_batch in my_dl_train:
-
             #  New: --- Unpack the single-element  ---
             # data_config = data_batch[0]
             # print(f"data_config {data_config}")
 
-            #  New: --- Access data using attributes from the ProcessedDatasetConfig object  ---
+            #  New: --- Access data using attributes from
+            # the ProcessedDatasetConfig object  ---
             X_tr = data_batch.x_train_preprocessed
             X_te = data_batch.x_test_preprocessed
             y_tr = data_batch.y_train_znormed
-            y_te_raw = data_batch.y_test_znormed # This holds the raw y_test for classification
+            y_te_raw = (
+                data_batch.y_test_znormed
+            )  # This holds the raw y_test for classification
             cat_ixs = data_batch.cat_ixs[0]
             confs = data_batch.configs[0]
             # print(f"data_batch.cat_ixs: {data_batch.cat_ixs}")
@@ -293,16 +295,21 @@ def test_get_preprocessed_datasets_basic():
     item = dataset[0]
 
     # Updated return type is ProcessedDatasetConfig
-    assert isinstance(item, ProcessedDatasetConfig), "The item should be a ProcessedDatasetConfig object"
-    assert hasattr(item, "x_train_preprocessed"), "The config object should have an 'x_train_preprocessed' attribute"
-    assert isinstance(item.y_test_znormed, torch.Tensor), "A tensor attribute like 'y_test_znormed' should exist"
+    assert isinstance(
+        item, ProcessedDatasetConfig
+    ), "The item should be a ProcessedDatasetConfig object"
+    assert hasattr(
+        item, "x_train_preprocessed"
+    ), "The config object should have an 'x_train_preprocessed' attribute"
+    assert isinstance(
+        item.y_test_znormed, torch.Tensor
+    ), "A tensor attribute like 'y_test_znormed' should exist"
 
 
 def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     synthetic_data, classifier_instance: TabPFNClassifier
 ) -> None:
-    """
-    Tests that DatasetCollectionWithPreprocessing returns a correctly
+    """Tests that DatasetCollectionWithPreprocessing returns a correctly
     structured ProcessedDatasetConfig object for a classification task.
     """
     # 1. SETUP
