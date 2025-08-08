@@ -17,8 +17,10 @@ from tabpfn import TabPFNClassifier
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
+    ProcessedDatasetConfig,
+    meta_dataset_collator, # New
 )
-from tabpfn.utils import meta_dataset_collator
+# from tabpfn.utils import meta_dataset_collator # Old
 
 from .utils import get_pytest_devices
 
@@ -195,6 +197,7 @@ def test_tabpfn_classifier_finetuning_loop(
     my_dl_train = DataLoader(
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
     )
+    # print(f"data_config {datasets_list}")
 
     if inference_precision == torch.float64:
         # Expect to raise a ValueError in
@@ -211,7 +214,22 @@ def test_tabpfn_classifier_finetuning_loop(
 
     else:
         for data_batch in my_dl_train:
-            X_tr, X_te, y_tr, y_te_raw, cat_ixs, confs = data_batch
+
+            #  New: --- Unpack the single-element  ---
+            # data_config = data_batch[0]
+            # print(f"data_config {data_config}")
+
+            #  New: --- Access data using attributes from the ProcessedDatasetConfig object  ---
+            X_tr = data_batch.x_train_preprocessed
+            X_te = data_batch.x_test_preprocessed
+            y_tr = data_batch.y_train_znormed
+            y_te_raw = data_batch.y_test_znormed # This holds the raw y_test for classification
+            cat_ixs = data_batch.cat_ixs[0]
+            confs = data_batch.configs[0]
+            # print(f"data_batch.cat_ixs: {data_batch.cat_ixs}")
+
+            # X_tr, X_te, y_tr, y_te_raw, cat_ixs, confs = data_batch
+            # print(f"cat_ixs: {cat_ixs}")
 
             # --- Fit and Predict ---
             clf.fit_from_preprocessed(X_tr, y_tr, cat_ixs, confs)
@@ -273,13 +291,21 @@ def test_get_preprocessed_datasets_basic():
     assert hasattr(dataset, "__len__")
     assert len(dataset) > 0
     item = dataset[0]
-    assert isinstance(item, tuple)
-    assert len(item) == 6
+
+    # Updated return type is ProcessedDatasetConfig
+    assert isinstance(item, ProcessedDatasetConfig), "The item should be a ProcessedDatasetConfig object"
+    assert hasattr(item, "x_train_preprocessed"), "The config object should have an 'x_train_preprocessed' attribute"
+    assert isinstance(item.y_test_znormed, torch.Tensor), "A tensor attribute like 'y_test_znormed' should exist"
 
 
 def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     synthetic_data, classifier_instance: TabPFNClassifier
 ) -> None:
+    """
+    Tests that DatasetCollectionWithPreprocessing returns a correctly
+    structured ProcessedDatasetConfig object for a classification task.
+    """
+    # 1. SETUP
     X_raw, y_raw = synthetic_data
     clf = classifier_instance
     n_estimators = clf.n_estimators
@@ -293,30 +319,66 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
     assert len(dataset_collection) == 1, "Collection should contain one dataset config"
 
+    # 2. GET ITEM & CHECK TYPE: The core change is here
     item_index = 0
-    processed_dataset_item = dataset_collection[item_index]
+    processed_config = dataset_collection[item_index]
 
-    assert isinstance(processed_dataset_item, tuple)
+    # Check that the output is now a ProcessedDatasetConfig object, not a tuple
+    assert isinstance(
+        processed_config, ProcessedDatasetConfig
+    ), "The returned item should be a ProcessedDatasetConfig object"
+
+    # 3. ASSERTIONS: Access data by attribute name, not by index
+    assert isinstance(
+        processed_config.x_train_preprocessed, list
+    ), "x_train_preprocessed should be a list"
     assert (
-        len(processed_dataset_item) == 6
-    ), "Item tuple should have 4 elements for classification"
+        len(processed_config.x_train_preprocessed) == n_estimators
+    ), "List lengths should match the number of estimators"
+    assert (
+        len(processed_config.x_test_preprocessed) == n_estimators
+    ), "List lengths should match the number of estimators"
+    assert (
+        len(processed_config.configs) == n_estimators
+    ), "List lengths should match the number of estimators"
 
-    (
-        X_trains_preprocessed,
-        X_tests_preprocessed,
-        y_trains_preprocessed,
-        y_test_raw_tensor,
-        cat_ixs,
-        returned_ensemble_configs,
-    ) = processed_dataset_item
-
-    assert isinstance(X_trains_preprocessed, list)
-    assert len(X_trains_preprocessed) == n_estimators
+    # Check the shapes of the data splits
     n_samples_total = X_raw.shape[0]
     expected_n_test = int(np.floor(n_samples_total * test_size))
     expected_n_train = n_samples_total - expected_n_test
-    assert y_test_raw_tensor.shape == (expected_n_test,)
-    assert X_trains_preprocessed[0].shape[0] == expected_n_train
+
+    # For classification, y_test_znormed holds the raw, unprocessed test labels
+    assert processed_config.y_test_znormed.shape == (
+        expected_n_test,
+    ), "Shape of the test labels is incorrect"
+    assert processed_config.x_train_preprocessed[0].shape[0] == (
+        expected_n_train
+    ), "Number of samples in the preprocessed training set is incorrect"
+
+    # item_index = 0
+    # processed_dataset_item = dataset_collection[item_index]
+
+    # assert isinstance(processed_dataset_item, tuple)
+    # assert (
+    #     len(processed_dataset_item) == 6
+    # ), "Item tuple should have 4 elements for classification"
+
+    # (
+    #     X_trains_preprocessed,
+    #     X_tests_preprocessed,
+    #     y_trains_preprocessed,
+    #     y_test_raw_tensor,
+    #     cat_ixs,
+    #     returned_ensemble_configs,
+    # ) = processed_dataset_item
+
+    # assert isinstance(X_trains_preprocessed, list)
+    # assert len(X_trains_preprocessed) == n_estimators
+    # n_samples_total = X_raw.shape[0]
+    # expected_n_test = int(np.floor(n_samples_total * test_size))
+    # expected_n_train = n_samples_total - expected_n_test
+    # assert y_test_raw_tensor.shape == (expected_n_test,)
+    # assert X_trains_preprocessed[0].shape[0] == expected_n_train
 
 
 def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
@@ -325,6 +387,7 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
     """Test DatasetCollectionWithPreprocessing
     using a collection of multiple synthetic datasets.
     """
+    # 1. SETUP
     datasets = uniform_synthetic_dataset_collection
     clf = classifier_instance
     n_estimators = clf.n_estimators
@@ -343,27 +406,27 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
         datasets
     ), "Collection should contain one item per dataset"
 
+    # 2. LOOP & ASSERTIONS: The fix is applied inside this loop
     for item_index in range(len(datasets)):
-        processed_dataset_item = dataset_collection[item_index]
-        assert isinstance(processed_dataset_item, tuple)
-        assert (
-            len(processed_dataset_item) == 6
-        ), "Item tuple should have 6 elements for classification"
-        (
-            X_trains_preprocessed,
-            X_tests_preprocessed,
-            y_trains_preprocessed,
-            y_test_raw_tensor,
-            cat_ixs,
-            returned_ensemble_configs,
-        ) = processed_dataset_item
-        assert isinstance(X_trains_preprocessed, list)
-        assert len(X_trains_preprocessed) == n_estimators
+        # Get the processed config object for the current dataset
+        processed_config = dataset_collection[item_index]
+
+        # THE FIX: Check for the correct object type
+        assert isinstance(
+            processed_config, ProcessedDatasetConfig
+        ), "Each item in the collection should be a ProcessedDatasetConfig object"
+
+        # THE FIX: Access data by attribute, not by unpacking a tuple
+        assert isinstance(processed_config.x_train_preprocessed, list)
+        assert len(processed_config.x_train_preprocessed) == n_estimators
+
+        # Check data shapes
         n_samples_total = X_list[item_index].shape[0]
         expected_n_test = int(np.floor(n_samples_total * test_size))
         expected_n_train = n_samples_total - expected_n_test
-        assert y_test_raw_tensor.shape == (expected_n_test,)
-        assert X_trains_preprocessed[0].shape[0] == expected_n_train
+
+        assert processed_config.y_test_znormed.shape == (expected_n_test,)
+        assert processed_config.x_train_preprocessed[0].shape[0] == expected_n_train
 
 
 def test_dataset_and_collator_with_dataloader_uniform(

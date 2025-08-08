@@ -880,71 +880,73 @@ def pad_tensors(tensor_list, padding_val=0, *, labels=False):
     return ret_list
 
 
-def meta_dataset_collator(batch, padding_val=0.0):
-    """Collate function for torch.utils.data.DataLoader.
 
-    Designed for batches from DatasetCollectionWithPreprocessing.
-    Takes a list of dataset samples (the batch) and structures them
-    into a single tuple suitable for model input, often for fine-tuning
-    using `fit_from_preprocessed`.
+# # Old code
+# def meta_dataset_collator(batch, padding_val=0.0):
+#     """Collate function for torch.utils.data.DataLoader.
 
-    Handles samples containing nested lists (e.g., for ensemble members)
-    and tensors. Pads tensors to consistent shapes using `pad_tensors`
-    before stacking. Non-tensor items are grouped into lists.
+#     Designed for batches from DatasetCollectionWithPreprocessing.
+#     Takes a list of dataset samples (the batch) and structures them
+#     into a single tuple suitable for model input, often for fine-tuning
+#     using `fit_from_preprocessed`.
 
-    Args:
-        batch (list): A list where each element is one sample from the
-            Dataset. Samples often contain multiple components like
-            features, labels, configs, etc., potentially nested in lists.
-        padding_val (float): Value used for padding tensors to allow
-            stacking across the batch dimension.
+#     Handles samples containing nested lists (e.g., for ensemble members)
+#     and tensors. Pads tensors to consistent shapes using `pad_tensors`
+#     before stacking. Non-tensor items are grouped into lists.
 
-    Returns:
-        tuple: A tuple where each element is a collated component from the
-            input batch (e.g., stacked tensors, lists of configs).
-            The structure matches the input required by methods like
-            `fit_from_preprocessed`.
+#     Args:
+#         batch (list): A list where each element is one sample from the
+#             Dataset. Samples often contain multiple components like
+#             features, labels, configs, etc., potentially nested in lists.
+#         padding_val (float): Value used for padding tensors to allow
+#             stacking across the batch dimension.
 
-    Note:
-        Currently only implemented and tested for `batch_size = 1`,
-        as enforced by an internal assertion.
-    """
-    batch_sz = len(batch)
-    assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
-    num_estim = len(batch[0][0])
-    items_list = []
-    for item_idx in range(len(batch[0])):
-        if isinstance(batch[0][item_idx], list):
-            estim_list = []
-            for estim_no in range(num_estim):
-                if isinstance(batch[0][item_idx][0], torch.Tensor):
-                    labels = batch[0][item_idx][0].ndim == 1
-                    estim_list.append(
-                        torch.stack(
-                            pad_tensors(
-                                [batch[r][item_idx][estim_no] for r in range(batch_sz)],
-                                padding_val=padding_val,
-                                labels=labels,
-                            )
-                        )
-                    )
-                else:
-                    estim_list.append(
-                        list(batch[r][item_idx][estim_no] for r in range(batch_sz))  # noqa: C400
-                    )
-            items_list.append(estim_list)
-        elif isinstance(batch[0][item_idx], torch.Tensor):
-            labels = batch[0][item_idx].ndim == 1
-            items_list.append(
-                torch.stack(
-                    pad_tensors(
-                        [batch[r][item_idx] for r in range(batch_sz)],
-                        padding_val=padding_val,
-                        labels=labels,
-                    )
-                )
-            )
-        else:
-            items_list.append([batch[r][item_idx] for r in range(batch_sz)])
+#     Returns:
+#         tuple: A tuple where each element is a collated component from the
+#             input batch (e.g., stacked tensors, lists of configs).
+#             The structure matches the input required by methods like
+#             `fit_from_preprocessed`.
 
-    return tuple(items_list)
+#     Note:
+#         Currently only implemented and tested for `batch_size = 1`,
+#         as enforced by an internal assertion.
+#     """
+#     batch_sz = len(batch)
+#     assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
+#     num_estim = len(batch[0][0])
+#     items_list = []
+#     for item_idx in range(len(batch[0])):
+#         if isinstance(batch[0][item_idx], list):
+#             estim_list = []
+#             for estim_no in range(num_estim):
+#                 if isinstance(batch[0][item_idx][0], torch.Tensor):
+#                     labels = batch[0][item_idx][0].ndim == 1
+#                     estim_list.append(
+#                         torch.stack(
+#                             pad_tensors(
+#                                 [batch[r][item_idx][estim_no] for r in range(batch_sz)],
+#                                 padding_val=padding_val,
+#                                 labels=labels,
+#                             )
+#                         )
+#                     )
+#                 else:
+#                     estim_list.append(
+#                         list(batch[r][item_idx][estim_no] for r in range(batch_sz))  # noqa: C400
+#                     )
+#             items_list.append(estim_list)
+#         elif isinstance(batch[0][item_idx], torch.Tensor):
+#             labels = batch[0][item_idx].ndim == 1
+#             items_list.append(
+#                 torch.stack(
+#                     pad_tensors(
+#                         [batch[r][item_idx] for r in range(batch_sz)],
+#                         padding_val=padding_val,
+#                         labels=labels,
+#                     )
+#                 )
+#             )
+#         else:
+#             items_list.append([batch[r][item_idx] for r in range(batch_sz)])
+
+#     return tuple(items_list)
