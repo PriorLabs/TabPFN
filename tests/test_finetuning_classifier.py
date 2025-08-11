@@ -474,7 +474,7 @@ def test_dataset_and_collator_with_dataloader_uniform(
         for est_tensor in batch.y_train_znormed:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        
+
         # 6. Check that the metadata was restructured correctly
         assert all(isinstance(c, list) for c in batch.configs)
 
@@ -514,7 +514,7 @@ def test_classifier_dataset_and_collator_batches_type(
         batch_size=batch_size,
         collate_fn=meta_dataset_collator,
     )
-    
+
     # --- Verification: This part is updated ---
     for batch in dl:
         # 1. Verify the batch is the correct dataclass type
@@ -635,7 +635,9 @@ def test_fit_from_preprocessed_runs(classifier_instance, classification_data) ->
         preds = clf.forward(data_batch.x_test_preprocessed)
 
         # 3. Assertions now use attributes from the data_batch object
-        assert preds.ndim == 3, f"Expected 3D output (samples, classes), got {preds.shape}"
+        assert (
+            preds.ndim == 3
+        ), f"Expected 3D output (samples, classes), got {preds.shape}"
         assert preds.shape[0] == data_batch.x_test_preprocessed[0].shape[0]
         assert preds.shape[0] == data_batch.y_test_znormed.shape[0]
         assert preds.shape[1] == clf.n_classes_
@@ -645,7 +647,7 @@ def test_fit_from_preprocessed_runs(classifier_instance, classification_data) ->
         assert torch.allclose(
             probs_sum, torch.ones_like(probs_sum), atol=1e-5
         ), "Probabilities do not sum to 1"
-        
+
         # Only need to check one batch
         break
 
@@ -772,7 +774,8 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         # except ValueError as e:
         #     self.fail(
         #         f"Failed to unpack data batch from DataLoader."
-        #         f"Structure might be different. Error: {e}. Batch content: {data_batch}"
+        #         f"Structure might be different."
+        #         f"Error: {e}. Batch content: {data_batch}"
         #     )
 
         # New fix
@@ -782,7 +785,6 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         y_trains_p2 = data_batch.y_train_znormed
         cat_ixs_p2 = data_batch.cat_ixs
         confs_p2 = data_batch.configs
-
 
         clf_batched.fit_from_preprocessed(
             X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2

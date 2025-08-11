@@ -19,8 +19,8 @@ from tabpfn.architectures.base.bar_distribution import (
     FullSupportBarDistribution,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig, meta_dataset_collator
-# from tabpfn.utils import meta_dataset_collator
 
+# from tabpfn.utils import meta_dataset_collator
 from .utils import get_pytest_devices
 
 rng = np.random.default_rng(42)
