@@ -1030,19 +1030,9 @@ class DatasetCollectionWithPreprocessing(Dataset):
 def meta_dataset_collator(
     batch: list[ProcessedDatasetConfig],
 ) -> ProcessedDatasetConfig:
-    """Collates a batch of ProcessedDatasetConfig objects.
-
-    This function is designed for a batch_size of 1. It takes the single
-    dataclass instance from the batch and structures its contents for model
-    consumption by adding a "batch" dimension of size 1 to all tensors.
-    Non-tensor metadata (like configs or bardist) are wrapped in a list.
-
-    Args:
-        batch: A list containing a single ProcessedDatasetConfig object.
-
-    Returns:
-        A new ProcessedDatasetConfig instance where all attributes have been
-        structured into a batch of size 1.
+    """
+    Collates a batch of ProcessedDatasetConfig objects, ensuring the output
+    structure matches the legacy format expected by the model's forward pass.
     """
     assert len(batch) == 1, "This collator is only implemented for a batch size of 1."
 
@@ -1050,27 +1040,35 @@ def meta_dataset_collator(
     item = batch[0]
     collated_attrs = {}
 
-    # Iterate through all fields of the dataclass
-    # (e.g., 'x_train_preprocessed', 'bardist')
+    # The number of estimators is the source of truth for restructuring.
+    num_estimators = len(item.configs)
+
+    # Iterate through all fields of the dataclass ('x_train_preprocessed', 'configs', etc.)
     for field in fields(ProcessedDatasetConfig):
         attr_name = field.name
         value = getattr(item, attr_name)
 
-        if isinstance(value, list) and value and isinstance(value[0], torch.Tensor):
-            # This handles fields like x_train_preprocessed (List[torch.Tensor])
-            # Add a batch dimension to each tensor in the list.
-            collated_attrs[attr_name] = [t.unsqueeze(0) for t in value]
+        if isinstance(value, list):
+            # Case 1: A list of Tensors (e.g., x_train_preprocessed).
+            # This is handled correctly by adding a batch dimension to each tensor.
+            if value and isinstance(value[0], torch.Tensor):
+                collated_attrs[attr_name] = [t.unsqueeze(0) for t in value]
+
+            # Case 2: A list of metadata where length matches the number of estimators.
+            # This is the key fix. We restructure it from [item1, item2] to [[item1], [item2]].
+            elif len(value) == num_estimators and not any(isinstance(v, torch.Tensor) for v in value):
+                collated_attrs[attr_name] = [[v] for v in value]
+
+            # Case 3: Any other list. Just wrap it to create the batch.
+            else:
+                 collated_attrs[attr_name] = [value]
+
         elif isinstance(value, torch.Tensor):
-            # This handles single tensors like y_test_znormed.
-            # Add a batch dimension.
+            # Case 4: A single Tensor. Add a batch dimension.
             collated_attrs[attr_name] = value.unsqueeze(0)
         else:
-            # This is the key part for your question!
-            # This handles all non-tensor metadata:
-            # - bardist and normalized_bardist (FullSupportBarDistribution or None)
-            # - configs (List[EnsembleConfig])
-            # - cat_ixs (List[Optional[List[int]]])
-            # We simply wrap the value in a list to represent the batch.
+            # Case 5: Other single metadata items (e.g., bardist, which can be None).
+            # Wrap it in a list to represent the batch.
             collated_attrs[attr_name] = [value]
 
     # Create the final collated batch object from the processed attributes.
