@@ -144,7 +144,16 @@ def main():
     # --- Setup Data, Model, and Dataloader ---
     # X_train, X_test, y_train, y_test = prepare_data(config)
     # Rosen's test:
-    X_train, X_test, y_train, y_test = torch.rand(10, 3), torch.rand(2, 3), torch.rand(10,), torch.rand(2,)
+    X_train, X_test, y_train, y_test = (
+        torch.rand(10, 3),
+        torch.rand(2, 3),
+        torch.rand(
+            10,
+        ),
+        torch.rand(
+            2,
+        ),
+    )
     regressor, regressor_config = setup_regressor(config)
 
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
@@ -196,7 +205,9 @@ def main():
                 norm_bardist = data_batch.normalized_bardist
 
                 regressor.normalized_bardist_ = norm_bardist[0]
-                regressor.fit_from_preprocessed(X_trains_p, y_trains_p, cat_ixs_unwrapped, confs_unwrapped)
+                regressor.fit_from_preprocessed(
+                    X_trains_p, y_trains_p, cat_ixs_unwrapped, confs_unwrapped
+                )
                 logits, _, _ = regressor.forward(X_tests_p)
 
                 # For regression, the loss function is part of the preprocessed data

@@ -1030,8 +1030,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
 def meta_dataset_collator(
     batch: list[ProcessedDatasetConfig],
 ) -> ProcessedDatasetConfig:
-    """
-    Collates a batch of ProcessedDatasetConfig objects, ensuring the output
+    """Collates a batch of ProcessedDatasetConfig objects, ensuring the output
     structure matches the legacy format expected by the model's forward pass.
     """
     assert len(batch) == 1, "This collator is only implemented for a batch size of 1."
@@ -1043,7 +1042,8 @@ def meta_dataset_collator(
     # The number of estimators is the source of truth for restructuring.
     num_estimators = len(item.configs)
 
-    # Iterate through all fields of the dataclass ('x_train_preprocessed', 'configs', etc.)
+    # Iterate through all fields of the dataclass
+    # ('x_train_preprocessed', 'configs', etc.)
     for field in fields(ProcessedDatasetConfig):
         attr_name = field.name
         value = getattr(item, attr_name)
@@ -1055,13 +1055,16 @@ def meta_dataset_collator(
                 collated_attrs[attr_name] = [t.unsqueeze(0) for t in value]
 
             # Case 2: A list of metadata where length matches the number of estimators.
-            # This is the key fix. We restructure it from [item1, item2] to [[item1], [item2]].
-            elif len(value) == num_estimators and not any(isinstance(v, torch.Tensor) for v in value):
+            # This is the key fix.
+            # We restructure it from [item1, item2] to [[item1], [item2]].
+            elif len(value) == num_estimators and not any(
+                isinstance(v, torch.Tensor) for v in value
+            ):
                 collated_attrs[attr_name] = [[v] for v in value]
 
             # Case 3: Any other list. Just wrap it to create the batch.
             else:
-                 collated_attrs[attr_name] = [value]
+                collated_attrs[attr_name] = [value]
 
         elif isinstance(value, torch.Tensor):
             # Case 4: A single Tensor. Add a batch dimension.

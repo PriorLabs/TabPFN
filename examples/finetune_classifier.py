@@ -141,8 +141,8 @@ def main():
 
     # --- Setup Data, Model, and Dataloader ---
     # X_train, X_test, y_train, y_test = prepare_data(config)
-    X_train = torch.rand(10,3)
-    X_test = torch.rand(2,3)
+    X_train = torch.rand(10, 3)
+    X_test = torch.rand(2, 3)
     y_train = torch.randint(0, 2, (10,))
     y_test = torch.randint(0, 2, (2,))
     classifier, optimizer, classifier_config = setup_model_and_optimizer(config)
@@ -173,7 +173,9 @@ def main():
             progress_bar = tqdm(finetuning_dataloader, desc=f"Finetuning Epoch {epoch}")
             for data_batch in progress_bar:
                 # Skip data_batch if splits don't have all classes
-                if len(np.unique(data_batch.y_train_znormed[0].squeeze().cpu())) != len(np.unique(data_batch.y_test_znormed.squeeze().cpu())):
+                if len(np.unique(data_batch.y_train_znormed[0].squeeze().cpu())) != len(
+                    np.unique(data_batch.y_test_znormed.squeeze().cpu())
+                ):
                     continue
 
                 optimizer.zero_grad()
@@ -185,10 +187,17 @@ def main():
                 print(f"data_batch.configs: {data_batch.configs}")
 
                 classifier.fit_from_preprocessed(
-                    data_batch.x_train_preprocessed, data_batch.y_train_znormed, cat_ixs_unwrapped, confs_unwrapped
+                    data_batch.x_train_preprocessed,
+                    data_batch.y_train_znormed,
+                    cat_ixs_unwrapped,
+                    confs_unwrapped,
                 )
-                predictions = classifier.forward(data_batch.x_test_preprocessed, return_logits=True)
-                loss = loss_function(predictions, data_batch.y_test_znormed.to(config["device"]))
+                predictions = classifier.forward(
+                    data_batch.x_test_preprocessed, return_logits=True
+                )
+                loss = loss_function(
+                    predictions, data_batch.y_test_znormed.to(config["device"])
+                )
                 loss.backward()
                 optimizer.step()
 
