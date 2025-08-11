@@ -70,7 +70,7 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit",
-  "ruff==0.8.6", # This version must be the same as in .pre-commit-config.yaml
+  "ruff==0.12.8", # This version must be the same as in .pre-commit-config.yaml
   "mypy==1.17.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest",
