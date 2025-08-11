@@ -16,7 +16,11 @@ class TabPFNSettings(BaseSettings):
     Prefixed by ``TABPFN_`` in environment variables.
     """
 
-    model_config = SettingsConfigDict(env_prefix="TABPFN_", env_file=".env")
+    # Set extra="ignore" so that unknown keys in the .env file, for example, entries for
+    # other applications, do not cause validation errors.
+    model_config = SettingsConfigDict(
+        env_prefix="TABPFN_", env_file=".env", extra="ignore"
+    )
 
     # Model Configuration
     model_cache_dir: Path | None = Field(
