@@ -141,7 +141,10 @@ def main():
 
     # --- Setup Data, Model, and Dataloader ---
     # X_train, X_test, y_train, y_test = prepare_data(config)
-    X_train, X_test, y_train, y_test = torch.rand(10, 3), torch.rand(2, 3), torch.randint(0, 1, (10,)), torch.randint(0, 1, (2,))
+    X_train = torch.rand(10,3)
+    X_test = torch.rand(2,3)
+    y_train = torch.randint(0, 2, (10,))
+    y_test = torch.randint(0, 2, (2,))
     classifier, optimizer, classifier_config = setup_model_and_optimizer(config)
 
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
@@ -178,7 +181,8 @@ def main():
                 # Unwrap metadata from the list added by the collator
                 cat_ixs_unwrapped = data_batch.cat_ixs
                 confs_unwrapped = data_batch.configs
-                print(f"confs_unwrapped: {len(confs_unwrapped)}")
+                print(f"data_batch.cat_ixs: {data_batch.cat_ixs}")
+                print(f"data_batch.configs: {data_batch.configs}")
 
                 classifier.fit_from_preprocessed(
                     data_batch.x_train_preprocessed, data_batch.y_train_znormed, cat_ixs_unwrapped, confs_unwrapped

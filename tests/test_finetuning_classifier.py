@@ -227,7 +227,7 @@ def test_tabpfn_classifier_finetuning_loop(
                 data_batch.y_test_znormed
             )  # This holds the raw y_test for classification
             cat_ixs = data_batch.cat_ixs
-            confs = data_batch.configs[0]
+            confs = data_batch.configs
             # print(f"data_batch.cat_ixs: {data_batch.cat_ixs}")
 
             # X_tr, X_te, y_tr, y_te_raw, cat_ixs, confs = data_batch
@@ -450,21 +450,51 @@ def test_dataset_and_collator_with_dataloader_uniform(
         batch_size=batch_size,
         collate_fn=meta_dataset_collator,
     )
+
+    # --- Verification: This part is updated ---
     for batch in dl:
-        # Should be tuple with X_trains, X_tests, y_trains, y_tests, cat_ixs, confs
-        assert isinstance(batch, tuple)
-        X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = batch
-        for est_tensor in X_trains:
-            assert isinstance(
-                est_tensor, torch.Tensor
-            ), "Each estimator's batch should be a tensor."
+        # 1. Verify the batch is the correct dataclass type, not a tuple
+        assert isinstance(batch, ProcessedDatasetConfig)
+
+        # 2. Verify the types of key attributes
+        assert isinstance(batch.x_train_preprocessed, list)
+        assert isinstance(batch.y_train_znormed, list)
+        assert isinstance(batch.y_test_znormed, torch.Tensor)
+        assert isinstance(batch.configs, list)
+
+        # 3. Verify the batch dimension is present on tensors
+        assert batch.y_test_znormed.shape[0] == batch_size
+
+        # 4. Check the list of tensors for training features
+        for est_tensor in batch.x_train_preprocessed:
+            assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains:
-            assert isinstance(
-                est_tensor, torch.Tensor
-            ), "Each estimator's batch should be a tensor for labels."
+
+        # 5. Check the list of tensors for training labels
+        for est_tensor in batch.y_train_znormed:
+            assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        break  # Only check one batch
+        
+        # 6. Check that the metadata was restructured correctly
+        assert all(isinstance(c, list) for c in batch.configs)
+
+        # Only need to check the first batch to verify the structure
+        break
+    # for batch in dl:
+    #     # Should be tuple with X_trains, X_tests, y_trains, y_tests, cat_ixs, confs
+    #     assert isinstance(batch, tuple)
+    #     X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = batch
+    #     for est_tensor in X_trains:
+    #         assert isinstance(
+    #             est_tensor, torch.Tensor
+    #         ), "Each estimator's batch should be a tensor."
+    #         assert est_tensor.shape[0] == batch_size
+    #     for est_tensor in y_trains:
+    #         assert isinstance(
+    #             est_tensor, torch.Tensor
+    #         ), "Each estimator's batch should be a tensor for labels."
+    #         assert est_tensor.shape[0] == batch_size
+    #     break  # Only check one batch
 
 
 def test_classifier_dataset_and_collator_batches_type(
@@ -484,19 +514,33 @@ def test_classifier_dataset_and_collator_batches_type(
         batch_size=batch_size,
         collate_fn=meta_dataset_collator,
     )
+    
+    # --- Verification: This part is updated ---
     for batch in dl:
-        assert isinstance(batch, tuple)
-        X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = batch
-        for est_tensor in X_trains:
+        # 1. Verify the batch is the correct dataclass type
+        assert isinstance(batch, ProcessedDatasetConfig)
+
+        # 2. Check the tensor lists for correct type and batch dimension
+        for est_tensor in batch.x_train_preprocessed:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains:
+
+        for est_tensor in batch.y_train_znormed:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        assert isinstance(cat_ixs, list)
-        for conf in confs:
-            for c in conf:
+
+        # 3. Check the metadata attributes
+        assert isinstance(batch.cat_ixs, list)
+        assert isinstance(batch.configs, list)
+
+        # 4. Verify the structure and type of the ensemble configs
+        # This loop structure correctly handles the [[config1], [config2]] format
+        for conf_list in batch.configs:
+            assert isinstance(conf_list, list)
+            for c in conf_list:
                 assert isinstance(c, ClassifierEnsembleConfig)
+
+        # Only need to check the first batch
         break
 
 
@@ -560,21 +604,50 @@ def test_fit_from_preprocessed_runs(classifier_instance, classification_data) ->
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
     )
 
+    # for data_batch in dl:
+    #     X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = data_batch
+    #     clf.fit_from_preprocessed(X_trains, y_trains, cat_ixs, confs)
+    #     preds = clf.forward(X_tests)
+    #     assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
+    #     assert preds.shape[0] == X_tests[0].shape[0]
+    #     assert preds.shape[0] == y_tests.shape[0]
+    #     assert preds.shape[1] == clf.n_classes_
+
+    #     # TODO: verify number of classes, "Mismatch in class count"
+    #     probs_sum = preds.sum(dim=1)
+    #     assert torch.allclose(
+    #         probs_sum, torch.ones_like(probs_sum), atol=1e-5
+    #     ), "Probabilities do not sum to 1"
+    #     break  # Only need to check one batch for this test
+    # --- Verification: This part is updated ---
     for data_batch in dl:
-        X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = data_batch
-        clf.fit_from_preprocessed(X_trains, y_trains, cat_ixs, confs)
-        preds = clf.forward(X_tests)
-        assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
-        assert preds.shape[0] == X_tests[0].shape[0]
-        assert preds.shape[0] == y_tests.shape[0]
+        # 1. Verify we have the correct dataclass object
+        assert isinstance(data_batch, ProcessedDatasetConfig)
+
+        # 2. Call the methods using the dataclass attributes
+        clf.fit_from_preprocessed(
+            data_batch.x_train_preprocessed,
+            data_batch.y_train_znormed,
+            data_batch.cat_ixs,
+            data_batch.configs,
+        )
+        # The `forward` method takes the preprocessed test features
+        preds = clf.forward(data_batch.x_test_preprocessed)
+
+        # 3. Assertions now use attributes from the data_batch object
+        assert preds.ndim == 3, f"Expected 3D output (samples, classes), got {preds.shape}"
+        assert preds.shape[0] == data_batch.x_test_preprocessed[0].shape[0]
+        assert preds.shape[0] == data_batch.y_test_znormed.shape[0]
         assert preds.shape[1] == clf.n_classes_
 
-        # TODO: verify number of classes, "Mismatch in class count"
+        # 4. Verify that probabilities sum to 1 for each sample
         probs_sum = preds.sum(dim=1)
         assert torch.allclose(
             probs_sum, torch.ones_like(probs_sum), atol=1e-5
         ), "Probabilities do not sum to 1"
-        break  # Only need to check one batch for this test
+        
+        # Only need to check one batch
+        break
 
 
 class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
@@ -692,15 +765,24 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         except StopIteration:
             self.fail("DataLoader yielded no batches.")
 
-        try:
-            (X_trains_p2, X_tests_p2, y_trains_p2, _, cat_ixs_p2, confs_p2, *_) = (
-                data_batch
-            )
-        except ValueError as e:
-            self.fail(
-                f"Failed to unpack data batch from DataLoader."
-                f"Structure might be different. Error: {e}. Batch content: {data_batch}"
-            )
+        # try:
+        #     (X_trains_p2, X_tests_p2, y_trains_p2, _, cat_ixs_p2, confs_p2, *_) = (
+        #         data_batch
+        #     )
+        # except ValueError as e:
+        #     self.fail(
+        #         f"Failed to unpack data batch from DataLoader."
+        #         f"Structure might be different. Error: {e}. Batch content: {data_batch}"
+        #     )
+
+        # New fix
+        assert isinstance(data_batch, ProcessedDatasetConfig)
+        X_trains_p2 = data_batch.x_train_preprocessed
+        X_tests_p2 = data_batch.x_test_preprocessed
+        y_trains_p2 = data_batch.y_train_znormed
+        cat_ixs_p2 = data_batch.cat_ixs
+        confs_p2 = data_batch.configs
+
 
         clf_batched.fit_from_preprocessed(
             X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
