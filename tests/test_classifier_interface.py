@@ -49,7 +49,7 @@ fit_modes = [
 inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
-model_paths = ModelSource.get_regressor_v2().filenames
+model_paths = ModelSource.get_classifier_v2().filenames
 
 primary_model = model_paths[0]
 other_models = model_paths[1:]
