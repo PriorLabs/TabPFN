@@ -106,6 +106,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
         "fit_mode",
         "inference_precision",
         "remove_outliers_std",
+        "model_path",
     ),
     all_combinations,
 )
@@ -117,6 +118,7 @@ def test_fit(
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     remove_outliers_std: int | None,
+    model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     if torch.device(device).type == "cpu" and inference_precision in ["autocast"]:
@@ -133,6 +135,7 @@ def test_fit(
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
+        model_path=model_path,
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
