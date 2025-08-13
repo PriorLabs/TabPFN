@@ -60,6 +60,7 @@ _full_grid = product(
     estimators,
     devices,  # device
     feature_shift_decoders,
+    multiclass_decoders,
     fit_modes,
     inference_precision_methods,
     remove_outliers_stds,
