@@ -1017,6 +1017,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             )
 
         # Return structured data for classification
+        # TODO: Change classification's y_test_znormed to y_test_raw
         return ProcessedDatasetConfig(
             x_train_preprocessed=X_trains_preprocessed,
             x_test_preprocessed=X_tests_preprocessed,
