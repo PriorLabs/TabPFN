@@ -15,10 +15,13 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNRegressor
 from tabpfn.architectures.base.bar_distribution import (
-    BarDistribution,
     FullSupportBarDistribution,
 )
-from tabpfn.preprocessing import RegressorEnsembleConfig, meta_dataset_collator
+from tabpfn.preprocessing import (
+    ProcessedDatasetConfig,
+    RegressorEnsembleConfig,
+    meta_dataset_collator,
+)
 
 # from tabpfn.utils import meta_dataset_collator
 from .utils import get_pytest_devices
@@ -159,34 +162,66 @@ def test_regressor_dataset_and_collator_batches_type(
         collate_fn=meta_dataset_collator,
     )
     for batch in dl:
-        assert isinstance(batch, tuple)
-        (
-            X_trains_preprocessed,
-            X_tests_preprocessed,
-            y_trains_preprocessed,
-            y_test_standardized,
-            cat_ixs,
-            confs,
-            normalized_bardist_,
-            bar_distribution,
-            x_test_raw,
-            y_test_raw,
-        ) = batch
-        for est_tensor in X_trains_preprocessed:
+        # 1. The batch is now a ProcessedDatasetConfig object, not a tuple
+        assert isinstance(batch, ProcessedDatasetConfig)
+
+        # 2. Access attributes directly instead of unpacking
+        for est_tensor in batch.x_train_preprocessed:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains_preprocessed:
+
+        # 3. Note the attribute name change from y_trains_preprocessed
+        for est_tensor in batch.y_train_znormed:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        assert isinstance(cat_ixs, list)
-        for conf in confs:
-            for c in conf:
+
+        assert isinstance(batch.cat_ixs, list)
+        for conf_list in batch.configs:
+            for c in conf_list:
                 assert isinstance(c, RegressorEnsembleConfig)
-        for ren_crit in normalized_bardist_:
+
+        # The collator wraps single metadata items in a list for the batch
+        for ren_crit in batch.normalized_bardist:
             assert isinstance(ren_crit, FullSupportBarDistribution)
-        for bar_dist in bar_distribution:
-            assert isinstance(bar_dist, BarDistribution)
-        break
+
+        for bar_dist in batch.bardist:
+            # The dataclass specifically uses FullSupportBarDistribution
+            assert isinstance(bar_dist, FullSupportBarDistribution)
+
+        # You can also verify the other attributes
+        assert isinstance(batch.y_test_znormed, torch.Tensor)
+        assert isinstance(batch.x_test_raw, torch.Tensor)
+        assert isinstance(batch.y_test_raw, torch.Tensor)
+
+        break  # Only test the first batch
+        # assert isinstance(batch, tuple)
+        # (
+        #     X_trains_preprocessed,
+        #     X_tests_preprocessed,
+        #     y_trains_preprocessed,
+        #     y_test_standardized,
+        #     cat_ixs,
+        #     confs,
+        #     normalized_bardist_,
+        #     bar_distribution,
+        #     x_test_raw,
+        #     y_test_raw,
+        # ) = batch
+        # for est_tensor in X_trains_preprocessed:
+        #     assert isinstance(est_tensor, torch.Tensor)
+        #     assert est_tensor.shape[0] == batch_size
+        # for est_tensor in y_trains_preprocessed:
+        #     assert isinstance(est_tensor, torch.Tensor)
+        #     assert est_tensor.shape[0] == batch_size
+        # assert isinstance(cat_ixs, list)
+        # for conf in confs:
+        #     for c in conf:
+        #         assert isinstance(c, RegressorEnsembleConfig)
+        # for ren_crit in normalized_bardist_:
+        #     assert isinstance(ren_crit, FullSupportBarDistribution)
+        # for bar_dist in bar_distribution:
+        #     assert isinstance(bar_dist, BarDistribution)
+        # break
 
 
 @pytest.mark.parametrize(param_order, combinations)
@@ -238,26 +273,29 @@ def test_tabpfn_regressor_finetuning_loop(
         for data_batch in my_dl_train:
             optim_impl.zero_grad()
 
-            (
-                X_trains_preprocessed,
-                X_tests_preprocessed,
-                y_trains_preprocessed,
-                y_test_standardized,
-                cat_ixs,
-                confs,
-                normalized_bardist_,
-                bar_distribution,
-                batch_x_test_raw,
-                batch_y_test_raw,
-            ) = data_batch
+            # (
+            #     X_trains_preprocessed,
+            #     X_tests_preprocessed,
+            #     y_trains_preprocessed,
+            #     y_test_standardized,
+            #     cat_ixs,
+            #     confs,
+            #     normalized_bardist_,
+            #     bar_distribution,
+            #     batch_x_test_raw,
+            #     batch_y_test_raw,
+            # ) = data_batch
 
             reg.fit_from_preprocessed(
-                X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+                data_batch.x_train_preprocessed,
+                data_batch.y_train_znormed,
+                data_batch.cat_ixs,
+                data_batch.configs,
             )
 
-            reg.normalized_bardist_ = normalized_bardist_[0]
+            reg.normalized_bardist_ = data_batch.normalized_bardist[0]
 
-            averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
+            averaged_pred_logits, _, _ = reg.forward(data_batch.x_test_preprocessed)
 
             # --- Basic Shape Checks ---
             assert (
@@ -265,14 +303,22 @@ def test_tabpfn_regressor_finetuning_loop(
             ), f"Expected 3D output, got {averaged_pred_logits.shape}"
 
             # Batch Size
-            assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
+            # assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
+            assert averaged_pred_logits.shape[0] == data_batch.y_test_raw.shape[0]
             assert averaged_pred_logits.shape[0] == batch_size
-            assert averaged_pred_logits.shape[0] == X_tests_preprocessed[0].shape[0]
-            assert averaged_pred_logits.shape[0] == y_test_standardized.shape[0]
+            # assert averaged_pred_logits.shape[0] == X_tests_preprocessed[0].shape[0]
+            assert (
+                averaged_pred_logits.shape[0]
+                == data_batch.x_test_preprocessed[0].shape[0]
+            )
+            # assert averaged_pred_logits.shape[0] == y_test_standardized.shape[0]
+            assert averaged_pred_logits.shape[0] == data_batch.y_test_znormed.shape[0]
 
             # N_samples
-            assert averaged_pred_logits.shape[1] == batch_y_test_raw.shape[1]
-            assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
+            # assert averaged_pred_logits.shape[1] == batch_y_test_raw.shape[1]
+            # assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
+            assert averaged_pred_logits.shape[1] == data_batch.y_test_raw.shape[1]
+            assert averaged_pred_logits.shape[1] == data_batch.y_test_znormed.shape[1]
 
             # N_bins
             n_borders_bardist = reg.bardist_.borders.shape[0]
@@ -280,9 +326,13 @@ def test_tabpfn_regressor_finetuning_loop(
             n_borders_norm_crit = reg.normalized_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
 
-            assert len(X_tests_preprocessed) == reg.n_estimators
-            assert len(X_trains_preprocessed) == reg.n_estimators
-            assert len(y_trains_preprocessed) == reg.n_estimators
+            # assert len(X_tests_preprocessed) == reg.n_estimators
+            # assert len(X_trains_preprocessed) == reg.n_estimators
+            # assert len(y_trains_preprocessed) == reg.n_estimators
+            assert len(data_batch.x_test_preprocessed) == reg.n_estimators
+            assert len(data_batch.x_train_preprocessed) == reg.n_estimators
+            assert len(data_batch.y_train_znormed) == reg.n_estimators
+
             assert reg.model_ is not None, "Model not initialized after fit"
             assert hasattr(
                 reg, "bardist_"
@@ -300,8 +350,11 @@ def test_tabpfn_regressor_finetuning_loop(
             else:
                 raise ValueError("Need to define optimization space")
 
+            # nll_loss_per_sample = lossfn(
+            #     averaged_pred_logits, batch_y_test_raw.to(device)
+            # )
             nll_loss_per_sample = lossfn(
-                averaged_pred_logits, batch_y_test_raw.to(device)
+                averaged_pred_logits, data_batch.y_test_raw.to(device)
             )
             loss = nll_loss_per_sample.mean()
 
@@ -368,28 +421,43 @@ def test_finetuning_consistency_bar_distribution(
         shuffle=False,
     )
     data_batch = next(iter(dataloader))
-    (
-        X_trains_preprocessed,
-        X_tests_preprocessed,
-        y_trains_preprocessed,
-        y_test_standardized,
-        cat_ixs,
-        confs,
-        normalized_bardist_,
-        bar_distribution,
-        batch_x_test_raw,
-        batch_y_test_raw,
-    ) = data_batch
+    # (
+    #     X_trains_preprocessed,
+    #     X_tests_preprocessed,
+    #     y_trains_preprocessed,
+    #     y_test_standardized,
+    #     cat_ixs,
+    #     confs,
+    #     normalized_bardist_,
+    #     bar_distribution,
+    #     batch_x_test_raw,
+    #     batch_y_test_raw,
+    # ) = data_batch
 
+    # np.testing.assert_allclose(
+    #     batch_y_test_raw.flatten().detach().cpu().numpy(),
+    #     y_test_raw,
+    #     rtol=1e-5,
+    #     atol=1e-5,
+    # )
+
+    # We now access data via the attributes of the `data_batch` object.
     np.testing.assert_allclose(
-        batch_y_test_raw.flatten().detach().cpu().numpy(),
+        data_batch.y_test_raw.flatten().detach().cpu().numpy(),
         y_test_raw,
         rtol=1e-5,
         atol=1e-5,
     )
 
+    # reg_batched.fit_from_preprocessed(
+    #     X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+    # )
+
     reg_batched.fit_from_preprocessed(
-        X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
+        data_batch.x_train_preprocessed,
+        data_batch.y_train_znormed,
+        data_batch.cat_ixs,
+        data_batch.configs,
     )
 
     mean = np.mean(y_train_raw)
@@ -398,21 +466,36 @@ def test_finetuning_consistency_bar_distribution(
     y_train_mean_ = mean.item()
     y_standardised_investigated = (y_test_raw - y_train_mean_) / y_train_std_
 
+    # np.testing.assert_allclose(
+    #     y_test_standardized[0].flatten().detach().cpu().numpy(),
+    #     y_standardised_investigated,
+    #     rtol=1e-5,
+    #     atol=1e-5,
+    # )
+
     np.testing.assert_allclose(
-        y_test_standardized[0].flatten().detach().cpu().numpy(),
+        data_batch.y_test_znormed[0].flatten().detach().cpu().numpy(),
         y_standardised_investigated,
         rtol=1e-5,
         atol=1e-5,
     )
 
+    # np.testing.assert_allclose(
+    #     batch_x_test_raw[0].detach().cpu().numpy(),
+    #     X_test_raw,
+    #     rtol=1e-5,
+    #     atol=1e-5,
+    # )
+
     np.testing.assert_allclose(
-        batch_x_test_raw[0].detach().cpu().numpy(),
+        data_batch.x_test_raw[0].detach().cpu().numpy(),
         X_test_raw,
         rtol=1e-5,
         atol=1e-5,
     )
 
-    normalized_bardist_ = normalized_bardist_[0]
+    # normalized_bardist_ = normalized_bardist_[0]
+    normalized_bardist_ = data_batch.normalized_bardist[0]
     reg_batched.normalized_bardist_ = normalized_bardist_
 
     torch.testing.assert_close(
@@ -524,21 +607,30 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             shuffle=False,
         )
         data_batch = next(iter(dataloader))
-        (
-            X_trains_p2,
-            X_tests_p2,
-            y_trains_p2,
-            _,
-            cat_ixs_p2,
-            confs_p2,
-            _,
-            _,
-            _,
-            _,
-        ) = data_batch
+        # (
+        #     X_trains_p2,
+        #     X_tests_p2,
+        #     y_trains_p2,
+        #     _,
+        #     cat_ixs_p2,
+        #     confs_p2,
+        #     _,
+        #     _,
+        #     _,
+        #     _,
+        # ) = data_batch
+
+        # reg_batched.fit_from_preprocessed(
+        #     X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
+        # )
+
         reg_batched.fit_from_preprocessed(
-            X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
+            data_batch.x_train_preprocessed,
+            data_batch.y_train_znormed,
+            data_batch.cat_ixs,
+            data_batch.configs,
         )
+
         assert hasattr(reg_batched, "model_")
         assert hasattr(reg_batched.model_, "forward")
 
@@ -549,7 +641,8 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             reg_batched.model_, "forward", wraps=reg_batched.model_.forward
         ) as mock_forward_p3:
             # Pass the list of preprocessed test tensors obtained earlier
-            _ = reg_batched.forward(X_tests_p2)
+            # _ = reg_batched.forward(X_tests_p2)
+            _ = reg_batched.forward(data_batch.x_test_preprocessed)
             assert mock_forward_p3.called
             # Capture the tensor input to the internal model
             tensor_p3_full = mock_forward_p3.call_args.args[0]
