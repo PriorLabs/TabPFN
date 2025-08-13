@@ -72,9 +72,10 @@ _smoke_grid = product(
     [1],  # n_estimators
     ["cpu"],  # device (fast & universally available)
     ["shuffle"],  # feature_shift_decoder
+    ["shuffle"],  # multiclass_decoder
     ["fit_preprocessors"],  # fit_mode
     ["auto"],  # inference_precision
-    [remove_outliers_stds[0]],  # remove_outliers_std
+    [None],  # remove_outliers_std
     other_models,  # every non-first model path
 )
 
