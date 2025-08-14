@@ -122,7 +122,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 select = [
   "A",
-  # "ANN", # Handled by mypy
+  "ANN", # type annotations
   "ARG",
   "B",
   "BLE",
@@ -189,7 +189,10 @@ ignore = [
   "N803",    # Argument name `X` should be lowercase
   "N802",    # Function name should be lowercase
   "COM812",  # Trailing comma missing (conflicts with formatter)
-  # These tend to be lighweight and confuse pyright
+  "ANN002",  # No type annotation for *args is okay.
+  "ANN003",  # No type annotation for *kwargs is okay.
+  "ANN204",  # No type annotation for __init__ is okay.
+  "ANN401"   # We do allow Any annotations, but use responsibly.
 ]
 
 exclude = [
@@ -256,6 +259,9 @@ exclude = [
   "FBT001",
   "FBT002",
   "A001",
+]
+"src/tabpfn/architectures/base/preprocessing.py" = [
+  "ANN"
 ]
 "src/tabpfn/model_loading.py" = [
   "C901"

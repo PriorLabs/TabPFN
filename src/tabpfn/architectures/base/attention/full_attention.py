@@ -113,7 +113,7 @@ class MultiHeadAttention(Attention):
         def assert_tensor_shape(
             tensor: torch.Tensor | None,
             expected_shape: list[int | None],
-        ):
+        ) -> None:
             if tensor is None:
                 return
             actual_shape = tensor.size()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from functools import partial
 
 import numpy as np
@@ -209,8 +210,10 @@ def test_reshape_step_append_original_logic(
     assert Xt.shape[1] == expected_output_features
 
 
-def _get_preprocessing_steps():
-    defaults = [
+def _get_preprocessing_steps() -> (
+    list[Callable[..., FeaturePreprocessingTransformerStep]]
+):
+    defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
         for cls in preprocessing.__dict__.values()
         if (
@@ -220,7 +223,7 @@ def _get_preprocessing_steps():
             and cls is not DifferentiableZNormStep  # works on torch tensors
         )
     ]
-    extras = [
+    extras: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         partial(
             ReshapeFeatureDistributionsStep,
             transform_name="none",
@@ -232,7 +235,9 @@ def _get_preprocessing_steps():
     return defaults + extras
 
 
-def _get_random_data(rng, n_samples, n_features, cat_inds):
+def _get_random_data(
+    rng: np.random.Generator, n_samples: int, n_features: int, cat_inds: list[int]
+) -> np.ndarray:
     x = rng.random((n_samples, n_features))
     x[:, cat_inds] = rng.integers(0, 3, size=(n_samples, len(cat_inds))).astype(float)
     return x
