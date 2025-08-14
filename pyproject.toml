@@ -209,6 +209,7 @@ exclude = [
   "node_modules",
   "venv",
   "docs",
+  "*.ipynb",
 ]
 
 # Exclude a variety of commonly ignored directories.
@@ -257,13 +258,6 @@ exclude = [
 ]
 "src/tabpfn/*.py" = [
   "D107",
-]
-"examples/notebooks/TabPFN_Demo_Local.ipynb" = [
-    "F401",  # Unused import
-    "A004",  # Shadowing builtin
-    "PD901", # Generic variable name `df`
-    "NPY002",# Legacy np.random call
-    "ARG001",# Unused function argument
 ]
 
 
