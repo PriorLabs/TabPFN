@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, NoReturn
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import joblib
@@ -83,7 +83,7 @@ class InferenceEngine(ABC):
         """
         ...
 
-    def use_torch_inference_mode(self, *, use_inference: bool) -> NoReturn:
+    def use_torch_inference_mode(self, *, use_inference: bool) -> None:
         """Enable/Disable `torch.inference_mode`.
 
         Disabling allows backpropagation (gradients) but is slower and uses more
