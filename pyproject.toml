@@ -106,6 +106,10 @@ line-length = 88
 output-format = "full"
 src = ["src", "tests", "examples"]
 
+extend-exclude = [
+  "**/*.ipynb"
+]
+
 [tool.ruff.lint]
 # Extend what ruff is allowed to fix, even it it may break
 # This is okay given we use it all the time and it ensures
@@ -209,7 +213,7 @@ exclude = [
   "node_modules",
   "venv",
   "docs",
-  "*.ipynb",
+  "**/*.ipynb",
 ]
 
 # Exclude a variety of commonly ignored directories.
