@@ -324,22 +324,6 @@ class ConsistencyTest:
         with cls.PLATFORM_METADATA_FILE.open("w") as f:
             json.dump(metadata, f, indent=2)
 
-    @classmethod
-    def load_platform_metadata(cls) -> dict:
-        """Load platform metadata from file.
-
-        Returns empty dict if file doesn't exist or can't be read.
-        """
-        if not cls.PLATFORM_METADATA_FILE.exists():
-            return {}
-
-        try:
-            with cls.PLATFORM_METADATA_FILE.open("r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            # More specific exceptions for file reading issues
-            return {}
-
     def get_dataset_name(self):
         """Get the unique name for this test case."""
         raise NotImplementedError("Subclasses must implement get_dataset_name()")
