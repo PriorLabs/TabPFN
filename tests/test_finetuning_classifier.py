@@ -18,10 +18,9 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
     ProcessedDatasetConfig,
-    meta_dataset_collator,  # New
+    meta_dataset_collator, 
 )
 
-# from tabpfn.utils import meta_dataset_collator # Old
 from .utils import get_pytest_devices
 
 rng = np.random.default_rng(42)
@@ -197,7 +196,6 @@ def test_tabpfn_classifier_finetuning_loop(
     my_dl_train = DataLoader(
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
     )
-    # print(f"data_config {datasets_list}")
 
     if inference_precision == torch.float64:
         # Expect to raise a ValueError in
