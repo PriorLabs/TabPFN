@@ -70,7 +70,7 @@ class BarDistribution(nn.Module):
         """
         if len(ys.shape) < len(logits.shape) and len(ys.shape) == 1:
             # bring new borders to the same dim as logits up to the last dim
-            ys = ys.repeat(logits.shape[:-1] + (1,))
+            ys = ys.repeat((*logits.shape[:-1], 1))
         else:
             assert (
                 ys.shape[:-1] == logits.shape[:-1]

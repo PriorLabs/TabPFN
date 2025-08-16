@@ -33,6 +33,7 @@ exclude_devices = {
 
 devices = get_pytest_devices()
 
+
 is_cpu_float16_supported = check_cpu_float16_support()
 
 # TODO: test "batched" mode
