@@ -438,7 +438,7 @@ class TestTinyClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -463,7 +463,7 @@ class TestTinyClassifierDifferentiableInput(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
             differentiable_input=True,
         )
 
@@ -491,7 +491,7 @@ class TestTinyRegressor(ConsistencyTest):
         return TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -516,7 +516,7 @@ class TestMulticlassClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -541,7 +541,7 @@ class TestEnsembleClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=5,  # Larger ensemble for this test
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
