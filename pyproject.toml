@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "2.1.2"
+version = "2.1.3"
 dependencies = [
   "torch>=2.1,<3",
   "scikit-learn>=1.2.0,<1.7",
@@ -106,6 +106,10 @@ line-length = 88
 output-format = "full"
 src = ["src", "tests", "examples"]
 
+extend-exclude = [
+  "**/*.ipynb"
+]
+
 [tool.ruff.lint]
 # Extend what ruff is allowed to fix, even it it may break
 # This is okay given we use it all the time and it ensures
@@ -118,7 +122,7 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
 select = [
   "A",
-  # "ANN", # Handled by mypy
+  "ANN", # type annotations
   "ARG",
   "B",
   "BLE",
@@ -185,7 +189,10 @@ ignore = [
   "N803",    # Argument name `X` should be lowercase
   "N802",    # Function name should be lowercase
   "COM812",  # Trailing comma missing (conflicts with formatter)
-  # These tend to be lighweight and confuse pyright
+  "ANN002",  # No type annotation for *args is okay.
+  "ANN003",  # No type annotation for *kwargs is okay.
+  "ANN204",  # No type annotation for __init__ is okay.
+  "ANN401"   # We do allow Any annotations, but use responsibly.
 ]
 
 exclude = [
@@ -209,6 +216,7 @@ exclude = [
   "node_modules",
   "venv",
   "docs",
+  "**/*.ipynb",
 ]
 
 # Exclude a variety of commonly ignored directories.
@@ -252,18 +260,14 @@ exclude = [
   "FBT002",
   "A001",
 ]
+"src/tabpfn/architectures/base/preprocessing.py" = [
+  "ANN"
+]
 "src/tabpfn/model_loading.py" = [
   "C901"
 ]
 "src/tabpfn/*.py" = [
   "D107",
-]
-"examples/notebooks/TabPFN_Demo_Local.ipynb" = [
-    "F401",  # Unused import
-    "A004",  # Shadowing builtin
-    "PD901", # Generic variable name `df`
-    "NPY002",# Legacy np.random call
-    "ARG001",# Unused function argument
 ]
 
 

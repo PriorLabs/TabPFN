@@ -103,7 +103,7 @@ def evaluate_regressor(
     return mse, mae, r2
 
 
-def main():
+def main() -> None:
     """Main function to configure and run the finetuning workflow."""
     # --- Master Configuration ---
     # This improved structure separates general settings from finetuning hyperparameters.

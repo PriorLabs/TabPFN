@@ -95,7 +95,7 @@ _METADATA_FILE = (
 )
 
 
-def _get_platform_details():
+def _get_platform_details() -> tuple[dict[str, str], dict[str, str]]:
     """Gathers and returns details for both current and reference platforms.
 
     This function centralizes platform information retrieval and file I/O,
@@ -165,7 +165,7 @@ def is_ci_compatible_platform(os_name, python_version):
     return (os_name, python_major_minor) in CI_PLATFORMS
 
 
-def _generate_skip_logic():
+def _generate_skip_logic() -> tuple[bool, str]:
     """Determines if tests should be skipped and generates the reason string.
 
     This is the core logic that replaces should_run_consistency_tests()
@@ -306,12 +306,12 @@ class ConsistencyTest:
     PLATFORM_METADATA_FILE = REFERENCE_DIR / "platform_metadata.json"
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         """Ensure the reference predictions directory exists."""
         cls.REFERENCE_DIR.mkdir(exist_ok=True)
 
     @classmethod
-    def save_platform_metadata(cls):
+    def save_platform_metadata(cls) -> None:
         """Save current platform information to metadata file."""
         metadata = {
             "os": platform.system(),
@@ -323,22 +323,6 @@ class ConsistencyTest:
 
         with cls.PLATFORM_METADATA_FILE.open("w") as f:
             json.dump(metadata, f, indent=2)
-
-    @classmethod
-    def load_platform_metadata(cls):
-        """Load platform metadata from file.
-
-        Returns empty dict if file doesn't exist or can't be read.
-        """
-        if not cls.PLATFORM_METADATA_FILE.exists():
-            return {}
-
-        try:
-            with cls.PLATFORM_METADATA_FILE.open("r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            # More specific exceptions for file reading issues
-            return {}
 
     def get_dataset_name(self):
         """Get the unique name for this test case."""

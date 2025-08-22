@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import typing
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import Self
@@ -405,7 +405,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X_raw: XType | list[XType],
         y_raw: YType | list[YType],
-        split_fn,
+        split_fn: Callable,
         max_data_size: None | int = 10000,
     ) -> DatasetCollectionWithPreprocessing:
         """Transforms raw input data into a collection of datasets,
@@ -442,7 +442,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return _initialize_model_variables_helper(self, "classifier")
 
     def _initialize_dataset_preprocessing(
-        self, X: XType, y: YType, rng
+        self,
+        X: XType,
+        y: YType,
+        rng,  # noqa: ANN001
     ) -> tuple[list[ClassifierEnsembleConfig], XType, YType]:
         """Internal preprocessing method for input arguments.
         Returns ClassifierEnsembleConfigs, inferred categorical indices,
@@ -553,7 +556,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         cat_ix: list[list[int]],
         configs: list[list[EnsembleConfig]],
         *,
-        no_refit=True,
+        no_refit: bool = True,
     ) -> TabPFNClassifier:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by

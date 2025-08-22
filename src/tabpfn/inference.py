@@ -83,7 +83,7 @@ class InferenceEngine(ABC):
         """
         ...
 
-    def use_torch_inference_mode(self, *, use_inference: bool):
+    def use_torch_inference_mode(self, *, use_inference: bool) -> None:
         """Enable/Disable `torch.inference_mode`.
 
         Disabling allows backpropagation (gradients) but is slower and uses more
@@ -354,7 +354,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             self.model = self.model.cpu()
 
     @override
-    def use_torch_inference_mode(self, use_inference: bool):
+    def use_torch_inference_mode(self, use_inference: bool) -> None:
         self.inference_mode = use_inference
 
 
@@ -514,7 +514,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             self.model = self.model.cpu()
 
     @override
-    def use_torch_inference_mode(self, use_inference: bool):
+    def use_torch_inference_mode(self, use_inference: bool) -> None:
         self.inference_mode = use_inference
 
 

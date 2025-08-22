@@ -31,7 +31,7 @@ def test_internal_windows_total_memory_multithreaded():
 
     results = []
 
-    def get_memory():
+    def get_memory() -> None:
         results.append(get_total_memory_windows())
 
     threads = []

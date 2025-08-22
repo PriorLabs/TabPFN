@@ -7,7 +7,7 @@ different members.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from functools import partial
 from itertools import chain, product, repeat
@@ -649,7 +649,9 @@ def fit_preprocessing_one(
     return (config, preprocessor, res.X, y_train_processed, res.categorical_features)
 
 
-def transform_labels_one(config, y_train):
+def transform_labels_one(
+    config: EnsembleConfig, y_train: np.ndarray | torch.Tensor
+) -> np.ndarray:
     """Transform the labels for one ensemble config.
         for both regression or classification.
 
@@ -788,13 +790,11 @@ class DatasetCollectionWithPreprocessing(Dataset):
             `sklearn.model_selection.train_test_split`). It's used to split
             the raw data (X, y) into train and test sets. It will receive
             `X`, `y`, and `random_state` as arguments.
-        rng (np.random.Generator): A NumPy random number generator instance
+        rng: A NumPy random number generator instance
             used for generating the split seed and potentially within the
             preprocessing steps defined in the configs.
-        dataset_config_collection (
-            Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]
-        ): A sequence containing dataset configuration objects. Each object
-            must hold the raw data (`X_raw`, `y_raw`), categorical feature
+        dataset_config_collection: A sequence containing dataset configuration objects.
+            Each object must hold the raw data (`X_raw`, `y_raw`), categorical feature
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
             fields (`znorm_space_bardist_`).
@@ -812,11 +812,13 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
     def __init__(
         self,
-        split_fn,
-        rng,
-        dataset_config_collection,
-        n_workers=1,
-    ):
+        split_fn: Callable,
+        rng: np.random.Generator,
+        dataset_config_collection: Sequence[
+            RegressorDatasetConfig | ClassifierDatasetConfig
+        ],
+        n_workers: int = 1,
+    ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
@@ -825,7 +827,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
     def __len__(self):
         return len(self.configs)
 
-    def __getitem__(self, index):  # noqa: C901, PLR0912
+    def __getitem__(self, index: int):  # noqa: C901, PLR0912
         """Retrieves, splits, and preprocesses the dataset config at the index.
 
         Performs train/test splitting and applies potentially multiple
@@ -919,6 +921,10 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
         # Compute target variable Z-transform standardization
         # based on statistics of training set
+        # Note: Since we compute raw_space_bardist_ here,
+        # it is not set as an attribute of the Regressor class
+        # This however makes also sense when considering that
+        # this attribute changes on every dataset
         if regression_task:
             train_mean = np.mean(y_train_raw)
             train_std = np.std(y_train_raw)

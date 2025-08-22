@@ -421,7 +421,7 @@ class SeqEncStep(nn.Module):
         *x: torch.Tensor,
         single_eval_pos: int | None = None,
         **kwargs: Any,
-    ) -> tuple[torch.Tensor]:
+    ) -> tuple[torch.Tensor | None, ...]:
         """Transform the data using the fitted encoder step.
 
         Args:
@@ -498,7 +498,7 @@ class LinearInputEncoderStep(SeqEncStep):
         self.layer = nn.Linear(num_features, emsize, bias=bias)
         self.replace_nan_by_zero = replace_nan_by_zero
 
-    def _fit(self, *x: torch.Tensor, **kwargs: Any):
+    def _fit(self, *x: torch.Tensor, **kwargs: Any) -> None:
         """Fit the encoder step. Does nothing for LinearInputEncoderStep."""
 
     def _transform(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
@@ -565,7 +565,7 @@ class NanHandlingEncoderStep(SeqEncStep):
         self,
         x: torch.Tensor,
         **kwargs: Any,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Replace NaN and infinite values in the input tensor.
 
         Args:
@@ -928,7 +928,7 @@ class FrequencyFeatureEncoderStep(SeqEncStep):
         x: torch.Tensor,
         single_eval_pos: int | None = None,
         categorical_inds: list[int] | None = None,
-    ):
+    ) -> None:
         """Fit the encoder step. Does nothing for FrequencyFeatureEncoderStep."""
 
     def _transform(
@@ -936,7 +936,7 @@ class FrequencyFeatureEncoderStep(SeqEncStep):
         x: torch.Tensor,
         single_eval_pos: int | None = None,
         categorical_inds: list[int] | None = None,
-    ):
+    ) -> tuple[torch.Tensor]:
         """Add frequency-based features to the input tensor.
 
         Args:
@@ -962,9 +962,9 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
 
     def __init__(
         self,
-        num_features,
-        emsize,
-        base_encoder,
+        num_features: int,
+        emsize: int,
+        base_encoder,  # noqa: ANN001
         num_embs: int = 1_000,
         **kwargs: Any,
     ):
@@ -976,15 +976,17 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
         self.embedding = nn.Embedding(num_embs, emsize)
         self.base_encoder = base_encoder
 
-    def _fit(self, x, single_eval_pos: int, categorical_inds: list[int]):
+    def _fit(
+        self, x: torch.Tensor, single_eval_pos: int, categorical_inds: list[int]
+    ) -> None:
         pass
 
     def _transform(
         self,
-        x,
+        x: torch.Tensor,
         single_eval_pos: int,
         categorical_inds: list[int],
-    ):
+    ) -> tuple[torch.Tensor]:
         if categorical_inds is None:
             is_categorical = torch.zeros(x.shape[1], dtype=torch.bool, device=x.device)
         else:
@@ -1023,31 +1025,6 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
         return (embs,)
 
 
-class StyleEncoder(nn.Module):
-    def __init__(self, num_hyperparameters, em_size):
-        super().__init__()
-        self.em_size = em_size
-        self.embedding = nn.Linear(num_hyperparameters, self.em_size)
-
-    def forward(self, hyperparameters):  # B x num_hps
-        return self.embedding(hyperparameters)
-
-
-def get_linear_encoder_generator(in_keys):
-    def get_linear_encoder(num_features, emsize):
-        return SequentialEncoder(
-            LinearInputEncoderStep(
-                num_features,
-                emsize,
-                in_keys=in_keys,
-                out_keys=["output"],
-            ),
-            output_key="output",
-        )
-
-    return get_linear_encoder
-
-
 ##### TARGET ENCODERS #####
 
 
@@ -1056,19 +1033,23 @@ class MulticlassClassificationTargetEncoder(SeqEncStep):
         super().__init__(**kwargs)
         self.unique_ys_ = None
 
-    def _fit(self, y: torch.Tensor, single_eval_pos: int, **kwargs: Any):
+    def _fit(self, y: torch.Tensor, single_eval_pos: int, **kwargs: Any) -> None:
         assert len(y.shape) == 3 and (y.shape[-1] == 1), "y must be of shape (T, B, 1)"
         self.unique_ys_ = [
             torch.unique(y[:single_eval_pos, b_i]) for b_i in range(y.shape[1])
         ]
 
     @staticmethod
-    def flatten_targets(y: torch.Tensor, unique_ys: torch.Tensor | None = None):
+    def flatten_targets(
+        y: torch.Tensor, unique_ys: torch.Tensor | None = None
+    ) -> torch.Tensor:
         if unique_ys is None:
             unique_ys = torch.unique(y)
         return (y.unsqueeze(-1) > unique_ys).sum(axis=-1)
 
-    def _transform(self, y: torch.Tensor, single_eval_pos: int | None = None):
+    def _transform(
+        self, y: torch.Tensor, single_eval_pos: int | None = None
+    ) -> tuple[torch.Tensor]:
         assert len(y.shape) == 3 and (y.shape[-1] == 1), "y must be of shape (T, B, 1)"
         assert not (
             y.isnan().any() and self.training

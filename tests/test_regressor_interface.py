@@ -21,6 +21,7 @@ from torch import nn
 
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_device_and_type
 
@@ -31,6 +32,8 @@ devices = get_pytest_devices()
 # --- Environment-Aware Check for CPU Float16 Support ---
 is_cpu_float16_supported = check_cpu_float16_support()
 
+# --- Define parameter combinations ---
+# These are the parameters we want to test in our grid search
 feature_shift_decoders = ["shuffle", "rotate"]
 fit_modes = [
     "low_memory",
@@ -41,16 +44,34 @@ inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
 remove_outliers_stds = [None, 12]
 estimators = [1, 2]
 
-all_combinations = list(
-    product(
-        estimators,
-        devices,  # device,
-        feature_shift_decoders,
-        fit_modes,
-        inference_precision_methods,
-        remove_outliers_stds,
-    ),
+model_paths = ModelSource.get_regressor_v2().filenames
+primary_model = ModelSource.get_regressor_v2().default_filename
+other_models = set(model_paths) - {primary_model}
+
+# --- Build parameter combinations ---
+# Full grid for the first (primary) model path
+_full_grid = product(
+    estimators,
+    devices,  # device
+    feature_shift_decoders,
+    fit_modes,
+    inference_precision_methods,
+    remove_outliers_stds,
+    [primary_model],  # only the first entry
 )
+
+# Minimal "smoke" grid for all remaining model paths (one combo per path)
+_smoke_grid = product(
+    [1],  # n_estimators
+    ["cpu"],  # device (fast & universally available)
+    ["shuffle"],  # feature_shift_decoder
+    ["fit_preprocessors"],  # fit_mode
+    ["auto"],  # inference_precision
+    [remove_outliers_stds[0]],  # remove_outliers_std
+    other_models,  # every non-first model path
+)
+
+all_combinations = list(_full_grid) + list(_smoke_grid)
 
 
 # Wrap in fixture so it's only loaded in if a test using it is run
@@ -69,6 +90,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
         "fit_mode",
         "inference_precision",
         "remove_outliers_std",
+        "model_path",
     ),
     all_combinations,
 )
@@ -79,6 +101,7 @@ def test_regressor(
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     remove_outliers_std: int | None,
+    model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     if torch.device(device).type == "cpu" and inference_precision == "autocast":
@@ -95,6 +118,7 @@ def test_regressor(
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNRegressor(
+        model_path=model_path,
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
@@ -570,7 +594,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     ), "norm_criterion should be initialized for regressor"
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
-    regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
+    regressor = TabPFNRegressor(device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
     assert hasattr(regressor, "model_"), "regressor should have model_ attribute"

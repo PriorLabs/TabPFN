@@ -66,6 +66,11 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-classifier-vutqq28w.ckpt",
             "tabpfn-v2-classifier-znskzxi4.ckpt",
             "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+            "tabpfn-v2-classifier-finetuned-znskzxi4-tvvss6bp.ckpt",
+            "tabpfn-v2-classifier-finetuned-vutqq28w-boexhu6h.ckpt",
+            "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
+            "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
+            "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
