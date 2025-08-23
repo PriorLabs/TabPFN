@@ -89,6 +89,7 @@ dev = [
   "mike",
   "black",  # This allows mkdocstrings to format signatures in the docs
 ]
+tpu = ["torch_xla[tpu]>=2.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # Where the tests are located
