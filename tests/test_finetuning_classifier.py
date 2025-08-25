@@ -20,11 +20,11 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.utils import meta_dataset_collator
 
+from .utils import get_pytest_devices
+
 rng = np.random.default_rng(42)
 
-devices = ["cpu"]
-if torch.cuda.is_available():
-    devices.append("cuda")
+devices = get_pytest_devices()
 
 fit_modes = [
     "batched",
@@ -46,7 +46,7 @@ param_order = [
 
 default_config = {
     "n_estimators": 1,
-    "device": "cpu",
+    "device": "auto",
     "fit_mode": "batched",
     "inference_precision": "auto",
 }
@@ -545,7 +545,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         # Initialize two classifiers with the necessary modes
         clf_standard = TabPFNClassifier(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="fit_preprocessors",  # A standard mode that preprocesses on fit
         )
@@ -553,7 +553,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         #  and fit_from_preprocessed
         clf_batched = TabPFNClassifier(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="batched",
         )

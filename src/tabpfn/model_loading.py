@@ -14,7 +14,7 @@ import tempfile
 import urllib.request
 import urllib.response
 import warnings
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast, overload
@@ -66,6 +66,11 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-classifier-vutqq28w.ckpt",
             "tabpfn-v2-classifier-znskzxi4.ckpt",
             "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+            "tabpfn-v2-classifier-finetuned-znskzxi4-tvvss6bp.ckpt",
+            "tabpfn-v2-classifier-finetuned-vutqq28w-boexhu6h.ckpt",
+            "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
+            "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
+            "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
@@ -602,9 +607,13 @@ def save_tabpfn_model(
     model_state = model.model_.state_dict()
 
     # Get bardist state dict and prefix with 'criterion.'
-    if hasattr(model, "bardist_") and model.bardist_ is not None:
+    if (
+        hasattr(model, "znorm_space_bardist_")
+        and model.znorm_space_bardist_ is not None
+    ):
         bardist_state = {
-            f"criterion.{k}": v for k, v in model.bardist_.state_dict().items()
+            f"criterion.{k}": v
+            for k, v in model.znorm_space_bardist_.state_dict().items()
         }
         # Combine model and bardist states
         state_dict = {**model_state, **bardist_state}
@@ -612,7 +621,7 @@ def save_tabpfn_model(
         state_dict = model_state
 
     # Create checkpoint with correct structure
-    checkpoint = {"state_dict": state_dict, "config": model.config_}
+    checkpoint = {"state_dict": state_dict, "config": asdict(model.config_)}
 
     # Save the checkpoint
     torch.save(checkpoint, save_path)

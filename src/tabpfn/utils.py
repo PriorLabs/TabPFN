@@ -582,7 +582,7 @@ def infer_random_state(
 def _process_text_na_dataframe(  # type: ignore
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
-    ord_encoder=None,
+    ord_encoder=None,  # noqa: ANN001
     *,
     fit_encoder: bool = False,
 ) -> np.ndarray:
@@ -695,8 +695,12 @@ def update_encoder_params(
     if remove_outliers_std is not None and remove_outliers_std <= 0:
         raise ValueError("remove_outliers_std must be greater than 0")
 
+    # TODO: find a less hacky way to change settings during training
+    # and inference
     if not hasattr(model, "encoder"):
-        return
+        raise ValueError(
+            "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+        )
 
     encoder = model.encoder
 
@@ -704,6 +708,11 @@ def update_encoder_params(
     norm_layer = next(
         e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
     )
+    if not hasattr(norm_layer, "remove_outliers"):
+        raise ValueError(
+            "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
+            "this will break the TabPFN sklearn wrapper"
+        )
     norm_layer.remove_outliers = (remove_outliers_std is not None) and (
         remove_outliers_std > 0
     )
@@ -817,7 +826,9 @@ def get_total_memory_windows() -> float:
         return 0.0
 
 
-def split_large_data(largeX: XType, largey: YType, max_data_size: int):
+def split_large_data(
+    largeX: XType, largey: YType, max_data_size: int
+) -> tuple[list[XType], list[YType]]:
     """Split a large dataset into chunks along the first dimension.
 
     Args:
@@ -846,7 +857,12 @@ def split_large_data(largeX: XType, largey: YType, max_data_size: int):
     return xlst, ylst
 
 
-def pad_tensors(tensor_list, padding_val=0, *, labels=False):
+def pad_tensors(
+    tensor_list: list[torch.Tensor],
+    padding_val: float | None = 0,
+    *,
+    labels: bool = False,
+) -> list[torch.Tensor]:
     """Pad tensors to maximum dims at the last dimensions.
     if labels=False, 2d tensors are expected, if labels=True, one 1d
     vectors are expected as inputs.
@@ -873,7 +889,7 @@ def pad_tensors(tensor_list, padding_val=0, *, labels=False):
     return ret_list
 
 
-def meta_dataset_collator(batch, padding_val=0.0):
+def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
     """Collate function for torch.utils.data.DataLoader.
 
     Designed for batches from DatasetCollectionWithPreprocessing.

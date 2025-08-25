@@ -102,7 +102,7 @@ def evaluate_model(
     return roc_auc, log_loss_score
 
 
-def main():
+def main() -> None:
     """Main function to configure and run the finetuning workflow."""
     # --- Master Configuration ---
     config = {
