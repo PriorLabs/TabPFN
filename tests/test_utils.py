@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+import numpy as np
 
 def test_internal_windows_total_memory():
     if os.name != "nt":
@@ -43,3 +44,12 @@ def test_internal_windows_total_memory_multithreaded():
         t.join()
     psutil_result = psutil.virtual_memory().total / 1e9
     assert all(result == psutil_result for result in results)
+
+def test_infer_categorical_features():
+    from tabpfn.utils import infer_categorical_features
+    X = np.array([[np.nan, "NA"]], dtype=object).reshape(-1, 1)
+    out = infer_categorical_features(X, provided=[0], min_samples_for_inference=0, max_unique_for_category=2, min_unique_for_numerical=5)
+    assert out == [0]
+
+
+
