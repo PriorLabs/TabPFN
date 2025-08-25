@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 import pytest
 
-import numpy as np
+from tabpfn.utils import infer_categorical_features
+
 
 def test_internal_windows_total_memory():
     if os.name != "nt":
@@ -45,11 +47,62 @@ def test_internal_windows_total_memory_multithreaded():
     psutil_result = psutil.virtual_memory().total / 1e9
     assert all(result == psutil_result for result in results)
 
-def test_infer_categorical_features():
-    from tabpfn.utils import infer_categorical_features
+
+def test_infer_categorical_with_str_and_nan_provided_included():
     X = np.array([[np.nan, "NA"]], dtype=object).reshape(-1, 1)
-    out = infer_categorical_features(X, provided=[0], min_samples_for_inference=0, max_unique_for_category=2, min_unique_for_numerical=5)
+    out = infer_categorical_features(
+        X,
+        provided=[0],
+        min_samples_for_inference=0,
+        max_unique_for_category=2,
+        min_unique_for_numerical=5,
+    )
     assert out == [0]
 
 
+def test_infer_categorical_with_str_and_nan_multiple_rows_provided_included():
+    X = np.array([[np.nan], ["NA"], ["NA"]], dtype=object)
+    out = infer_categorical_features(
+        X,
+        provided=[0],
+        min_samples_for_inference=0,
+        max_unique_for_category=2,
+        min_unique_for_numerical=5,
+    )
+    assert out == [0]
 
+
+def test_infer_categorical_auto_inference_blocked_when_not_enough_samples():
+    X = np.array([[1.0], [1.0], [np.nan]])
+    out = infer_categorical_features(
+        X,
+        provided=None,
+        min_samples_for_inference=3,
+        max_unique_for_category=2,
+        min_unique_for_numerical=4,
+    )
+    assert out == []
+
+
+def test_infer_categorical_auto_inference_enabled_with_enough_samples():
+    X = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 2.0], [2.0, 3.0], [np.nan, 9.0]])
+    out = infer_categorical_features(
+        X,
+        provided=None,
+        min_samples_for_inference=3,
+        max_unique_for_category=3,
+        min_unique_for_numerical=4,
+    )
+    assert out == [0]
+
+
+def test_infer_categorical_provided_column_excluded_if_exceeds_max_unique():
+    X = np.array([[0], [1], [2], [3], [np.nan]], dtype=float)
+    out = infer_categorical_features(
+        X,
+        provided=[0],
+        min_samples_for_inference=0,
+        max_unique_for_category=3,
+        min_unique_for_numerical=2,
+    )
+    assert out == []
