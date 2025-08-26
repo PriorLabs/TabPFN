@@ -106,3 +106,15 @@ def test_infer_categorical_provided_column_excluded_if_exceeds_max_unique():
         min_unique_for_numerical=2,
     )
     assert out == []
+
+
+def test_infer_categorical_with_dict_raises_error():
+    X = np.array([[{"a": 1}], [{"b": 2}]], dtype=object)
+    with pytest.raises(TypeError):
+        infer_categorical_features(
+            X,
+            provided=None,
+            min_samples_for_inference=0,
+            max_unique_for_category=2,
+            min_unique_for_numerical=2,
+        )
