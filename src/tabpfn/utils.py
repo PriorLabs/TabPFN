@@ -543,7 +543,7 @@ def infer_categorical_features(
             num_distinct = s.nunique(dropna=False)
         except TypeError as e:
             # e.g. "unhashable type: 'dict'" when object arrays contain dicts
-            raise TypeError("argument must be a string or a number") from e
+            raise TypeError("Columns must only contain strings or numbers") from e
         if ix in maybe_categoricals:
             if num_distinct <= max_unique_for_category:
                 indices.append(ix)
