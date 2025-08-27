@@ -803,3 +803,29 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert not hasattr(
         classifier2, "bardist_"
     ), "classifier2 should not have bardist_ attribute"
+
+
+def test_subsample_with_replacement_allows_oversampling(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Tests that SUBSAMPLE_SAMPLES_WITH_REPLACEMENT=True allows sampling more
+    samples than available in the dataset (oversampling).
+    """
+    X, y = X_y
+    n_samples = X.shape[0]
+    oversample_size = n_samples + 10  # Sample more than available
+
+    # This should work without errors because with_replacement=True allows
+    # drawing the same sample multiple times.
+    model_with_replacement = TabPFNClassifier(
+        n_estimators=2,
+        device="cpu",
+        inference_config={
+            "SUBSAMPLE_SAMPLES": oversample_size,
+            "SUBSAMPLE_SAMPLES_WITH_REPLACEMENT": True,
+        },
+        random_state=42,
+    )
+
+    model_with_replacement.fit(X, y)
+    model_with_replacement.predict(X)

@@ -332,7 +332,7 @@ class EnsembleConfig:
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
 
     @classmethod
-    def generate_for_classification(
+    def generate_for_classification(  # noqa: PLR0913
         cls,
         *,
         n: int,
@@ -344,6 +344,7 @@ class EnsembleConfig:
         preprocessor_configs: Sequence[PreprocessorConfig],
         class_shift_method: Literal["rotate", "shuffle"] | None,
         n_classes: int,
+        subsample_with_replacement: bool = False,
         random_state: int | np.random.Generator | None,
     ) -> list[ClassifierEnsembleConfig]:
         """Generate ensemble configurations for classification.
@@ -361,6 +362,7 @@ class EnsembleConfig:
             preprocessor_configs: Preprocessor configurations to use on the data.
             class_shift_method: How to shift classes for classpermutation.
             n_classes: Number of classes.
+            subsample_with_replacement: Whether to subsample with replacement.
             random_state: Random number generator.
 
         Returns:
@@ -400,6 +402,7 @@ class EnsembleConfig:
                 n=n,
                 max_index=max_index,
                 subsample=subsample_size,
+                with_replacement=subsample_with_replacement,
                 random_state=static_seed,
             )
         elif subsample_size is None:
@@ -451,6 +454,7 @@ class EnsembleConfig:
         feature_shift_decoder: Literal["shuffle", "rotate"] | None,
         preprocessor_configs: Sequence[PreprocessorConfig],
         target_transforms: Sequence[TransformerMixin | Pipeline | None],
+        subsample_with_replacement: bool = False,
         random_state: int | np.random.Generator | None,
     ) -> list[RegressorEnsembleConfig]:
         """Generate ensemble configurations for regression.
@@ -467,6 +471,7 @@ class EnsembleConfig:
             feature_shift_decoder: How shift features
             preprocessor_configs: Preprocessor configurations to use on the data.
             target_transforms: Target transformations to apply.
+            subsample_with_replacement: Whether to subsample with replacement.
             random_state: Random number generator.
 
         Returns:
@@ -483,6 +488,7 @@ class EnsembleConfig:
                 n=n,
                 max_index=max_index,
                 subsample=subsample_size,
+                with_replacement=subsample_with_replacement,
                 random_state=static_seed,
             )
         elif subsample_size is None:
