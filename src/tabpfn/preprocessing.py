@@ -267,36 +267,47 @@ def generate_index_permutations(
     *,
     max_index: int,
     subsample: int | float,
+    with_replacement: bool = False,
     random_state: int | np.random.Generator | None,
 ) -> list[npt.NDArray[np.int64]]:
     """Generate indices for subsampling from the data.
 
     Args:
-        n: Number of indices to generate.
-        max_index: Maximum index to generate.
+        n: Number of index arrays to generate.
+        max_index: The upper bound for the indices (samples from [0, max_index-1]).
         subsample:
-            Number of indices to subsample. If `int`, subsample that many
-            indices. If float, subsample that fraction of indices.
-        random_state: Random number generator.
+            The number of indices to draw.
+            - If `int`, this is the absolute number of indices.
+            - If `float`, this is the fraction of `max_index` to draw.
+        with_replacement: If `True`, indices can be chosen more than once.
+            If `False` (default), indices are unique.
+        random_state: A seed or random number generator for reproducibility.
 
     Returns:
-        List of indices to subsample.
+        A list containing `n` arrays of subsampled indices.
     """
     _, rng = infer_random_state(random_state)
-    if isinstance(subsample, int):
-        if subsample < 1:
-            raise ValueError(f"{subsample=} must be larger than 1 if int")
-        subsample = min(subsample, max_index)
 
-        return [rng.permutation(max_index)[:subsample] for _ in range(n)]
-
+    # Determine the number of items to subsample (k)
     if isinstance(subsample, float):
-        if not (0 < subsample < 1):
-            raise ValueError(f"{subsample=} must be in (0, 1) if float")
-        subsample = int(subsample * max_index) + 1
-        return [rng.permutation(max_index)[:subsample] for _ in range(n)]
+        if not (0.0 < subsample <= 1.0):
+            raise ValueError(f"If float, {subsample=} must be in (0, 1].")
+        # Ensure at least one sample is drawn
+        k = max(1, int(subsample * max_index))
+    elif isinstance(subsample, int):
+        if subsample < 1:
+            raise ValueError(f"If int, {subsample=} must be at least 1.")
+        k = subsample
+    else:
+        raise TypeError(f"{subsample=} must be an int or float.")
 
-    raise ValueError(f"{subsample=} must be int or float.")
+    # Generate n lists of indices based on the replacement strategy
+    if with_replacement:
+        # Sample with replacement. The sample size `k` can be larger than `max_index`.
+        return [rng.choice(max_index, size=k, replace=True) for _ in range(n)]
+    # Sample without replacement. The sample size cannot exceed the population size.
+    sample_size = min(k, max_index)
+    return [rng.permutation(max_index)[:sample_size] for _ in range(n)]
 
 
 # TODO: (Klemens)
