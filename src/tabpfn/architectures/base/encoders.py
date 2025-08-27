@@ -233,25 +233,26 @@ def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
         The shape is (sequence_length, batch_size, total_features) if batch_size is greater than 1.
     """
     B, total_features = sel.shape
-    sequence_length = x.shape[0]
+
+    # Do nothing if we need to select all of the features
+    if torch.all(sel):
+        return x
 
     # If B == 1, we don't need to append zeros, as the number of features don't need to be fixed.
     if B == 1:
         return x[:, :, sel[0]]
 
-    new_x = torch.zeros(
-        (sequence_length, B, total_features),
-        device=x.device,
-        dtype=x.dtype,
-    )
+    new_x = x.detach().clone()
 
     # For each batch, compute the number of selected features.
     sel_counts = sel.sum(dim=-1)  # shape: (B,)
 
     for b in range(B):
         s = int(sel_counts[b])
-        if s > 0:
-            new_x[:, b, :s] = x[:, b, sel[b]]
+        if s != total_features:
+            if s > 0:
+                new_x[:, b, :s] = x[:, b, sel[b]]
+            new_x[:, b, s:] = 0
 
     return new_x
 
@@ -594,11 +595,7 @@ class NanHandlingEncoderStep(SeqEncStep):
 
 
 class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
-    """Encoder step to remove empty (constant) features.
-    Was changed to NOT DO ANYTHING, the removal of empty features now
-    done elsewhere, but the saved model still needs this encoder step.
-    TODO: REMOVE.
-    """
+    """Encoder step to remove empty (constant) features."""
 
     def __init__(self, **kwargs: Any):
         """Initialize the RemoveEmptyFeaturesEncoderStep.
@@ -607,16 +604,16 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             **kwargs: Keyword arguments passed to the parent SeqEncStep.
         """
         super().__init__(**kwargs)
-        self.sel = None
+        self.column_selection_mask = None
 
     def _fit(self, x: torch.Tensor, **kwargs: Any) -> None:
-        """Compute the feature selection mask on the training set.
+        """Compute the non-empty feature selection mask on the training set.
 
         Args:
             x: The input tensor.
             **kwargs: Additional keyword arguments (unused).
         """
-        self.sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.column_selection_mask = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
         """Remove empty features from the input tensor.
@@ -628,7 +625,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        return (select_features(x, self.sel),)
+        return (select_features(x, self.column_selection_mask),)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
