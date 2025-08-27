@@ -187,9 +187,9 @@ def normalize_data(
     Returns:
         The normalized data tensor, or a tuple containing the data and scaling factors.
     """
-    assert (mean is None) == (
-        std is None
-    ), "Either both or none of mean and std must be given"
+    assert (mean is None) == (std is None), (
+        "Either both or none of mean and std must be given"
+    )
     if mean is None:
         if normalize_positions is not None and normalize_positions > 0:
             mean = torch_nanmean(data[:normalize_positions], axis=0)  # type: ignore
@@ -218,43 +218,69 @@ def normalize_data(
     return data
 
 
-def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
+def select_features(x_RBN: torch.Tensor, sel_BN: torch.Tensor) -> torch.Tensor:
     """Select features from the input tensor based on the selection mask,
     and arrange them contiguously in the last dimension.
-    If batch size is bigger than 1, we pad the features with zeros to make the number of features fixed.
+
+    R: Number of rows
+    B: Batch size (e.g. train batch size x number of feature groups)
+    N: Number of features per group
 
     Args:
-        x: The input tensor of shape (sequence_length, batch_size, total_features)
-        sel: The boolean selection mask indicating which features to keep of shape (batch_size, total_features)
+        x_RBN: The input tensor of shape (num_rows, batch_size, num_features_per_group)
+        sel_BN: The boolean selection mask indicating which features to keep of shape (batch_size, num_features_per_group)
 
     Returns:
         The tensor with selected features.
-        The shape is (sequence_length, batch_size, number_of_selected_features) if batch_size is 1.
-        The shape is (sequence_length, batch_size, total_features) if batch_size is greater than 1.
+        The shape is (num_rows, batch_size, number_of_selected_features) if batch_size is 1.
+        The shape is (num_rows, batch_size, features_per_group) if batch_size is greater than 1.
     """
-    B, total_features = sel.shape
+    B, N = sel_BN.shape
 
     # Do nothing if we need to select all of the features
-    if torch.all(sel):
-        return x
+    if torch.all(sel_BN):
+        return x_RBN
 
     # If B == 1, we don't need to append zeros, as the number of features don't need to be fixed.
     if B == 1:
-        return x[:, :, sel[0]]
+        return x_RBN[:, :, sel_BN[0]]
 
-    new_x = x.detach().clone()
+    # We want to zero out the unselected features and move them to the end of the feature group.
+    # Strategy:
+    # 1. Count how many selected features come before each position in the feature group
+    # 2. Count how many unselected features come before each position in the feature group
+    # 3. For selected features: their new position is just their rank among selected
+    # 4. For unselected: their new position is (number of selected) + their rank among unselected
+    # 5. Use these positions to gather the selected features and zero out the unselected features
+    # 6. Return the gathered features
 
-    # For each batch, compute the number of selected features.
-    sel_counts = sel.sum(dim=-1)  # shape: (B,)
+    selected_mask_BN = sel_BN.to(torch.int32)
+    not_selected_mask_BN = (~sel_BN).to(torch.int32)
 
-    for b in range(B):
-        s = int(sel_counts[b])
-        if s != total_features:
-            if s > 0:
-                new_x[:, b, :s] = x[:, b, sel[b]]
-            new_x[:, b, s:] = 0
+    selected_before_BN = torch.cumsum(selected_mask_BN, dim=1) - selected_mask_BN
+    unselected_before_BN = (
+        torch.cumsum(not_selected_mask_BN, dim=1) - not_selected_mask_BN
+    )
 
-    return new_x
+    num_selected_B1 = selected_mask_BN.sum(dim=1, keepdim=True)
+    new_positions_BN = torch.where(
+        sel_BN,
+        selected_before_BN,  # Position among selected features
+        num_selected_B1 + unselected_before_BN,  # Position after all selected features
+    )
+
+    # Now we need to invert this: instead of "where does each original position go",
+    # we need "what original position goes to each new position"
+    base_index_BN = torch.arange(N, device=x_RBN.device)[None, :].expand(B, -1)
+    new_column_index_BN = torch.zeros_like(base_index_BN)
+    batch_idx_BN = torch.arange(B, device=x_RBN.device)[:, None].expand(-1, N)
+    new_column_index_BN[batch_idx_BN, new_positions_BN] = base_index_BN
+
+    gather_index_RBN = new_column_index_BN[None].expand(x_RBN.shape[0], -1, -1)
+
+    x_masked_RBN = x_RBN * sel_BN.to(torch.bool)[None]
+
+    return torch.gather(x_masked_RBN, dim=2, index=gather_index_RBN)
 
 
 def remove_outliers(
@@ -466,7 +492,9 @@ class SeqEncStep(nn.Module):
         assert isinstance(
             out,
             tuple,
-        ), f"out is not a tuple: {out}, type: {type(out)}, class: {self.__class__.__name__}"
+        ), (
+            f"out is not a tuple: {out}, type: {type(out)}, class: {self.__class__.__name__}"
+        )
         assert len(out) == len(self.out_keys)
         state.update({out_key: out[i] for i, out_key in enumerate(self.out_keys)})
         return state
@@ -604,16 +632,16 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             **kwargs: Keyword arguments passed to the parent SeqEncStep.
         """
         super().__init__(**kwargs)
-        self.column_selection_mask = None
+        self.feature_selection_mask = None
 
     def _fit(self, x: torch.Tensor, **kwargs: Any) -> None:
         """Compute the non-empty feature selection mask on the training set.
 
         Args:
-            x: The input tensor.
+            x: The input tensor of shape (sequence_length, batch_size, features_per_group)
             **kwargs: Additional keyword arguments (unused).
         """
-        self.column_selection_mask = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.feature_selection_mask = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
         """Remove empty features from the input tensor.
@@ -625,7 +653,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        return (select_features(x, self.column_selection_mask),)
+        return (select_features(x, self.feature_selection_mask),)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
@@ -862,9 +890,9 @@ class InputNormalizationEncoderStep(SeqEncStep):
             x = to_ranking_low_mem(x)
 
         if self.remove_outliers:
-            assert (
-                self.remove_outliers_sigma > 1.0
-            ), "remove_outliers_sigma must be > 1.0"
+            assert self.remove_outliers_sigma > 1.0, (
+                "remove_outliers_sigma must be > 1.0"
+            )
 
             x, _ = remove_outliers(
                 x,
@@ -1048,9 +1076,9 @@ class MulticlassClassificationTargetEncoder(SeqEncStep):
         self, y: torch.Tensor, single_eval_pos: int | None = None
     ) -> tuple[torch.Tensor]:
         assert len(y.shape) == 3 and (y.shape[-1] == 1), "y must be of shape (T, B, 1)"
-        assert not (
-            y.isnan().any() and self.training
-        ), "NaNs are not allowed in the target at this point during training (set to model.eval() if not in training)"
+        assert not (y.isnan().any() and self.training), (
+            "NaNs are not allowed in the target at this point during training (set to model.eval() if not in training)"
+        )
         y_new = y.clone()
         for B in range(y.shape[1]):
             y_new[:, B, :] = self.flatten_targets(y[:, B, :], self.unique_ys_[B])
