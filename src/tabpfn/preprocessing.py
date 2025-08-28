@@ -286,6 +286,11 @@ def generate_index_permutations(
     Returns:
         A list containing `n` arrays of subsampled indices.
     """
+    if max_index < 0:
+        raise ValueError(f"max_index must be non-negative, but got {max_index}")
+    if max_index == 0:
+        return [np.array([], dtype=np.int64) for _ in range(n)]
+
     _, rng = infer_random_state(random_state)
 
     # Determine the number of items to subsample (k)
@@ -405,7 +410,7 @@ class EnsembleConfig:
                 with_replacement=subsample_with_replacement,
                 random_state=static_seed,
             )
-        elif subsample_size is None:
+        elif subsample_size is None:  # No subsampling
             subsamples = [None] * n  # type: ignore
         else:
             raise ValueError(
