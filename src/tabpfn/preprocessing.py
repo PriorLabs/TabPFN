@@ -6,6 +6,7 @@ different members.
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
