@@ -298,7 +298,7 @@ def generate_index_permutations(
         if not (0.0 < subsample <= 1.0):
             raise ValueError(f"If float, {subsample=} must be in (0, 1].")
         # Ensure at least one sample is drawn
-        k = max(1, int(subsample * max_index))
+        k = max(1, math.ceil(subsample * max_index))
     elif isinstance(subsample, int):
         if subsample < 1:
             raise ValueError(f"If int, {subsample=} must be at least 1.")
