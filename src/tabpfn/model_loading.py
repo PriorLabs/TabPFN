@@ -661,6 +661,11 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
             for key, value in vars(estimator).items()
             if key.endswith("_") and key not in blacklist
         }
+        # move all tensors to "cpu" before loading, so if fitted & saved on cuda-device
+        # and loading on cpu-device does not throw
+        # "RuntimeError: Attempting to deserialize object on a CUDA device..."
+        # fitted_attrs ={k:v.to("cpu") if isinstance(v, torch.nn.Module) else v
+        #                 for k, v in fitted_attrs.items()}
         joblib.dump(fitted_attrs, tmp / "fitted_attrs.joblib")
 
         # 3. Save the InferenceEngine state without the model weights

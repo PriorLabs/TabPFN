@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from itertools import product
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,14 @@ from sklearn.datasets import make_classification, make_regression
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.model_loading import save_tabpfn_model
+
+from .utils import get_pytest_devices
+
+# filter out combinations when "mps" is exatly one device type!
+# -> yields different predictions, as dtypes are partly unsupported
+device_bicombination = [
+    comb for comb in product(get_pytest_devices(), repeat=2) if comb.count("mps") != 1
+]
 
 
 # --- Fixtures for data ---
@@ -34,22 +43,30 @@ def classification_data_with_categoricals():
 
 # --- Main Test using Parametrization ---
 @pytest.mark.parametrize(
-    ("estimator_class", "data_fixture"),
+    ("estimator_class", "data_fixture", "saving_device", "loading_device"),
     [
-        (TabPFNRegressor, "regression_data"),
-        (TabPFNClassifier, "classification_data_with_categoricals"),
+        (pred, fixture, *devs)
+        for (pred, fixture), devs in product(
+            [
+                (TabPFNRegressor, "regression_data"),
+                (TabPFNClassifier, "classification_data_with_categoricals"),
+            ],
+            device_bicombination,
+        )
     ],
 )
-def test_save_load_happy_path(estimator_class, data_fixture, request, tmp_path):
+def test_save_load_happy_path(
+    estimator_class, data_fixture, saving_device, loading_device, request, tmp_path
+):
     """Tests the standard save/load workflow, including categorical data."""
     X, y = request.getfixturevalue(data_fixture)
-    model = estimator_class(device="cpu", n_estimators=4)
+    model = estimator_class(device=saving_device, n_estimators=4)
     model.fit(X, y)
     path = tmp_path / "model.tabpfn_fit"
 
     # Save and then load the model using its class method
     model.save_fit_state(path)
-    loaded_model = estimator_class.load_from_fit_state(path, device="cpu")
+    loaded_model = estimator_class.load_from_fit_state(path, device=loading_device)
 
     # 1. Check that predictions are identical
     np.testing.assert_array_almost_equal(model.predict(X), loaded_model.predict(X))
