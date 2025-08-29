@@ -52,7 +52,7 @@ estimators = [1, 2]
 
 model_paths = ModelSource.get_classifier_v2().filenames
 primary_model = ModelSource.get_classifier_v2().default_filename
-other_models = set(model_paths) - {primary_model}
+other_models = [model_path for model_path in model_paths if model_path != primary_model]
 
 # --- Build parameter combinations ---
 # Full grid for the first (primary) model path
