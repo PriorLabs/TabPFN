@@ -49,6 +49,8 @@ if TYPE_CHECKING:
 
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.classifier import TabPFNClassifier
+    from tabpfn.regressor import TabPFNRegressor
 
 
 class BaseModelSpecs:
@@ -438,13 +440,17 @@ def get_preprocessed_datasets_helper(
     return DatasetCollectionWithPreprocessing(split_fn, rng, dataset_config_collection)
 
 
-def _initialize_model_variables_helper(
-    calling_instance: Any,
+def initialize_model_variables_helper(
+    calling_instance: TabPFNRegressor | TabPFNClassifier,
     model_type: Literal["regressor", "classifier"],
 ) -> tuple[int, np.random.Generator]:
-    """Helper function to perform initialization
-    of the model, return determined byte_size
-    and RNG object.
+    """Set attributes on the given model to prepare it for inference.
+
+    This includes selecting the device and the inference precision.
+
+    Returns:
+        a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
+        dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
     if model_type == "regressor":

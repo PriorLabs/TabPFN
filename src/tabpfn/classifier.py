@@ -32,11 +32,11 @@ from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
 
 from tabpfn.base import (
-    _initialize_model_variables_helper,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
     get_preprocessed_datasets_helper,
+    initialize_model_variables_helper,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -54,12 +54,12 @@ from tabpfn.preprocessing import (
     default_classifier_preprocessor_configs,
 )
 from tabpfn.utils import (
-    _fix_dtypes,
-    _get_embeddings,
-    _get_ordinal_encoder,
-    _process_text_na_dataframe,
+    fix_dtypes,
+    get_embeddings,
+    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
+    process_text_na_dataframe,
     validate_X_predict,
     validate_Xy_fit,
 )
@@ -377,9 +377,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inference_precision: torch.dtype | Literal["autocast", "auto"] = (
             inference_precision
         )
-        self.fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"] = (
-            fit_mode
-        )
+        self.fit_mode = fit_mode
         self.memory_saving_mode: bool | Literal["auto"] | float | int = (
             memory_saving_mode
         )
@@ -439,7 +437,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """Perform initialization of the model, return determined byte_size
         and RNG object.
         """
-        return _initialize_model_variables_helper(self, "classifier")
+        return initialize_model_variables_helper(self, "classifier")
 
     def _initialize_dataset_preprocessing(
         self,
@@ -514,10 +512,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Will convert inferred categorical indices to category dtype,
             # to be picked up by the ord_encoder, as well
             # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-            X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+            X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             # Ensure categories are ordinally encoded
-            ord_encoder = _get_ordinal_encoder()
-            X = _process_text_na_dataframe(X, ord_encoder=ord_encoder, fit_encoder=True)
+            ord_encoder = get_ordinal_encoder()
+            X = process_text_na_dataframe(X, ord_encoder=ord_encoder, fit_encoder=True)
 
             assert isinstance(X, np.ndarray)
             self.preprocessor_ = ord_encoder
@@ -676,8 +674,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X = validate_X_predict(X, self)
-            X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
-            X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)
+            X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+            X = process_text_na_dataframe(X, ord_encoder=self.preprocessor_)
 
         return self.forward(X, use_inference_mode=True, return_logits=return_logits)
 
@@ -755,7 +753,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         balanced_probas = probas / torch.Tensor(class_prob_in_train).to(self.device_)
         return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
 
-    # TODO: reduce complexity to remove noqa C901, PLR0912
     def forward(  # noqa: C901, PLR0912
         self,
         X: list[torch.Tensor] | torch.Tensor,
@@ -923,7 +920,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             np.ndarray
                 The computed embeddings for each fitted estimator.
         """
-        return _get_embeddings(self, X, data_source)
+        return get_embeddings(self, X, data_source)
 
     def save_fit_state(self, path: Path | str) -> None:
         """Save a fitted classifier, light wrapper around save_fitted_tabpfn_model."""

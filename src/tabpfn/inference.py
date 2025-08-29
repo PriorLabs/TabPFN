@@ -104,7 +104,7 @@ class InferenceEngine(ABC):
             "This inference engine does not support torch.inference_mode changes."
         )
 
-    def save_state_expect_model_weights(self, path: str | Path) -> None:
+    def save_state_except_model_weights(self, path: str | Path) -> None:
         """Persist the executor state to ``path`` without the model weights.
 
         The state is first moved to CPU so the resulting file can be loaded
@@ -354,7 +354,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             self.model = self.model.cpu()
 
     @override
-    def use_torch_inference_mode(self, use_inference: bool) -> None:
+    def use_torch_inference_mode(self, *, use_inference: bool) -> None:
         self.inference_mode = use_inference
 
 
@@ -446,7 +446,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     @override
     def iter_outputs(
         self,
-        X: np.ndarray | torch.tensor,
+        X: np.ndarray | torch.Tensor,
         *,
         device: torch.device,
         autocast: bool,
@@ -514,7 +514,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             self.model = self.model.cpu()
 
     @override
-    def use_torch_inference_mode(self, use_inference: bool) -> None:
+    def use_torch_inference_mode(self, *, use_inference: bool) -> None:
         self.inference_mode = use_inference
 
 
@@ -529,7 +529,7 @@ class InferenceEngineCacheKV(InferenceEngine):
     """
 
     preprocessors: list[SequentialFeatureTransformer]
-    ensemble_configs: list[EnsembleConfig]
+    ensemble_configs: Sequence[EnsembleConfig]
     cat_ixs: Sequence[list[int]]
     models: list[Architecture]
     n_train_samples: list[int]

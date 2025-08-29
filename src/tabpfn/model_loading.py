@@ -664,7 +664,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         joblib.dump(fitted_attrs, tmp / "fitted_attrs.joblib")
 
         # 3. Save the InferenceEngine state without the model weights
-        estimator.executor_.save_state_expect_model_weights(
+        estimator.executor_.save_state_except_model_weights(
             tmp / "executor_state.joblib"
         )
 
