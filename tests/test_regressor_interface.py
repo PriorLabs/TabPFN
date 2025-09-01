@@ -23,7 +23,7 @@ from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
-from tabpfn.utils import infer_device_and_type
+from tabpfn.utils import infer_devices
 
 from .utils import check_cpu_float16_support, get_pytest_devices
 
@@ -186,8 +186,8 @@ def test_sklearn_compatible_estimator(
     estimator: TabPFNRegressor,
     check: Callable[[TabPFNRegressor], None],
 ) -> None:
-    _auto_device = infer_device_and_type(device="auto")
-    if _auto_device.type == "mps":
+    _auto_devices = infer_devices(devices="auto")
+    if any(device.type == "mps" for device in _auto_devices):
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     if check.func.__name__ in (  # type: ignore

@@ -641,7 +641,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         raise ValueError("Path must end with .tabpfn_fit")
 
     # Attributes that are handled separately or should not be saved.
-    blacklist = {"model_", "executor_", "config_", "device_"}
+    blacklist = {"model_", "executor_", "config_", "devices_"}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -739,15 +739,15 @@ def load_fitted_tabpfn_model(
             ]
 
         # 5. Move all torch components to the target device
-        est.device_ = torch.device(device)
+        est.devices_ = (torch.device(device),)
         if hasattr(est.executor_, "model") and est.executor_.model is not None:
-            est.executor_.model.to(est.device_)
+            est.executor_.model.to(device)
         if hasattr(est.executor_, "models"):
-            est.executor_.models = [m.to(est.device_) for m in est.executor_.models]
+            est.executor_.models = [m.to(device) for m in est.executor_.models]
 
         # Restore other potential torch objects from fitted_attrs
         for key, value in vars(est).items():
             if key.endswith("_") and hasattr(value, "to"):
-                setattr(est, key, value.to(est.device_))
+                setattr(est, key, value.to(device))
 
         return est
