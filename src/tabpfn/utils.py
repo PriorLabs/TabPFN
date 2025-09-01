@@ -9,7 +9,7 @@ import ctypes
 import os
 import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 import numpy as np
 import numpy.typing as npt
@@ -103,10 +103,9 @@ def get_embeddings(
     embeddings: list[np.ndarray] = []
 
     # Cast executor to Any to bypass the iter_outputs signature check
-    executor = typing.cast("typing.Any", model.executor_)
-    for output, config in executor.iter_outputs(
+    for output, config in model.executor_.iter_outputs(
         X,
-        device=model.device_,
+        devices=model.devices_,
         autocast=model.use_autocast_,
         only_return_standard_out=False,
     ):
@@ -176,31 +175,34 @@ def _cancel_nan_borders(
     return borders, logit_cancel_mask
 
 
-def infer_device_and_type(device: str | torch.device | None) -> torch.device:
-    """Infers the appropriate PyTorch device based on the input and environment
-    configuration.
+DevicesSpecification = Union[
+    torch.device, str, Sequence[Union[torch.device, str]], Literal["auto"]
+]
 
-    Rules:
-    1. If `device` is `None` or "auto":
-       - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
-       - Otherwise picks "mps" if available and not excluded
-       - Falls back to "cpu"
-    2. If `device` is a string, converts it to a torch.device
-    3. If already a torch.device, returns as-is
-    4. Otherwise raises ValueError
 
-    Environment:
-        TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
-        (e.g., "cuda,mps"). This allows excluding "mps" on the CI pipeline.
+def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
+    """Selects the appropriate PyTorch devices for inference.
+
+    If `device` is "auto" then the devices are selected as follows:
+    1. If CUDA is available and not excluded, returns all "cuda" devices
+    2. Otherwise, if MPS is available and not excluded, returns the "mps" device
+    3. Otherwise, returns the "cpu" device
+
+    CUDA and MPS can be excluded from the "auto" selection by specifying the
+    TABPFN_EXCLUDE_DEVICES environment variable. This can be either "cuda", "mps", or
+    "cuda,mps". This is useful for excluding device classes in CI.
 
     Args:
-        device (str | torch.device | None): The device specification. Can be:
-            - `None` or `"auto"` for automatic inference.
-            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
-            - A `torch.device` instance.
+        devices: The device specification. One of:
+            - "auto": the device will be selected as described above
+            - a PyTorch device string like "cuda", "mps", or "cpu": this single device
+                will be selected by parsing the string to a torch.device
+            - a torch.device: this single device will be selected
+            - a list of PyTorch device strings or torch.device: each item will be
+                converted to a torch.device, and all of the devices selected
 
     Returns:
-        The inferred device
+        A tuple of at least one device.
     """
     exclude_devices = {
         d.strip()
@@ -208,22 +210,32 @@ def infer_device_and_type(device: str | torch.device | None) -> torch.device:
         if d.strip()
     }
 
-    if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = (
-            "cuda"
-            if torch.cuda.is_available() and "cuda" not in exclude_devices
-            else "mps"
-            if torch.backends.mps.is_available() and "mps" not in exclude_devices
-            else "cpu"
+    if devices == "auto":
+        if "cuda" not in exclude_devices and torch.cuda.is_available():
+            return tuple(
+                torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())
+            )
+
+        if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+            return (torch.device("mps"),)
+
+        return (torch.device("cpu"),)
+
+    if isinstance(devices, (str, torch.device)):
+        devices = (devices,)
+
+    # This is safe because torch.device(torch.device(...)) is a noop.
+    # torch.device(device) returns a fairly informative error message if `device` is not
+    # a valid device, thus do no extra error reporting.
+    devices = tuple(torch.device(device) for device in devices)
+
+    if len(set(devices)) != len(devices):
+        raise ValueError(
+            "The list of devices for inference cannot contain the same device more "
+            f"than once. It contained: {devices}"
         )
-        return torch.device(device_type_)
-    if isinstance(device, str):
-        return torch.device(device)
 
-    if isinstance(device, torch.device):
-        return device
-
-    raise ValueError(f"Invalid device: {device}")
+    return devices
 
 
 def is_autocast_available(device_type: str) -> bool:
@@ -259,11 +271,13 @@ def is_autocast_available(device_type: str) -> bool:
         )
 
 
-def infer_fp16_inference_mode(device: torch.device, *, enable: bool | None) -> bool:
+def infer_fp16_inference_mode(
+    devices: Sequence[torch.device], *, enable: bool | None
+) -> bool:
     """Infer whether fp16 inference should be enabled.
 
     Args:
-        device: The device to validate against.
+        devices: The devices to validate against.
         enable:
             Whether it should be enabled, `True` or `False`, otherwise if `None`,
             detect if it's possible and use it if so.
@@ -272,12 +286,13 @@ def infer_fp16_inference_mode(device: torch.device, *, enable: bool | None) -> b
         Whether to use fp16 inference or not.
 
     Raises:
-        ValueError: If fp16 inference was enabled and device type does not support it.
+        ValueError: If fp16 inference was enabled and any of the selected devices do
+            not support it.
     """
-    is_cpu = device.type.lower() == "cpu"
+    is_cpu = any(device.type.lower() == "cpu" for device in devices)
     fp16_available = (
         not is_cpu  # CPU can show enabled, yet it kills inference speed
-        and is_autocast_available(device.type)
+        and any(is_autocast_available(device.type) for device in devices)
     )
 
     if enable is None:
@@ -288,7 +303,7 @@ def infer_fp16_inference_mode(device: torch.device, *, enable: bool | None) -> b
             raise ValueError(
                 "You specified `fp16_inference=True`, however"
                 "`torch.amp.autocast_mode.is_autocast_available()`"
-                f" reported that your used device ({device=})"
+                f" reported that one or more of the selected devices ({devices=})"
                 " does not support it."
                 "\nPlease ensure your version of torch and device type"
                 " are compatible with torch.autocast()`"

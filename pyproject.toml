@@ -76,6 +76,7 @@ dev = [
   # Test
   "pytest",
   "pytest-xdist",
+  "pytest-mock>=3.14.1",
   "onnx", # required for onnx export tests
   "psutil", # required for testing internal memory tool on windows
   # Docs

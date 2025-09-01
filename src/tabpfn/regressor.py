@@ -56,6 +56,7 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.utils import (
+    DevicesSpecification,
     fix_dtypes,
     get_embeddings,
     get_ordinal_encoder,
@@ -136,8 +137,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     interface_config_: ModelInterfaceConfig
     """Additional configuration of the interface for expert users."""
 
-    device_: torch.device
-    """The device determined to be used."""
+    devices_: tuple[torch.device, ...]
+    """The devices determined to be used.
+
+    The devices are determined based on the `device` argument to the constructor, and
+    the devices available on the system. If multiple devices are listed, currently only
+    the first is used for inference.
+    """
 
     feature_names_in_: npt.NDArray[Any]
     """The feature names of the input data.
@@ -187,7 +193,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
         model_path: str | Path | Literal["auto"] | RegressorModelSpecs = "auto",
-        device: str | torch.device | Literal["auto"] = "auto",
+        device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
         fit_mode: Literal[
@@ -542,7 +548,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         assert isinstance(X, np.ndarray)
         check_cpu_warning(
-            self.device, X, allow_cpu_override=self.ignore_pretraining_limits
+            self.devices_, X, allow_cpu_override=self.ignore_pretraining_limits
         )
 
         if feature_names_in is not None:
@@ -604,7 +610,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             random_state=rng,
         )
 
-        self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.device_)
+        self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
 
         assert len(ensemble_configs) == self.n_estimators
 
@@ -647,7 +653,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             byte_size, rng = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
-                self.inference_precision, self.device_
+                self.inference_precision, self.devices_
             )
             rng = None
 
@@ -659,7 +665,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ensemble_configs=configs,
             cat_ix=cat_ix,
             fit_mode="batched",
-            device_=self.device_,
+            devices_=self.devices_,
             rng=rng,
             n_jobs=self.n_jobs,
             byte_size=byte_size,
@@ -701,7 +707,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         else:  # already fitted and prompt_tuning mode: no cat. features
             _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
-                self.inference_precision, self.device_
+                self.inference_precision, self.devices_
             )
 
         assert len(ensemble_configs) == self.n_estimators
@@ -734,7 +740,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,
-            device_=self.device_,
+            devices_=self.devices_,
             rng=rng,
             n_jobs=self.n_jobs,
             byte_size=byte_size,
@@ -853,8 +859,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         transformed_logits = [
             translate_probs_across_borders(
                 logits,
-                frm=torch.as_tensor(borders_t, device=self.device_),
-                to=self.znorm_space_bardist_.borders.to(self.device_),
+                frm=torch.as_tensor(borders_t, device=logits.device),
+                to=self.znorm_space_bardist_.borders.to(logits.device),
             )
             for logits, borders_t in zip(outputs, borders)
         ]
@@ -977,7 +983,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Iterate over estimators
         for output, config in self.executor_.iter_outputs(
             X,
-            device=self.device_,
+            devices=self.devices_,
             autocast=self.use_autocast_,
         ):
             if self.softmax_temperature != 1:

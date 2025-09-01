@@ -69,7 +69,7 @@ class InferenceEngine(ABC):
         self,
         X: np.ndarray,
         *,
-        device: torch.device,
+        devices: Sequence[torch.device],
         autocast: bool,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model.
@@ -78,7 +78,7 @@ class InferenceEngine(ABC):
 
         Args:
             X: The input data to make predictions on.
-            device: The device to run the model on.
+            devices: The devices to run the model on.
             autocast: Whether to use torch.autocast during inference.
         """
         ...
@@ -194,10 +194,13 @@ class InferenceEngineOnDemand(InferenceEngine):
         self,
         X: np.ndarray,
         *,
-        device: torch.device,
+        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        # This engine currently only supports one device, so just take the first.
+        device = devices[0]
+
         rng = np.random.default_rng(self.static_seed)
         itr = fit_preprocessing(
             configs=self.ensemble_configs,
@@ -324,9 +327,12 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         self,
         X: list[torch.Tensor],
         *,
-        device: torch.device,
+        devices: Sequence[torch.device],
         autocast: bool,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        # This engine currently only supports one device, so just take the first.
+        device = devices[0]
+
         self.model = self.model.to(device)
         ensemble_size = len(self.X_trains)
         for i in range(ensemble_size):
@@ -448,10 +454,13 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         self,
         X: np.ndarray | torch.Tensor,
         *,
-        device: torch.device,
+        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        # This engine currently only supports one device, so just take the first.
+        device = devices[0]
+
         self.model = self.model.to(device)
         if self.force_inference_dtype is not None:
             self.model = self.model.type(self.force_inference_dtype)
@@ -545,7 +554,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
         model: Architecture,
-        device: torch.device,
+        devices: Sequence[torch.device],
         rng: np.random.Generator,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
@@ -562,7 +571,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             ensemble_configs: The ensemble configurations to use.
             n_workers: The number of workers to use.
             model: The model to use.
-            device: The device to run the model on.
+            devices: The devices to run the model on.
             rng: The random number generator.
             dtype_byte_size: Size of the dtype in bytes.
             force_inference_dtype: The dtype to force inference to.
@@ -570,6 +579,9 @@ class InferenceEngineCacheKV(InferenceEngine):
             autocast: Whether to use torch.autocast during inference.
             only_return_standard_out: Whether to only return the standard output
         """
+        # This engine currently only supports one device, so just take the first.
+        device = devices[0]
+
         itr = fit_preprocessing(
             configs=ensemble_configs,
             X_train=X_train,
@@ -636,10 +648,13 @@ class InferenceEngineCacheKV(InferenceEngine):
         self,
         X: np.ndarray,
         *,
-        device: torch.device,
+        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        # This engine currently only supports one device, so just take the first.
+        device = devices[0]
+
         for preprocessor, model, config, cat_ix, X_train_len in zip(
             self.preprocessors,
             self.models,
