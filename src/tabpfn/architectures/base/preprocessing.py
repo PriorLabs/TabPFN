@@ -18,7 +18,7 @@ from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -1106,17 +1106,13 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 model.fit(X_scaled, y)
 
                 # Get feature importances (absolute coefficients)
-                if y.ndim > 1 and y.shape[1] > 1:  # Multi-output regression
-                    importances = np.mean(np.abs(model.coef_), axis=0)
-                else:
-                    importances = np.abs(model.coef_)
-
-                print("Feature importances:", importances[0:10], "...")
+                importances = np.abs(model.coef_)[:, 0]
 
                 # Normalize to get probabilities, avoiding division by zero
                 s = importances.sum()
                 if s > 1e-8:
                     weights = importances / s
+
             except Exception:
                 # Fallback to uniform sampling on any failure
                 weights = None
