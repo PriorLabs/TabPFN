@@ -661,7 +661,7 @@ def fit_preprocessing_one(
         y_train = y_train.copy()
 
     preprocessor = config.to_pipeline(random_state=static_seed)
-    res = preprocessor.fit_transform(X_train, cat_ix)
+    res = preprocessor.fit_transform(X_train, cat_ix, y=y_train)
 
     # TODO(eddiebergman): Not a fan of this, wish it was more transparent, but we want
     # to distuinguish what to do with the `ys` based on the ensemble config type

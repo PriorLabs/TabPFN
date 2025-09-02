@@ -18,6 +18,7 @@ from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -461,34 +462,49 @@ class FeaturePreprocessingTransformerStep:
         self,
         X: np.ndarray,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> _TransformResult:
-        self.fit(X, categorical_features)
+        self.fit(X, categorical_features, y=y)
         # TODO(eddiebergman): If we could get rid of this... anywho, needed for
         # the AddFingerPrint
         result = self._transform(X, is_test=False)
         return _TransformResult(result, self.categorical_features_after_transform_)
 
     @abstractmethod
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
+    ) -> list[int]:
         """Underlying method of the preprocessor to implement by subclassses.
 
         Args:
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical feature.
+            y: Target variable, used by some transformers.
 
         Returns:
             list of indices of categorical features after the transform.
         """
         raise NotImplementedError
 
-    def fit(self, X: np.ndarray, categorical_features: list[int]) -> Self:
+    def fit(
+        self,
+        X: np.ndarray,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
+    ) -> Self:
         """Fits the preprocessor.
 
         Args:
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical feature.
+            y: Target variable, used by some transformers.
         """
-        self.categorical_features_after_transform_ = self._fit(X, categorical_features)
+        self.categorical_features_after_transform_ = self._fit(
+            X, categorical_features, y=y
+        )
         assert self.categorical_features_after_transform_ is not None, (
             "_fit should have returned a list of the indexes of the categorical"
             "features after the transform."
@@ -537,15 +553,17 @@ class SequentialFeatureTransformer(UserList):
         self,
         X: np.ndarray | torch.tensor,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> _TransformResult:
         """Fit and transform the data using the fitted pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical features.
+            y: Target variable, used by some transformers.
         """
         for step in self.steps:
-            X, categorical_features = step.fit_transform(X, categorical_features)
+            X, categorical_features = step.fit_transform(X, categorical_features, y=y)
             assert isinstance(categorical_features, list), (
                 f"The {step=} must return list of categorical features,"
                 f" but {type(step)} returned {categorical_features}"
@@ -555,18 +573,22 @@ class SequentialFeatureTransformer(UserList):
         return _TransformResult(X, categorical_features)
 
     def fit(
-        self, X: np.ndarray | torch.tensor, categorical_features: list[int]
+        self,
+        X: np.ndarray | torch.tensor,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> Self:
         """Fit all the steps in the pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical feature.
+            y: Target variable, used by some transformers.
         """
         assert (
             len(self) > 0
         ), "The SequentialFeatureTransformer must have at least one step."
-        self.fit_transform(X, categorical_features)
+        self.fit_transform(X, categorical_features, y=y)
         return self
 
     def transform(self, X: np.ndarray) -> _TransformResult:
@@ -602,7 +624,10 @@ class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):
 
     @override
     def _fit(
-        self, X: np.ndarray | torch.Tensor, categorical_features: list[int]
+        self,
+        X: np.ndarray | torch.Tensor,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> list[int]:
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
@@ -655,7 +680,10 @@ class AddFingerprintFeaturesStep(FeaturePreprocessingTransformerStep):
 
     @override
     def _fit(
-        self, X: np.ndarray | torch.Tensor, categorical_features: list[int]
+        self,
+        X: np.ndarray | torch.Tensor,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> list[int]:
         _, rng = infer_random_state(self.random_state)
         self.rnd_salt_ = int(rng.integers(0, 2**16))
@@ -714,7 +742,10 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
 
     @override
     def _fit(
-        self, X: np.ndarray | torch.tensor, categorical_features: list[int]
+        self,
+        X: np.ndarray | torch.tensor,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> list[int]:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
@@ -1023,6 +1054,8 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         n_samples: int,
         n_features: int,
         categorical_features: list[int],
+        X: np.ndarray,
+        y: np.ndarray | None,
     ) -> tuple[Pipeline | ColumnTransformer, list[int]]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
@@ -1046,14 +1079,58 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             n_samples,
             random_state=static_seed,
         )
-        if self.subsample_features > 0:
+
+        weights = None
+        # Check if we are actually subsampling
+        if (
+            self.subsample_features > 0
+            and y is not None
+            and self.subsample_features * n_features < n_features
+        ):
+            try:
+                # Can only run regression on numeric targets
+                if not np.issubdtype(y.dtype, np.number):
+                    raise ValueError("Target y is not numeric.")
+
+                if isinstance(X, torch.Tensor):
+                    X = X.cpu().numpy()
+
+                # Impute NaNs, as LinearRegression does not support them
+                imputer = SimpleImputer(strategy="mean")
+                X_imputed = imputer.fit_transform(X)
+
+                # Impute NaNs in y if they exist
+                if np.isnan(y).any():
+                    y_imputer = SimpleImputer(strategy="mean")
+                    y_imputed = y_imputer.fit_transform(y.reshape(-1, 1)).ravel()
+                else:
+                    y_imputed = y
+
+                model = LinearRegression()
+                model.fit(X_imputed, y_imputed)
+
+                # Get feature importances (absolute coefficients)
+                if y.ndim > 1 and y.shape[1] > 1:  # Multi-output regression
+                    importances = np.mean(np.abs(model.coef_), axis=0)
+                else:
+                    importances = np.abs(model.coef_)
+
+                # Normalize to get probabilities, avoiding division by zero
+                s = importances.sum()
+                if s > 1e-8:
+                    weights = importances / s
+            except Exception:
+                # Fallback to uniform sampling on any failure
+                weights = None
+
+        if self.subsample_features > 0:  # sampling more features than exist
             subsample_features = int(self.subsample_features * n_features) + 1
-            # sampling more features than exist
             replace = subsample_features > n_features
             self.subsampled_features_ = rng.choice(
                 list(range(n_features)),
                 subsample_features,
                 replace=replace,
+                p=weights,
             )
             categorical_features = [
                 new_idx
@@ -1062,7 +1139,12 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             ]
             n_features = subsample_features
         else:
-            self.subsampled_features_ = np.arange(n_features)
+            # choose random subset of features
+            self.subsampled_features_ = np.random.choice(
+                list(range(n_features)),
+                n_features,
+                replace=False,
+            )
 
         all_feats_ix = list(range(n_features))
         transformers = []
@@ -1145,12 +1227,19 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         return transformer, cat_ix
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
+    ) -> list[int]:
         n_samples, n_features = X.shape
         transformer, cat_ix = self._set_transformer_and_cat_ix(
             n_samples,
             n_features,
             categorical_features,
+            X=X,
+            y=y,
         )
         transformer.fit(X[:, self.subsampled_features_])
         self.categorical_features_after_transform_ = cat_ix
@@ -1162,12 +1251,15 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         self,
         X: np.ndarray,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> _TransformResult:
         n_samples, n_features = X.shape
         transformer, cat_ix = self._set_transformer_and_cat_ix(
             n_samples,
             n_features,
             categorical_features,
+            X=X,
+            y=y,
         )
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.categorical_features_after_transform_ = cat_ix
@@ -1275,6 +1367,7 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
         self,
         X: np.ndarray,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> list[int]:
         ct, categorical_features = self._get_transformer(X, categorical_features)
         if ct is None:
@@ -1316,6 +1409,7 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
         self,
         X: np.ndarray,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> tuple[np.ndarray, list[int]]:
         ct, categorical_features = self._get_transformer(X, categorical_features)
         if ct is None:
@@ -1365,8 +1459,9 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
         self,
         X: np.ndarray,
         categorical_features: list[int],
+        y: np.ndarray | None = None,
     ) -> _TransformResult:
-        Xt, cat_ix = self._fit_transform(X, categorical_features)
+        Xt, cat_ix = self._fit_transform(X, categorical_features, y=y)
         self.categorical_features_after_transform_ = cat_ix
         return _TransformResult(Xt, cat_ix)
 
@@ -1409,7 +1504,12 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
         self.standardizer = StandardScaler(with_mean=False)
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
+    ) -> list[int]:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)
 
@@ -1476,7 +1576,12 @@ class DifferentiableZNormStep(FeaturePreprocessingTransformerStep):
         self.means = torch.tensor([])
         self.stds = torch.tensor([])
 
-    def _fit(self, X: torch.Tensor, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: torch.Tensor,
+        categorical_features: list[int],
+        y: np.ndarray | None = None,
+    ) -> list[int]:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)
         return categorical_features
