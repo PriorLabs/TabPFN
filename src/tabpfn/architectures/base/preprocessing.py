@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import logging
 from abc import abstractmethod
 from collections import UserList
 from collections.abc import Sequence
@@ -1117,7 +1118,10 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 # Fallback to uniform sampling on any failure
                 weights = None
 
-        print(self.subsample_features, n_features, weights)
+        logging.debug(
+            f"Subsampling {self.subsample_features * 100:.1f}% of features"
+            f" from {n_features} features.", weights
+        )
 
         if self.subsample_features > 0.0:
             subsample_features = int(self.subsample_features * n_features) + 1
