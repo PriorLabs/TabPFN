@@ -1106,7 +1106,8 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 model.fit(X_scaled, y)
 
                 # Get feature importances (absolute coefficients)
-                importances = np.abs(model.coef_)[:, 0]
+                importances = np.abs(model.coef_).sum(axis=0)
+                print("importances", importances.shape)
 
                 # Normalize to get probabilities, avoiding division by zero
                 s = importances.sum()
