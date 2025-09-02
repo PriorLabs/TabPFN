@@ -14,9 +14,9 @@ from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
+import joblib
 import numpy as np
 import torch
-from sklearn.utils.validation import joblib
 from torch.utils.data import Dataset
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
