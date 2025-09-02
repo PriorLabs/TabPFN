@@ -1107,7 +1107,6 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
 
                 # Get feature importances (absolute coefficients)
                 importances = np.abs(model.coef_).sum(axis=0)
-                print("importances", importances.shape)
 
                 # Normalize to get probabilities, avoiding division by zero
                 s = importances.sum()
@@ -1118,7 +1117,9 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 # Fallback to uniform sampling on any failure
                 weights = None
 
-        if self.subsample_features > 0:  # sampling more features than exist
+        print(self.subsample_features, n_features, weights)
+
+        if self.subsample_features > 0.0:
             subsample_features = int(self.subsample_features * n_features) + 1
             replace = subsample_features > n_features
             self.subsampled_features_ = rng.choice(
@@ -1133,13 +1134,6 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 if idx in categorical_features
             ]
             n_features = subsample_features
-        else:
-            # choose random subset of features
-            self.subsampled_features_ = np.random.choice(
-                list(range(n_features)),
-                n_features,
-                replace=False,
-            )
 
         all_feats_ix = list(range(n_features))
         transformers = []
