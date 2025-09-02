@@ -18,7 +18,7 @@ from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LinearRegression
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -1102,7 +1102,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_imputed)
 
-                model = Ridge()
+                model = LinearRegression()
                 model.fit(X_scaled, y)
 
                 # Get feature importances (absolute coefficients)
@@ -1132,6 +1132,8 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 if idx in categorical_features
             ]
             n_features = subsample_features
+        else:
+            self.subsampled_features_ = np.arange(n_features)
 
         all_feats_ix = list(range(n_features))
         transformers = []
