@@ -18,7 +18,7 @@ from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression, Ridge
+from sklearn.linear_model import Ridge
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -1106,7 +1106,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 model.fit(X_scaled, y)
 
                 # Get feature importances (absolute coefficients)
-                importances = np.abs(model.coef_).sum(axis=0)
+                importances = np.abs(model.coef_)
 
                 # Normalize to get probabilities, avoiding division by zero
                 s = importances.sum()
