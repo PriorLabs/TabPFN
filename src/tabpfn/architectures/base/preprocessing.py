@@ -18,7 +18,7 @@ from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.decomposition import TruncatedSVD
 from sklearn.impute import SimpleImputer
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -1102,7 +1102,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_imputed)
 
-                model = LogisticRegression()
+                model = Ridge()
                 model.fit(X_scaled, y)
 
                 # Get feature importances (absolute coefficients)
@@ -1116,12 +1116,6 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             except Exception:
                 # Fallback to uniform sampling on any failure
                 weights = None
-
-        print(
-            f"Subsampling {self.subsample_features * 100:.1f}% of features"
-            f" from {n_features} features.",
-            weights,
-        )
 
         if self.subsample_features > 0.0:
             subsample_features = int(self.subsample_features * n_features) + 1
