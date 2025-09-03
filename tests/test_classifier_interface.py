@@ -84,18 +84,15 @@ all_combinations = list(_full_grid) + list(_smoke_grid)
 
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
-    X, y = sklearn.datasets.load_iris(return_X_y=True)
-    # Take 20 samples from class 0, 20 from class 1, 20 from class 2
-    # This ensures all 3 classes are present
-    X_diverse = np.vstack([X[y == 0][:20], X[y == 1][:20], X[y == 2][:20]])
-    y_diverse = np.hstack([y[y == 0][:20], y[y == 1][:20], y[y == 2][:20]])
-
-    # Shuffle to mix them up, otherwise training data would be ordered by class
-    indices = np.arange(len(y_diverse))
-    rng = np.random.default_rng(42)
-    rng.shuffle(indices)
-
-    return X_diverse[indices].astype(np.float32), y_diverse[indices].astype(np.int64)
+    n_classes = 3
+    return sklearn.datasets.make_classification(
+        n_samples=20 * n_classes,
+        n_classes=n_classes,
+        n_features=5,
+        n_informative=5,
+        n_redundant=0,
+        random_state=0,
+    )
 
 
 @pytest.mark.parametrize(
@@ -342,7 +339,9 @@ def test_balance_probabilities_alters_proba_output(
     ), "Probabilities did not change when balance_probabilities was toggled."
 
 
-@pytest.mark.skip(reason="No longer passes now dataset has been shrunk.")
+@pytest.mark.skip(
+    reason="The result is actually different depending on the fitting mode."
+)
 def test_fit_modes_all_return_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -626,14 +625,9 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     assert embeddings.shape[2] == encoder_shape
 
 
-def test_pandas_output_config():
+def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):
     """Test compatibility with sklearn's output configuration settings."""
-    # Generate synthetic classification data
-    X, y = sklearn.datasets.make_classification(
-        n_samples=50,
-        n_features=10,
-        random_state=19,
-    )
+    X, y = X_y
 
     # Initialize TabPFN
     model = TabPFNClassifier(n_estimators=1, random_state=42)

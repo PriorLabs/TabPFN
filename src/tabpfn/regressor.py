@@ -39,11 +39,11 @@ from sklearn.base import (
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
-    _initialize_model_variables_helper,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
     get_preprocessed_datasets_helper,
+    initialize_model_variables_helper,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
@@ -56,13 +56,13 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.utils import (
-    _fix_dtypes,
-    _get_embeddings,
-    _get_ordinal_encoder,
-    _process_text_na_dataframe,
-    _transform_borders_one,
+    fix_dtypes,
+    get_embeddings,
+    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
+    process_text_na_dataframe,
+    transform_borders_one,
     translate_probs_across_borders,
     validate_X_predict,
     validate_Xy_fit,
@@ -514,7 +514,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Initializes the model, returning byte_size and RNG object."""
-        return _initialize_model_variables_helper(self, "regressor")
+        return initialize_model_variables_helper(self, "regressor")
 
     def _initialize_dataset_preprocessing(
         self, X: XType, y: YType, rng: np.random.Generator
@@ -560,10 +560,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Will convert inferred categorical indices to category dtype,
         # to be picked up by the ord_encoder, as well
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-        X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+        X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
         # Ensure categories are ordinally encoded
-        ord_encoder = _get_ordinal_encoder()
-        X = _process_text_na_dataframe(
+        ord_encoder = get_ordinal_encoder()
+        X = process_text_na_dataframe(
             X,
             ord_encoder=ord_encoder,
             fit_encoder=True,  # type: ignore
@@ -839,8 +839,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
-        X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
+        X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+        X = process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
 
         # Runs over iteration engine
         (
@@ -1010,7 +1010,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     descending_borders = False
                 else:
                     logit_cancel_mask, descending_borders, borders_t = (
-                        _transform_borders_one(
+                        transform_borders_one(
                             std_borders,
                             target_transform=config_for_ensemble.target_transform,
                             repair_nan_borders_after_transform=self.interface_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
@@ -1087,7 +1087,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             np.ndarray
                 The computed embeddings for each fitted estimator.
         """
-        return _get_embeddings(self, X, data_source)
+        return get_embeddings(self, X, data_source)
 
     def save_fit_state(self, path: Path | str) -> None:
         """Save a fitted regressor, light wrapper around save_fitted_tabpfn_model."""

@@ -60,7 +60,7 @@ def get_autocast_context(
     return torch.autocast(device.type, enabled=enabled)
 
 
-def _get_embeddings(
+def get_embeddings(
     model: TabPFNClassifier | TabPFNRegressor,
     X: XType,
     data_source: Literal["train", "test"] = "test",
@@ -83,7 +83,7 @@ def _get_embeddings(
             ``(n_estimators, n_samples, embedding_dim)``. You can average over the
             first axis or reshape to concatenate the estimators, e.g.:
 
-                emb = _get_embeddings(model, X)
+                emb = get_embeddings(model, X)
                 emb_avg = emb.mean(axis=0)
                 emb_concat = emb.reshape(emb.shape[1], -1)
     """
@@ -97,7 +97,7 @@ def _get_embeddings(
     from tabpfn.preprocessing import ClassifierEnsembleConfig, RegressorEnsembleConfig
 
     X = validate_X_predict(X, model)
-    X = _fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 
     embeddings: list[np.ndarray] = []
@@ -309,7 +309,7 @@ STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 
 
-def _fix_dtypes(
+def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -377,10 +377,11 @@ def _fix_dtypes(
     return X
 
 
-def _get_ordinal_encoder(
+def get_ordinal_encoder(
     *,
     numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
 ) -> ColumnTransformer:
+    """Create a ColumnTransformer that ordinally encodes string/category columns."""
     oe = OrdinalEncoder(
         # TODO: Could utilize the categorical dtype values directly instead of "auto"
         categories="auto",
@@ -588,13 +589,20 @@ def infer_random_state(
     return static_seed, np_rng
 
 
-def _process_text_na_dataframe(  # type: ignore
+def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
-    ord_encoder=None,  # noqa: ANN001
+    ord_encoder: ColumnTransformer | None = None,
     *,
     fit_encoder: bool = False,
 ) -> np.ndarray:
+    """Convert `X` to float64, replacing NA with NaN in string cells.
+
+    If `ord_encoder` is not None, then it will be used to encode `X` before the
+    conversion to float64.
+
+    Note that this function sometimes mutates its input.
+    """
     string_cols = X.select_dtypes(include=["string", "object"]).columns
     if len(string_cols) > 0:
         X[string_cols] = X[string_cols].fillna(placeholder)
@@ -742,7 +750,7 @@ def update_encoder_params(
         model.y_encoder = SequentialEncoder(*diffable_steps)
 
 
-def _transform_borders_one(
+def transform_borders_one(
     borders: np.ndarray,
     target_transform: TransformerMixin | Pipeline,
     *,
