@@ -91,6 +91,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
         n_features=5,
         n_informative=5,
         n_redundant=0,
+        random_state=0,
     )
 
 
