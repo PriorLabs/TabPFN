@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,11 +57,26 @@ class TestingSettings(BaseSettings):
         "Set to True to run tests on non-reference platforms.",
     )
 
-    ci: bool = Field(
+    ci: bool | str = Field(
         default=False,
         description="Indicates if running in continuous integration environment. "
         "Typically set by CI systems (e.g., GitHub Actions).",
     )
+
+    @field_validator("ci", mode="before")
+    @classmethod
+    def _parse_ci(cls, value: Any) -> bool:
+        """Interpret any non-empty environment value as ``True``.
+
+        Some CI providers set the ``CI`` environment variable to a non-boolean
+        string (e.g., ``"azure"``).  Treat any non-empty string other than
+        common falsy values as ``True`` so importing TabPFN works seamlessly in
+        those environments.
+        """
+        if isinstance(value, str):
+            value_lower = value.strip().lower()
+            return value_lower not in {"", "0", "false", "no", "off"}
+        return bool(value)
 
 
 class Settings(BaseSettings):
