@@ -8,7 +8,7 @@ from tabpfn.settings import TabPFNSettings, TestingSettings
 
 
 def test__load_settings__env_file_contains_variables_for_other_apps__does_not_crash(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.delenv("TABPFN_MODEL_CACHE_DIR", raising=False)
     env_file = tmp_path / ".env"
@@ -19,13 +19,13 @@ def test__load_settings__env_file_contains_variables_for_other_apps__does_not_cr
     assert str(tabpfn_settings.model_cache_dir) == "test_cache_dir"
 
 
-def test__ci_env_non_boolean_sets_true(monkeypatch) -> None:
+def test__ci_env_non_boolean_sets_true(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", "azure")
     testing_settings = TestingSettings()
     assert testing_settings.ci is True
 
 
-def test__ci_env_false_sets_false(monkeypatch) -> None:
+def test__ci_env_false_sets_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", "false")
     testing_settings = TestingSettings()
     assert testing_settings.ci is False
