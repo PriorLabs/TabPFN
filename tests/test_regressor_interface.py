@@ -23,7 +23,12 @@ from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
-from tabpfn.utils import infer_device_and_type
+from tabpfn.utils import (
+    _fix_dtypes,
+    _process_text_na_dataframe,
+    infer_device_and_type,
+    validate_X_predict,
+)
 
 from .utils import check_cpu_float16_support, get_pytest_devices
 
@@ -641,3 +646,45 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert (
         reg2.znorm_space_bardist_ is not None
     ), "znorm_space_bardist_ should be initialized for regressor2"
+
+
+@pytest.mark.parametrize("average_before_softmax", [True, False])
+def test_forward_predict_logit_consistency(
+    X_y: tuple[np.ndarray, np.ndarray], average_before_softmax: bool
+) -> None:
+    """Verify that the low-level `forward` method's output is identical to the
+    'logits' returned by the high-level `predict(output_type='full')` method.
+    """
+    X, y = X_y
+    model = TabPFNRegressor(
+        n_estimators=2,
+        average_before_softmax=average_before_softmax,
+        random_state=42,
+        device="cpu",
+        inference_precision=torch.float64,  # Use high precision for stability
+    )
+    model.fit(X, y)
+
+    # 1. Get the "ground truth" logits from the high-level predict() API
+    # The `predict` method internally calls `_raw_predict`, which calls `forward`.
+    full_prediction = model.predict(X, output_type="full")
+    logits_from_predict = full_prediction["logits"]
+
+    # 2. Call the low-level `forward()` method directly to get its output.
+    # We must replicate the minimal preprocessing done in `_raw_predict`.
+    X_processed = validate_X_predict(X, model)
+    X_processed = _fix_dtypes(
+        X_processed, cat_indices=model.inferred_categorical_indices_
+    )
+    X_processed = _process_text_na_dataframe(
+        X_processed, ord_encoder=model.preprocessor_
+    )
+    logits_from_forward = model.forward(X_processed, use_inference_mode=True)
+
+    # 3. Assert the logits from both paths are identical.
+    assert logits_from_forward is not None
+    torch.testing.assert_close(
+        logits_from_predict,
+        logits_from_forward,
+        msg="Logits from low-level forward() differ from high-level predict().",
+    )

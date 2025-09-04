@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - @benraha Improved the inference speed on CPU significantly [#459](https://github.com/PriorLabs/TabPFN/pull/459).
 - @benraha Added a fast-path for the column selection in RemoveEmptyFeaturesEncoderStep [#468](https://github.com/PriorLabs/TabPFN/pull/468).
+- **(Breaking)** The `TabPFNRegressor.forward()` method signature has changed. It now returns a single logits tensor instead of a tuple, simplifying its interface for finetuning.
+- Reduced memory consumption for `TabPFNRegressor` during inference by processing ensemble outputs sequentially instead of stacking them in memory. This improves performance, especially when using a high `n_estimators`.
 
 ### Bug Fixes
 
