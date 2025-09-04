@@ -14,18 +14,18 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNRegressor
-from tabpfn.model.bar_distribution import (
+from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.utils import meta_dataset_collator
 
+from .utils import get_pytest_devices
+
 rng = np.random.default_rng(42)
 
-devices = ["cpu"]
-if torch.cuda.is_available():
-    devices.append("cuda")
+devices = get_pytest_devices()
 
 fit_modes = [
     "batched",
@@ -167,7 +167,7 @@ def test_regressor_dataset_and_collator_batches_type(
             y_test_standardized,
             cat_ixs,
             confs,
-            normalized_bardist_,
+            raw_space_bardist_,
             bar_distribution,
             x_test_raw,
             y_test_raw,
@@ -182,7 +182,7 @@ def test_regressor_dataset_and_collator_batches_type(
         for conf in confs:
             for c in conf:
                 assert isinstance(c, RegressorEnsembleConfig)
-        for ren_crit in normalized_bardist_:
+        for ren_crit in raw_space_bardist_:
             assert isinstance(ren_crit, FullSupportBarDistribution)
         for bar_dist in bar_distribution:
             assert isinstance(bar_dist, BarDistribution)
@@ -245,7 +245,7 @@ def test_tabpfn_regressor_finetuning_loop(
                 y_test_standardized,
                 cat_ixs,
                 confs,
-                normalized_bardist_,
+                raw_space_bardist_,
                 bar_distribution,
                 batch_x_test_raw,
                 batch_y_test_raw,
@@ -255,7 +255,7 @@ def test_tabpfn_regressor_finetuning_loop(
                 X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
             )
 
-            reg.normalized_bardist_ = normalized_bardist_[0]
+            reg.raw_space_bardist_ = raw_space_bardist_[0]
 
             averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
 
@@ -275,9 +275,9 @@ def test_tabpfn_regressor_finetuning_loop(
             assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
 
             # N_bins
-            n_borders_bardist = reg.bardist_.borders.shape[0]
+            n_borders_bardist = reg.znorm_space_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
-            n_borders_norm_crit = reg.normalized_bardist_.borders.shape[0]
+            n_borders_norm_crit = reg.raw_space_bardist_.borders.shape[0]
             assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
 
             assert len(X_tests_preprocessed) == reg.n_estimators
@@ -285,18 +285,20 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(y_trains_preprocessed) == reg.n_estimators
             assert reg.model_ is not None, "Model not initialized after fit"
             assert hasattr(
-                reg, "bardist_"
-            ), "Regressor missing 'bardist_' attribute after fit"
+                reg, "znorm_space_bardist_"
+            ), "Regressor missing 'znorm_space_bardist_' attribute after fit"
             assert hasattr(
-                reg, "normalized_bardist_"
-            ), "Regressor missing 'normalized_bardist_' attribute after fit"
-            assert reg.bardist_ is not None, "reg.bardist_ is None"
+                reg, "raw_space_bardist_"
+            ), "Regressor missing 'raw_space_bardist_' attribute after fit"
+            assert (
+                reg.znorm_space_bardist_ is not None
+            ), "reg.znorm_space_bardist_ is None"
 
             lossfn = None
             if optimization_space == "raw_label_space":
-                lossfn = reg.bardist_
+                lossfn = reg.raw_space_bardist_
             elif optimization_space == "preprocessed":
-                lossfn = reg.normalized_bardist_
+                lossfn = reg.znorm_space_bardist_
             else:
                 raise ValueError("Need to define optimization space")
 
@@ -375,7 +377,7 @@ def test_finetuning_consistency_bar_distribution(
         y_test_standardized,
         cat_ixs,
         confs,
-        normalized_bardist_,
+        raw_space_bardist_,
         bar_distribution,
         batch_x_test_raw,
         batch_y_test_raw,
@@ -412,36 +414,36 @@ def test_finetuning_consistency_bar_distribution(
         atol=1e-5,
     )
 
-    normalized_bardist_ = normalized_bardist_[0]
-    reg_batched.normalized_bardist_ = normalized_bardist_
+    raw_space_bardist_ = raw_space_bardist_[0]
+    reg_batched.raw_space_bardist_ = raw_space_bardist_
 
     torch.testing.assert_close(
-        normalized_bardist_.borders,
-        reg_batched.normalized_bardist_.borders,
+        raw_space_bardist_.borders,
+        reg_batched.raw_space_bardist_.borders,
         rtol=1e-5,
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
     )
 
     torch.testing.assert_close(
-        normalized_bardist_.borders,
-        reg_standard.normalized_bardist_.borders,
+        raw_space_bardist_.borders,
+        reg_standard.raw_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
     )
 
     torch.testing.assert_close(
-        reg_standard.normalized_bardist_.borders,
-        reg_batched.normalized_bardist_.borders,
+        reg_standard.raw_space_bardist_.borders,
+        reg_batched.raw_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Renormalized criterion borders do not match.",
     )
 
     torch.testing.assert_close(
-        reg_standard.bardist_.borders,
-        reg_batched.bardist_.borders,
+        reg_standard.znorm_space_bardist_.borders,
+        reg_batched.znorm_space_bardist_.borders,
         rtol=1e-5,  # Standard float tolerance
         atol=1e-5,
         msg="Bar distribution borders do not match.",
@@ -479,13 +481,13 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         # Initialize two regressors with the inference and FineTuning
         reg_standard = TabPFNRegressor(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="fit_preprocessors",  # Example standard mode
         )
         reg_batched = TabPFNRegressor(
             n_estimators=n_estimators,
-            device="cpu",
+            device="auto",
             random_state=common_seed,
             fit_mode="batched",  # Mode compatible with get_preprocessed_datasets
         )
@@ -503,7 +505,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             _ = reg_standard.predict(X_test_raw)  # Trigger the patched method
             assert mock_forward_p1.called
             # Capture the tensor input to the internal model
-            tensor_p1_full = mock_forward_p1.call_args.args[1]
+            tensor_p1_full = mock_forward_p1.call_args.args[0]
 
         assert tensor_p1_full is not None
         # Standard path's internal model receives the combined train+test sequence
@@ -552,7 +554,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
             _ = reg_batched.forward(X_tests_p2)
             assert mock_forward_p3.called
             # Capture the tensor input to the internal model
-            tensor_p3_full = mock_forward_p3.call_args.args[1]
+            tensor_p3_full = mock_forward_p3.call_args.args[0]
 
         assert tensor_p3_full is not None
         # As confirmed before, the internal model in this path

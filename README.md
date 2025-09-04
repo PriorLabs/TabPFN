@@ -9,17 +9,14 @@
 
 <img src="https://github.com/PriorLabs/tabpfn-extensions/blob/main/tabpfn_summary.webp" width="80%" alt="TabPFN Summary">
 
-⚠️ **Major Update: Version 2.0:** Complete codebase overhaul with new architecture and
-features. Previous version available at [v1.0.0](../../tree/v1.0.0) and
-`pip install tabpfn==0.1.11`.
-
-📚 For detailed usage examples and best practices, check out [Interactive Colab Tutorial](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
-
 ## 🏁 Quick Start
 
-TabPFN is a foundation model for tabular data that outperforms traditional methods while
-being dramatically faster. This repository contains the core PyTorch implementation with
-CUDA optimization.
+### Interactive Notebook Tutorial
+> [!TIP]
+>
+> Dive right in with our interactive Colab notebook! It's the best way to get a hands-on feel for TabPFN, walking you through installation, classification, and regression examples.
+>
+> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
 > ⚡ **GPU Recommended**:
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
@@ -234,7 +231,7 @@ This script will download the main classifier and regressor models, as well as a
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
-   - Set environment variable: `os.environ["TABPFN_MODEL_CACHE_DIR"] = "/path/to/dir"`
+   - Set environment variable: `export TABPFN_MODEL_CACHE_DIR="/path/to/dir"` (see environment variables FAQ below)
    - Default OS cache directory:
      - Windows: `%APPDATA%\tabpfn\`
      - macOS: `~/Library/Caches/tabpfn/`
@@ -245,6 +242,25 @@ A: Try the following:
 - Download the newest version of tabpfn `pip install tabpfn --upgrade`
 - Ensure model files downloaded correctly (re-download if needed)
 
+**Q: What environment variables can I use to configure TabPFN?**
+A: TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
+
+**Model Configuration:**
+- `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
+
+**PyTorch Settings:**
+- `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`). See [PyTorch CUDA documentation](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) for more information.
+
+Example:
+```bash
+export TABPFN_MODEL_CACHE_DIR="/path/to/models"
+export TABPFN_ALLOW_CPU_LARGE_DATASET=true
+export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
+```
+
+Or simply set them in your `.env`
+
 **Q: How do I save and load a trained TabPFN model?**
 A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
 it later with :func:`load_fitted_tabpfn_model` (or the corresponding
@@ -252,7 +268,7 @@ it later with :func:`load_fitted_tabpfn_model` (or the corresponding
 
 ```python
 from tabpfn import TabPFNRegressor
-from tabpfn.model.loading import (
+from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
     save_fitted_tabpfn_model,
 )

@@ -4,7 +4,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
+import os
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal
@@ -19,6 +21,10 @@ from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
 from torch import nn
 
+from tabpfn.architectures.base.encoders import (
+    MulticlassClassificationTargetEncoder,
+    SequentialEncoder,
+)
 from tabpfn.constants import (
     DEFAULT_NUMPY_PREPROCESSING_DTYPE,
     NA_PLACEHOLDER,
@@ -26,10 +32,6 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.model.encoders import (
-    MulticlassClassificationTargetEncoder,
-    SequentialEncoder,
-)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -41,7 +43,24 @@ if TYPE_CHECKING:
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
 
-def _get_embeddings(
+def get_autocast_context(
+    device: torch.device, *, enabled: bool
+) -> contextlib.AbstractContextManager:
+    """Returns a torch.autocast context manager, disabling it for MPS devices.
+
+    Args:
+        device: The torch device being used.
+        enabled: Whether to enable autocast.
+
+    Returns:
+        A context manager for autocasting.
+    """
+    if device.type == "mps":
+        return contextlib.nullcontext()
+    return torch.autocast(device.type, enabled=enabled)
+
+
+def get_embeddings(
     model: TabPFNClassifier | TabPFNRegressor,
     X: XType,
     data_source: Literal["train", "test"] = "test",
@@ -64,7 +83,7 @@ def _get_embeddings(
             ``(n_estimators, n_samples, embedding_dim)``. You can average over the
             first axis or reshape to concatenate the estimators, e.g.:
 
-                emb = _get_embeddings(model, X)
+                emb = get_embeddings(model, X)
                 emb_avg = emb.mean(axis=0)
                 emb_concat = emb.reshape(emb.shape[1], -1)
     """
@@ -78,7 +97,7 @@ def _get_embeddings(
     from tabpfn.preprocessing import ClassifierEnsembleConfig, RegressorEnsembleConfig
 
     X = validate_X_predict(X, model)
-    X = _fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 
     embeddings: list[np.ndarray] = []
@@ -158,16 +177,45 @@ def _cancel_nan_borders(
 
 
 def infer_device_and_type(device: str | torch.device | None) -> torch.device:
-    """Infer the device and data type from the given device string.
+    """Infers the appropriate PyTorch device based on the input and environment
+    configuration.
+
+    Rules:
+    1. If `device` is `None` or "auto":
+       - Picks "cuda" if available and not excluded via TABPFN_EXCLUDE_DEVICES
+       - Otherwise picks "mps" if available and not excluded
+       - Falls back to "cpu"
+    2. If `device` is a string, converts it to a torch.device
+    3. If already a torch.device, returns as-is
+    4. Otherwise raises ValueError
+
+    Environment:
+        TABPFN_EXCLUDE_DEVICES: comma-separated list of devices to ignore
+        (e.g., "cuda,mps"). This allows excluding "mps" on the CI pipeline.
 
     Args:
-        device: The device to infer the type from.
+        device (str | torch.device | None): The device specification. Can be:
+            - `None` or `"auto"` for automatic inference.
+            - A string like `"cuda"`, `"cpu"`, or `"mps"`.
+            - A `torch.device` instance.
 
     Returns:
         The inferred device
     """
+    exclude_devices = {
+        d.strip()
+        for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",")
+        if d.strip()
+    }
+
     if (device is None) or (isinstance(device, str) and device == "auto"):
-        device_type_ = "cuda" if torch.cuda.is_available() else "cpu"
+        device_type_ = (
+            "cuda"
+            if torch.cuda.is_available() and "cuda" not in exclude_devices
+            else "mps"
+            if torch.backends.mps.is_available() and "mps" not in exclude_devices
+            else "cpu"
+        )
         return torch.device(device_type_)
     if isinstance(device, str):
         return torch.device(device)
@@ -261,7 +309,7 @@ STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 
 
-def _fix_dtypes(
+def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -329,10 +377,11 @@ def _fix_dtypes(
     return X
 
 
-def _get_ordinal_encoder(
+def get_ordinal_encoder(
     *,
     numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
 ) -> ColumnTransformer:
+    """Create a ColumnTransformer that ordinally encodes string/category columns."""
     oe = OrdinalEncoder(
         # TODO: Could utilize the categorical dtype values directly instead of "auto"
         categories="auto",
@@ -488,12 +537,23 @@ def infer_categorical_features(
     indices = []
 
     for ix, col in enumerate(X.T):
+        # Calculate total distinct values once, treating NaN as a category.
+        try:
+            s = pd.Series(col)
+            # counts NaN/None as a category
+            num_distinct = s.nunique(dropna=False)
+        except TypeError as e:
+            # e.g. "unhashable type: 'dict'" when object arrays contain dicts
+            raise TypeError(
+                "argument must be a string or a number"
+                "(columns must only contain strings or numbers)"
+            ) from e
         if ix in maybe_categoricals:
-            if len(np.unique(col)) <= max_unique_for_category:
+            if num_distinct <= max_unique_for_category:
                 indices.append(ix)
         elif (
             large_enough_x_to_infer_categorical
-            and len(np.unique(col)) < min_unique_for_numerical
+            and num_distinct < min_unique_for_numerical
         ):
             indices.append(ix)
 
@@ -529,13 +589,20 @@ def infer_random_state(
     return static_seed, np_rng
 
 
-def _process_text_na_dataframe(  # type: ignore
+def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
-    ord_encoder=None,
+    ord_encoder: ColumnTransformer | None = None,
     *,
     fit_encoder: bool = False,
 ) -> np.ndarray:
+    """Convert `X` to float64, replacing NA with NaN in string cells.
+
+    If `ord_encoder` is not None, then it will be used to encode `X` before the
+    conversion to float64.
+
+    Note that this function sometimes mutates its input.
+    """
     string_cols = X.select_dtypes(include=["string", "object"]).columns
     if len(string_cols) > 0:
         X[string_cols] = X[string_cols].fillna(placeholder)
@@ -645,8 +712,12 @@ def update_encoder_params(
     if remove_outliers_std is not None and remove_outliers_std <= 0:
         raise ValueError("remove_outliers_std must be greater than 0")
 
+    # TODO: find a less hacky way to change settings during training
+    # and inference
     if not hasattr(model, "encoder"):
-        return
+        raise ValueError(
+            "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+        )
 
     encoder = model.encoder
 
@@ -654,6 +725,11 @@ def update_encoder_params(
     norm_layer = next(
         e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
     )
+    if not hasattr(norm_layer, "remove_outliers"):
+        raise ValueError(
+            "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
+            "this will break the TabPFN sklearn wrapper"
+        )
     norm_layer.remove_outliers = (remove_outliers_std is not None) and (
         remove_outliers_std > 0
     )
@@ -674,7 +750,7 @@ def update_encoder_params(
         model.y_encoder = SequentialEncoder(*diffable_steps)
 
 
-def _transform_borders_one(
+def transform_borders_one(
     borders: np.ndarray,
     target_transform: TransformerMixin | Pipeline,
     *,
@@ -767,7 +843,9 @@ def get_total_memory_windows() -> float:
         return 0.0
 
 
-def split_large_data(largeX: XType, largey: YType, max_data_size: int):
+def split_large_data(
+    largeX: XType, largey: YType, max_data_size: int
+) -> tuple[list[XType], list[YType]]:
     """Split a large dataset into chunks along the first dimension.
 
     Args:
@@ -796,7 +874,12 @@ def split_large_data(largeX: XType, largey: YType, max_data_size: int):
     return xlst, ylst
 
 
-def pad_tensors(tensor_list, padding_val=0, *, labels=False):
+def pad_tensors(
+    tensor_list: list[torch.Tensor],
+    padding_val: float | None = 0,
+    *,
+    labels: bool = False,
+) -> list[torch.Tensor]:
     """Pad tensors to maximum dims at the last dimensions.
     if labels=False, 2d tensors are expected, if labels=True, one 1d
     vectors are expected as inputs.
@@ -823,7 +906,7 @@ def pad_tensors(tensor_list, padding_val=0, *, labels=False):
     return ret_list
 
 
-def meta_dataset_collator(batch, padding_val=0.0):
+def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
     """Collate function for torch.utils.data.DataLoader.
 
     Designed for batches from DatasetCollectionWithPreprocessing.

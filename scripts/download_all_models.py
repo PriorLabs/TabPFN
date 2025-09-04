@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from tabpfn.model.loading import _user_cache_dir, download_all_models
+from tabpfn.model_loading import _user_cache_dir, download_all_models
 
 
 def main() -> None:

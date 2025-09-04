@@ -1,27 +1,13 @@
-"""An example for finetuning TabPFN on the Covertype dataset.
+"""Provides a detailed example of fine-tuning a TabPFNClassifier model.
 
-This code can be restructured into an Sklearn compatible classifier:
-FinetunedTabPFNClassifier(sklearn.base.ClassifierMixin, sklearn.base.RegressorMixin)
-def __init__(self, base_estimator: TabPFNClassifier,
- training_datasets: list[pd.DataFrame],
-  evaluation_datasets: list[pd.DataFrame],
-  epochs: int,
+This script demonstrates the complete workflow for fine-tuning the TabPFNClassifier
+on the Covertype dataset for a multi-class classification task. It illustrates
+the entire process, including loading and preparing the data, configuring the model
+and optimizer, running the iterative fine-tuning loop, and evaluating model
+performance using ROC AUC and Log Loss.
 
-  ):
-    self.base_estimator = base_estimator
-    self.training_datasets = training_datasets
-    self.evaluation_datasets = evaluation_datasets
-    self.epochs = epochs
-
-def fit(self):
-    # below training code
-
-def predict(self, X):
-    self.base_estimator.predict(X)
-
-def predict_proba(self, X):
-    self.base_estimator.predict_proba(X)
-
+Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
+support for the Apple Silicon (MPS) backend is still under development.
 """
 
 from functools import partial
@@ -116,7 +102,7 @@ def evaluate_model(
     return roc_auc, log_loss_score
 
 
-def main():
+def main() -> None:
     """Main function to configure and run the finetuning workflow."""
     # --- Master Configuration ---
     config = {
@@ -166,7 +152,7 @@ def main():
         batch_size=config["finetuning"]["meta_batch_size"],
         collate_fn=meta_dataset_collator,
     )
-    loss_function = torch.nn.NLLLoss()
+    loss_function = torch.nn.CrossEntropyLoss()
 
     eval_config = {
         **classifier_config,
@@ -196,10 +182,8 @@ def main():
                 classifier.fit_from_preprocessed(
                     X_train_batch, y_train_batch, cat_ixs, confs
                 )
-                predictions = classifier.forward(X_test_batch)
-                loss = loss_function(
-                    torch.log(predictions), y_test_batch.to(config["device"])
-                )
+                predictions = classifier.forward(X_test_batch, return_logits=True)
+                loss = loss_function(predictions, y_test_batch.to(config["device"]))
                 loss.backward()
                 optimizer.step()
 

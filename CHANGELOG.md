@@ -8,13 +8,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Added a new `predict_logits()` method to `TabPFNClassifier` to return raw model outputs (logits). This is useful for model explainability tasks (e.g., with SHAP) that benefit from unnormalized, additive outputs.
 
 ### Changed
+- @benraha Improved the inference speed on CPU significantly [#459](https://github.com/PriorLabs/TabPFN/pull/459).
+- @benraha Added a fast-path for the column selection in RemoveEmptyFeaturesEncoderStep [#468](https://github.com/PriorLabs/TabPFN/pull/468).
 - **(Breaking)** The `TabPFNRegressor.forward()` method signature has changed. It now returns a single logits tensor instead of a tuple, simplifying its interface for finetuning.
+- Reduced memory consumption for `TabPFNRegressor` during inference by processing ensemble outputs sequentially instead of stacking them in memory. This improves performance, especially when using a high `n_estimators`.
+
+### Bug Fixes
+
+## [2.1.3] - 2025-08-26
+
+### Added
+- Added several new finetuned model checkpoints. ([#462](https://github.com/PriorLabs/TabPFN/pull/462))
+
+### Changed
+
+### Bug Fixes
+- Current infer categoricals crashes in case user tries to pass a feature as input that contains str and nan values. ([#432](https://github.com/PriorLabs/TabPFN/pull/432))
+- Fixed a validation error that occurred when a `.env` file contained settings from other applications. ([#446](https://github.com/PriorLabs/TabPFN/pull/446))
+- Fixed a crash on PyTorch versions older than 2.5 by correctly detecting Grouped-Query Attention (GQA) support. ([#438](https://github.com/PriorLabs/TabPFN/pull/438))
+
+## [2.1.2] - 2025-08-03
+
+- No changes -
+
+## [2.1.1] - 2025-08-03
+
+### Added
+- Added a new `predict_logits()` method to `TabPFNClassifier` to return raw model outputs (logits). This is useful for model explainability tasks (e.g., with SHAP) that benefit from unnormalized, additive outputs.
+- Support for MPS device: TabPFN can run on local Apple MPS Accelerator.
+
+### Changed
 - Increased the default value of the `n_estimators` parameter in `TabPFNClassifier` from `4` to `8`. This change aims to improve average accuracy by default, with the trade-off of increased inference time and memory usage. ([#384](https://github.com/PriorLabs/TabPFN/pull/384))
-- Greatly reduced memory consumption for `TabPFNRegressor` during inference by processing ensemble outputs sequentially instead of stacking them in memory. This improves performance, especially when using a high `n_estimators`.
-- Refactored the internal prediction logic for `TabPFNClassifier` and `TabPFNRegressor` for improved clarity, modularity, and maintainability.
+- Refactored the internal prediction logic for `TabPFNClassifier` for improved clarity, modularity, and maintainability.
+- Regression finetuning outputs are renamed to more clearly reflect their purpose.
+- Updated the Colab Notebook to include more of TabPFNs functionality (Row embeddings, string input data, missing value imputation, time series forecasting).
+- Classifier finetunging now operates on the logits directly.
+
+### Bug fix
+- @benraha fixed a bug with differentiable inputs to the TabPFNClassifer.
+- @zhengaq fixed a bug when a row was completely consisting of missing values.
+- @rosenyu304 fixed a bug with the random number generator for old sklearn versions.
 
 ## [2.1.0] - 2025-07-04
 

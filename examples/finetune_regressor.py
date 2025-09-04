@@ -3,6 +3,9 @@
 This script demonstrates the complete workflow, including data loading and preparation
 for the Bike Sharing Demand dataset, model configuration, the fine-tuning loop,
 and performance evaluation for a regression task.
+
+Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
+support for the Apple Silicon (MPS) backend is still under development.
 """
 
 from functools import partial
@@ -100,7 +103,7 @@ def evaluate_regressor(
     return mse, mae, r2
 
 
-def main():
+def main() -> None:
     """Main function to configure and run the finetuning workflow."""
     # --- Master Configuration ---
     # This improved structure separates general settings from finetuning hyperparameters.
@@ -178,25 +181,28 @@ def main():
             for data_batch in progress_bar:
                 optimizer.zero_grad()
                 (
-                    X_trains_p,
-                    X_tests_p,
-                    y_trains_p,
-                    y_test_std,
+                    X_trains_preprocessed,
+                    X_tests_preprocessed,
+                    y_trains_znorm,
+                    y_test_znorm,
                     cat_ixs,
                     confs,
-                    norm_bardist,
-                    bardist,
+                    raw_space_bardist_,
+                    znorm_space_bardist_,
                     _,
-                    batch_y_test_raw,
+                    y_test_raw,
                 ) = data_batch
 
-                regressor.normalized_bardist_ = norm_bardist[0]
-                regressor.fit_from_preprocessed(X_trains_p, y_trains_p, cat_ixs, confs)
-                logits, _, _ = regressor.forward(X_tests_p)
+                regressor.raw_space_bardist_ = raw_space_bardist_[0]
+                regressor.bardist_ = znorm_space_bardist_[0]
+                regressor.fit_from_preprocessed(
+                    X_trains_preprocessed, y_trains_znorm, cat_ixs, confs
+                )
+                logits, _, _ = regressor.forward(X_tests_preprocessed)
 
                 # For regression, the loss function is part of the preprocessed data
-                loss_fn = norm_bardist[0]
-                y_target = y_test_std
+                loss_fn = znorm_space_bardist_[0]
+                y_target = y_test_znorm
 
                 loss = loss_fn(logits, y_target.to(config["device"])).mean()
                 loss.backward()

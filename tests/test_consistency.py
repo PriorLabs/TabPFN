@@ -61,10 +61,12 @@ import platform
 
 import numpy as np
 import pytest
+import torch
 from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
 from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn.settings import settings
 
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
@@ -93,7 +95,7 @@ _METADATA_FILE = (
 )
 
 
-def _get_platform_details():
+def _get_platform_details() -> tuple[dict[str, str], dict[str, str]]:
     """Gathers and returns details for both current and reference platforms.
 
     This function centralizes platform information retrieval and file I/O,
@@ -163,7 +165,7 @@ def is_ci_compatible_platform(os_name, python_version):
     return (os_name, python_major_minor) in CI_PLATFORMS
 
 
-def _generate_skip_logic():
+def _generate_skip_logic() -> tuple[bool, str]:
     """Determines if tests should be skipped and generates the reason string.
 
     This is the core logic that replaces should_run_consistency_tests()
@@ -198,7 +200,7 @@ def _generate_skip_logic():
     )
 
     # Special handling for CI: log a warning if skipping in a CI environment
-    if os.environ.get("CI", "false").lower() in ("true", "1", "yes"):
+    if settings.testing.ci:
         logging.warning("Skipping consistency tests due to platform mismatch in CI.")
 
         # Additionally, warn if the reference data is not from a CI-compatible platform
@@ -224,12 +226,13 @@ platform_specific = pytest.mark.skipif(
 
 
 # Test data generators for reproducible datasets
-def get_tiny_classification_data(*, seed_modifier=0):
+def get_tiny_classification_data(*, seed_modifier=0, as_tensors=False):
     """Get a tiny fixed classification dataset for testing.
 
     Args:
         seed_modifier: Optional modifier to the random seed, used in tests
                       to create intentionally different data
+        as_tensors: Optional modifier to return data as PyTorch tensors
     """
     random_state = check_random_state(FIXED_RANDOM_SEED + seed_modifier)
     X = random_state.rand(10, 5)  # 10 samples, 5 features
@@ -239,6 +242,8 @@ def get_tiny_classification_data(*, seed_modifier=0):
     X_train, X_test = X[:7], X[7:]
     y_train = y[:7]
 
+    if as_tensors:
+        return torch.tensor(X_train), torch.tensor(y_train), torch.tensor(X_test)
     return X_train, y_train, X_test
 
 
@@ -301,12 +306,12 @@ class ConsistencyTest:
     PLATFORM_METADATA_FILE = REFERENCE_DIR / "platform_metadata.json"
 
     @classmethod
-    def setup_class(cls):
+    def setup_class(cls) -> None:
         """Ensure the reference predictions directory exists."""
         cls.REFERENCE_DIR.mkdir(exist_ok=True)
 
     @classmethod
-    def save_platform_metadata(cls):
+    def save_platform_metadata(cls) -> None:
         """Save current platform information to metadata file."""
         metadata = {
             "os": platform.system(),
@@ -318,22 +323,6 @@ class ConsistencyTest:
 
         with cls.PLATFORM_METADATA_FILE.open("w") as f:
             json.dump(metadata, f, indent=2)
-
-    @classmethod
-    def load_platform_metadata(cls):
-        """Load platform metadata from file.
-
-        Returns empty dict if file doesn't exist or can't be read.
-        """
-        if not cls.PLATFORM_METADATA_FILE.exists():
-            return {}
-
-        try:
-            with cls.PLATFORM_METADATA_FILE.open("r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            # More specific exceptions for file reading issues
-            return {}
 
     def get_dataset_name(self):
         """Get the unique name for this test case."""
@@ -433,7 +422,7 @@ class TestTinyClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -442,6 +431,34 @@ class TestTinyClassifier(ConsistencyTest):
     @platform_specific
     def test_consistency(self):
         """Test prediction consistency on a very small classification dataset."""
+        self.run_test()
+
+
+class TestTinyClassifierDifferentiableInput(ConsistencyTest):
+    """Test prediction consistency for a tiny binary classifier."""
+
+    def get_dataset_name(self):
+        return "tiny_diff_input_classifier"
+
+    def get_test_data(self):
+        return get_tiny_classification_data(as_tensors=True)
+
+    def get_model(self):
+        return TabPFNClassifier(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            differentiable_input=True,
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict_proba(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on a very small classification dataset,
+        using differentiable input.
+        """
         self.run_test()
 
 
@@ -458,7 +475,7 @@ class TestTinyRegressor(ConsistencyTest):
         return TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -483,7 +500,7 @@ class TestMulticlassClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):
@@ -508,7 +525,7 @@ class TestEnsembleClassifier(ConsistencyTest):
         return TabPFNClassifier(
             n_estimators=5,  # Larger ensemble for this test
             random_state=FIXED_RANDOM_SEED,
-            device="cpu",
+            device="auto",
         )
 
     def get_prediction_func(self):

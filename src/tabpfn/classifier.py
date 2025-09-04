@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import typing
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import Self
@@ -32,11 +32,11 @@ from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
 
 from tabpfn.base import (
-    _initialize_model_variables_helper,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
     get_preprocessed_datasets_helper,
+    initialize_model_variables_helper,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -45,10 +45,7 @@ from tabpfn.constants import (
     YType,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model.loading import (
-    load_fitted_tabpfn_model,
-    save_fitted_tabpfn_model,
-)
+from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
@@ -57,12 +54,12 @@ from tabpfn.preprocessing import (
     default_classifier_preprocessor_configs,
 )
 from tabpfn.utils import (
-    _fix_dtypes,
-    _get_embeddings,
-    _get_ordinal_encoder,
-    _process_text_na_dataframe,
+    fix_dtypes,
+    get_embeddings,
+    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
+    process_text_na_dataframe,
     validate_X_predict,
     validate_Xy_fit,
 )
@@ -72,8 +69,8 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
+    from tabpfn.architectures.interface import ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
-    from tabpfn.model.config import ModelConfig
 
     try:
         from sklearn.base import Tags
@@ -84,8 +81,12 @@ if TYPE_CHECKING:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """TabPFNClassifier class."""
 
-    config_: ModelConfig
-    """The configuration of the loaded model to be used for inference."""
+    config_: ArchitectureConfig
+    """The configuration of the loaded model to be used for inference.
+
+    The concrete type of this config is defined by the arhitecture in use and should be
+    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    """
 
     interface_config_: ModelInterfaceConfig
     """Additional configuration of the interface for expert users."""
@@ -220,8 +221,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If `"auto"`, the device
-                is `"cuda"` if available, otherwise `"cpu"`.
+                The device to use for inference with TabPFN. If set to "auto", the
+                device is selected based on availability in the following order of
+                priority: "cuda", "mps", and then "cpu". You can also set the device
+                manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
                 supported devices.
@@ -374,9 +377,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inference_precision: torch.dtype | Literal["autocast", "auto"] = (
             inference_precision
         )
-        self.fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"] = (
-            fit_mode
-        )
+        self.fit_mode = fit_mode
         self.memory_saving_mode: bool | Literal["auto"] | float | int = (
             memory_saving_mode
         )
@@ -402,7 +403,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X_raw: XType | list[XType],
         y_raw: YType | list[YType],
-        split_fn,
+        split_fn: Callable,
         max_data_size: None | int = 10000,
     ) -> DatasetCollectionWithPreprocessing:
         """Transforms raw input data into a collection of datasets,
@@ -436,10 +437,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """Perform initialization of the model, return determined byte_size
         and RNG object.
         """
-        return _initialize_model_variables_helper(self, "classifier")
+        return initialize_model_variables_helper(self, "classifier")
 
     def _initialize_dataset_preprocessing(
-        self, X: XType, y: YType, rng
+        self,
+        X: XType,
+        y: YType,
+        rng,  # noqa: ANN001
     ) -> tuple[list[ClassifierEnsembleConfig], XType, YType]:
         """Internal preprocessing method for input arguments.
         Returns ClassifierEnsembleConfigs, inferred categorical indices,
@@ -508,10 +512,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Will convert inferred categorical indices to category dtype,
             # to be picked up by the ord_encoder, as well
             # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-            X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+            X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             # Ensure categories are ordinally encoded
-            ord_encoder = _get_ordinal_encoder()
-            X = _process_text_na_dataframe(X, ord_encoder=ord_encoder, fit_encoder=True)
+            ord_encoder = get_ordinal_encoder()
+            X = process_text_na_dataframe(X, ord_encoder=ord_encoder, fit_encoder=True)
 
             assert isinstance(X, np.ndarray)
             self.preprocessor_ = ord_encoder
@@ -550,7 +554,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         cat_ix: list[list[int]],
         configs: list[list[EnsembleConfig]],
         *,
-        no_refit=True,
+        no_refit: bool = True,
     ) -> TabPFNClassifier:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
@@ -649,14 +653,40 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
+    def _raw_predict(self, X: XType, *, return_logits: bool) -> torch.Tensor:
+        """Internal method to run prediction.
+
+        Handles input validation, preprocessing, and the forward pass.
+        Returns the raw torch.Tensor output (either logits or probabilities)
+        before final detachment and conversion to NumPy.
+
+        Args:
+            X: The input data for prediction.
+            return_logits: If True, the raw logits are returned. Otherwise,
+                           probabilities are returned after softmax and other
+                           post-processing steps.
+
+        Returns:
+            The raw torch.Tensor output, either logits or probabilities,
+            depending on `return_logits`.
+        """
+        check_is_fitted(self)
+
+        if not self.differentiable_input:
+            X = validate_X_predict(X, self)
+            X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+            X = process_text_na_dataframe(X, ord_encoder=self.preprocessor_)
+
+        return self.forward(X, use_inference_mode=True, return_logits=return_logits)
+
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
         Args:
-            X: The input samples.
+            X: The input data for prediction.
 
         Returns:
-            The predicted class labels.
+            The predicted class labels as a NumPy array.
         """
         proba = self.predict_proba(X)
         y_pred = np.argmax(proba, axis=1)
@@ -665,42 +695,72 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return y_pred
 
+    @config_context(transform_output="default")
+    def predict_logits(self, X: XType) -> np.ndarray:
+        """Predict the raw logits for the provided input samples.
+
+        Logits represent the unnormalized log-probabilities of the classes
+        before the softmax activation function is applied.
+
+        Args:
+            X: The input data for prediction.
+
+        Returns:
+            The predicted logits as a NumPy array. Shape (n_samples, n_classes).
+        """
+        logits_tensor = self._raw_predict(X, return_logits=True)
+        return logits_tensor.float().detach().cpu().numpy()
+
     @config_context(transform_output="default")  # type: ignore
     def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         Args:
-            X: The input data.
+            X: The input data for prediction.
 
         Returns:
-            The predicted probabilities of the classes.
+            The predicted probabilities of the classes as a NumPy array.
+            Shape (n_samples, n_classes).
         """
-        check_is_fitted(self)
-
-        if not self.differentiable_input:
-            X = validate_X_predict(X, self)
-            X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
-            X = _process_text_na_dataframe(X, ord_encoder=self.preprocessor_)
-
-        output = self.forward(X, use_inference_mode=True)
-        output = output.float().detach().cpu().numpy()
+        proba_tensor = self._raw_predict(X, return_logits=False)
+        output = proba_tensor.float().detach().cpu().numpy()
 
         if self.interface_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
             output = np.around(output, decimals=SKLEARN_16_DECIMAL_PRECISION)
             output = np.where(output < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, output)
 
-        # Normalize to guarantee proba sum to 1, required due to precision issues and
+        # Ensure probabilities sum to 1 in case of minor floating point inaccuracies
         # going from torch to numpy
         return output / output.sum(axis=1, keepdims=True)  # type: ignore
 
-    # TODO: reduce complexity to remove noqa C901, PLR0912
+    def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
+        """Scales logits by the softmax temperature."""
+        if self.softmax_temperature != 1.0:
+            return logits / self.softmax_temperature
+        return logits
+
+    def _average_across_estimators(self, tensors: torch.Tensor) -> torch.Tensor:
+        """Averages a tensor across the estimator dimension (dim=0)."""
+        return tensors.mean(dim=0)
+
+    def _apply_softmax(self, logits: torch.Tensor) -> torch.Tensor:
+        """Applies the softmax function to the last dimension."""
+        return torch.nn.functional.softmax(logits, dim=-1)
+
+    def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
+        """Applies class balancing to a probability tensor."""
+        class_prob_in_train = self.class_counts_ / self.class_counts_.sum()
+        balanced_probas = probas / torch.Tensor(class_prob_in_train).to(self.device_)
+        return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
+
     def forward(  # noqa: C901, PLR0912
         self,
         X: list[torch.Tensor] | torch.Tensor,
         *,
         use_inference_mode: bool = False,
+        return_logits: bool = False,
     ) -> torch.Tensor:
-        """Forward pass returning predicted probabilities
+        """Forward pass returning predicted probabilities or logits
         for TabPFNClassifier Inference Engine. Used in
         Fine-Tuning and prediction. Called directly
         in FineTuning training loop or by predict() function
@@ -713,9 +773,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             use_inference_mode: Flag for inference mode., default at False since
             it is called within predict. During FineTuning forward() is called
             directly by user, so default should be False here.
+            return_logits: If True, returns raw logits. Otherwise, probabilities.
 
         Returns:
-            The predicted probabilities of the classes.
+            The predicted probabilities or logits of the classes as a torch.Tensor.
+            - If `use_inference_mode` is True: Shape (N_samples, N_classes)
+            - If `use_inference_mode` is False (e.g., for training/fine-tuning):
+              Shape (Batch_size, N_classes, N_samples), suitable for NLLLoss.
         """
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
@@ -758,12 +822,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         ):
             original_ndim = output.ndim
 
+            # This block correctly handles both single configs and lists of configs
             if original_ndim == 2:
                 # Shape is [Nsamples, NClasses] -> [Nsamples, 1,  NClasses]
                 processed_output = output.unsqueeze(1)
                 config_list = [config]
             elif original_ndim == 3:
-                # Shape is [Nsamples, batch_size, NClasses] noqa ERA001
+                # Shape is [Nsamples, batch_size, NClasses]
                 processed_output = output
                 config_list = config
             else:
@@ -771,17 +836,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     f"Output tensor must be 2d or 3d, got {original_ndim}d"
                 )
 
-            num_target_classes = processed_output.shape[-1]
-
-            if self.softmax_temperature != 1:
-                processed_output = (
-                    processed_output[:, :, :num_target_classes].float()
-                    / self.softmax_temperature
-                )
-
-            if config_list is not None:
-                output_batch = []
-                for i, batch_config in enumerate(config_list):
+            # Process the config_list (which is now guaranteed to be a list)
+            output_batch = []
+            for i, batch_config in enumerate(config_list):
+                assert isinstance(batch_config, ClassifierEnsembleConfig)
+                # If class_permutation is None - class shifting is disabled
+                # So we slice to self.n_classes_ to ensure the output tensor matches
+                # the expected number of classes
+                if batch_config.class_permutation is None:
+                    output_batch.append(processed_output[:, i, : self.n_classes_])
+                else:
                     # make sure the processed_output num_classes are the same.
                     if len(batch_config.class_permutation) != self.n_classes_:
                         use_perm = np.arange(self.n_classes_)
@@ -790,28 +854,49 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                         )
                     else:
                         use_perm = batch_config.class_permutation
+
                     output_batch.append(processed_output[:, i, use_perm])
 
-                output_all = torch.stack(output_batch, dim=1)
+            outputs.append(torch.stack(output_batch, dim=1))
 
-            outputs.append(output_all)
+        # --- Post-processing Pipeline ---
+        # 'outputs' contains the raw, unscaled logits from each estimator.
+        stacked_outputs = torch.stack(outputs)
 
-        if self.average_before_softmax:
-            output = torch.stack(outputs).mean(dim=0)
-            output = torch.nn.functional.softmax(output, dim=-1)
+        # --- Build the processing pipeline by composing the steps in order ---
+        # The first step is always to apply the temperature scaling.
+        pipeline = [self._apply_temperature]
+
+        if return_logits:
+            # For logits, we just average the temperature-scaled logits.
+            pipeline.append(self._average_across_estimators)
         else:
-            outputs = [torch.nn.functional.softmax(o, dim=-1) for o in outputs]
-            output = torch.stack(outputs).mean(dim=0)
+            # For probabilities, the order of averaging and softmax is crucial.
+            if self.average_before_softmax:
+                pipeline.extend([self._average_across_estimators, self._apply_softmax])
+            else:  # Average after softmax
+                pipeline.extend([self._apply_softmax, self._average_across_estimators])
 
-        if self.balance_probabilities:
-            class_prob_in_train = self.class_counts_ / self.class_counts_.sum()
-            output = output / torch.Tensor(class_prob_in_train).to(self.device_)
-            output = output / output.sum(dim=-1, keepdim=True)
+            # Balancing is the final optional step for probabilities.
+            if self.balance_probabilities:
+                pipeline.append(self._apply_balancing)
 
-        if use_inference_mode:
-            output = output.squeeze(1)  # [N, B, C] -> [N, C]
-        else:
-            output = output.transpose(0, 1).transpose(1, 2)  # for NLLLoss [B, C, N]
+        # --- Execute the pipeline ---
+        # Start with the initial raw logits
+        output = stacked_outputs
+        # Sequentially apply each function in the pipeline
+        for step_function in pipeline:
+            output = step_function(output)
+
+        # --- Final output shaping ---
+        if output.ndim > 2 and use_inference_mode:
+            output = output.squeeze(1)
+
+        if not use_inference_mode:
+            # This case is primarily for fine-tuning where NLLLoss expects [B, C, N]
+            if output.ndim == 2:  # was likely [N, C]
+                output = output.unsqueeze(0)  # [1, N, C]
+            output = output.transpose(0, 1).transpose(1, 2)
 
         return output
 
@@ -835,7 +920,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             np.ndarray
                 The computed embeddings for each fitted estimator.
         """
-        return _get_embeddings(self, X, data_source)
+        return get_embeddings(self, X, data_source)
 
     def save_fit_state(self, path: Path | str) -> None:
         """Save a fitted classifier, light wrapper around save_fitted_tabpfn_model."""

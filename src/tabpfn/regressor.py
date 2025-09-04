@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import typing
+import warnings
 from collections.abc import Callable, Generator, Sequence
 from functools import partial
 from pathlib import Path
@@ -35,19 +36,16 @@ from sklearn.base import (
     check_is_fitted,
 )
 
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
-    _initialize_model_variables_helper,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
     get_preprocessed_datasets_helper,
+    initialize_model_variables_helper,
 )
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import (
-    load_fitted_tabpfn_model,
-    save_fitted_tabpfn_model,
-)
+from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
@@ -57,13 +55,13 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.utils import (
-    _fix_dtypes,
-    _get_embeddings,
-    _get_ordinal_encoder,
-    _process_text_na_dataframe,
-    _transform_borders_one,
+    fix_dtypes,
+    get_embeddings,
+    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
+    process_text_na_dataframe,
+    transform_borders_one,
     translate_probs_across_borders,
     validate_X_predict,
     validate_Xy_fit,
@@ -75,10 +73,10 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
+    from tabpfn.architectures.interface import ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
-    from tabpfn.model.config import ModelConfig
 
     try:
         from sklearn.base import Tags
@@ -140,8 +138,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         0.9,
     ]
 
-    config_: ModelConfig
-    """The configuration of the loaded model to be used for inference."""
+    config_: ArchitectureConfig
+    """The configuration of the loaded model to be used for inference.
+
+    The concrete type of this config is defined by the arhitecture in use and should be
+    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    """
 
     interface_config_: ModelInterfaceConfig
     """Additional configuration of the interface for expert users."""
@@ -168,11 +170,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_outputs_: Literal[1]  # We only support single output
     """The number of outputs the model supports. Only 1 for now"""
 
-    bardist_: FullSupportBarDistribution
-    """The bar distribution of the target variable, used by the model."""
+    znorm_space_bardist_: FullSupportBarDistribution
+    """The bar distribution of the target variable, used by the model.
+    This is the bar distribution in the normalized target space.
+    """
 
-    normalized_bardist_: FullSupportBarDistribution
-    """The normalized bar distribution used for computing the predictions."""
+    raw_space_bardist_: FullSupportBarDistribution
+    """The bar distribution in the raw target space, used for computing the
+    predictions."""
 
     use_autocast_: bool
     """Whether torch's autocast should be used."""
@@ -261,8 +266,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If `"auto"`, the device is
-                `"cuda"` if available, otherwise `"cpu"`.
+                The device to use for inference with TabPFN. If set to "auto", the
+                device is selected based on availability in the following order of
+                priority: "cuda", "mps", and then "cpu". You can also set the device
+                manually to one of these options.
 
                 See PyTorch's documentation on devices for more information about
                 supported devices.
@@ -425,6 +432,52 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
+    @property
+    def norm_bardist_(self) -> FullSupportBarDistribution:
+        """WARNING: DEPRECATED. Please use `raw_space_bardist_` instead.
+        This attribute will be removed in a future version.
+        """
+        warnings.warn(
+            "`norm_bardist_` is deprecated and will be removed in a future version. "
+            "Please use `raw_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.raw_space_bardist_
+
+    @norm_bardist_.setter
+    def norm_bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`norm_bardist_` is deprecated and will be removed in a future version. "
+            "Please use `raw_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.raw_space_bardist_ = value
+
+    @property
+    def bardist_(self) -> FullSupportBarDistribution:
+        """WARNING: DEPRECATED. Please use `znorm_space_bardist_` instead.
+        This attribute will be removed in a future version.
+        """
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.znorm_space_bardist_
+
+    @bardist_.setter
+    def bardist_(self, value: FullSupportBarDistribution) -> None:
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.znorm_space_bardist_ = value
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -473,7 +526,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Initializes the model, returning byte_size and RNG object."""
-        return _initialize_model_variables_helper(self, "regressor")
+        return initialize_model_variables_helper(self, "regressor")
 
     def _initialize_dataset_preprocessing(
         self, X: XType, y: YType, rng: np.random.Generator
@@ -519,10 +572,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Will convert inferred categorical indices to category dtype,
         # to be picked up by the ord_encoder, as well
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-        X = _fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+        X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
         # Ensure categories are ordinally encoded
-        ord_encoder = _get_ordinal_encoder()
-        X = _process_text_na_dataframe(
+        ord_encoder = get_ordinal_encoder()
+        X = process_text_na_dataframe(
             X,
             ord_encoder=ord_encoder,
             fit_encoder=True,  # type: ignore
@@ -563,11 +616,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             random_state=rng,
         )
 
-        self.bardist_ = self.bardist_.to(self.device_)
+        self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.device_)
 
         assert len(ensemble_configs) == self.n_estimators
 
-        return ensemble_configs, X, y, self.bardist_
+        return ensemble_configs, X, y, self.znorm_space_bardist_
 
     def fit_from_preprocessed(
         self,
@@ -654,7 +707,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if not hasattr(self, "model_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y, self.bardist_ = (
+            ensemble_configs, X, y, self.znorm_space_bardist_ = (
                 self._initialize_dataset_preprocessing(X, y, rng)
             )
         else:  # already fitted and prompt_tuning mode: no cat. features
@@ -669,7 +722,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.constant_value_ = y[0] if self.is_constant_target_ else None
 
         if self.is_constant_target_:
-            self.bardist_ = FullSupportBarDistribution(
+            self.znorm_space_bardist_ = FullSupportBarDistribution(
                 borders=torch.tensor(
                     [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
                 )
@@ -681,8 +734,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
-        self.normalized_bardist_ = FullSupportBarDistribution(
-            self.bardist_.borders * self.y_train_std_ + self.y_train_mean_,
+        self.raw_space_bardist_ = FullSupportBarDistribution(
+            self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
 
         # Create the inference engine
@@ -709,10 +762,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Handles preprocessing and calls the forward pass to get final predictions."""
         # 1. Preprocess the input data
         X_processed = validate_X_predict(X, self)
-        X_processed = _fix_dtypes(
+        X_processed = fix_dtypes(
             X_processed, cat_indices=self.inferred_categorical_indices_
         )
-        X_processed = _process_text_na_dataframe(
+        X_processed = process_text_na_dataframe(
             X_processed, ord_encoder=self.preprocessor_
         )
 
@@ -819,7 +872,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logit_to_output = partial(
             _logits_to_output,
             logits=logits,
-            criterion=self.normalized_bardist_,
+            criterion=self.raw_space_bardist_,
             quantiles=quantiles,
         )
         if output_type in ["full", "main"]:
@@ -841,7 +894,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             if output_type == "full":
                 return FullOutputDict(
                     **main_outputs,
-                    criterion=self.normalized_bardist_,
+                    criterion=self.raw_space_bardist_,
                     logits=logits,
                 )
             return main_outputs
@@ -892,7 +945,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 logit_cancel_mask,
                 descending_borders,
                 borders_t,
-            ) = _transform_borders_one(
+            ) = transform_borders_one(
                 std_borders,
                 target_transform=config.target_transform,
                 repair_nan_borders_after_transform=(
@@ -1054,7 +1107,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type == "full":
             return FullOutputDict(
                 **main_outputs,
-                criterion=self.bardist_,
+                criterion=self.znorm_space_bardist_,
                 logits=torch.zeros((n_samples, 1)),
             )
         return main_outputs
@@ -1079,7 +1132,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             np.ndarray
                 The computed embeddings for each fitted estimator.
         """
-        return _get_embeddings(self, X, data_source)
+        return get_embeddings(self, X, data_source)
 
     def save_fit_state(self, path: Path | str) -> None:
         """Save a fitted regressor, light wrapper around save_fitted_tabpfn_model."""

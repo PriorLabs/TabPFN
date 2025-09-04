@@ -4,13 +4,13 @@
 
 from __future__ import annotations
 
-import os
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
 
 import torch
 
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.config import ModelInterfaceConfig
 
 # --- TabPFN imports ---
@@ -27,14 +27,14 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.model.bar_distribution import FullSupportBarDistribution
-from tabpfn.model.loading import load_model_criterion_config
+from tabpfn.model_loading import load_model_criterion_config
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
     ClassifierDatasetConfig,
     DatasetCollectionWithPreprocessing,
     RegressorDatasetConfig,
 )
+from tabpfn.settings import settings
 from tabpfn.utils import (
     infer_device_and_type,
     infer_fp16_inference_mode,
@@ -47,15 +47,16 @@ if TYPE_CHECKING:
     import numpy as np
     import pandas as pd
 
-    from tabpfn.model.bar_distribution import FullSupportBarDistribution
-    from tabpfn.model.config import ModelConfig
-    from tabpfn.model.transformer import PerFeatureTransformer
+    from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.classifier import TabPFNClassifier
+    from tabpfn.regressor import TabPFNRegressor
 
 
 class BaseModelSpecs:
     """Base class for model specifications."""
 
-    def __init__(self, model: PerFeatureTransformer, config: ModelConfig):
+    def __init__(self, model: Architecture, config: ArchitectureConfig):
         self.model = model
         self.config = config
 
@@ -71,8 +72,8 @@ class RegressorModelSpecs(BaseModelSpecs):
 
     def __init__(
         self,
-        model: PerFeatureTransformer,
-        config: ModelConfig,
+        model: Architecture,
+        config: ArchitectureConfig,
         norm_criterion: FullSupportBarDistribution,
     ):
         super().__init__(model, config)
@@ -137,7 +138,7 @@ def initialize_tabpfn_model(
         if which == "classifier":
             # The classifier's bar distribution is not used;
             # pass check_bar_distribution_criterion=False
-            model, _, config_ = load_model_criterion_config(
+            model, _, config = load_model_criterion_config(
                 model_path=model_path,
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
@@ -148,7 +149,7 @@ def initialize_tabpfn_model(
             norm_criterion = None
         else:
             # The regressor's bar distribution is required
-            model, bardist, config_ = load_model_criterion_config(
+            model, bardist, config = load_model_criterion_config(
                 model_path=model_path,
                 check_bar_distribution_criterion=True,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
@@ -215,7 +216,7 @@ def create_inference_engine(  # noqa: PLR0913
     *,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model: PerFeatureTransformer,
+    model: Architecture,
     ensemble_configs: Any,
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
@@ -331,9 +332,7 @@ def check_cpu_warning(
         X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
         allow_cpu_override: If True, allow CPU usage with large datasets.
     """
-    allow_cpu_override = allow_cpu_override or (
-        os.getenv("TABPFN_ALLOW_CPU_LARGE_DATASET", "0") == "1"
-    )
+    allow_cpu_override = allow_cpu_override or settings.tabpfn.allow_cpu_large_dataset
 
     if allow_cpu_override:
         return
@@ -431,7 +430,7 @@ def get_preprocessed_datasets_helper(
                 X_raw=X_mod,
                 y_raw=y_mod,
                 cat_ix=current_cat_ix,
-                bardist_=bardist_,
+                znorm_space_bardist_=bardist_,
             )
         else:
             raise ValueError(f"Invalid model_type: {model_type}")
@@ -441,21 +440,24 @@ def get_preprocessed_datasets_helper(
     return DatasetCollectionWithPreprocessing(split_fn, rng, dataset_config_collection)
 
 
-def _initialize_model_variables_helper(
-    calling_instance: Any,
+def initialize_model_variables_helper(
+    calling_instance: TabPFNRegressor | TabPFNClassifier,
     model_type: Literal["regressor", "classifier"],
 ) -> tuple[int, np.random.Generator]:
-    """Helper function to perform initialization
-    of the model, return determined byte_size
-    and RNG object.
+    """Set attributes on the given model to prepare it for inference.
+
+    This includes selecting the device and the inference precision.
+
+    Returns:
+        a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
+        dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-
     if model_type == "regressor":
         (
             calling_instance.model_,
             calling_instance.config_,
-            calling_instance.bardist_,
+            calling_instance.znorm_space_bardist_,
         ) = initialize_tabpfn_model(
             model_path=calling_instance.model_path,
             which="regressor",
@@ -486,6 +488,7 @@ def _initialize_model_variables_helper(
     _config = ModelInterfaceConfig.from_user_input(
         inference_config=calling_instance.inference_config,
     )  # shorter alias
+
     calling_instance.interface_config_ = _config
 
     outlier_removal_std = _config.OUTLIER_REMOVAL_STD
