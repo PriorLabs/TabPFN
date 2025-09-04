@@ -344,6 +344,19 @@ class MemoryUsageEstimator:
             free_memory = t - a  # free inside reserved
         elif device.type.startswith("mps"):
             free_memory = cls._get_mps_free_memory()
+        elif device.type.startswith("xla"):
+            # need to import torch_xla to access memory info, which is an optional
+            # dependency.
+            try:
+                import torch_xla.core.xla_model as xm
+            except ImportError as e:
+                raise ImportError(
+                    "torch_xla is required to access XLA device memory info. "
+                    "Please install it via `pip install tabpfn[tpu]`.",
+                ) from e
+
+            mem_info = xm.get_memory_info(xm.xla_device())
+            free_memory = mem_info["bytes_limit"] - mem_info["bytes_used"]
         else:
             raise ValueError(f"Unknown device {device}")
 
