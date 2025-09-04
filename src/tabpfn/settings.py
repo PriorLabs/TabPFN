@@ -57,7 +57,7 @@ class TestingSettings(BaseSettings):
         "Set to True to run tests on non-reference platforms.",
     )
 
-    ci: bool | str = Field(
+    ci: bool = Field(
         default=False,
         description="Indicates if running in continuous integration environment. "
         "Typically set by CI systems (e.g., GitHub Actions).",
