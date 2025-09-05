@@ -164,3 +164,4 @@ cython_debug/
 
 # Claude AI assistant
 CLAUDE.md
+uv.lock

@@ -6,7 +6,6 @@ from itertools import product
 from pathlib import Path
 
 import numpy as np
-import pandas
 import pytest
 import torch
 from sklearn.datasets import make_classification, make_regression
@@ -97,12 +96,15 @@ def test_save_load_happy_path(
     loaded_model = estimator_class.load_from_fit_state(path, device=loading_device)
 
     if loading_device == saving_device:
-        # In transformer.py::add_embeddings we generate random tensors inside a fixed-seed RNG context.
+        # In transformer.py::add_embeddings we generate random tensors inside a
+        # fixed-seed RNG context.
         # Note: PyTorch uses different random number generators on CPU and CUDA.
         # Even with the same seed, CPU and CUDA will produce different random values.
         # This means the feature embeddings differ slightly depending on the device,
-        # which in turn leads to small prediction differences between CPU and CUDA models.
-        # This behavior is expected and comes from the transformer architecture, not a bug.
+        # which in turn leads to small prediction differences between CPU and CUDA
+        # models.
+        # This behavior is expected and comes from the transformer architecture,
+        # not a bug.
 
         # We cannot align the two RNG streams, so the only options are either to skip
         # the tests that compare predictions of different saving & loading devices.
