@@ -665,7 +665,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         # and loading on cpu-device does not throw
         # "RuntimeError: Attempting to deserialize object on a CUDA device..."
         fitted_attrs = {
-            k: v.to("cpu") if isinstance(v, torch.nn.Module) else v
+            k: v.to("cpu") if isinstance(v, (torch.nn.Module, torch.Tensor)) else v
             for k, v in fitted_attrs.items()
         }
 

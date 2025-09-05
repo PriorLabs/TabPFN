@@ -65,18 +65,21 @@ def classification_data_with_categoricals():
     ],
 )
 def test_save_load_happy_path(
-    estimator_class, data_fixture, saving_device, loading_device, request, tmp_path
+    estimator_class,
+    data_fixture,
+    saving_device,
+    loading_device,
+    request,
+    tmp_path,
+    monkeypatch,
 ):
-    """Tests the standard save/load workflow, including categorical data."""
     X, y = request.getfixturevalue(data_fixture)
 
-    # fully mimic a cuda device or cpu device
+    # Simulate saving device
     if "cuda" in saving_device:
-        # Always use cuda
-        torch.cuda.is_available = lambda: True
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     elif "cpu" in saving_device:
-        # if device is "cpu" make sure to fully disable cuda
-        torch.cuda.is_available = lambda: False
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     else:
         raise NotImplementedError(f"saving device: {saving_device} not found")
 
@@ -87,11 +90,13 @@ def test_save_load_happy_path(
     # Save and then load the model using its class method
     model.save_fit_state(path)
 
+    # Simulate saving device
     if "cuda" in loading_device:
-        # Always use cuda for predictor loading
-        torch.cuda.is_available = lambda: True
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     elif "cpu" in loading_device:
-        torch.cuda.is_available = lambda: False
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    else:
+        raise NotImplementedError(f"saving device: {loading_device} not found")
 
     loaded_model = estimator_class.load_from_fit_state(path, device=loading_device)
 
@@ -112,8 +117,6 @@ def test_save_load_happy_path(
         # (or use a large tolerance, which is reasonable for different random embeddings
         # but as the regressor has a difference of +-1 unit, setting such a large
         # tolerance is meaningless)
-
-        np.testing.assert_array_almost_equal(model.predict(X), loaded_model.predict(X))
 
         # 1. Check that predictions are identical
         np.testing.assert_array_almost_equal(model.predict(X), loaded_model.predict(X))
