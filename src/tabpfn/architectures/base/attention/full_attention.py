@@ -429,7 +429,21 @@ class MultiHeadAttention(Attention):
             and k is None
             and v is None
         ):
-            qkv = torch.einsum("... s, j h d s -> ... j h d", x, self._w_qkv)
+            # A faster version of
+            # qkv = torch.einsum("... s, j h d s -> ... j h d", x, self._w_qkv)
+            batch_shape = x.shape[:-1]  # [..., seq_len]
+            j, nhead, d_k, input_size = self._w_qkv.shape
+
+            # [..., seq_len, input_size] -> [batch_flat * seq_len, input_size]
+            x_flat = x.reshape(-1, input_size)
+
+            # [j, nhead, d_k, input_size] -> [j * nhead * d_k, input_size]
+            w_flat = self._w_qkv.reshape(j * nhead * d_k, input_size)
+
+            qkv_flat = torch.mm(x_flat, w_flat.T)
+
+            # Reshape back to desired format: [..., seq_len, j, nhead, d_k]
+            qkv = qkv_flat.reshape(*batch_shape, j, nhead, d_k)
             q = None
         else:
             qkv = None
@@ -536,6 +550,9 @@ class MultiHeadAttention(Attention):
         kv: torch.Tensor,
         share_kv_across_n_heads: int,
     ) -> torch.Tensor:
+        if share_kv_across_n_heads == 1:
+            return kv
+
         nhead, d = kv.shape[-2:]
         kv = kv[..., None, :].expand(
             *([-1] * (kv.dim() - 1)),
