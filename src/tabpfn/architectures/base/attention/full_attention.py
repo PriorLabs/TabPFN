@@ -434,13 +434,10 @@ class MultiHeadAttention(Attention):
             batch_shape = x.shape[:-1]  # [..., seq_len]
             j, nhead, d_k, input_size = self._w_qkv.shape
 
-            # [..., seq_len, input_size] -> [batch_flat * seq_len, input_size]
-            x_flat = x.reshape(-1, input_size)
-
             # [j, nhead, d_k, input_size] -> [j * nhead * d_k, input_size]
-            w_flat = self._w_qkv.reshape(j * nhead * d_k, input_size)
+            w_flat = self._w_qkv.reshape(-1, input_size)
 
-            qkv_flat = torch.mm(x_flat, w_flat.T)
+            qkv_flat = torch.matmul(x, w_flat.T)
 
             # Reshape back to desired format: [..., seq_len, j, nhead, d_k]
             qkv = qkv_flat.reshape(*batch_shape, j, nhead, d_k)
