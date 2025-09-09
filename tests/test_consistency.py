@@ -65,7 +65,7 @@ import torch
 from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
-from tabpfn import TabPFNClassifier, TabPFNRegressor  # type: ignore
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.settings import settings
 
 # Test configuration parameters
@@ -409,11 +409,14 @@ class ConsistencyTest:
         return predictions
 
 
-class TestTinyClassifier(ConsistencyTest):
-    """Test prediction consistency for a tiny binary classifier."""
+class TestTinyClassifierFitPreprocessors(ConsistencyTest):
+    """Test prediction consistency for a tiny binary classifier.
+
+    Use `fit_mode=fit_preprocessors`.
+    """
 
     def get_dataset_name(self):
-        return "tiny_classifier"
+        return "tiny_classifier_fit_preprocessors"
 
     def get_test_data(self):
         return get_tiny_classification_data()
@@ -423,6 +426,7 @@ class TestTinyClassifier(ConsistencyTest):
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
             device="auto",
+            fit_mode="fit_preprocessors",
         )
 
     def get_prediction_func(self):
@@ -431,6 +435,62 @@ class TestTinyClassifier(ConsistencyTest):
     @platform_specific
     def test_consistency(self):
         """Test prediction consistency on a very small classification dataset."""
+        self.run_test()
+
+
+class TestTinyClassifierLowMemory(ConsistencyTest):
+    """Test prediction consistency for a tiny binary classifier.
+
+    Use `fit_mode=low_memory`.
+    """
+
+    def get_dataset_name(self):
+        return "tiny_classifier_low_memory"
+
+    def get_test_data(self):
+        return get_tiny_classification_data()
+
+    def get_model(self):
+        return TabPFNClassifier(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            fit_mode="low_memory",
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict_proba(X)
+
+    @platform_specific
+    def test_consistency(self):
+        self.run_test()
+
+
+class TestTinyClassifierFitWithCache(ConsistencyTest):
+    """Test prediction consistency for a tiny binary classifier.
+
+    Use `fit_mode=fit_with_cache`.
+    """
+
+    def get_dataset_name(self):
+        return "tiny_classifier_fit_with_cache"
+
+    def get_test_data(self):
+        return get_tiny_classification_data()
+
+    def get_model(self):
+        return TabPFNClassifier(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            fit_mode="fit_with_cache",
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict_proba(X)
+
+    @platform_specific
+    def test_consistency(self):
         self.run_test()
 
 
