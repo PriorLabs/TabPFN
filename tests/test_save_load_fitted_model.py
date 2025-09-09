@@ -101,7 +101,7 @@ def test_save_load_happy_path(
     loaded_model = estimator_class.load_from_fit_state(path, device=loading_device)
 
     if loading_device == saving_device:
-        # In transformer.py::add_embeddings we generate random tensors inside a
+        # In transformer.py::add_embeddings we generate() random tensors inside a
         # fixed-seed RNG context.
         # Note: PyTorch uses different random number generators on CPU and CUDA.
         # Even with the same seed, CPU and CUDA will produce different random values.
