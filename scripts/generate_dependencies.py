@@ -14,7 +14,9 @@ from pathlib import Path
 
 def parse_dependency_lines(content: str) -> list[str]:
     """Finds and cleans the dependency lines from the pyproject.toml content."""
-    deps_match = re.search(r"dependencies\s*=\s*\[(.*?)\]", content, re.DOTALL)
+    # Find the dependencies section and match until we find the closing bracket
+    # that's not part of a package extra specification
+    deps_match = re.search(r"dependencies\s*=\s*\[(.*?)\n\]", content, re.DOTALL)
     if not deps_match:
         return []
 
@@ -62,20 +64,24 @@ def main() -> None:
     if args.mode == "maximum":
         for dep in deps:
             # Check for maximum version constraint
-            max_version_match = re.search(r'([^>=<\s]+).*?<\s*([^,\s"\']+)', dep)
+            # Updated regex to handle package extras like [telemetry-interactive]
+            pattern = r'([^>=<\s]+(?:\[[^\]]+\])?).*?<\s*([^,\s"\']+)'
+            max_version_match = re.search(pattern, dep)
             if max_version_match:
                 package, max_ver = max_version_match.groups()
                 output_reqs.append(f"{package}<{max_ver}")
             else:
                 # If no max version, just use the package name
-                package_match = re.match(r"([^>=<\s]+)", dep)
+                # Updated regex to handle package extras like [telemetry-interactive]
+                package_match = re.match(r"([^>=<\s]+(?:\[[^\]]+\])?)", dep)
                 if package_match:
                     output_reqs.append(package_match.group(1))
 
     elif args.mode == "minimum":
         for dep in deps:
             # Check for minimum version constraint
-            match = re.match(r'([^>=<\s]+)\s*>=\s*([^,\s"\']+)', dep)
+            # Updated regex to handle package extras like [telemetry-interactive]
+            match = re.match(r'([^>=<\s]+(?:\[[^\]]+\])?)\s*>=\s*([^,\s"\']+)', dep)
             if match:
                 package, min_ver = match.groups()
                 output_reqs.append(f"{package}=={min_ver}")
