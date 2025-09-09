@@ -522,11 +522,14 @@ class TestTinyClassifierDifferentiableInput(ConsistencyTest):
         self.run_test()
 
 
-class TestTinyRegressor(ConsistencyTest):
-    """Test prediction consistency for a tiny regressor."""
+class TestTinyRegressorFitPreprocessors(ConsistencyTest):
+    """Test prediction consistency for a tiny regressor.
+
+    Use `fit_mode=fit_preprocessors`.
+    """
 
     def get_dataset_name(self):
-        return "tiny_regressor"
+        return "tiny_regressor_fit_preprocessors"
 
     def get_test_data(self):
         return get_tiny_regression_data()
@@ -536,6 +539,65 @@ class TestTinyRegressor(ConsistencyTest):
             n_estimators=DEFAULT_N_ESTIMATORS,
             random_state=FIXED_RANDOM_SEED,
             device="auto",
+            fit_mode="fit_preprocessors",
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on a very small regression dataset."""
+        self.run_test()
+
+
+class TestTinyRegressorLowMemory(ConsistencyTest):
+    """Test prediction consistency for a tiny regressor.
+
+    Use `fit_mode=low_memory`.
+    """
+
+    def get_dataset_name(self):
+        return "tiny_regressor_low_memory"
+
+    def get_test_data(self):
+        return get_tiny_regression_data()
+
+    def get_model(self):
+        return TabPFNRegressor(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            fit_mode="low_memory",
+        )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on a very small regression dataset."""
+        self.run_test()
+
+
+class TestTinyRegressorFitWithCache(ConsistencyTest):
+    """Test prediction consistency for a tiny regressor.
+
+    Use `fit_mode=fit_with_cache`.
+    """
+
+    def get_dataset_name(self):
+        return "tiny_regressor_fit_with_cache"
+
+    def get_test_data(self):
+        return get_tiny_regression_data()
+
+    def get_model(self):
+        return TabPFNRegressor(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            fit_mode="fit_with_cache",
         )
 
     def get_prediction_func(self):
