@@ -165,7 +165,7 @@ jobs:
         run: |
           uv pip install --system --no-deps .
           uv pip install --system -r requirements.txt
-          uv pip install --system pytest psutil
+          uv pip install --system pytest pytest-mock psutil
           # onnx isn’t available yet on 3.13
           if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
             uv pip install --system onnx
