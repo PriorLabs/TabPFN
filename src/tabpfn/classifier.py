@@ -187,7 +187,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 The temperature for the softmax function. This is used to control the
                 confidence of the model's predictions. Lower values make the model's
                 predictions more confident. This is only applied when predicting during
-                a post-processing step. Set `softmax_temperature=1.0` for no effect.
+                a post-processing step. Set `softmax_temperature=1.0` for no effect. Be
+                advised that `.predict()` does not currently sample, so this setting is
+                only relevant for `.predict_proba()` and `.predict_logits()`.
 
             balance_probabilities:
                 Whether to balance the probabilities based on the class distribution
