@@ -30,6 +30,8 @@ import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
+from tabpfn_common_utils.telemetry import track_model_call
+from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.base import (
     check_cpu_warning,
@@ -38,8 +40,6 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
 )
-from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
