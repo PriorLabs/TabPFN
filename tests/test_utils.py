@@ -169,12 +169,10 @@ def test__infer_devices__device_specified__selects_it(
 ) -> None:
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
-    mock_cuda.device_count.return_value = 3
+    mock_cuda.device_count.return_value = 2
     mocker.patch("torch.backends.mps").is_available.return_value = True
 
-    inferred = set(infer_devices(devices="auto"))
-    expected = {torch.device("cuda:0"), torch.device("cuda:1"), torch.device("cuda:2")}
-    assert inferred == expected
+    assert infer_devices(devices="cuda:0") == (torch.device("cuda:0"),)
 
 
 def test__infer_devices__multiple_devices_specified___selects_them(
