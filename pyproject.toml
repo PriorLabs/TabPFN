@@ -20,7 +20,7 @@ dependencies = [
   # Once Python 3.10 is the minimum version, this can be removed.
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
-  "tabpfn-common-utils[telemetry-interactive]>=0.1.7"
+  "tabpfn-common-utils[telemetry-interactive]>=0.1.8"
 ]
 requires-python = ">=3.9"
 authors = [
