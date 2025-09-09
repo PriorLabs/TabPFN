@@ -706,7 +706,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The predicted class labels as a NumPy array.
         """
-        proba = self._predict_proba(X)
+        with config_context(transform_output="default"):
+            proba = self._predict_proba(X)
+
         y_pred = np.argmax(proba, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
             return self.label_encoder_.inverse_transform(y_pred)
