@@ -340,7 +340,7 @@ We only collect high-level, non-identifying information such as:
 
 This data is processed in compliance with the **General Data Protection Regulation (GDPR)** principles of data minimization and purpose limitation.
 
-For more details, please see our [Privacy Policy](http://priorlabs.ai/privacy_policy/).
+For more details, please see our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
 
 ### How to opt out
 If you prefer not to send telemetry, you can disable it by setting an environment variable:
