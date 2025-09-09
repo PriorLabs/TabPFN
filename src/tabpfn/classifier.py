@@ -38,6 +38,8 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
 )
+from tabpfn_common_utils.telemetry import track_model_call
+from tabpfn_common_utils.telemetry.interactive import ping
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
@@ -388,6 +390,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
+        # Ping the usage service if telemetry enabled
+        ping()
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
@@ -557,6 +562,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert len(ensemble_configs) == self.n_estimators
         return ensemble_configs, X, y
 
+    @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -619,6 +625,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
+    @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
 
@@ -689,6 +696,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self.forward(X, use_inference_mode=True, return_logits=return_logits)
 
+    @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
@@ -706,6 +714,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return y_pred
 
     @config_context(transform_output="default")
+    @track_model_call(model_method="predict", param_names=["X"])
     def predict_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
@@ -722,6 +731,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")  # type: ignore
+    @track_model_call(model_method="predict", param_names=["X"])
     def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 

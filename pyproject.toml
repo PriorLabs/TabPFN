@@ -20,6 +20,7 @@ dependencies = [
   # Once Python 3.10 is the minimum version, this can be removed.
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
+  "tabpfn-common-utils[telemetry-interactive]>=0.1.7"
 ]
 requires-python = ">=3.9"
 authors = [
@@ -35,12 +36,15 @@ authors = [
   { name = "Eddie Bergman" },
   # Prior Labs Contributors
   { name = "Leo Grinsztajn" },
-  { name = "Felix Jabloski"},
-  { name = "Klemens Flöge"},
-  { name = "Oscar Key"},
-  { name = "Felix Birkel"},
-  { name = "Philipp Jund"},
-
+  { name = "Felix Jabloski" },
+  { name = "Klemens Flöge" },
+  { name = "Oscar Key" },
+  { name = "Felix Birkel" },
+  { name = "Philipp Jund" },
+  { name = "Felix Jabloski" },
+  { name = "Brendan Roof" },
+  { name = "Dominik Safaric" },
+  { name = "Benjamin Jaeger" }
 ]
 
 readme = "README.md"

@@ -35,6 +35,8 @@ from sklearn.base import (
     TransformerMixin,
     check_is_fitted,
 )
+from tabpfn_common_utils.telemetry import track_model_call
+from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -420,6 +422,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
+        # Ping the usage service if telemetry enabled
+        ping()
+
     @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
         """WARNING: DEPRECATED. Please use `raw_space_bardist_` instead.
@@ -618,6 +623,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
 
+    @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -681,6 +687,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
+    @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
 
@@ -791,6 +798,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
+    @track_model_call(model_method="predict", param_names=["X"])
     def predict(
         self,
         X: XType,
