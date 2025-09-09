@@ -64,7 +64,6 @@ def main() -> None:
     if args.mode == "maximum":
         for dep in deps:
             # Check for maximum version constraint
-            # Updated regex to handle package extras like [telemetry-interactive]
             pattern = r'([^>=<\s]+(?:\[[^\]]+\])?).*?<\s*([^,\s"\']+)'
             max_version_match = re.search(pattern, dep)
             if max_version_match:
@@ -72,7 +71,6 @@ def main() -> None:
                 output_reqs.append(f"{package}<{max_ver}")
             else:
                 # If no max version, just use the package name
-                # Updated regex to handle package extras like [telemetry-interactive]
                 package_match = re.match(r"([^>=<\s]+(?:\[[^\]]+\])?)", dep)
                 if package_match:
                     output_reqs.append(package_match.group(1))
@@ -80,7 +78,6 @@ def main() -> None:
     elif args.mode == "minimum":
         for dep in deps:
             # Check for minimum version constraint
-            # Updated regex to handle package extras like [telemetry-interactive]
             match = re.match(r'([^>=<\s]+(?:\[[^\]]+\])?)\s*>=\s*([^,\s"\']+)', dep)
             if match:
                 package, min_ver = match.groups()
