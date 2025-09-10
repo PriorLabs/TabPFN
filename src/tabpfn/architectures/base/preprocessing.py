@@ -186,7 +186,7 @@ def _yeojohnson(x, lmbda=None):
 
     if np.issubdtype(x.dtype, np.complexfloating):
         raise ValueError(
-            "Yeo-Johnson transformation is not defined for " "complex numbers."
+            "Yeo-Johnson transformation is not defined for complex numbers."
         )
 
     if np.issubdtype(x.dtype, np.integer):
