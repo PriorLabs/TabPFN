@@ -128,7 +128,7 @@ def _try_huggingface_downloads(
     """
     """Try to download models and config using the HuggingFace Hub API."""
     try:
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
     except ImportError as e:
         raise ImportError(
             "Please install huggingface_hub: pip install huggingface-hub",
@@ -674,7 +674,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
 
 
 def _extract_archive(path: Path, tmp: Path) -> None:
-    import zipfile
+    import zipfile  # noqa: PLC0415
 
     with zipfile.ZipFile(path, "r") as archive:
         for member in archive.namelist():
@@ -688,8 +688,8 @@ def load_fitted_tabpfn_model(
     path: Path | str, *, device: str | torch.device = "cpu"
 ) -> BaseEstimator:
     """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
-    from copy import deepcopy
-    from importlib import import_module
+    from copy import deepcopy  # noqa: PLC0415
+    from importlib import import_module  # noqa: PLC0415
 
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:

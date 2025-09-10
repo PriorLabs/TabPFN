@@ -94,7 +94,10 @@ def get_embeddings(
     selected_data = data_map[data_source]
 
     # Avoid circular imports
-    from tabpfn.preprocessing import ClassifierEnsembleConfig, RegressorEnsembleConfig
+    from tabpfn.preprocessing import (  # noqa: PLC0415
+        ClassifierEnsembleConfig,
+        RegressorEnsembleConfig,
+    )
 
     X = validate_X_predict(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
@@ -635,7 +638,7 @@ def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:
 # However we don't really need the full BarDistribution class and this was
 # put here to make that a bit more obvious in terms of what was going on.
 def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
-    ys = ys.repeat(logits.shape[:-1] + (1,))
+    ys = ys.repeat((*logits.shape[:-1], 1))
     n_bars = len(borders) - 1
     y_buckets = _map_to_bucket_ix(ys, borders).clamp(0, n_bars - 1).to(logits.device)
 
@@ -806,7 +809,7 @@ def get_total_memory_windows() -> float:
     Returns:
         The total memory of the system in GB.
     """
-    import platform
+    import platform  # noqa: PLC0415
 
     if platform.system() != "Windows":
         return 0.0  # Function should not be called on non-Windows platforms

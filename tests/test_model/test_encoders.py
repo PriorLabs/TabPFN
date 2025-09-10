@@ -118,13 +118,13 @@ def test_input_normalization():
     )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert torch.isclose(
-        out.var(dim=0), torch.tensor([1.0]), atol=1e-05
-    ).all(), "Variance should be 1.0 for all features and batch samples."
+    assert torch.isclose(out.var(dim=0), torch.tensor([1.0]), atol=1e-05).all(), (
+        "Variance should be 1.0 for all features and batch samples."
+    )
 
-    assert torch.isclose(
-        out.mean(dim=0), torch.tensor([0.0]), atol=1e-05
-    ).all(), "Mean should be 0.0 for all features and batch samples."
+    assert torch.isclose(out.mean(dim=0), torch.tensor([0.0]), atol=1e-05).all(), (
+        "Mean should be 0.0 for all features and batch samples."
+    )
 
     out = encoder({"main": x}, single_eval_pos=5)["main"]
     assert torch.isclose(out[0:5].var(dim=0), torch.tensor([1.0]), atol=1e-03).all(), (
@@ -141,12 +141,12 @@ def test_input_normalization():
     x[:, 1, :] = 100.0
     x[:, 2, 6:] = 100.0
     out = encoder({"main": x}, single_eval_pos=5)["main"]
-    assert (
-        out[:, 0, :] == out_ref[:, 0, :]
-    ).all(), "Changing one batch should not affeect the others."
-    assert (
-        out[:, 2, 0:5] == out_ref[:, 2, 0:5]
-    ).all(), "Changing unnormalized part of the batch should not affect the others."
+    assert (out[:, 0, :] == out_ref[:, 0, :]).all(), (
+        "Changing one batch should not affeect the others."
+    )
+    assert (out[:, 2, 0:5] == out_ref[:, 2, 0:5]).all(), (
+        "Changing unnormalized part of the batch should not affect the others."
+    )
 
 
 def test_remove_empty_feats():
@@ -164,21 +164,21 @@ def test_remove_empty_feats():
 
     x[0, 1, 1] = 0.0
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (
-        out[:, 1, -1] != 0
-    ).all(), "Should not change anything if no column is entirely empty."
+    assert (out[:, 1, -1] != 0).all(), (
+        "Should not change anything if no column is entirely empty."
+    )
 
     x[:, 1, 1] = 0.0
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (
-        out[:, 1, -1] == 0
-    ).all(), "Empty column should be removed and shifted to the end."
-    assert (
-        out[:, 1, 1] != 0
-    ).all(), "The place of the empty column should be filled with the next column."
-    assert (
-        out[:, 2, 1] != 0
-    ).all(), "Non empty columns should not be changed in their position."
+    assert (out[:, 1, -1] == 0).all(), (
+        "Empty column should be removed and shifted to the end."
+    )
+    assert (out[:, 1, 1] != 0).all(), (
+        "The place of the empty column should be filled with the next column."
+    )
+    assert (out[:, 2, 1] != 0).all(), (
+        "Non empty columns should not be changed in their position."
+    )
 
 
 def test_variable_num_features():
@@ -192,9 +192,9 @@ def test_variable_num_features():
     )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (
-        out.shape[-1] == fixed_out
-    ), "Features were not extended to the requested number of features."
+    assert out.shape[-1] == fixed_out, (
+        "Features were not extended to the requested number of features."
+    )
     assert torch.isclose(
         out[:, :, 0 : x.shape[-1]] / x, torch.tensor([math.sqrt(fixed_out / F)])
     ).all(), "Normalization is not correct."
@@ -213,9 +213,9 @@ def test_variable_num_features():
         VariableNumFeaturesEncoderStep(**kwargs), output_key=None
     )
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (
-        out[:, :, : x.shape[-1]] == x
-    ).all(), "Features should be unchanged when not normalizing."
+    assert (out[:, :, : x.shape[-1]] == x).all(), (
+        "Features should be unchanged when not normalizing."
+    )
 
 
 def test_nan_handling_encoder():
@@ -301,12 +301,12 @@ def test_combination():
     x[:, 1, :] = 100.0
     x[6:, 2, 2] = 100.0
     out = encoder({"main": x}, single_eval_pos=5)["main"]
-    assert (
-        out[:, 0, :] == out_ref[:, 0, :]
-    ).all(), "Changing one batch should not affeect the others."
-    assert (
-        out[0:5, 2, 2] == out_ref[0:5, 2, 2]
-    ).all(), "Changing unnormalized part of the batch should not affect the others."
+    assert (out[:, 0, :] == out_ref[:, 0, :]).all(), (
+        "Changing one batch should not affeect the others."
+    )
+    assert (out[0:5, 2, 2] == out_ref[0:5, 2, 2]).all(), (
+        "Changing unnormalized part of the batch should not affect the others."
+    )
 
     x = torch.randn([N, B, F])
     x[1, 0, 2] = np.inf
@@ -332,12 +332,12 @@ def test_combination():
         {"main": x_param, "domain_indicator": domain_indicator}, single_eval_pos=5
     )["main"].sum()
     s.backward()
-    assert (
-        x_param.grad is not None
-    ), "the encoder is not differentiable, i.e. the gradients are None."
-    assert not torch.isnan(
-        x_param.grad
-    ).any(), "the encoder is not differentiable, i.e. the gradients are nan."
+    assert x_param.grad is not None, (
+        "the encoder is not differentiable, i.e. the gradients are None."
+    )
+    assert not torch.isnan(x_param.grad).any(), (
+        "the encoder is not differentiable, i.e. the gradients are nan."
+    )
 
 
 def test_multiclass_encoder():

@@ -1,4 +1,3 @@
-# ruff: noqa
 """This file is taken from PyTorch and modified to work with TabPFN, also
 inspired from sklearn's show_versions function. This collects useful debug
 information that can be used to report issues.

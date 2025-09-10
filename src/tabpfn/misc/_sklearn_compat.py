@@ -1,4 +1,3 @@
-# ruff: noqa
 # mypy: ignore-errors
 # taken from https://github.com/sklearn-compat/sklearn-compat
 """Ease developer experience to support multiple versions of scikit-learn.
