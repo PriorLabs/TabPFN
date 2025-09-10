@@ -63,9 +63,9 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
         **kwargs: Any,
     ) -> torch.Tensor:
         assert isinstance(self, torch.nn.Module)
-        assert (
-            save_peak_mem_factor is None or allow_inplace
-        ), "The parameter save_peak_mem_factor only supported with 'allow_inplace' set."
+        assert save_peak_mem_factor is None or allow_inplace, (
+            "The parameter 'save_peak_mem_factor' requires 'allow_inplace' to be set."
+        )
         assert isinstance(x, torch.Tensor)
 
         tensor_inputs = list(tuple(self.parameters()) + tuple(args))
@@ -260,7 +260,7 @@ class MemoryUsageEstimator:
         try:
             # Fallback to using Metal API if torch.mps.recommended_max_memory is
             # not available as it is only available in PyTorch 2.5.0 and later.
-            from Metal import MTLCreateSystemDefaultDevice
+            from Metal import MTLCreateSystemDefaultDevice  # noqa: PLC0415
         except ImportError as err:
             raise ImportError(
                 "pyobjc-framework-Metal is required to access the Metal "
@@ -307,7 +307,7 @@ class MemoryUsageEstimator:
                     os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
                 )
             except AttributeError:
-                from tabpfn.utils import get_total_memory_windows
+                from tabpfn.utils import get_total_memory_windows  # noqa: PLC0415
 
                 if os.name == "nt":
                     free_memory = get_total_memory_windows()
@@ -398,10 +398,10 @@ class MemoryUsageEstimator:
     @classmethod
     def reset_peak_memory_if_required(
         cls,
+        *,
         save_peak_mem: bool | Literal["auto"] | float | int,
         model: torch.nn.Module,
         X: torch.Tensor,
-        *,
         cache_kv: bool,
         device: torch.device,
         dtype_byte_size: int,

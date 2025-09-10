@@ -65,13 +65,13 @@ def test_dependency_script_generation(
     # ASSERT
     # The assertion logic remains exactly the same.
     output_file = tmp_path / "requirements.txt"
-    assert (
-        output_file.is_file()
-    ), f"Script did not create requirements.txt in '{mode}' mode."
+    assert output_file.is_file(), (
+        f"Script did not create requirements.txt in '{mode}' mode."
+    )
 
     with output_file.open() as f:
         actual_requirements = sorted(line.strip() for line in f if line.strip())
 
-    assert (
-        actual_requirements == expected_requirements
-    ), f"Output in '{mode}' mode did not match expectations."
+    assert actual_requirements == expected_requirements, (
+        f"Output in '{mode}' mode did not match expectations."
+    )

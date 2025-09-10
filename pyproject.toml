@@ -236,6 +236,7 @@ exclude = [
   "TCH",
   "N803",
   "C901",  # Too complex
+  "PLC0415",
 ]
 "__init__.py" = ["I002"]
 "examples/*" = ["INP001", "I002", "E741", "D101", "D103", "T20", "D415", "ERA001", "E402", "E501", "BLE001"]
@@ -270,6 +271,8 @@ exclude = [
 "src/tabpfn/*.py" = [
   "D107",
 ]
+"src/tabpfn/misc/_sklearn_compat.py" = ["ALL"]
+"src/tabpfn/misc/debug_versions.py" = ["ALL"]
 
 
 [tool.ruff.lint.isort]
