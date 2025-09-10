@@ -4,19 +4,38 @@ from __future__ import annotations
 
 import queue
 from collections.abc import Generator, Iterable, Sequence
-from copy import deepcopy
 from multiprocessing.pool import ThreadPool
-from typing import Callable, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 import torch
 
-R = TypeVar("R")
+R_co = TypeVar("R_co", covariant=True)
+
+
+class Function(Protocol, Generic[R_co]):
+    """Interface that functions submitted to `parallel_execute()` should implement."""
+
+    def __call__(self, *, device: torch.device, is_parallel: bool) -> R_co:
+        """Execute the function.
+
+        Args:
+            device: PyTorch device that all comptuation should be performed on.
+            is_parallel: Indicates whether this function is being executed in parallel
+                with other functions. If True, then the function should take care to
+                copy any state shared with other functions before mutating it. For
+                example, any nn.Modules should be deep copied before moving them to
+                `device`. If False, then copying can be avoided to reduce overhead.
+
+        Returns:
+            Any desired value. Any Tensors in the returned value can be on any device.
+        """
+        ...
 
 
 def parallel_execute(
     devices: Sequence[torch.device],
-    functions: Iterable[Callable[[torch.device], R]],
-) -> Generator[R]:
+    functions: Iterable[Function[R_co]],
+) -> Generator[R_co]:
     """Evaluate the given functions in parallel across `devices`.
 
     The function evaluations are parallelised using Python threads, so this will only
@@ -28,11 +47,7 @@ def parallel_execute(
 
     Args:
         devices: The devices to use for evaluation.
-        functions: The functions to evaluate. Each function should accept a single
-            `device` argument, and perform all its computation on that device. Any
-            Tensors in the return value may be on any device. If more than one device is
-            provided, then the functions will be deepcopy'd before execution. Otherwise,
-            the provided instance will be executed directly.
+        functions: The functions to evaluate following the `Function` protocol.
 
     Returns:
         A generator consisting of the return values of the functions, in the same order
@@ -40,36 +55,28 @@ def parallel_execute(
     """
     if len(devices) == 1:
         # If we only have one device then just use the current thread to avoid overhead.
-        yield from _evaluate_in_current_thread(devices[0], functions)
+        yield from _execute_in_current_thread(devices[0], functions)
     else:
-        yield from _evaluate_with_multithreading(devices, functions)
-        # yield from _evaluate_with_multiprocessing(devices, functions)
+        yield from _execute_with_multithreading(devices, functions)
 
 
-def _evaluate_in_current_thread(
-    device: torch.device, functions: Iterable[Callable[[torch.device], R]]
-) -> Generator[R]:
+def _execute_in_current_thread(
+    device: torch.device, functions: Iterable[Function[R_co]]
+) -> Generator[R_co]:
     for function in functions:
-        yield function(device)
+        yield function(device=device, is_parallel=False)
 
 
-def _evaluate_with_multithreading(
-    devices: Sequence[torch.device],
-    functions: Iterable[Callable[[torch.device], R]],
-) -> Generator[R]:
+def _execute_with_multithreading(
+    devices: Sequence[torch.device], functions: Iterable[Function[R_co]]
+) -> Generator[R_co]:
     free_devices: queue.Queue[int] = queue.Queue(maxsize=len(devices))
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)
 
     with ThreadPool(processes=len(devices)) as pool:
         async_results = [
-            pool.apply_async(
-                # We deepcopy the input function to avoid threads mutating each others
-                # state. For example, if the function uses an nn.Module this allows
-                # different threads to move the module to different devices.
-                _execute_function_in_thread,
-                (devices, free_devices, deepcopy(func)),
-            )
+            pool.apply_async(_execute_function_in_thread, (devices, free_devices, func))
             for func in functions
         ]
         for async_result in async_results:
@@ -79,8 +86,8 @@ def _evaluate_with_multithreading(
 def _execute_function_in_thread(
     all_devices: Sequence[torch.device],
     free_devices: queue.Queue[int],
-    function: Callable[[torch.device], R],
-) -> R:
+    function: Function[R_co],
+) -> R_co:
     device_index = free_devices.get(block=True)
     try:
         device = all_devices[device_index]
@@ -91,9 +98,9 @@ def _execute_function_in_thread(
                 torch.cuda.stream(torch.cuda.Stream(device)),
                 torch.cuda.device(device),
             ):
-                return function(device)
-        # Theoretically it is possible to parallelise over other classes of device, but
-        # mainly this is useful for unit testing with multiple cpu devices.
-        return function(device)
+                return function(device=device, is_parallel=True)
+        # Theoretically it is possible to parallelise over classes of device other than
+        # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
+        return function(device=device, is_parallel=True)
     finally:
         free_devices.put(device_index)

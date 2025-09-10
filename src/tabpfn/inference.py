@@ -216,10 +216,6 @@ class InferenceEngineOnDemand(InferenceEngine):
         model_forward_functions = (
             partial(
                 self._call_model,
-                # We explicitly pass the model here so that it's copied by
-                # parallel_evaluate(). This avoids different threads moving the same
-                # model to different devices.
-                model=self.model,
                 X_train=X_train,
                 X_test=preprocessor.transform(X).X,
                 y_train=y_train,
@@ -238,9 +234,9 @@ class InferenceEngineOnDemand(InferenceEngine):
 
     def _call_model(
         self,
-        device: torch.device,
         *,
-        model: Architecture,
+        device: torch.device,
+        is_parallel: bool,
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
@@ -248,7 +244,16 @@ class InferenceEngineOnDemand(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Execute a model forward pass on the provided device.
+
+        Note that several instances of this function may be executed in parallel in
+        different threads, one for each device in the system.
+        """
+        # If several estimators are being run in parallel, then each thread needs its
+        # own copy of the model so it can move it to its device.
+        model = deepcopy(self.model) if is_parallel else self.model
         model.to(device)
+
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
@@ -256,7 +261,7 @@ class InferenceEngineOnDemand(InferenceEngine):
 
         MemoryUsageEstimator.reset_peak_memory_if_required(
             save_peak_mem=self.save_peak_mem,
-            model=self.model,
+            model=model,
             X=X_full,
             cache_kv=False,
             dtype_byte_size=self.dtype_byte_size,
@@ -264,11 +269,8 @@ class InferenceEngineOnDemand(InferenceEngine):
             safety_factor=1.2,
         )
 
-        with (
-            get_autocast_context(device, enabled=autocast),
-            torch.inference_mode(),
-        ):
-            return self.model(
+        with get_autocast_context(device, enabled=autocast), torch.inference_mode():
+            return model(
                 X_full,
                 y_train,
                 only_return_standard_out=only_return_standard_out,
@@ -489,10 +491,6 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         model_forward_functions = (
             partial(
                 self._call_model,
-                # We explicitly pass the model here so that it's copied by
-                # parallel_evaluate(). This avoids different threads moving the same
-                # model to different devices.
-                model=self.model,
                 X_train=X_train,
                 X_test=X_test,
                 y_train=y_train,
@@ -514,9 +512,9 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
 
     def _call_model(
         self,
-        device: torch.device,
         *,
-        model: Architecture,
+        device: torch.device,
+        is_parallel: bool,
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
@@ -524,7 +522,16 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Execute a model forward pass on the provided device.
+
+        Note that several instances of this function may be executed in parallel in
+        different threads, one for each device in the system.
+        """
+        # If several estimators are being run in parallel, then each thread needs its
+        # own copy of the model so it can move it to its device.
+        model = deepcopy(self.model) if is_parallel else self.model
         model.to(device)
+
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
