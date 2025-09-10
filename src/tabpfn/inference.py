@@ -4,12 +4,10 @@
 
 from __future__ import annotations
 
-import contextlib
-import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -20,7 +18,7 @@ import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import MemoryUsageEstimator
-from tabpfn.parallel_evaluate import parallel_evaluate
+from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
@@ -211,14 +209,16 @@ class InferenceEngineOnDemand(InferenceEngine):
             n_workers=self.n_workers,
             parallel_mode="as-ready",
         )
-        configs, others = itertools.tee(itr, 2)
 
         if self.force_inference_dtype is not None:
-            self.model = self.model.type(self.force_inference_dtype)
+            self.model.type(self.force_inference_dtype)
 
-        estimator_functions = (
+        model_forward_functions = (
             partial(
-                _evaluate_estimator,
+                self._call_model,
+                # We explicitly pass the model here so that it's copied by
+                # parallel_evaluate(). This avoids different threads moving the same
+                # model to different devices.
                 model=self.model,
                 X_train=X_train,
                 X_test=preprocessor.transform(X).X,
@@ -226,19 +226,54 @@ class InferenceEngineOnDemand(InferenceEngine):
                 cat_ix=cat_ix,
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
-                force_inference_dtype=self.force_inference_dtype,
-                inference_mode=True,
-                save_peak_mem=self.save_peak_mem,
-                dtype_byte_size=self.dtype_byte_size,
             )
-            for _, preprocessor, X_train, y_train, cat_ix in others
+            for _, preprocessor, X_train, y_train, cat_ix in itr
+        )
+        outputs = parallel_execute(devices, model_forward_functions)
+
+        for config, output in zip(self.ensemble_configs, outputs):
+            yield _move_and_squeeze_output(output, devices[0]), config
+
+        self.model.cpu()
+
+    def _call_model(
+        self,
+        device: torch.device,
+        *,
+        model: Architecture,
+        X_train: torch.Tensor | np.ndarray,
+        X_test: torch.Tensor | np.ndarray,
+        y_train: torch.Tensor | np.ndarray,
+        cat_ix: list[int],
+        autocast: bool,
+        only_return_standard_out: bool,
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        model.to(device)
+        X_full, y_train = _prepare_model_inputs(
+            device, self.force_inference_dtype, X_train, X_test, y_train
+        )
+        batched_cat_ix = [cat_ix]
+
+        MemoryUsageEstimator.reset_peak_memory_if_required(
+            save_peak_mem=self.save_peak_mem,
+            model=self.model,
+            X=X_full,
+            cache_kv=False,
+            dtype_byte_size=self.dtype_byte_size,
+            device=device,
+            safety_factor=1.2,
         )
 
-        outputs = parallel_evaluate(devices, estimator_functions)
-        for output, (config, _, _, _, _) in zip(outputs, configs):
-            yield _move_output(output, devices[0]), config
-
-        self.model = self.model.cpu()
+        with (
+            get_autocast_context(device, enabled=autocast),
+            torch.inference_mode(),
+        ):
+            return self.model(
+                X_full,
+                y_train,
+                only_return_standard_out=only_return_standard_out,
+                categorical_inds=batched_cat_ix,
+            )
 
 
 @dataclass
@@ -445,35 +480,77 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             self.model.type(self.force_inference_dtype)
 
         if self.no_preprocessing:
-            X_tests = (X for _ in self.preprocessors)
+            X_tests = (X for _ in range(len(self.ensemble_configs)))
         else:
             X_tests = (
                 preprocessor.transform(X).X for preprocessor in self.preprocessors
             )
 
-        estimator_functions = (
+        model_forward_functions = (
             partial(
-                _evaluate_estimator,
+                self._call_model,
+                # We explicitly pass the model here so that it's copied by
+                # parallel_evaluate(). This avoids different threads moving the same
+                # model to different devices.
                 model=self.model,
                 X_train=X_train,
                 X_test=X_test,
                 y_train=y_train,
                 cat_ix=cat_ix,
-                only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
-                force_inference_dtype=self.force_inference_dtype,
-                inference_mode=self.inference_mode,
-                save_peak_mem=self.save_peak_mem,
-                dtype_byte_size=self.dtype_byte_size,
+                only_return_standard_out=only_return_standard_out,
             )
             for X_train, X_test, y_train, cat_ix in zip(
                 self.X_trains, X_tests, self.y_trains, self.cat_ixs
             )
         )
+        outputs = parallel_execute(devices, model_forward_functions)
 
-        outputs = parallel_evaluate(devices, estimator_functions)
         for output, config in zip(outputs, self.ensemble_configs):
-            yield _move_output(output, devices[0]), config
+            yield _move_and_squeeze_output(output, devices[0]), config
+
+        if self.inference_mode:
+            self.model.cpu()
+
+    def _call_model(
+        self,
+        device: torch.device,
+        *,
+        model: Architecture,
+        X_train: torch.Tensor | np.ndarray,
+        X_test: torch.Tensor | np.ndarray,
+        y_train: torch.Tensor | np.ndarray,
+        cat_ix: list[int],
+        autocast: bool,
+        only_return_standard_out: bool,
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        model.to(device)
+        X_full, y_train = _prepare_model_inputs(
+            device, self.force_inference_dtype, X_train, X_test, y_train
+        )
+        batched_cat_ix = [cat_ix]
+
+        if self.inference_mode:
+            MemoryUsageEstimator.reset_peak_memory_if_required(
+                save_peak_mem=self.save_peak_mem,
+                model=model,
+                X=X_full,
+                cache_kv=False,
+                device=device,
+                dtype_byte_size=self.dtype_byte_size,
+                safety_factor=1.2,
+            )
+
+        with (
+            get_autocast_context(device, enabled=autocast),
+            torch.inference_mode(self.inference_mode),
+        ):
+            return model(
+                X_full,
+                y_train,
+                only_return_standard_out=only_return_standard_out,
+                categorical_inds=batched_cat_ix,
+            )
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
@@ -656,73 +733,22 @@ class InferenceEngineCacheKV(InferenceEngine):
             yield output, config
 
 
-def _evaluate_estimator(
+def _prepare_model_inputs(
     device: torch.device,
-    *,
-    model: Architecture,
+    force_inference_dtype: torch.dtype | None,
     X_train: torch.Tensor | np.ndarray,
     X_test: torch.Tensor | np.ndarray,
     y_train: torch.Tensor | np.ndarray,
-    cat_ix: list[int],
-    only_return_standard_out: bool,
-    autocast: bool,
-    force_inference_dtype: torch.dtype | None,
-    inference_mode: bool,
-    save_peak_mem: bool | Literal["auto"] | float | int,
-    dtype_byte_size: int,
-) -> dict | torch.Tensor:
-    """TODO.
-
-    Note that all the inputs to this function must be pickle-able for multiprocessing to
-    work. When/if we remove multiprocessing and stick with multithreading, we can
-    move this back into the inference engines and avoid being so verbose with the
-    arguments.
-    """
-    model.to(device)
-    if not isinstance(X_train, torch.Tensor):
-        X_train = torch.as_tensor(X_train, dtype=torch.float32)
-    X_train = X_train.to(device)
-    if not isinstance(X_test, torch.Tensor):
-        X_test = torch.as_tensor(X_test, dtype=torch.float32)
-    X_test = X_test.to(device)
+) -> tuple[torch.Tensor, torch.Tensor]:
+    dtype = force_inference_dtype if force_inference_dtype else torch.float32
+    X_train = torch.as_tensor(X_train, dtype=dtype, device=device)
+    X_test = torch.as_tensor(X_test, dtype=dtype, device=device)
     X_full = torch.cat([X_train, X_test], dim=0).unsqueeze(1)
-    if not isinstance(y_train, torch.Tensor):
-        y_train = torch.as_tensor(y_train, dtype=torch.float32)
-    y_train = y_train.to(device)
-
-    batched_cat_ix = [cat_ix]
-
-    # Handle type casting
-    with contextlib.suppress(Exception):  # Avoid overflow error
-        X_full = X_full.float()
-    if force_inference_dtype is not None:
-        X_full = X_full.type(force_inference_dtype)
-        y_train = y_train.type(force_inference_dtype)  # type: ignore
-
-    if inference_mode:
-        MemoryUsageEstimator.reset_peak_memory_if_required(
-            save_peak_mem=save_peak_mem,
-            model=model,
-            X=X_full,
-            cache_kv=False,
-            device=device,
-            dtype_byte_size=dtype_byte_size,
-            safety_factor=1.2,
-        )
-
-    with (
-        get_autocast_context(device, enabled=autocast),
-        torch.inference_mode(inference_mode),
-    ):
-        return model(
-            X_full,
-            y_train,
-            only_return_standard_out=only_return_standard_out,
-            categorical_inds=batched_cat_ix,
-        )
+    y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
+    return X_full, y_train
 
 
-def _move_output(
+def _move_and_squeeze_output(
     output: dict | torch.Tensor, device: torch.device
 ) -> dict[str, torch.Tensor] | torch.Tensor:
     if isinstance(output, dict):
