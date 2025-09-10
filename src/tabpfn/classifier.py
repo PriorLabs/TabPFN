@@ -706,8 +706,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The predicted class labels as a NumPy array.
         """
-        with config_context(transform_output="default"):
-            proba = self._predict_proba(X)
+        proba = self._predict_proba(X)
 
         y_pred = np.argmax(proba, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
@@ -732,7 +731,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         logits_tensor = self._raw_predict(X, return_logits=True)
         return logits_tensor.float().detach().cpu().numpy()
 
-    @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="predict", param_names=["X"])
     def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
@@ -748,6 +746,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         return self._predict_proba(X)
 
+    @config_context(transform_output="default")  # type: ignore
     def _predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
