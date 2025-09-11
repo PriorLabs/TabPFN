@@ -22,9 +22,9 @@ from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
-    from tabpfn.architectures.base.preprocessing import SequentialFeatureTransformer
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
+    from tabpfn.preprocessors import SequentialFeatureTransformer
 
 
 @dataclass

@@ -54,9 +54,9 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     PreprocessorConfig,
     RegressorEnsembleConfig,
-    ReshapeFeatureDistributionsStep,
     default_regressor_preprocessor_configs,
 )
+from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
 from tabpfn.utils import (
     fix_dtypes,
     get_embeddings,
@@ -583,11 +583,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.preprocessor_ = ord_encoder
 
-        possible_target_transforms = (
-            ReshapeFeatureDistributionsStep.get_all_preprocessors(
-                num_examples=y.shape[0],  # Use length of validated y
-                random_state=rng,  # Use the provided rng
-            )
+        possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
+            num_examples=y.shape[0],  # Use length of validated y
+            random_state=rng,  # Use the provided rng
         )
         target_preprocessors: list[TransformerMixin | Pipeline | None] = []
         for (
@@ -846,9 +844,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
         else:
-            assert all(
-                (0 <= q <= 1) and (isinstance(q, float)) for q in quantiles
-            ), "All quantiles must be between 0 and 1 and floats."
+            assert all((0 <= q <= 1) and (isinstance(q, float)) for q in quantiles), (
+                "All quantiles must be between 0 and 1 and floats."
+            )
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise ValueError(f"Invalid output type: {output_type}")
 

@@ -1,5 +1,5 @@
-"""DEPRECATED: Please import tabpfn.architectures.base.preprocessing instead."""
+"""DEPRECATED: Please import tabpfn.preprocessors instead."""
 
 from __future__ import annotations
 
-from tabpfn.architectures.base.preprocessing import *  # noqa: F403
+from tabpfn.preprocessors import *  # noqa: F403
