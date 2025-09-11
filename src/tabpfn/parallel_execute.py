@@ -12,14 +12,14 @@ import torch
 R_co = TypeVar("R_co", covariant=True)
 
 
-class Function(Protocol, Generic[R_co]):
+class ParallelFunction(Protocol, Generic[R_co]):
     """Interface that functions submitted to `parallel_execute()` should implement."""
 
     def __call__(self, *, device: torch.device, is_parallel: bool) -> R_co:
         """Execute the function.
 
         Args:
-            device: PyTorch device that all comptuation should be performed on.
+            device: PyTorch device that all computation should be performed on.
             is_parallel: Indicates whether this function is being executed in parallel
                 with other functions. If True, then the function should take care to
                 copy any state shared with other functions before mutating it. For
@@ -34,7 +34,7 @@ class Function(Protocol, Generic[R_co]):
 
 def parallel_execute(
     devices: Sequence[torch.device],
-    functions: Iterable[Function[R_co]],
+    functions: Iterable[ParallelFunction[R_co]],
 ) -> Generator[R_co]:
     """Evaluate the given functions in parallel across `devices`.
 
@@ -47,7 +47,7 @@ def parallel_execute(
 
     Args:
         devices: The devices to use for evaluation.
-        functions: The functions to evaluate following the `Function` protocol.
+        functions: The functions to evaluate following the `ParallelFunction` protocol.
 
     Returns:
         A generator consisting of the return values of the functions, in the same order
@@ -61,14 +61,15 @@ def parallel_execute(
 
 
 def _execute_in_current_thread(
-    device: torch.device, functions: Iterable[Function[R_co]]
+    device: torch.device, functions: Iterable[ParallelFunction[R_co]]
 ) -> Generator[R_co]:
     for function in functions:
         yield function(device=device, is_parallel=False)
 
 
 def _execute_with_multithreading(
-    devices: Sequence[torch.device], functions: Iterable[Function[R_co]]
+    devices: Sequence[torch.device],
+    functions: Iterable[ParallelFunction[R_co]],
 ) -> Generator[R_co]:
     free_devices: queue.Queue[int] = queue.Queue(maxsize=len(devices))
     for device_index, _ in enumerate(devices):
@@ -86,7 +87,7 @@ def _execute_with_multithreading(
 def _execute_function_in_thread(
     all_devices: Sequence[torch.device],
     free_devices: queue.Queue[int],
-    function: Function[R_co],
+    function: ParallelFunction[R_co],
 ) -> R_co:
     device_index = free_devices.get(block=True)
     try:
