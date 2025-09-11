@@ -18,7 +18,6 @@ from tabpfn.architectures.base import (
     layer,
     memory,
     mlp,
-    preprocessing,
     transformer,
 )
 
@@ -31,7 +30,6 @@ __all__ = [
     "loading",
     "memory",
     "mlp",
-    "preprocessing",
     "transformer",
 ]
 
