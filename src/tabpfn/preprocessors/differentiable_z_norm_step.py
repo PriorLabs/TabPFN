@@ -27,7 +27,7 @@ class DifferentiableZNormStep(FeaturePreprocessingTransformerStep):
         return categorical_features
 
     @override
-    def _transform(self, X: torch.Tensor, *, is_test=False):  # type: ignore
+    def _transform(self, X: torch.Tensor, *, is_test: bool = False) -> torch.Tensor:  # type: ignore
         assert X.shape[1] == self.means.shape[1]
         assert X.shape[1] == self.stds.shape[1]
         return (X - self.means) / self.stds

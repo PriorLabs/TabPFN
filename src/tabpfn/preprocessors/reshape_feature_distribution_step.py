@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+"""Reshape the feature distributions using different transformations."""
 
 from __future__ import annotations
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing_extensions import override
+
 import numpy as np
 from scipy import optimize
 from sklearn.preprocessing import PowerTransformer
@@ -10,11 +12,14 @@ from sklearn.preprocessing import PowerTransformer
 # this is taken from https://github.com/scipy/scipy/pull/18852
 # which fix overflow issues
 # we can directly import from scipy once we drop support for scipy < 1.12
-def _yeojohnson(x, lmbda=None):
+def _yeojohnson(
+    x: np.ndarray,
+    lmbda: float | None = None,
+) -> tuple[np.ndarray, float | None]:
     x = np.asarray(x)
     if x.size == 0:
         # changed from scipy from return x
-        return (x, None) if lmbda is None else x
+        return (x, None) if lmbda is None else x  # type: ignore
 
     if np.issubdtype(x.dtype, np.complexfloating):
         raise ValueError(
@@ -25,7 +30,7 @@ def _yeojohnson(x, lmbda=None):
         x = x.astype(np.float64, copy=False)
 
     if lmbda is not None:
-        return _yeojohnson_transform(x, lmbda)
+        return _yeojohnson_transform(x, lmbda)  # type: ignore
 
     # if lmbda=None, find the lmbda that maximizes the log-likelihood function.
     lmax = _yeojohnson_normmax(x)
@@ -34,7 +39,7 @@ def _yeojohnson(x, lmbda=None):
     return y, lmax
 
 
-def _yeojohnson_transform(x, lmbda):
+def _yeojohnson_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     """Returns `x` transformed by the Yeo-Johnson power transform with given
     parameter `lmbda`.
     """
@@ -58,13 +63,13 @@ def _yeojohnson_transform(x, lmbda):
     return out
 
 
-def _yeojohnson_llf(lmb, data):
+def _yeojohnson_llf(lmb: float, data: np.ndarray) -> np.ndarray:
     r"""The yeojohnson log-likelihood function."""
     data = np.asarray(data)
     n_samples = data.shape[0]
 
     if n_samples == 0:
-        return np.nan
+        return np.nan  # type: ignore
 
     trans = _yeojohnson_transform(data, lmb)
     trans_var = trans.var(axis=0)
@@ -81,14 +86,14 @@ def _yeojohnson_llf(lmb, data):
     return loglike
 
 
-def _yeojohnson_normmax(x, brack=None):
+def _yeojohnson_normmax(x: np.ndarray, brack: float | None = None) -> float:
     """Compute optimal Yeo-Johnson transform parameter.
     Compute optimal Yeo-Johnson transform parameter for input data, using
     maximum likelihood estimation.
 
     """
 
-    def _neg_llf(lmbda, data):
+    def _neg_llf(lmbda: float, data: np.ndarray) -> np.ndarray:
         llf = _yeojohnson_llf(lmbda, data)
         # reject likelihoods that are inf which are likely due to small
         # variance in the transformed space
@@ -101,7 +106,7 @@ def _yeojohnson_normmax(x, brack=None):
         if np.all(x == 0):
             return 1.0
         if brack is not None:
-            return optimize.brent(_neg_llf, brack=brack, args=(x,))
+            return optimize.brent(_neg_llf, brack=brack, args=(x,))  # type: ignore
         x = np.asarray(x)
         dtype = x.dtype if np.issubdtype(x.dtype, np.floating) else np.float64
         # Allow values up to 20 times the maximum observed value to be safely
@@ -125,13 +130,13 @@ def _yeojohnson_normmax(x, brack=None):
             lb, ub = max(2 - ub, lb), min(2 - lb, ub)
         # Match `optimize.brent`'s tolerance.
         tol_brent = 1.48e-08
-        return optimize.fminbound(_neg_llf, lb, ub, args=(x,), xtol=tol_brent)
+        return optimize.fminbound(_neg_llf, lb, ub, args=(x,), xtol=tol_brent)  # type: ignore
 
 
 # we created this inspired by the scipy change for transform
 # https://github.com/scipy/scipy/pull/18852
 # this is not in scipy even 1.12
-def _yeojohnson_inverse_transform(x, lmbda):
+def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     """Return inverse-transformed input x following Yeo-Johnson inverse
     transform with parameter lambda.
     """
@@ -173,17 +178,20 @@ class SafePowerTransformer(PowerTransformer):
     # requires scipy >= 1.9
     # this is the default in scikit-learn main for versions > 1.7
     # see https://github.com/scikit-learn/scikit-learn/pull/31227
-    def _yeo_johnson_optimize(self, x):
+    @override
+    def _yeo_johnson_optimize(self, x: np.ndarray) -> float:
         # the computation of lambda is influenced by NaNs so we need to
         # get rid of them
         x = x[~np.isnan(x)]
         _, lmbda = _yeojohnson(x, lmbda=None)
-        return lmbda
+        return lmbda  # type: ignore
 
-    def _yeo_johnson_transform(self, x, lmbda):
+    @override
+    def _yeo_johnson_transform(self, x: np.ndarray, lmbda: float) -> np.ndarray:
         return _yeojohnson_transform(x, lmbda)
 
-    def _yeo_johnson_inverse_transform(self, x, lmbda):
+    @override
+    def _yeo_johnson_inverse_transform(self, x: np.ndarray, lmbda: float) -> np.ndarray:
         return _yeojohnson_inverse_transform(x, lmbda)
 
 

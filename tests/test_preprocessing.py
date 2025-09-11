@@ -211,7 +211,7 @@ def test_reshape_step_append_original_logic(
 
 
 def _get_preprocessing_steps() -> list[
-    Callable[..., FeaturePreprocessingTransformerStep]
+    Callable[..., FeaturePreprocessingTransformerStep],
 ]:
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
