@@ -7,7 +7,7 @@ from typing_extensions import override
 import numpy as np
 import torch
 
-from tabpfn.preprocessors.helpers import (
+from tabpfn.preprocessors.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
 )
 

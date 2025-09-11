@@ -24,13 +24,13 @@ from sklearn.preprocessing import (
 from tabpfn.preprocessors.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )
-from tabpfn.preprocessors.helpers import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
-)
 from tabpfn.preprocessors.kdi_transformer import (
     KDITransformerWithNaN,
     get_all_kdi_transformers,
+)
+from tabpfn.preprocessors.preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    TransformResult,
 )
 from tabpfn.preprocessors.safe_power_transformer import SafePowerTransformer
 from tabpfn.utils import infer_random_state

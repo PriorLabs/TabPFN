@@ -9,7 +9,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessors.helpers import (
+from tabpfn.preprocessors.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
 )
 from tabpfn.utils import infer_random_state

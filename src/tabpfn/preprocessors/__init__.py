@@ -8,16 +8,16 @@ from tabpfn.preprocessors.differentiable_z_norm_step import DifferentiableZNormS
 from tabpfn.preprocessors.encode_categorical_features_step import (
     EncodeCategoricalFeaturesStep,
 )
-from tabpfn.preprocessors.helpers import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
-)
 from tabpfn.preprocessors.kdi_transformer import (
     KDITransformerWithNaN,
     get_all_kdi_transformers,
 )
 from tabpfn.preprocessors.nan_handling_polynomial_features_step import (
     NanHandlingPolynomialFeaturesStep,
+)
+from tabpfn.preprocessors.preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
 )
 from tabpfn.preprocessors.remove_constant_features_step import (
     RemoveConstantFeaturesStep,

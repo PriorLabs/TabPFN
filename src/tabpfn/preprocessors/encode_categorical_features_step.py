@@ -8,7 +8,7 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessors.helpers import (
+from tabpfn.preprocessors.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
     TransformResult,
 )
