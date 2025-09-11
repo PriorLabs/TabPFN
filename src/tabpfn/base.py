@@ -371,6 +371,8 @@ def get_preprocessed_datasets_helper(
     split_fn: Callable,
     max_data_size: int | None,
     model_type: Literal["regressor", "classifier"],
+    *,
+    equal_split_size: bool,
 ) -> DatasetCollectionWithPreprocessing:
     """Helper function to create a DatasetCollectionWithPreprocessing.
     Relies on methods from the calling_instance for specific initializations.
@@ -384,6 +386,11 @@ def get_preprocessed_datasets_helper(
         max_data_size: Maximum allowed number of samples within one dataset.
         If None, datasets are not splitted.
         model_type: The type of the model.
+        equal_split_size: If True, splits data into equally sized chunks under
+            max_data_size.
+            If False, splits into chunks of size `max_data_size`, with
+            the last chunk having the remainder samples but is dropped if its
+            size is less than 2.
     """
     if not isinstance(X_raw, list):
         X_raw = [X_raw]
@@ -399,7 +406,9 @@ def get_preprocessed_datasets_helper(
     X_split, y_split = [], []
     for X_item, y_item in zip(X_raw, y_raw):
         if max_data_size is not None:
-            Xparts, yparts = split_large_data(X_item, y_item, max_data_size)
+            Xparts, yparts = split_large_data(
+                X_item, y_item, max_data_size, equal_split_size=equal_split_size
+            )
         else:
             Xparts, yparts = [X_item], [y_item]
         X_split.extend(Xparts)

@@ -34,10 +34,13 @@ def test_split_large_data():
     max_chunk = 100
     large_x = np.arange(total_size * 2).reshape((total_size, 2))
     large_y = np.arange(total_size)
+    equal_split_size = True
 
     expected_num_chunks = ((total_size - 1) // max_chunk) + 1
 
-    x_chunks, y_chunks = split_large_data(large_x, large_y, max_chunk)
+    x_chunks, y_chunks = split_large_data(
+        large_x, large_y, max_chunk, equal_split_size=equal_split_size
+    )
 
     assert len(x_chunks) == expected_num_chunks, "Incorrect X chunk count"
     assert len(y_chunks) == expected_num_chunks, "Incorrect y chunk count"
@@ -60,19 +63,25 @@ def test_split_large_data():
     np.testing.assert_array_equal(reconstructed_y, large_y, "Reconstructed y differs")
 
     # Test edge case: empty input
-    x_empty, y_empty = split_large_data([], [], max_chunk)
+    x_empty, y_empty = split_large_data(
+        [], [], max_chunk, equal_split_size=equal_split_size
+    )
     assert x_empty == [], "X should be empty list for empty input"
     assert y_empty == [], "y should be empty list for empty input"
 
     # Test edge case: max_data_size >= total_size
-    x_single, y_single = split_large_data(large_x, large_y, total_size + 5)
+    x_single, y_single = split_large_data(
+        large_x, large_y, total_size + 5, equal_split_size=equal_split_size
+    )
     assert len(x_single) == 1, "Should be 1 X chunk if max_size is large"
     assert len(y_single) == 1, "Should be 1 y chunk if max_size is large"
     np.testing.assert_array_equal(x_single[0], large_x)
     np.testing.assert_array_equal(y_single[0], large_y)
 
     # Test edge case: max_data_size = 1
-    x_max_one, y_max_one = split_large_data(large_x, large_y, 1)
+    x_max_one, y_max_one = split_large_data(
+        large_x, large_y, 1, equal_split_size=equal_split_size
+    )
     assert len(x_max_one) == total_size, "Should be total_size chunks if max_size=1"
     assert len(y_max_one) == total_size, "Should be total_size chunks if max_size=1"
     assert len(x_max_one[0]) == 1, "Each X chunk should have size 1"
@@ -83,7 +92,9 @@ def test_split_large_data():
     max_chunk_exact = 30
     large_x_exact = np.arange(total_size_exact * 2).reshape((total_size_exact, 2))
     large_y_exact = np.arange(total_size_exact)
-    x_exact, y_exact = split_large_data(large_x_exact, large_y_exact, max_chunk_exact)
+    x_exact, y_exact = split_large_data(
+        large_x_exact, large_y_exact, max_chunk_exact, equal_split_size=equal_split_size
+    )
     assert len(x_exact) == total_size_exact // max_chunk_exact  # Should be 3 chunks
     assert len(y_exact) == total_size_exact // max_chunk_exact  # Should be 3 chunks
     assert len(x_exact[0]) == max_chunk_exact  # All chunks should be max size

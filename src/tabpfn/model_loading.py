@@ -430,8 +430,9 @@ def load_model_criterion_config(
                 f"Then place it at: {model_path}",
             ) from res[0]
 
-    loaded_model, criterion, config = load_model(path=model_path)
-    loaded_model.cache_trainset_representation = cache_trainset_representation
+    loaded_model, criterion, config = load_model(
+        path=model_path, cache_trainset_representation=cache_trainset_representation
+    )
     if check_bar_distribution_criterion and not isinstance(
         criterion,
         FullSupportBarDistribution,
@@ -517,6 +518,7 @@ def get_loss_criterion(
 def load_model(
     *,
     path: Path,
+    cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -526,6 +528,8 @@ def load_model(
 
     Args:
         path: Path to the checkpoint
+        cache_trainset_representation: If True, the model will cache the
+            trainset representation. Forwarded to get_architecture.
     """
     # Catch the `FutureWarning` that torch raises. This should be dealt with!
     # The warning is raised due to `torch.load`, which advises against ckpt
@@ -562,7 +566,7 @@ def load_model(
     model = architecture.get_architecture(
         config,
         n_out=get_n_out(config, loss_criterion),
-        cache_trainset_representation=True,
+        cache_trainset_representation=cache_trainset_representation,
     )
     model.load_state_dict(state_dict)
     model.eval()
