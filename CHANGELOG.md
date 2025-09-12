@@ -10,9 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 ### Changed
-- @safaricd Increase versioning from `2.1.4` to `2.2.0`
+- @safaricd Clarified details of anonymous usage telemetry collection.
 
-## [2.1.4] - 2025-09-11
+## [2.1.4] - 2025-09-11 - **yanked**
 
 ### Added
 
