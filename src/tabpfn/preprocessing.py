@@ -20,7 +20,13 @@ import torch
 from torch.utils.data import Dataset
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.architectures.base.preprocessing import (
+from tabpfn.constants import (
+    CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
+    MAXIMUM_FEATURE_SHIFT,
+    PARALLEL_MODE_TO_RETURN_AS,
+    SUPPORTS_RETURN_AS,
+)
+from tabpfn.preprocessors import (
     AddFingerprintFeaturesStep,
     DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
@@ -30,12 +36,6 @@ from tabpfn.architectures.base.preprocessing import (
     ReshapeFeatureDistributionsStep,
     SequentialFeatureTransformer,
     ShuffleFeaturesStep,
-)
-from tabpfn.constants import (
-    CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
-    MAXIMUM_FEATURE_SHIFT,
-    PARALLEL_MODE_TO_RETURN_AS,
-    SUPPORTS_RETURN_AS,
 )
 from tabpfn.utils import infer_random_state
 

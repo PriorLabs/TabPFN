@@ -54,9 +54,9 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     PreprocessorConfig,
     RegressorEnsembleConfig,
-    ReshapeFeatureDistributionsStep,
     default_regressor_preprocessor_configs,
 )
+from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
@@ -589,11 +589,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.preprocessor_ = ord_encoder
 
-        possible_target_transforms = (
-            ReshapeFeatureDistributionsStep.get_all_preprocessors(
-                num_examples=y.shape[0],  # Use length of validated y
-                random_state=rng,  # Use the provided rng
-            )
+        possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
+            num_examples=y.shape[0],  # Use length of validated y
+            random_state=rng,  # Use the provided rng
         )
         target_preprocessors: list[TransformerMixin | Pipeline | None] = []
         for (

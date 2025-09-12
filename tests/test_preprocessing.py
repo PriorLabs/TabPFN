@@ -9,8 +9,8 @@ import pytest
 import torch
 from sklearn.preprocessing import PowerTransformer
 
-from tabpfn.architectures.base import preprocessing
-from tabpfn.architectures.base.preprocessing import (
+from tabpfn import preprocessors
+from tabpfn.preprocessors import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
     FeaturePreprocessingTransformerStep,
@@ -211,11 +211,11 @@ def test_reshape_step_append_original_logic(
 
 
 def _get_preprocessing_steps() -> (
-    list[Callable[..., FeaturePreprocessingTransformerStep]]
+    list[Callable[..., FeaturePreprocessingTransformerStep],]
 ):
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
-        for cls in preprocessing.__dict__.values()
+        for cls in preprocessors.__dict__.values()
         if (
             isinstance(cls, type)
             and issubclass(cls, FeaturePreprocessingTransformerStep)
