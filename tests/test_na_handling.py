@@ -1,25 +1,29 @@
 import pandas as pd
+import pytest
 from tabpfn import TabPFNClassifier
 from sklearn.model_selection import train_test_split
 
-data = {
-    'feature1': ['a', 'b', pd.NA, 'd'],
-    'feature2': [1, 2, 3, 4],
-    'target': [0, 1, 0, 1]
-}
+def test_classifier_handles_na_values():
+    data = {
+        'feature1': ['a', 'b', pd.NA, 'd'],
+        'feature2': [1, 2, 3, 4],
+        'target': [0, 1, 0, 1]
+    }
+    df = pd.DataFrame(data)
+    X = df[['feature1', 'feature2']]
+    y = df['target']
 
-df = pd.DataFrame(data)
-X = df[['feature1', 'feature2']]
-y = df['target']
+    # Train-test split
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
 
-# Fix NA handling using .loc to avoid SettingWithCopyWarning
-X.loc[:, 'feature1'] = X['feature1'].fillna('missing').astype(str)
-X.loc[:, 'feature2'] = X['feature2'].astype(float)
+    clf = TabPFNClassifier(device='cpu')
 
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=42)
+    # The classifier should handle NA values internally
+    try:
+        clf.fit(X_train, y_train)
+        predictions = clf.predict(X_test)
 
-clf = TabPFNClassifier(device='cpu')
-clf.fit(X_train, y_train)
-
-print("Test passed! Model trained without NA errors.")
+        # Assert predictions length matches y_test
+        assert len(predictions) == len(y_test)
+    except Exception as e:
+        pytest.fail(f"TabPFNClassifier failed to handle NA values: {e}")

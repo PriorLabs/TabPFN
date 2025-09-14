@@ -79,6 +79,22 @@ if TYPE_CHECKING:
         from sklearn.base import Tags
     except ImportError:
         Tags = Any
+# classifier.py
+
+import pandas as pd
+import numpy as np
+# (other imports that were already there)
+
+
+def preprocess_input(X):
+    X = X.copy()
+    for col in X.columns:
+        if X[col].dtype == 'object':
+            X[col] = X[col].fillna('missing').astype(str)
+        else:
+            X[col] = X[col].fillna(0).astype(float)
+    return X
+
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
@@ -633,6 +649,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit(self, X: XType, y: YType) -> Self:
+        X = preprocess_input(X)
         """Fit the model.
 
         Args:
@@ -694,6 +711,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             depending on `return_logits`.
         """
         check_is_fitted(self)
+        X = preprocess_input(X)
 
         if not self.differentiable_input:
             X = validate_X_predict(X, self)
@@ -978,17 +996,4 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
-import pandas as pd
-import numpy as np
-
-def preprocess_input(X):
-    X = X.copy()
-    
-    for col in X.columns:
-        if X[col].dtype == 'object':   # Categorical/text columns
-            X[col] = X[col].fillna('missing').astype(str)
-        else:                           # Numeric columns
-            X[col] = X[col].fillna(0).astype(float)
-    
-    return X
 
