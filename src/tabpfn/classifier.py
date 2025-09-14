@@ -978,3 +978,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
+import pandas as pd
+import numpy as np
+
+def preprocess_input(X):
+    X = X.copy()
+    
+    for col in X.columns:
+        if X[col].dtype == 'object':   # Categorical/text columns
+            X[col] = X[col].fillna('missing').astype(str)
+        else:                           # Numeric columns
+            X[col] = X[col].fillna(0).astype(float)
+    
+    return X
+
