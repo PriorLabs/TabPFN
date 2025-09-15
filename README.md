@@ -343,7 +343,7 @@ This data is processed in compliance with the **General Data Protection Regulati
 For more details, please see our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
 
 ### How to opt out
-If you prefer not to send telemetry, you can disable it by setting an environment variable:
+If you prefer not to send telemetry, you can disable it by setting the following environment variable:
 
 ```bash
 export TABPFN_DISABLE_TELEMETRY=1
