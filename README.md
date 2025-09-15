@@ -335,7 +335,7 @@ The data is used exclusively to help us understand how the library is being used
 ### What we collect
 We only collect high-level, non-identifying information such as:
 - Package version
-- Operating system & Python version
+- Python version
 - How often fit and inference are called, including simple metadata like the dimensionality of the input and the type of task (e.g., classification vs. regression) (:warning: never the data itself)
 
 This data is processed in compliance with the **General Data Protection Regulation (GDPR)** principles of data minimization and purpose limitation.
