@@ -15,5 +15,3 @@ def set_global_seed():
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)  # noqa: NPY002
     random.seed(seed)
-    # Optional: force deterministic behavior where applicable
-    torch.use_deterministic_algorithms(mode=True)
