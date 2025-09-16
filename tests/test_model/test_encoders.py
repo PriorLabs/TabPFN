@@ -79,7 +79,7 @@ def test_normalize_data_basic(dtype, shape):
     # For dtype torch.float16 1e-3 is too much precision and results in
     # randomly failing tests, due to precision. Therefore increase the
     # tolerance.
-    atol= 1e-2 if dtype==torch.float16 else 1e-3
+    atol = 1e-2 if dtype == torch.float16 else 1e-3
     # Assert that mean is close to 0 and std is close to 1 for each feature
     assert torch.allclose(mean_of_norm, torch.zeros_like(mean_of_norm), atol=atol)
     assert torch.allclose(std_of_norm, torch.ones_like(std_of_norm), atol=atol)
