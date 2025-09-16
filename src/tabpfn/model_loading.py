@@ -661,7 +661,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
             for key, value in vars(estimator).items()
             if key.endswith("_") and key not in blacklist
         }
-        # move all tensors to "cpu" before loading, so if fitted & saved on cuda-device
+        # move all tensors to "cpu" before saving, so if fitted & saved on cuda-device
         # and loading on cpu-device does not throw
         # "RuntimeError: Attempting to deserialize object on a CUDA device..."
         fitted_attrs = {
