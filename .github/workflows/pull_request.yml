@@ -79,8 +79,6 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Run Tests (exclude MPS params)
-        env:
-          TABPFN_EXCLUDE_DEVICES: "mps"
         run: pytest tests/
 
   # -------------------------------------------------------------------
