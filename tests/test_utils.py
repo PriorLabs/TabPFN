@@ -140,7 +140,7 @@ def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
     assert infer_devices(devices="auto") == (torch.device("cuda:0"),)
 
 
-def test__infer_devices__auto__multiple_cuda_gpus_available__selects_all(
+def test__infer_devices__auto__multiple_cuda_gpus_available__selects_first(
     mocker: MagicMock,
 ) -> None:
     mock_cuda = mocker.patch("torch.cuda")
@@ -148,9 +148,7 @@ def test__infer_devices__auto__multiple_cuda_gpus_available__selects_all(
     mock_cuda.device_count.return_value = 3
     mocker.patch("torch.backends.mps").is_available.return_value = True
 
-    inferred = set(infer_devices(devices="auto"))
-    expected = {torch.device("cuda:0"), torch.device("cuda:1"), torch.device("cuda:2")}
-    assert inferred == expected
+    assert infer_devices(devices="auto") == (torch.device("cuda:0"),)
 
 
 def test__infer_devices__auto__cuda_and_mps_available_but_excluded__selects_cpu(
