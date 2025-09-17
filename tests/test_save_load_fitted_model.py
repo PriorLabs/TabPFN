@@ -78,8 +78,13 @@ def test_save_load_happy_path(
     # Simulate saving device
     if "cuda" in saving_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: False)
+    elif "mps" in saving_device:
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: True)
     elif "cpu" in saving_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: False)
     else:
         raise NotImplementedError(f"saving device: {saving_device} not found")
 
@@ -93,8 +98,13 @@ def test_save_load_happy_path(
     # Simulate saving device
     if "cuda" in loading_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: False)
+    elif "mps" in loading_device:
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: True)
     elif "cpu" in loading_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.mps, "is_available", lambda: False)
     else:
         raise NotImplementedError(f"saving device: {loading_device} not found")
 
