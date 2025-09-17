@@ -365,7 +365,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
 
             with (
-                torch.autocast(device.type, enabled=autocast),
+                get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
                 output = self.model(

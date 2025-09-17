@@ -17,7 +17,13 @@ def get_pytest_devices() -> list[str]:
         devices.append("cpu")
     if torch.cuda.is_available() and "cuda" not in exclude_devices:
         devices.append("cuda")
-    if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+    # MPS support on torch <= 2.3 often OOMs (see
+    # https://github.com/pytorch/pytorch/issues/105839) so we don't test it.
+    if (
+        torch.backends.mps.is_available()
+        and "mps" not in exclude_devices
+        and torch.__version__ >= "2.3"
+    ):
         devices.append("mps")
 
     if len(devices) == 0:
