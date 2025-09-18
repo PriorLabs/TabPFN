@@ -1,6 +1,9 @@
-name: In pull request
+name: Run tests
 on:
   pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 jobs:
   check_python_linting:
