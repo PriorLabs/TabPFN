@@ -95,11 +95,15 @@ def _execute_function_in_thread(
         if device.type == "cuda":
             # We use a separate stream per thread so that threads can execute kernels in
             # parallel.
-            with (
-                torch.cuda.stream(torch.cuda.Stream(device)),
-                torch.cuda.device(device),
-            ):
-                return function(device=device, is_parallel=True)
+            stream = torch.cuda.Stream(device)
+            with torch.cuda.stream(stream), torch.cuda.device(device):
+                output = function(device=device, is_parallel=True)
+                # The returned output will be consumed on a different CUDA stream, hence
+                # we synchronize before returning so that the output is ready for the
+                # consumer. It would be more efficient for the consumer to wait, so this
+                # thread can start with the next function, but this approach is simpler.
+                stream.synchronize()
+                return output
         # Theoretically it is possible to parallelise over classes of device other than
         # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
         return function(device=device, is_parallel=True)
