@@ -18,6 +18,9 @@ class ParallelFunction(Protocol, Generic[R_co]):
     def __call__(self, *, device: torch.device, is_parallel: bool) -> R_co:
         """Execute the function.
 
+        If using CUDA, `parallel_execute()` will set the current stream, and this
+        function should not change it.
+
         Args:
             device: PyTorch device that all computation should be performed on.
             is_parallel: Indicates whether this function is being executed in parallel
@@ -27,7 +30,7 @@ class ParallelFunction(Protocol, Generic[R_co]):
                 `device`. If False, then copying can be avoided to reduce overhead.
 
         Returns:
-            Any desired value. Any Tensors in the returned value can be on any device.
+            Any desired value. Any Tensors in the returned value should be on `device`.
         """
         ...
 
