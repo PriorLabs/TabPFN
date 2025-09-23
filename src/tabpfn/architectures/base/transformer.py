@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Callable, Generator, Iterable
-from contextlib import contextmanager
+from collections.abc import Callable, Iterable
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, overload
 from typing_extensions import Self, override
@@ -26,20 +25,6 @@ from tabpfn.architectures.interface import Architecture
 
 if TYPE_CHECKING:
     from tabpfn.architectures.base.config import ModelConfig
-
-
-@contextmanager
-def isolate_torch_rng(seed: int, device: torch.device) -> Generator[None, None, None]:
-    torch_rng_state = torch.get_rng_state()
-    if torch.cuda.is_available():
-        torch_cuda_rng_state = torch.cuda.get_rng_state(device=device)
-    torch.manual_seed(seed)
-    try:
-        yield
-    finally:
-        torch.set_rng_state(torch_rng_state)
-        if torch.cuda.is_available():
-            torch.cuda.set_rng_state(torch_cuda_rng_state, device=device)
 
 
 class LayerStack(nn.Module):
