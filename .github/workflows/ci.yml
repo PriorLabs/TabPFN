@@ -72,10 +72,7 @@ jobs:
         run: |
           uv pip install --system --no-deps .
           uv pip install --system -r requirements.txt
-          uv pip install --system pytest pytest-mock psutil
-          if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
-            uv pip install --system onnx
-          fi
+          uv pip install --system pytest pytest-mock psutil onnx
         shell: bash
 
       - name: Initialize submodules
@@ -115,8 +112,7 @@ jobs:
         run: |
           uv pip install --system --no-deps .
           uv pip install --system -r requirements.txt
-          uv pip install --system pytest pytest-mock psutil
-          # onnx is not supported on Python 3.13 yet
+          uv pip install --system pytest pytest-mock psutil onnx
         shell: bash
 
       - name: Initialize submodules
@@ -168,11 +164,7 @@ jobs:
         run: |
           uv pip install --system --no-deps .
           uv pip install --system -r requirements.txt
-          uv pip install --system pytest pytest-mock psutil
-          # onnx isn’t available yet on 3.13
-          if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
-            uv pip install --system onnx
-          fi
+          uv pip install --system pytest pytest-mock psutil onnx
         shell: bash
 
       - name: Initialize submodules
