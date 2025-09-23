@@ -618,47 +618,53 @@ class PerFeatureTransformer(Architecture):
 
         # TODO: we should probably hardcode the seed here
         # I think we never want to change it?
-        with isolate_torch_rng(self.seed, device=x.device):
-            if self.feature_positional_embedding == "normal_rand_vec":
-                embs = torch.randn(
+        positional_embedding_rng = torch.Generator(device=x.device).manual_seed(
+            self.seed
+        )
+        if self.feature_positional_embedding == "normal_rand_vec":
+            embs = torch.randn(
+                (x.shape[2], x.shape[3]),
+                device=x.device,
+                dtype=x.dtype,
+                generator=positional_embedding_rng,
+            )
+            x += embs[None, None]
+        elif self.feature_positional_embedding == "uni_rand_vec":
+            embs = (
+                torch.rand(
                     (x.shape[2], x.shape[3]),
                     device=x.device,
                     dtype=x.dtype,
+                    generator=positional_embedding_rng,
                 )
-                x += embs[None, None]
-            elif self.feature_positional_embedding == "uni_rand_vec":
-                embs = (
-                    torch.rand(
-                        (x.shape[2], x.shape[3]),
-                        device=x.device,
-                        dtype=x.dtype,
-                    )
-                    * 2
-                    - 1
+                * 2
+                - 1
+            )
+            x += embs[None, None]
+        elif self.feature_positional_embedding == "learned":
+            w = self.feature_positional_embedding_embeddings.weight
+            embs = w[
+                torch.randint(
+                    0,
+                    w.shape[0],
+                    (x.shape[2],),
+                    generator=positional_embedding_rng,
                 )
-                x += embs[None, None]
-            elif self.feature_positional_embedding == "learned":
-                w = self.feature_positional_embedding_embeddings.weight
-                embs = w[
-                    torch.randint(
-                        0,
-                        w.shape[0],
-                        (x.shape[2],),
-                    )
-                ]
-                x += embs[None, None]
-            elif self.feature_positional_embedding == "subspace":
-                embs = torch.randn(
-                    (x.shape[2], x.shape[3] // 4),
-                    device=x.device,
-                    dtype=x.dtype,
-                )
-                embs = self.feature_positional_embedding_embeddings(embs)
-                x += embs[None, None]
-            elif self.feature_positional_embedding is None:
-                embs = None
-            else:
-                raise ValueError(f"Unknown {self.feature_positional_embedding=}")
+            ]
+            x += embs[None, None]
+        elif self.feature_positional_embedding == "subspace":
+            embs = torch.randn(
+                (x.shape[2], x.shape[3] // 4),
+                device=x.device,
+                dtype=x.dtype,
+                generator=positional_embedding_rng,
+            )
+            embs = self.feature_positional_embedding_embeddings(embs)
+            x += embs[None, None]
+        elif self.feature_positional_embedding is None:
+            embs = None
+        else:
+            raise ValueError(f"Unknown {self.feature_positional_embedding=}")
 
         self.cached_embeddings = None
         if cache_embeddings and embs is not None:
