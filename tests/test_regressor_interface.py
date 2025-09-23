@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import os
-import sys
 import typing
 from itertools import product
 from typing import Callable, Literal
@@ -333,8 +332,6 @@ class ModelWrapper(nn.Module):
 def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     if os.name == "nt":
         pytest.skip("onnx export is not tested on windows")
-    if sys.version_info >= (3, 13):
-        pytest.xfail("onnx is not yet supported on Python 3.13")
     X, y = X_y
     with torch.no_grad():
         regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
