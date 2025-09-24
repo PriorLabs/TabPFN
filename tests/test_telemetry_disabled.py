@@ -1,4 +1,5 @@
 """Test to verify that telemetry is disabled during test execution."""
+from __future__ import annotations
 
 import os
 
