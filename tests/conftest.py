@@ -4,6 +4,7 @@ This module sets up global test configuration, including disabling telemetry
 for all tests to ensure consistent behavior and avoid external dependencies
 during testing.
 """
+
 from __future__ import annotations
 
 import os
