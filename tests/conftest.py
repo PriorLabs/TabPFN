@@ -12,7 +12,7 @@ import os
 import pytest
 
 
-def pytest_configure(_: pytest.Config) -> None:
+def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
     """Configure pytest with global settings."""
     # Disable telemetry for all tests to ensure consistent behavior
     os.environ["TABPFN_DISABLE_TELEMETRY"] = "1"
