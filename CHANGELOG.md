@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Disable all telemetry in unit tests.
+
 ## [2.2.1] - 2025-09-17
 
 ### Changed
