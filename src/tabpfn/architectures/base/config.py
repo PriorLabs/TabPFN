@@ -8,6 +8,7 @@ from typing import Any, Literal, Optional
 from typing_extensions import Self
 
 import pydantic
+from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from tabpfn.architectures.interface import ArchitectureConfig
@@ -26,7 +27,7 @@ class ModelConfig(ArchitectureConfig):
     # ------ Actual variation across configs
     emsize: int = 192
     """The embedding dimension."""
-    features_per_group: int = 2
+    features_per_group: int = Field(default=2, gt=0)
     """If > 1, the features will be grouped into groups of this size and the attention
     is across groups."""
     nhead: int = 6
