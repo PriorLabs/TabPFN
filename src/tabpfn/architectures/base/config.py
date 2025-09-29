@@ -26,7 +26,7 @@ class ModelConfig(ArchitectureConfig):
     # ------ Actual variation across configs
     emsize: int = 192
     """The embedding dimension."""
-    features_per_group: Literal[1, 2] = 2
+    features_per_group: int = 2
     """If > 1, the features will be grouped into groups of this size and the attention
     is across groups."""
     nhead: int = 6
