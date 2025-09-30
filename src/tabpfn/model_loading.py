@@ -95,13 +95,6 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
-    def get_fallback_urls(self) -> list[str]:
-        """Return list of fallback URLs for model downloads."""
-        return [
-            f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}?download=true"
-            for filename in self.filenames
-        ] + [f"{FALLBACK_S3_BASE_URL}/{filename}" for filename in self.filenames]
-
 
 def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
     if version == ModelVersion.V2:
