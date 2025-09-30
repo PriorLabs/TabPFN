@@ -232,11 +232,11 @@ graph LR
 
         interpretability_check["Need<br/>Interpretability?"];
 
-        interpretability_check -- Yes --> feature_selection["Feature Selection"];
-        interpretability_check -- Yes --> partial_dependence["Partial Dependence Plots"];
-        interpretability_check -- Yes --> ice["Individual Conditional Expectation"];
-        interpretability_check -- Yes --> shapley["Explain with<br/>SHAP"];
-        interpretability_check -- Yes --> shap_iq["Explain with<br/>SHAP IQ"];
+        interpretability_check --> feature_selection["Feature Selection"];
+        interpretability_check --> partial_dependence["Partial Dependence Plots"];
+        interpretability_check --> ice["Individual Conditional Expectation"];
+        interpretability_check --> shapley["Explain with<br/>SHAP"];
+        interpretability_check --> shap_iq["Explain with<br/>SHAP IQ"];
         interpretability_check -- No --> end_node;
 
         feature_selection --> end_node;
