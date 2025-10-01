@@ -11,6 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Disable all telemetry in unit tests.
+
+## [2.2.1] - 2025-09-17
+
+### Changed
+
+- Fixed bug on multi-GPU systems leading to worse results
+
 ## [2.2.0] - 2025-09-15
 
 ### Added
