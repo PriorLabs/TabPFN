@@ -21,6 +21,7 @@ def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
     # Disable telemetry for all tests to ensure consistent behavior
     os.environ["TABPFN_DISABLE_TELEMETRY"] = "1"
 
+
 @pytest.fixture(autouse=True, scope="function")  # noqa: PT003
 def set_global_seed() -> None:
     seed = 42
