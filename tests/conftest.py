@@ -10,9 +10,8 @@ from __future__ import annotations
 import os
 import random
 
-import pytest
-
 import numpy as np
+import pytest
 import torch
 
 
