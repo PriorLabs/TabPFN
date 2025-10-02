@@ -31,24 +31,24 @@ jobs:
         include:
           - os: ubuntu-latest
             python-version: "3.9"
-            dependency-set: minimum
+            dependency-set: lowest-direct
           - os: macos-13 # macos-latest doesn't work with python 3.10
             # https://github.com/actions/setup-python/issues/855
             python-version: "3.9"
-            dependency-set: minimum
+            dependency-set: lowest-direct
           - os: windows-latest
             python-version: "3.9"
-            dependency-set: minimum
+            dependency-set: lowest-direct
           # ubuntu-latest 3.13 maximum is not included here because it is executed
           # as a separate workflow below. This is because we wish to gate the GPU
           # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
           # separate workflow.
           - os: macos-latest
             python-version: "3.13"
-            dependency-set: maximum
+            dependency-set: highest
           - os: windows-latest
             python-version: "3.13"
-            dependency-set: maximum
+            dependency-set: highest
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -65,13 +65,9 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Generate requirements file
-        run: python scripts/generate_dependencies.py ${{ matrix.dependency-set }}
-
       - name: Install dependencies
         run: |
-          uv pip install --system --no-deps .
-          uv pip install --system -r requirements.txt
+          uv pip install --system --resolution ${{ matrix.dependency-set }} .
           uv pip install --system pytest pytest-mock psutil
           if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
             uv pip install --system onnx
@@ -108,13 +104,9 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Generate requirements file
-        run: python scripts/generate_dependencies.py maximum
-
       - name: Install dependencies
         run: |
-          uv pip install --system --no-deps .
-          uv pip install --system -r requirements.txt
+          uv pip install --system --resolution highest .
           uv pip install --system pytest pytest-mock psutil
           # onnx is not supported on Python 3.13 yet
         shell: bash
@@ -141,9 +133,9 @@ jobs:
       matrix:
         include:
           - python-version: "3.9"
-            dependency-set: minimum
+            dependency-set: lowest-direct
           - python-version: "3.13"
-            dependency-set: maximum
+            dependency-set: highest
 
     runs-on: ubuntu-22.04-4core-gpu
 
@@ -161,13 +153,9 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Generate requirements file
-        run: python scripts/generate_dependencies.py ${{ matrix.dependency-set }}
-
       - name: Install dependencies
         run: |
-          uv pip install --system --no-deps .
-          uv pip install --system -r requirements.txt
+          uv pip install --system --resolution ${{ matrix.dependency-set }} .
           uv pip install --system pytest pytest-mock psutil
           # onnx isn’t available yet on 3.13
           if [[ "${{ matrix.python-version }}" != "3.13" ]]; then
