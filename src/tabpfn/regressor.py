@@ -607,6 +607,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ensemble_configs = EnsembleConfig.generate_for_regression(
             n=self.n_estimators,
             subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
+            subsample_with_replacement=self.interface_config_.SUBSAMPLE_SAMPLES_WITH_REPLACEMENT,
             add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
