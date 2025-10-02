@@ -119,8 +119,11 @@ def test_fit(
     model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if torch.device(device).type == "cpu" and inference_precision in ["autocast"]:
-        pytest.skip("CPU device does not support 'autocast' inference.")
+    if inference_precision == "autocast":
+        if torch.device(device).type == "cpu":
+            pytest.skip("CPU device does not support 'autocast' inference.")
+        if torch.device(device).type == "mps" and torch.__version__ < "2.5":
+            pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
 
     # Use the environment-aware check to skip only if necessary
     if (
