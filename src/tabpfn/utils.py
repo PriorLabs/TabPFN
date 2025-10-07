@@ -627,11 +627,29 @@ def process_text_na_dataframe(
     else:
         X_encoded = X
 
+    if ord_encoder is not None:
+        # The ColumnTransformer will reorder the columns as following:
+        # - categorical columns (in the order they appear in the dataframe)
+        # - numerical columns (in the order they appear in the dataframe)
+        # We need to revert this to the original order.
+        # assumes the column transformer has one OrdinalEncoder, which is
+        # what we get when creating it using get_ordinal_encoder()
+        cat_cols = next(
+            columns
+            for _, transformer, columns in ord_encoder.transformers_
+            if isinstance(transformer, OrdinalEncoder)
+        )
+        num_cols = [c for c in X.columns if c not in cat_cols]
+        col_to_pos = {c: i for i, c in enumerate(cat_cols + num_cols)}
+        X_encoded = X_encoded[:, [col_to_pos[c] for c in X.columns]]
+
     string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
     X_encoded[:, string_cols_ix] = np.where(
         placeholder_mask,
         np.nan,
+        # iloc because get_loc returns the position of the column
+        # in-case X_encoded has string column names
         X_encoded[:, string_cols_ix],
     )
     return X_encoded.astype(np.float64)
