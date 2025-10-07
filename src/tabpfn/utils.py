@@ -648,8 +648,6 @@ def process_text_na_dataframe(
     X_encoded[:, string_cols_ix] = np.where(
         placeholder_mask,
         np.nan,
-        # iloc because get_loc returns the position of the column
-        # in-case X_encoded has string column names
         X_encoded[:, string_cols_ix],
     )
     return X_encoded.astype(np.float64)
