@@ -13,6 +13,7 @@ from functools import partial
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
+import logging
 
 import joblib
 import numpy as np
@@ -34,6 +35,7 @@ from tabpfn.preprocessors import (
     NanHandlingPolynomialFeaturesStep,
     RemoveConstantFeaturesStep,
     ReshapeFeatureDistributionsStep,
+    RemoveHighlyCorrelatedFeaturesStep,
     SequentialFeatureTransformer,
     ShuffleFeaturesStep,
 )
@@ -178,6 +180,7 @@ class PreprocessorConfig:
     subsample_features: float = -1
     global_transformer_name: str | None = None
     differentiable: bool = False
+    remove_highly_correlated: bool | float = False
 
     @override
     def __str__(self) -> str:
@@ -228,6 +231,7 @@ class PreprocessorConfig:
             subsample_features=config_dict["subsample_features"],
             global_transformer_name=config_dict["global_transformer_name"],
             differentiable=config_dict.get("differentiable", False),
+            remove_highly_correlated=config_dict.get("remove_highly_correlated", False),
         )
 
 
@@ -576,6 +580,25 @@ class EnsembleConfig:
                 random_state=random_state,
             ),
         )
+        
+        remove_corr = self.preprocess_config.remove_highly_correlated
+        threshold = None
+        if remove_corr is True:
+            threshold = 0.95
+        elif isinstance(remove_corr, float):
+            if not 0 < remove_corr < 1:
+                raise ValueError(
+                    "If float, remove_highly_correlated must be in (0, 1)"
+                )
+            threshold = remove_corr
+        if threshold is not None:
+            logging.info(f"Removing highly correlated features with threshold {threshold}")
+            steps.append(
+                RemoveHighlyCorrelatedFeaturesStep(
+                    threshold=threshold
+                ),
+            )
+            
         return SequentialFeatureTransformer(steps)
 
 

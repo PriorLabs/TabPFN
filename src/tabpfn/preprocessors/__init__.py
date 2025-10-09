@@ -28,6 +28,8 @@ from tabpfn.preprocessors.reshape_feature_distribution_step import (
 )
 from tabpfn.preprocessors.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessors.shuffle_features_step import ShuffleFeaturesStep
+from tabpfn.preprocessors.remove_highly_correlated import RemoveHighlyCorrelatedFeaturesStep
+
 
 __all__ = [
     "AdaptiveQuantileTransformer",
@@ -42,6 +44,7 @@ __all__ = [
     "SafePowerTransformer",
     "SequentialFeatureTransformer",
     "ShuffleFeaturesStep",
+    "RemoveHighlyCorrelatedFeaturesStep",
     "get_all_kdi_transformers",
     "get_all_reshape_feature_distribution_preprocessors",
 ]

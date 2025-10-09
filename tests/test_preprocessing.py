@@ -16,6 +16,7 @@ from tabpfn.preprocessors import (
     FeaturePreprocessingTransformerStep,
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,
+    RemoveHighlyCorrelatedFeaturesStep,
 )
 
 
@@ -325,6 +326,61 @@ def test_adaptive_quantile_transformer_with_numpy_generator():
     # Further assertion to ensure the transformer is functional
     assert hasattr(transformer, "quantiles_")
     assert transformer.quantiles_.shape == (10, 10)
+    
+
+
+def test_remove_highly_correlated():
+    """Tests that RemoveHighlyCorrelatedFeaturesStep can remove highly correlated numeric features.
+
+    This test ensures that the transformer is capable of identifying and removing highly correlated features.
+
+    """
+    n_samples = 10000
+    n_features = 500
+    
+    rng = torch.Generator()
+    rng.manual_seed(12345)  # Use your chosen seed here
+
+
+    base_col = torch.randn(n_samples, 1, generator=rng)  # base column vector
+
+    # Define a noise vector with a different noise scale per column
+    noise_scales = torch.rand(n_features, generator=rng) * 0.3  # e.g., noise std dev between 0 and 0.1
+
+    # Generate noise matrix with shape (n_samples, n_features)
+    noise = torch.randn(n_samples, n_features, generator=rng) * noise_scales  # automatically broadcasts noise_scales along rows
+
+    # Add different noise to each column based on noise_scales
+    X = base_col + noise
+
+
+    # ARRANGE: Instantiate the transformer with the Generator object
+    # This is the exact condition that caused the bug
+    transformer = RemoveHighlyCorrelatedFeaturesStep(threshold=0.98)
+
+    # ACT : we don't support categorical features so we don't need the second parameter.
+    transformer.fit(X, [])
+    
+    output = transformer.transform(X)
+    
+    print(f"Reduced from {n_features} to {output.X.shape[1]} features")
+
+    # Further assertion to ensure the transformer is functional
+    assert output.X.shape[1] == 215  # expected number of features with seed 12345
+    
+    # To test also negative correlations, randomly flip the sign of some columns
+    # Generate random boolean mask for columns to flip signs (e.g., 50% chance)
+    mask = np.random.rand(n_features) < 0.5
+    X [:, mask] *= -1
+    
+    transformer_neg = RemoveHighlyCorrelatedFeaturesStep(threshold=0.98)
+
+    # ACT : we don't support categorical features so we don't need the second parameter.
+    transformer_neg.fit(X, [])
+    
+    output_neg = transformer_neg.transform(X)
+    assert output_neg.X.shape[1] == 215  # expected number should be same as with all positive columns
+
 
 
 def test__safe_power_transformer__normal_cases__same_results_as_power_transformer():
