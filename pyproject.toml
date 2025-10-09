@@ -97,6 +97,14 @@ dev = [
   # docs.
   "black>=25.9.0",
 ]
+# The minimum subset of the dev dependencies required to run the tests on the CI.
+# The idea is to be as close to the deployment environment as possible.
+ci = [
+  "pytest>=8.4.2",
+  "pytest-mock>=3.14.1",
+  "onnx>=1.19.0",
+  "psutil>=7.1.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # Where the tests are located
