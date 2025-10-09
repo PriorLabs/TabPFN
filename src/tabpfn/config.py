@@ -91,6 +91,12 @@ class ModelInterfaceConfig:
         - If a float, the percentage of samples to subsample.
     """
 
+    SUBSAMPLE_SAMPLES_WITH_REPLACEMENT: bool = False
+    """Whether to subsample with replacement (bootstrapping). If False (default),
+    each sample can appear at most once in a subsample. If True, samples can be
+    drawn multiple times. This is only active when `SUBSAMPLE_SAMPLES` is not None.
+    """
+
     PREPROCESS_TRANSFORMS: list[PreprocessorConfig | dict] | None = None
     """The preprocessing applied to the data before passing it to TabPFN. See
     `PreprocessorConfig` for options and more details. If a list of `PreprocessorConfig`
