@@ -794,3 +794,302 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert not hasattr(
         classifier2, "bardist_"
     ), "classifier2 should not have bardist_ attribute"
+
+
+def test__preprocessing__integer_column_names_with_na__handles_correctly() -> None:
+    """Integration test for preprocessing with integer column names and NA values.
+
+    This test catches the bug where ColumnTransformer reorders columns and converts
+    integer column names to 'x0', 'x1', etc., breaking the column indexing in
+    process_text_na_dataframe.
+    """
+    # Create a DataFrame with integer column names (like after numpy array conversion)
+    X_train = pd.DataFrame(
+        {
+            0: [0.4, 0.5, 0.6, 0.7, 0.8],  # numeric
+            1: ["High", "Medium", "Low", "High", "Medium"],  # categorical
+            2: ["A", "B", "A", "B", "A"],  # categorical
+            3: [10.2, 20.4, 20.5, 15.3, 18.9],  # numeric
+            4: [
+                "guest",
+                "host",
+                pd.NA,
+                "guest",
+                "host",
+            ],  # categorical with NA at row 2
+        }
+    )
+    y_train = np.array([1, 0, 1, 0, 1])
+
+    # Explicitly specify categorical columns to ensure they are treated as such
+    # (automatic inference requires more samples)
+    model = TabPFNClassifier(
+        device="cpu", random_state=42, categorical_features_indices=[1, 2, 4]
+    )
+
+    # Mock forward during fit to capture training data preprocessing
+    from unittest.mock import patch
+
+    captured_train_data = []
+
+    def capture_forward(original_forward):  # noqa: ANN202
+        def mock_forward(X, **kwargs):  # noqa: ANN202
+            captured_train_data.append(X)
+            return original_forward(X, **kwargs)
+
+        return mock_forward
+
+    with patch.object(
+        TabPFNClassifier, "forward", capture_forward(TabPFNClassifier.forward)
+    ):
+        model.fit(X_train, y_train)
+
+    # Verify training data preprocessing
+    assert len(captured_train_data) > 0, "forward should be called during fit"
+    X_train_preprocessed = captured_train_data[0]
+
+    # Training data should have NA converted to NaN at correct position
+    assert X_train_preprocessed.shape == (
+        5,
+        5,
+    ), "Training data should have correct shape"
+    # Column 4 with NA at row 2 should be at position 2 after reordering
+    assert np.isnan(
+        X_train_preprocessed[2, 2]
+    ), "NA in training column 4 should become NaN at correct position"
+    # Non-NA values should not be NaN
+    assert not np.isnan(
+        X_train_preprocessed[0, 2]
+    ), "Non-NA values should not become NaN"
+    assert not np.isnan(
+        X_train_preprocessed[1, 2]
+    ), "Non-NA values should not become NaN"
+
+    # Check that preprocessing worked correctly
+    assert hasattr(model, "preprocessor_"), "Model should have fitted preprocessor"
+    assert hasattr(
+        model, "inferred_categorical_indices_"
+    ), "Model should have inferred categorical indices"
+
+    # The categorical columns (1, 2, 4) should be set
+    assert set(model.inferred_categorical_indices_) == {1, 2, 4}, (
+        f"Expected categorical columns [1, 2, 4], "
+        f"got {model.inferred_categorical_indices_}"
+    )
+
+    # Test that the full preprocessing pipeline handles NA correctly
+    # by mocking forward to capture the preprocessed data
+    from unittest.mock import patch
+
+    X_test = pd.DataFrame(
+        {
+            0: [0.45, 0.55],
+            1: ["High", "Low"],
+            2: ["A", "B"],
+            3: [12.0, 22.0],
+            4: ["guest", pd.NA],  # NA in test set at row 1, column 4
+        }
+    )
+
+    # Mock forward to capture the preprocessed data
+    captured_data = []
+    original_forward = model.forward
+
+    def mock_forward(X, **kwargs):  # noqa: ANN202
+        captured_data.append(X)
+        return original_forward(X, **kwargs)
+
+    with patch.object(model, "forward", side_effect=mock_forward):
+        predictions = model.predict(X_test)
+
+    # Verify the preprocessed data that entered forward
+    assert len(captured_data) == 1, "forward should be called once"
+    X_preprocessed = captured_data[0]
+
+    # After full preprocessing pipeline:
+    # - Categorical columns (1, 2, 4) come first due to ColumnTransformer reordering
+    # - Column 4 (with NA) should be at position 2 in the output
+    # - Row 1 should have NaN at that position
+    assert X_preprocessed.shape == (2, 5), "Preprocessed data should have same shape"
+    assert np.isnan(
+        X_preprocessed[1, 2]
+    ), "NA in column 4 should become NaN at correct position after reordering"
+    # Non-NA values should not be NaN
+    assert not np.isnan(
+        X_preprocessed[0, 2]
+    ), "Non-NA value in column 4 should not become NaN"
+
+    # Verify prediction worked correctly
+    predictions = model.predict(X_test)
+    assert predictions.shape == (2,), "Should predict for both test samples"
+    assert not np.isnan(
+        predictions
+    ).any(), "Predictions should not contain NaN despite NA in input"
+    assert np.all(
+        np.isin(predictions, [0, 1])
+    ), "Predictions should be valid class labels"
+
+    # Verify probabilities also work
+    probas = model.predict_proba(X_test)
+    assert probas.shape == (
+        2,
+        2,
+    ), "Should return probabilities for 2 samples and 2 classes"
+    assert not np.isnan(
+        probas
+    ).any(), "Probabilities should not contain NaN despite NA in input"
+    assert np.allclose(probas.sum(axis=1), 1.0), "Probabilities should sum to 1"
+    assert np.all(
+        (probas >= 0) & (probas <= 1)
+    ), "All probabilities should be in [0, 1]"
+
+
+def test__preprocessing__string_column_names_with_na__handles_correctly() -> None:
+    """Integration test for preprocessing with string column names and NA values.
+
+    Complements the integer column name test to ensure string column names
+    also work correctly through the entire preprocessing pipeline.
+    """
+    # Create a DataFrame with string column names
+    X_train = pd.DataFrame(
+        {
+            "ratio": [0.4, 0.5, 0.6, 0.7, 0.8],
+            "risk": ["High", "Medium", "Low", "High", "Medium"],
+            "height": ["Tall", "Short", "Tall", "Short", "Tall"],
+            "amount": [10.2, 20.4, 20.5, 15.3, 18.9],
+            "type": [
+                "guest",
+                "host",
+                pd.NA,
+                "guest",
+                "host",
+            ],  # categorical with NA at row 2
+        }
+    )
+    y_train = np.array([1, 0, 1, 0, 1])
+
+    # Explicitly specify categorical columns
+    model = TabPFNClassifier(
+        device="cpu",
+        random_state=42,
+        categorical_features_indices=["risk", "height", "type"],
+    )
+
+    # Mock forward during fit to capture training data preprocessing
+    from unittest.mock import patch
+
+    captured_train_data = []
+
+    def capture_forward(original_forward):  # noqa: ANN202
+        def mock_forward(X, **kwargs):  # noqa: ANN202
+            captured_train_data.append(X)
+            return original_forward(X, **kwargs)
+
+        return mock_forward
+
+    with patch.object(
+        TabPFNClassifier, "forward", capture_forward(TabPFNClassifier.forward)
+    ):
+        model.fit(X_train, y_train)
+
+    # Verify training data preprocessing
+    assert len(captured_train_data) > 0, "forward should be called during fit"
+    X_train_preprocessed = captured_train_data[0]
+
+    # Training data should have NA converted to NaN at correct position
+    assert X_train_preprocessed.shape == (
+        5,
+        5,
+    ), "Training data should have correct shape"
+    # Column 'type' with NA at row 2 should be at position 2 after reordering
+    assert np.isnan(
+        X_train_preprocessed[2, 2]
+    ), "NA in training 'type' column should become NaN at correct position"
+    # Non-NA values should not be NaN
+    assert not np.isnan(
+        X_train_preprocessed[0, 2]
+    ), "Non-NA values should not become NaN"
+    assert not np.isnan(
+        X_train_preprocessed[1, 2]
+    ), "Non-NA values should not become NaN"
+
+    # Check that preprocessing worked correctly
+    assert hasattr(model, "preprocessor_"), "Model should have fitted preprocessor"
+    assert hasattr(
+        model, "inferred_categorical_indices_"
+    ), "Model should have inferred categorical indices"
+
+    # The categorical columns should be set
+    assert set(model.inferred_categorical_indices_) == {
+        "risk",
+        "height",
+        "type",
+    }, f"""Expected categorical columns ['risk', 'height', 'type'],
+    got {model.inferred_categorical_indices_}"""
+
+    # Test that the full preprocessing pipeline handles NA correctly
+    # by mocking forward to capture the preprocessed data
+    from unittest.mock import patch
+
+    X_test = pd.DataFrame(
+        {
+            "ratio": [0.45, 0.55],
+            "risk": ["High", "Low"],
+            "height": ["Tall", "Short"],
+            "amount": [12.0, 22.0],
+            "type": ["guest", pd.NA],  # NA in test set at row 1, column 'type'
+        }
+    )
+
+    # Mock forward to capture the preprocessed data
+    captured_data = []
+    original_forward = model.forward
+
+    def mock_forward(X, **kwargs):  # noqa: ANN202
+        captured_data.append(X)
+        return original_forward(X, **kwargs)
+
+    with patch.object(model, "forward", side_effect=mock_forward):
+        predictions = model.predict(X_test)
+
+    # Verify the preprocessed data that entered forward
+    assert len(captured_data) == 1, "forward should be called once"
+    X_preprocessed = captured_data[0]
+
+    # After full preprocessing pipeline:
+    # - Categorical columns (risk, height, type) come first due to
+    # ColumnTransformer reordering
+    # - Column 'type' (with NA) should be at position 2 in the output
+    # - Row 1 should have NaN at that position
+    assert X_preprocessed.shape == (2, 5), "Preprocessed data should have same shape"
+    assert np.isnan(
+        X_preprocessed[1, 2]
+    ), "NA in 'type' column should become NaN at correct position after reordering"
+    # Non-NA values should not be NaN
+    assert not np.isnan(
+        X_preprocessed[0, 2]
+    ), "Non-NA value in 'type' column should not become NaN"
+
+    # Verify prediction worked correctly
+    predictions = model.predict(X_test)
+    assert predictions.shape == (2,), "Should predict for both test samples"
+    assert not np.isnan(
+        predictions
+    ).any(), "Predictions should not contain NaN despite NA in input"
+    assert np.all(
+        np.isin(predictions, [0, 1])
+    ), "Predictions should be valid class labels"
+
+    # Verify probabilities also work
+    probas = model.predict_proba(X_test)
+    assert probas.shape == (
+        2,
+        2,
+    ), "Should return probabilities for 2 samples and 2 classes"
+    assert not np.isnan(
+        probas
+    ).any(), "Probabilities should not contain NaN despite NA in input"
+    assert np.allclose(probas.sum(axis=1), 1.0), "Probabilities should sum to 1"
+    assert np.all(
+        (probas >= 0) & (probas <= 1)
+    ), "All probabilities should be in [0, 1]"

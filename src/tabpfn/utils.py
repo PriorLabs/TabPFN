@@ -410,7 +410,7 @@ def get_ordinal_encoder(
     to_convert = ["category", "string"]
     return ColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
-        remainder=FunctionTransformer(),
+        remainder=FunctionTransformer(feature_names_out="one-to-one"),
         sparse_threshold=0.0,
         verbose_feature_names_out=False,
     )
@@ -617,23 +617,47 @@ def process_text_na_dataframe(
     Note that this function sometimes mutates its input.
     """
     string_cols = X.select_dtypes(include=["string", "object"]).columns
+
+    string_cols_original_ix = [X.columns.get_loc(col) for col in string_cols]
+
+    placeholder_mask = None
     if len(string_cols) > 0:
         X[string_cols] = X[string_cols].fillna(placeholder)
+        placeholder_mask = (X[string_cols] == placeholder).to_numpy()
 
     if fit_encoder and ord_encoder is not None:
         X_encoded = ord_encoder.fit_transform(X)
     elif ord_encoder is not None:
         X_encoded = ord_encoder.transform(X)
+    elif isinstance(X, pd.DataFrame):
+        # ord_encoder returns a np array
+        X_encoded = X.to_numpy()
     else:
         X_encoded = X
 
-    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
-    placeholder_mask = X[string_cols] == placeholder
-    X_encoded[:, string_cols_ix] = np.where(
-        placeholder_mask,
-        np.nan,
-        X_encoded[:, string_cols_ix],
-    )
+    # Replace placeholder values with NaN in encoded array
+    if placeholder_mask is not None and len(string_cols) > 0:
+        if ord_encoder is not None:
+            feature_names_out = ord_encoder.get_feature_names_out()
+            name_to_idx = {name: idx for idx, name in enumerate(feature_names_out)}
+            # Convert column names to match feature_names_out format (e.g., 1 -> 'x1')
+            string_cols_ix_encoded = np.array(
+                [
+                    name_to_idx[
+                        f"x{col}" if isinstance(col, (int, np.integer)) else col
+                    ]
+                    for col in string_cols
+                ]
+            )
+        else:
+            string_cols_ix_encoded = string_cols_original_ix
+
+        X_encoded[:, string_cols_ix_encoded] = np.where(
+            placeholder_mask,
+            np.nan,
+            X_encoded[:, string_cols_ix_encoded],
+        )
+
     return X_encoded.astype(np.float64)
 
 
