@@ -66,9 +66,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution ${{ matrix.dependency-set }} .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
       - name: Initialize submodules
@@ -102,9 +100,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution highest .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
 
       - name: Initialize submodules
@@ -150,9 +146,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution ${{ matrix.dependency-set }} .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
       - name: Initialize submodules

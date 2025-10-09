@@ -7,6 +7,7 @@ name = "tabpfn"
 version = "2.2.1"
 dependencies = [
   "torch>=2.1,<3",
+  "numpy>=1.21.6,<3",
   "scikit-learn>=1.2.0,<1.8",
   "typing_extensions>=4.12.0",
   "scipy>=1.11.1,<2",
@@ -95,6 +96,14 @@ dev = [
   # We use Ruff for formatting but this allows mkdocstrings to format signatures in the
   # docs.
   "black>=25.9.0",
+]
+# The minimum subset of the dev dependencies required to run the tests on the CI.
+# The idea is to be as close to the deployment environment as possible.
+ci = [
+  "pytest>=8.4.2",
+  "pytest-mock>=3.14.1",
+  "onnx>=1.19.0",
+  "psutil>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
