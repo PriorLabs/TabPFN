@@ -108,22 +108,9 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         )
     )
 
-    def find_seq_output(config: EnsembleConfig) -> Tensor | dict:
-        """Find the sequential output corresponding to the given config.
-
-        The configs are not hashable, so we have to resort to this search method.
-        """
-        for output, trial_config in outputs_sequential:
-            if trial_config == config:
-                return output
-
-        return pytest.fail(
-            f"Parallel config was not found in sequential configs: {config}"
-        )
-
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:
-        seq_output = find_seq_output(par_config)
+        seq_output = _find_seq_output(par_config, outputs_sequential)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
@@ -165,22 +152,9 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         )
     )
 
-    def find_seq_output(config: EnsembleConfig) -> Tensor | dict:
-        """Find the sequential output corresponding to the given config.
-
-        The configs are not hashable, so we have to resort to this search method.
-        """
-        for output, trial_config in outputs_sequential:
-            if trial_config == config:
-                return output
-
-        return pytest.fail(
-            f"Parallel config was not found in sequential configs: {config}"
-        )
-
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:
-        seq_output = find_seq_output(par_config)
+        seq_output = _find_seq_output(par_config, outputs_sequential)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
@@ -215,3 +189,18 @@ def _create_test_ensemble_configs(
         n_classes=n_classes,
         random_state=0,
     )
+
+
+def _find_seq_output(
+    config: EnsembleConfig,
+    outputs_sequential: list[tuple[Tensor | dict, EnsembleConfig]],
+) -> Tensor | dict:
+    """Find the sequential output corresponding to the given config.
+
+    The configs are not hashable, so we have to resort to this search method.
+    """
+    for output, trial_config in outputs_sequential:
+        if trial_config == config:
+            return output
+
+    return pytest.fail(f"Parallel config was not found in sequential configs: {config}")
