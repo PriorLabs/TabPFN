@@ -431,6 +431,7 @@ A: **Yes!**
 A: Best practices:
 - Use **AutoTabPFNClassifier** from [TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions) for post-hoc ensembling
 - Feature engineering: Add domain-specific features to improve model performance
+
 Not effective:
   - Adapt feature scaling
   - Convert categorical features to numerical values (e.g., one-hot encoding)
