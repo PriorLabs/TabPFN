@@ -433,8 +433,8 @@ A: Best practices:
 - Feature engineering: Add domain-specific features to improve model performance
 
 Not effective:
-  - Adapt feature scaling
-  - Convert categorical features to numerical values (e.g., one-hot encoding)
+- Adapt feature scaling
+- Convert categorical features to numerical values (e.g., one-hot encoding)
 
 ## 🛠️ Development
 
