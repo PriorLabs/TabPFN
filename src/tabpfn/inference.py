@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
@@ -200,14 +201,17 @@ class InferenceEngineOnDemand(InferenceEngine):
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         rng = np.random.default_rng(self.static_seed)
-        itr = fit_preprocessing(
-            configs=self.ensemble_configs,
-            X_train=self.X_train,
-            y_train=self.y_train,
-            random_state=rng,
-            cat_ix=self.cat_ix,
-            n_workers=self.n_workers,
-            parallel_mode="as-ready",
+
+        ensemble_configs, preprocessings = itertools.tee(
+            fit_preprocessing(
+                configs=self.ensemble_configs,
+                X_train=self.X_train,
+                y_train=self.y_train,
+                random_state=rng,
+                cat_ix=self.cat_ix,
+                n_workers=self.n_workers,
+                parallel_mode="as-ready",
+            )
         )
 
         if self.force_inference_dtype is not None:
@@ -223,11 +227,11 @@ class InferenceEngineOnDemand(InferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
             )
-            for _, preprocessor, X_train, y_train, cat_ix in itr
+            for _, preprocessor, X_train, y_train, cat_ix in preprocessings
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for config, output in zip(self.ensemble_configs, outputs):
+        for (config, _, _, _, _), output in zip(ensemble_configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
         self.model.cpu()

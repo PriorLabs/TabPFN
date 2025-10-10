@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Literal, overload
 from typing_extensions import override
 
+import pytest
 import torch
 from numpy.random import default_rng
 from torch import Tensor
@@ -13,6 +14,7 @@ from tabpfn.architectures.interface import Architecture
 from tabpfn.inference import InferenceEngineCachePreprocessing, InferenceEngineOnDemand
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
+    EnsembleConfig,
     PreprocessorConfig,
 )
 
@@ -47,7 +49,13 @@ class TestModel(Architecture):
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
     ) -> Tensor | dict[str, Tensor]:
-        return torch.zeros(size=(10, 1, 10))
+        """Perform a forward pass, see doc string of `Architecture`."""
+        assert isinstance(x, Tensor)
+        assert isinstance(y, Tensor)
+        n_train_test, _, _ = x.shape
+        n_train, _ = y.shape
+        test_rows = n_train_test - n_train
+        return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
 
     @property
     def ninp(self) -> int:
@@ -63,27 +71,27 @@ class TestModel(Architecture):
 
 def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     rng = default_rng(seed=0)
-    n_train = 10
-    X_train = rng.standard_normal(size=(n_train, 1, 2))
-    y_train = rng.standard_normal(size=(n_train, 1))
-    X_test = rng.standard_normal(size=(2, 1, 2))
+    n_train = 100
+    n_features = 4
+    n_classes = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
 
-    ensemble_config = ClassifierEnsembleConfig(
-        preprocess_config=PreprocessorConfig(name="power", categorical_name="none"),
-        add_fingerprint_feature=False,
-        polynomial_features="no",
-        feature_shift_count=0,
-        feature_shift_decoder="shuffle",
-        subsample_ix=None,
-        class_permutation=None,
-    )
     engine = InferenceEngineCachePreprocessing.prepare(
         X_train,
         y_train,
-        cat_ix=[0] * n_train,
+        cat_ix=[] * n_train,
         model=TestModel(),
-        ensemble_configs=[ensemble_config] * 2,
-        n_workers=0,
+        ensemble_configs=_create_test_ensemble_configs(
+            n_configs=5, n_classes=n_classes
+        ),
+        # n_workers is currently disabled (it always uses 1 worker). However, it seems
+        # likely we might used it in the near future.
+        # We want to test a value >1 as this might mean the outputs are not in the same
+        # order as the input configs, and we want to check that the parallel evaluation
+        # code behaves correctly in this scenario.
+        n_workers=5,
         rng=rng,
         dtype_byte_size=4,
         force_inference_dtype=None,
@@ -99,40 +107,49 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
             X_test, devices=[torch.device("cpu"), torch.device("cpu")], autocast=False
         )
     )
+
+    def find_seq_output(config: EnsembleConfig) -> Tensor | dict:
+        """Find the sequential output corresponding to the given config.
+
+        The configs are not hashable, so we have to resort to this search method.
+        """
+        for output, trial_config in outputs_sequential:
+            if trial_config == config:
+                return output
+
+        return pytest.fail(
+            f"Parallel config was not found in sequential configs: {config}"
+        )
+
     assert len(outputs_sequential) == len(outputs_parallel)
-    for (seq_output, seq_config), (par_output, par_config) in zip(
-        outputs_sequential, outputs_parallel
-    ):
+    for par_output, par_config in outputs_parallel:
+        seq_output = find_seq_output(par_config)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
-        assert seq_config == par_config
 
 
 def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     rng = default_rng(seed=0)
-    n_train = 10
-    n_estimators = 5
-    X_train = rng.standard_normal(size=(n_train, 1, 2))
-    y_train = rng.standard_normal(size=(n_train, 1))
-    X_test = rng.standard_normal(size=(2, 1, 2))
+    n_train = 100
+    n_features = 4
+    n_classes = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
 
-    ensemble_config = ClassifierEnsembleConfig(
-        preprocess_config=PreprocessorConfig(name="power", categorical_name="none"),
-        add_fingerprint_feature=False,
-        polynomial_features="no",
-        feature_shift_count=0,
-        feature_shift_decoder="shuffle",
-        subsample_ix=None,
-        class_permutation=None,
-    )
     engine = InferenceEngineOnDemand.prepare(
         X_train,
         y_train,
-        cat_ix=[0] * n_train,
+        cat_ix=[] * n_train,
         model=TestModel(),
-        ensemble_configs=[ensemble_config] * n_estimators,
-        n_workers=0,
+        ensemble_configs=_create_test_ensemble_configs(n_configs=5, n_classes=3),
+        # n_workers is currently disabled (it always uses 1 worker). However, it seems
+        # likely we might used it in the near future.
+        # We want to test a value >1 as this might mean the outputs are not in the same
+        # order as the input configs, and we want to check that the parallel evaluation
+        # code behaves correctly in this scenario.
+        n_workers=5,
         rng=rng,
         dtype_byte_size=4,
         force_inference_dtype=None,
@@ -147,11 +164,54 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
             X_test, devices=[torch.device("cpu"), torch.device("cpu")], autocast=False
         )
     )
+
+    def find_seq_output(config: EnsembleConfig) -> Tensor | dict:
+        """Find the sequential output corresponding to the given config.
+
+        The configs are not hashable, so we have to resort to this search method.
+        """
+        for output, trial_config in outputs_sequential:
+            if trial_config == config:
+                return output
+
+        return pytest.fail(
+            f"Parallel config was not found in sequential configs: {config}"
+        )
+
     assert len(outputs_sequential) == len(outputs_parallel)
-    for (seq_output, seq_config), (par_output, par_config) in zip(
-        outputs_sequential, outputs_parallel
-    ):
+    for par_output, par_config in outputs_parallel:
+        seq_output = find_seq_output(par_config)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
-        assert seq_config == par_config
+
+
+def _create_test_ensemble_configs(
+    n_configs: int, n_classes: int
+) -> list[ClassifierEnsembleConfig]:
+    preprocessor_configs = [
+        PreprocessorConfig(
+            "quantile_uni_coarse",
+            append_original="auto",
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd",
+            subsample_features=-1,
+        ),
+        PreprocessorConfig(
+            "none",
+            categorical_name="numeric",
+            subsample_features=-1,
+        ),
+    ]
+    return EnsembleConfig.generate_for_classification(
+        n=n_configs,
+        subsample_size=None,
+        max_index=n_classes - 1,
+        add_fingerprint_feature=True,
+        polynomial_features="all",
+        feature_shift_decoder="shuffle",
+        preprocessor_configs=preprocessor_configs,
+        class_shift_method=None,
+        n_classes=n_classes,
+        random_state=0,
+    )
