@@ -803,7 +803,7 @@ def get_bucket_limits(
             assert full_range[1] >= ys.max()
             full_range = torch.tensor(full_range)  # type: ignore
 
-        ys_sorted, _ys_order = ys.sort(0)  # type: ignore
+        ys_sorted, _ = ys.sort(0)  # type: ignore
         bucket_limits = (
             ys_sorted[ys_per_bucket - 1 :: ys_per_bucket][:-1]
             + ys_sorted[ys_per_bucket::ys_per_bucket]
