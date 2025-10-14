@@ -15,7 +15,11 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 import torch
-from sklearn.base import check_is_fitted, is_classifier
+from sklearn.base import (
+    TransformerMixin,
+    check_is_fitted,
+    is_classifier,
+)
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
@@ -32,6 +36,9 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.preprocessors.order_preserving_columntransformer import (
+    OrderPreservingColumnTransformer,
+)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -393,7 +400,7 @@ def fix_dtypes(  # noqa: D103
 def get_ordinal_encoder(
     *,
     numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
-) -> ColumnTransformer:
+) -> OrderPreservingColumnTransformer:
     """Create a ColumnTransformer that ordinally encodes string/category columns."""
     oe = OrdinalEncoder(
         # TODO: Could utilize the categorical dtype values directly instead of "auto"
@@ -408,7 +415,7 @@ def get_ordinal_encoder(
     # using a regex on the type of the column, and using `object`, `"object"` and
     # `np.object` will not pick up strings.
     to_convert = ["category", "string"]
-    return ColumnTransformer(
+    return OrderPreservingColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
         remainder=FunctionTransformer(),
         sparse_threshold=0.0,
@@ -616,6 +623,8 @@ def process_text_na_dataframe(
 
     Note that this function sometimes mutates its input.
     """
+    # Replace NAN values in X, for dtypes, which the OrdinalEncoder cannot handle
+    # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
     string_cols = X.select_dtypes(include=["string", "object"]).columns
     if len(string_cols) > 0:
         X[string_cols] = X[string_cols].fillna(placeholder)
@@ -626,22 +635,6 @@ def process_text_na_dataframe(
         X_encoded = ord_encoder.transform(X)
     else:
         X_encoded = X
-
-    if ord_encoder is not None:
-        # The ColumnTransformer will reorder the columns as following:
-        # - categorical columns (in the order they appear in the dataframe)
-        # - numerical columns (in the order they appear in the dataframe)
-        # We need to revert this to the original order.
-        # assumes the column transformer has one OrdinalEncoder, which is
-        # what we get when creating it using get_ordinal_encoder()
-        cat_cols = next(
-            columns
-            for _, transformer, columns in ord_encoder.transformers_
-            if isinstance(transformer, OrdinalEncoder)
-        )
-        num_cols = [c for c in X.columns if c not in cat_cols]
-        col_to_pos = {c: i for i, c in enumerate(cat_cols + num_cols)}
-        X_encoded = X_encoded[:, [col_to_pos[c] for c in X.columns]]
 
     string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
