@@ -401,7 +401,7 @@ def get_preprocessed_datasets_helper(
     if not hasattr(calling_instance, "model_") or calling_instance.model_ is None:
         _, rng = calling_instance._initialize_model_variables()
     else:
-        static_seed, rng = infer_random_state(calling_instance.random_state)
+        _static_seed, rng = infer_random_state(calling_instance.random_state)
 
     X_split, y_split = [], []
     for X_item, y_item in zip(X_raw, y_raw):

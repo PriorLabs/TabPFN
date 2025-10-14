@@ -62,6 +62,7 @@ import platform
 import numpy as np
 import pytest
 import torch
+from sklearn.datasets import load_iris
 from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
@@ -262,8 +263,6 @@ def get_tiny_regression_data():
 
 def get_iris_multiclass_data():
     """Get a small subset of iris data for multiclass testing."""
-    from sklearn.datasets import load_iris
-
     # Load iris dataset with 3 well-separated classes
     X, y = load_iris(return_X_y=True)
 

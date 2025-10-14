@@ -3,37 +3,31 @@
 from __future__ import annotations
 
 import os
+import threading
 from unittest.mock import MagicMock
 
 import numpy as np
+import psutil
 import pytest
 import torch
 
-from tabpfn.utils import infer_categorical_features, infer_devices
+from tabpfn.utils import (
+    get_total_memory_windows,
+    infer_categorical_features,
+    infer_devices,
+)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
 def test_internal_windows_total_memory():
-    if os.name != "nt":
-        pytest.skip("Windows specific test")
-    import psutil
-
-    from tabpfn.utils import get_total_memory_windows
-
     utils_result = get_total_memory_windows()
     psutil_result = psutil.virtual_memory().total / 1e9
     assert utils_result == psutil_result
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
 def test_internal_windows_total_memory_multithreaded():
     # collect results from multiple threads
-    if os.name != "nt":
-        pytest.skip("Windows specific test")
-    import threading
-
-    import psutil
-
-    from tabpfn.utils import get_total_memory_windows
-
     results = []
 
     def get_memory() -> None:

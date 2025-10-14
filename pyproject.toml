@@ -79,7 +79,7 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit>=4.3.0",
-  "ruff==0.8.6", # This version must be the same as in .pre-commit-config.yaml
+  "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
   "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest>=8.4.2",
@@ -239,8 +239,11 @@ exclude = [
   "**/*.ipynb",
 ]
 
-# Exclude a variety of commonly ignored directories.
 [tool.ruff.lint.per-file-ignores]
+# These files are copied without changes from extenal repositories, so ignore all rules.
+"src/tabpfn/misc/debug_versions.py" = ["ALL"]
+"src/tabpfn/misc/_sklearn_compat.py" = ["ALL"]
+
 "tests/*.py" = [
   "S101",
   "D101",
