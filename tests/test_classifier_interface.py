@@ -260,6 +260,37 @@ def test_predict_logits_and_consistency(
     assert log_loss(y, proba_from_predict_proba) < 5.0
 
 
+@pytest.mark.parametrize(("n_estimators"), [1, 2])
+def test_predict_raw_logits(
+    X_y: tuple[np.ndarray, np.ndarray],
+    n_estimators: int,
+):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    # Ensure y is int64 for consistency with classification tasks
+    y = y.astype(np.int64)
+
+    classifier = TabPFNClassifier(
+        n_estimators=n_estimators,
+        random_state=42,
+    )
+    classifier.fit(X, y)
+
+    logits = classifier.predict_raw_logits(X)
+    assert logits.shape[0] == n_estimators
+    assert isinstance(logits, np.ndarray)
+    assert logits.shape == (n_estimators, X.shape[0], classifier.n_classes_)
+    assert logits.dtype == np.float32
+    assert not np.isnan(logits).any()
+    assert not np.isinf(logits).any()
+    if classifier.n_classes_ > 1:
+        assert not np.all(logits == logits[:, 0:1]), (
+            "Logits are identical across classes for all samples, indicating "
+            "trivial output."
+        )
+
+
 def test_softmax_temperature_impact_on_logits_magnitude(
     X_y: tuple[np.ndarray, np.ndarray],
 ):
