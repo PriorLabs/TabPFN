@@ -1,3 +1,9 @@
+## Issue
+Please link the corresponding Github issue. If there is None, please open a new Issue
+with a description of the bug/feature request before making a PR, so we can discuss
+whether that is something we'd consider integrating into the code base and potentially
+avoid unnecessary work.
+
 ## Motivation and Context
 
 ---
