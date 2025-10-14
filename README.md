@@ -297,7 +297,7 @@ We're building the future of tabular machine learning and would love your involv
 
 2. **Contribute**:
    - Report bugs or request features
-   - Submit pull requests (please make sure to open issue discussing the feature/bug first if none exists)
+   - Submit pull requests (please make sure to open an issue discussing the feature/bug first if none exists)
    - Share your research and use cases
 
 3. **Stay Updated**: Star the repo and join Discord for the latest updates
