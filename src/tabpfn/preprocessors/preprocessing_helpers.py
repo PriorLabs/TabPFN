@@ -11,6 +11,20 @@ if TYPE_CHECKING:
     import numpy as np
     import torch
 
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Any
+from typing_extensions import override
+
+import pandas as pd
+from sklearn.base import (
+    BaseEstimator,
+    check_is_fitted,
+)
+from sklearn.compose import ColumnTransformer
+
+if TYPE_CHECKING:
+    from tabpfn.classifier import XType, YType
+
 
 class TransformResult(NamedTuple):
     """Result of a feature preprocessing step."""
@@ -164,6 +178,79 @@ class SequentialFeatureTransformer(UserList):
             f"but got {categorical_features}"
         )
         return TransformResult(X, categorical_features)
+
+
+class OrderPreservingColumnTransformer(ColumnTransformer):
+    """An ColumnTransformer that preserves the column order after transformation."""
+
+    def __init__(
+        self,
+        transformers: Sequence[
+            tuple[
+                str,
+                BaseEstimator,
+                str
+                | int
+                | slice
+                | Iterable[str | int]
+                | Callable[[Any], Iterable[str | int]],
+            ]
+        ],
+        **kwargs: Any,
+    ):
+        """Implementation base on https://scikit-learn.org/stable/modules/generated/sklearn.compose.ColumnTransformer.html.
+
+        Parameters
+        ----------
+        transformers : sequence of (name, transformer, columns) tuples
+            List of (name, transformer, columns) tuples specifying the transformers.
+        **kwargs : additional keyword arguments
+            Passed to sklearn.compose.ColumnTransformer.
+        """
+        super().__init__(transformers=transformers, **kwargs)
+
+    @override
+    def transform(self, X: XType, **kwargs: dict[str, Any]) -> XType:
+        original_columns = (
+            X.columns if isinstance(X, pd.DataFrame) else range(X.shape[-1])
+        )
+        X_t = super().transform(X, **kwargs)
+        return self._preserve_order(X=X_t, original_columns=original_columns)
+
+    @override
+    def fit_transform(
+        self, X: XType, y: YType = None, **kwargs: dict[str, Any]
+    ) -> XType:
+        original_columns = (
+            X.columns if isinstance(X, pd.DataFrame) else range(X.shape[-1])
+        )
+        X_t = super().fit_transform(X, y, **kwargs)
+        return self._preserve_order(X=X_t, original_columns=original_columns)
+
+    def _preserve_order(
+        self, X: XType, original_columns: list | range | pd.Index
+    ) -> XType:
+        check_is_fitted(self)
+        assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
+        for name, _, col_subset in self.transformers_:
+            if (
+                len(col_subset) > 0
+                and len(col_subset) < X.shape[-1]
+                and name != "remainder"
+            ):
+                # In case that the encoder processed a true subset of features, AND is
+                # not the "remainder", then we need to restore the column order
+
+                # map original columns to indices in the transformed array
+                transformed_columns = col_subset + [
+                    c for c in original_columns if c not in col_subset
+                ]
+                indices = [transformed_columns.index(c) for c in original_columns]
+                X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
+                # Once we restored the original columns, for one coder we can break out
+                # of the loop
+                break
+        return X
 
 
 __all__ = [

@@ -36,7 +36,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.preprocessors.order_preserving_columntransformer import (
+from tabpfn.preprocessors.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
 )
 
