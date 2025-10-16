@@ -202,7 +202,7 @@ graph LR
         ts_features --> model_choice;
         data_check -- "Purely Tabular" --> model_choice;
         model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, >10k samples" --> subsample["Handling Large Datasets<br/>Data"];
+        model_choice -- "Yes, >10k samples" --> subsample["Large Datasets Guide<br/>"];
         model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
     end
 
