@@ -209,6 +209,8 @@ graph LR
     subgraph Performance
         finetune_check["Need<br/>Finetuning?"];
         performance_check["Need Even Better Performance?"];
+        speed_check["Need faster inference<br/>at prediction time?"];
+        kv_cache["Enable KV Cache<br/>(fit_mode='fit_with_cache')<br/><small>Faster predict; +Memory ~O(N×F)</small>"];
         tuning_complete["Tuning Complete"];
 
         finetune_check -- Yes --> finetuning["Finetuning"];
@@ -216,15 +218,19 @@ graph LR
 
         finetuning --> performance_check;
 
-
         performance_check -- No --> tuning_complete;
         performance_check -- Yes --> hpo["HPO"];
         performance_check -- Yes --> post_hoc["Post-Hoc<br/>Ensembling"];
         performance_check -- Yes --> more_estimators["More<br/>Estimators"];
+        performance_check -- Yes --> speed_check;
+
+        speed_check -- Yes --> kv_cache;
+        speed_check -- No --> tuning_complete;
 
         hpo --> tuning_complete;
         post_hoc --> tuning_complete;
         more_estimators --> tuning_complete;
+        kv_cache --> tuning_complete;
     end
 
     subgraph Interpretability
@@ -247,7 +253,7 @@ graph LR
     end
 
     %% 3. LINK SUBGRAPHS AND PATHS
-    task_type -- "Prediction" --> data_check;
+    task_type -- "Classification or Regression" --> data_check;
     task_type -- "Unsupervised" --> unsupervised_type;
 
     subsample --> finetune_check;
@@ -255,11 +261,11 @@ graph LR
 
     %% 4. APPLY STYLES
     class start,end_node start_node;
-    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators process_node;
-    class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check decision_node;
+    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators,kv_cache process_node;
+    class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check,speed_check decision_node;
     class tuning_complete process_node;
 
-    %% 5. ADD CLICKABLE LINKS (RESTORED FROM ORIGINAL)
+    %% 5. ADD CLICKABLE LINKS (INCLUDING KV CACHE EXAMPLE)
     click local_version "https://github.com/PriorLabs/TabPFN" "TabPFN Backend Options" _blank
     click api_client "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Client" _blank
     click api_backend_note "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Backend" _blank
@@ -279,6 +285,8 @@ graph LR
     click post_hoc "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/phe/phe_example.py" "Post-Hoc Ensemble Example" _blank
     click hpo "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/hpo/tuned_tabpfn.py" "HPO Example" _blank
     click subsample "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py" "Large Datasets Example" _blank
+    click kv_cache "https://github.com/PriorLabs/TabPFN/blob/main/examples/kv_cache_fast_prediction.py" "KV Cache Fast Prediction Example" _blank
+
 ```
 
 ## 📜 License
