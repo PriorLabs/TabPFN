@@ -201,7 +201,7 @@ graph LR
         data_check -- "Time-Series Data?" --> ts_features["Use Time-Series<br/>Features"];
         ts_features --> model_choice;
         data_check -- "Purely Tabular" --> model_choice;
-        model_choice -- "No" --> rfpfn["RF-PFN"];
+        model_choice -- "No" --> finetune_check;
         model_choice -- "Yes, >10k samples" --> subsample["Handling Large Datasets<br/>Data"];
         model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
     end
@@ -250,13 +250,12 @@ graph LR
     task_type -- "Prediction" --> data_check;
     task_type -- "Unsupervised" --> unsupervised_type;
 
-    rfpfn --> finetune_check;
     subsample --> finetune_check;
     many_class --> finetune_check;
 
     %% 4. APPLY STYLES
     class start,end_node start_node;
-    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,rfpfn,subsample,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators process_node;
+    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators process_node;
     class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check decision_node;
     class tuning_complete process_node;
 
@@ -271,7 +270,6 @@ graph LR
     click density "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/density_estimation_outlier_detection.py" "TabPFN Density Estimation/Outlier Detection Example" _blank
     click embedding "https://github.com/PriorLabs/tabpfn-extensions/tree/main/examples/embedding" "TabPFN Embedding Example" _blank
     click ts_features "https://github.com/PriorLabs/tabpfn-time-series" "TabPFN Time-Series Example" _blank
-    click rfpfn "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/rf_pfn/rf_pfn_example.py" "RF-PFN Example" _blank
     click many_class "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/many_class/many_class_classifier_example.py" "Many Class Example" _blank
     click finetuning "https://github.com/PriorLabs/TabPFN/blob/main/examples/finetune_classifier.py" "Finetuning Example" _blank
     click feature_selection "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/feature_selection.py" "Feature Selection Example" _blank
