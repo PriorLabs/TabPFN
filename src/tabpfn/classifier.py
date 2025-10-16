@@ -153,7 +153,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        model_path: str | Path | Literal["auto"] = "auto",
+        model_path: str | list[str] | Path | list[Path] | Literal["auto"] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -222,6 +222,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
+                Can be a list of paths to load multiple models. If a list is provided,
+                the models are applied across different estimators.
 
                 - If `"auto"`, the model will be downloaded upon first use. This
                   defaults to your system cache directory, but can be overwritten

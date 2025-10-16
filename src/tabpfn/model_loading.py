@@ -32,6 +32,7 @@ from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
+from tabpfn.constants import ModelPath
 from tabpfn.inference import InferenceEngine
 from tabpfn.settings import settings
 
@@ -350,13 +351,13 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
 
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
     version: Literal["v2"],
     which: Literal["classifier"],
-    download: bool,
+    download_if_not_exists: bool,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
@@ -366,18 +367,18 @@ def load_model_criterion_config(
 
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
     version: Literal["v2"],
     which: Literal["regressor"],
-    download: bool,
+    download_if_not_exists: bool,
 ) -> tuple[Architecture, FullSupportBarDistribution, ArchitectureConfig]: ...
 
 
 def load_model_criterion_config(
-    model_path: None | str | Path,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
@@ -406,11 +407,17 @@ def load_model_criterion_config(
     Returns:
         The model, criterion, and config.
     """
-    (model_path, model_dir, model_name, which) = resolve_model_path(
-        model_path, which, version
+    (resolved_model_path, resolved_model_dir, resolved_model_name, which) = (
+        resolve_model_path(
+            model_path=model_path,
+            which=which,
+            version=version,
+        )
     )
 
-    model_dir.mkdir(parents=True, exist_ok=True)
+    # TODO: From here on we need to check whether we deal with a list or not
+
+    resolved_model_dir.mkdir(parents=True, exist_ok=True)
     if not model_path.exists():
         if not download:
             raise ValueError(
@@ -420,29 +427,30 @@ def load_model_criterion_config(
 
         logger.info(f"Downloading model to {model_path}.")
         res = download_model(
-            model_path,
+            resolved_model_path,
             version=version,
             which=cast("Literal['classifier', 'regressor']", which),
-            model_name=model_name,
+            model_name=resolved_model_name,
         )
         if res != "ok":
             repo_type = "clf" if which == "classifier" else "reg"
             raise RuntimeError(
-                f"Failed to download model to {model_path}!\n\n"
+                f"Failed to download model to {resolved_model_path}!\n\n"
                 f"For offline usage, please download the model manually from:\n"
-                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
-                f"Then place it at: {model_path}",
+                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_name}\n\n"
+                f"Then place it at: {resolved_model_path}",
             ) from res[0]
 
     loaded_model, criterion, config = load_model(
-        path=model_path, cache_trainset_representation=cache_trainset_representation
+        path=resolved_model_path,
+        cache_trainset_representation=cache_trainset_representation,
     )
     if check_bar_distribution_criterion and not isinstance(
         criterion,
         FullSupportBarDistribution,
     ):
         raise ValueError(
-            f"The model loaded, '{model_path}', was expected to have a"
+            f"The model loaded, '{resolved_model_path}', was expected to have a"
             " FullSupportBarDistribution criterion, but instead "
             f" had a {type(criterion).__name__} criterion.",
         )
@@ -450,10 +458,15 @@ def load_model_criterion_config(
 
 
 def resolve_model_path(
-    model_path: None | str | Path,
+    model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
-) -> tuple[Path, Path, str, str]:
+) -> tuple[
+    Path | list[Path],
+    Path | list[Path],
+    str | list[str],
+    Literal["regressor", "classifier"],
+]:
     """Resolves the model path, using the official default model if no path is provided.
 
     Args:
@@ -464,32 +477,32 @@ def resolve_model_path(
         version: The model version (currently only 'v2').
 
     Returns:
-        A tuple containing the resolved model Path, the parent directory Path,
-        the model's filename, and the model type.
+        A tuple containing the resolved model Path(s),
+        the parent directory Path(s), the model's filename(s), and the model type.
     """
     if model_path is None:
         # Get the source information to find the official default model filename.
         model_source = _get_model_source(ModelVersion(version), ModelType(which))
-        model_name = model_source.default_filename
+        resolved_model_name = model_source.default_filename
 
         # Determine the cache directory for storing models.
         if settings.tabpfn.model_cache_dir is not None:
-            model_dir = settings.tabpfn.model_cache_dir
+            resolved_model_dir = settings.tabpfn.model_cache_dir
         else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        # Construct the full path to the default model.
-        model_path = model_dir / model_name
+            resolved_model_dir = _user_cache_dir(
+                platform=sys.platform, appname="tabpfn"
+            )
+        resolved_model_path = resolved_model_dir / resolved_model_name
+    elif isinstance(model_path, ModelPath):
+        resolved_model_path = Path(model_path)
+        resolved_model_dir = resolved_model_path.parent
+        resolved_model_name = resolved_model_path.name
     else:
-        # If a path is provided, simply parse it.
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
+        resolved_model_path = [Path(p) for p in model_path]
+        resolved_model_dir = [p.parent for p in resolved_model_path]
+        resolved_model_name = [p.name for p in resolved_model_path]
 
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    return model_path, model_dir, model_name, which
+    return resolved_model_path, resolved_model_dir, resolved_model_name, which
 
 
 def get_loss_criterion(

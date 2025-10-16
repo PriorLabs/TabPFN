@@ -18,6 +18,7 @@ from tabpfn.config import ModelInterfaceConfig
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
+    ModelPath,
     XType,
     YType,
 )
@@ -84,35 +85,22 @@ class RegressorModelSpecs(BaseModelSpecs):
 ModelSpecs = Union[RegressorModelSpecs, ClassifierModelSpecs]
 
 
-@overload
 def initialize_tabpfn_model(
-    model_path: (str | Path | Literal["auto"] | RegressorModelSpecs),
-    which: Literal["regressor"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> RegressorModelSpecs: ...
-
-
-@overload
-def initialize_tabpfn_model(
-    model_path: (str | Path | Literal["auto"] | ClassifierModelSpecs),
-    which: Literal["classifier"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> ClassifierModelSpecs: ...
-
-
-def initialize_tabpfn_model(
-    model_path: str
-    | Path
-    | Literal["auto"]
+    model_path: ModelPath
+    | list[ModelPath]
     | RegressorModelSpecs
     | ClassifierModelSpecs,
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> ModelSpecs:
+) -> tuple[Architecture, ArchitectureConfig, FullSupportBarDistribution | None]:
     """Initializes a TabPFN model based on the provided configuration.
 
     Args:
         model_path: Path or directive ("auto") to load the pre-trained model from.
+            If a list of paths is provided, the models are applied across different
+            estimators. If a RegressorModelSpecs or ClassifierModelSpecs object is
+            provided, the model is loaded from the object.
+
         which: Which TabPFN model to load.
         fit_mode: Determines caching behavior.
 
@@ -121,54 +109,54 @@ def initialize_tabpfn_model(
         config: The configuration object associated with the loaded model.
         bar_distribution: The BarDistribution for regression (`None` if classifier).
     """
-    model, config, norm_criterion = None, None, None
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        model = model_path.model
-        config = model_path.config
-        norm_criterion = model_path.norm_criterion
-    elif isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
-        model = model_path.model
-        config = model_path.config
-    elif model_path is None or isinstance(model_path, (str, Path)):
-        # (after processing 'auto')
-        download = True
+        return model_path.model, model_path.config, model_path.norm_criterion
+
+    if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
+        return model_path.model, model_path.config, None
+
+    if (
+        model_path is None
+        or model_path == "auto"
+        or isinstance(model_path, (ModelPath, list[ModelPath]))  # pyright: ignore[reportArgumentType]
+    ):
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
-        # Load model with potential caching
+        download_if_not_exists = True
+
         if which == "classifier":
-            # The classifier's bar distribution is not used;
-            # pass check_bar_distribution_criterion=False
-            model, _, config = load_model_criterion_config(
-                model_path=model_path,
+            model, _, config = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+                model_path=model_path,  # pyright: ignore[reportArgumentType]
+                # The classifier's bar distribution is not used;
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="classifier",
                 version="v2",
-                download=download,
+                download_if_not_exists=download_if_not_exists,
             )
             norm_criterion = None
         else:
-            # The regressor's bar distribution is required
-            model, bardist, config = load_model_criterion_config(
-                model_path=model_path,
+            model, bardist, config = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+                model_path=model_path,  # pyright: ignore[reportArgumentType]
+                # The regressor's bar distribution is required
                 check_bar_distribution_criterion=True,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="regressor",
                 version="v2",
-                download=download,
+                download_if_not_exists=download_if_not_exists,
             )
             norm_criterion = bardist
-    else:
-        raise TypeError(
-            "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
-            + which
-            + "'. Expected 'classifier' or 'regressor'. and model_path"
-            + "is of of type"
-            + str(type(model_path))
-        )
 
-    return model, config, norm_criterion
+        return model, config, norm_criterion
+
+    raise TypeError(
+        "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
+        + which
+        + "'. Expected 'classifier' or 'regressor'. and model_path"
+        + "is of of type"
+        + str(type(model_path))
+    )
 
 
 def determine_precision(
