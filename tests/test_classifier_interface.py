@@ -613,6 +613,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "y": {0: "num_labels"},
         }
         _patch_layernorm_no_affine(classifier.model_)
+
+        # From 2.9 PyTorch changed the default export mode form TorchScript to
+        # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
+        # available in newer PyTorch versions, hence we don't always include it.
+        export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
             ModelWrapper(classifier.model_).eval(),
             (X_tensor, y_tensor, True, [[]]),
@@ -626,7 +631,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             output_names=["output"],
             opset_version=17,  # using 17 since we use torch>=2.1
             dynamic_axes=dynamic_axes,
-            dynamo=False,
+            **export_kwargs,
         )
 
 
