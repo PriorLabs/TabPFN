@@ -15,7 +15,7 @@ Implications:
 
 import time
 from sklearn.datasets import make_classification
-from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
