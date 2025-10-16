@@ -147,7 +147,7 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN UX](https://ux.priorlabs.ai)**
   No-code graphical interface to explore TabPFN capabilities—ideal for business users and prototyping.
 
-## 📊 TabPFN Workflow at a Glance
+## 🔀 TabPFN Workflow at a Glance
 Follow this decision tree to build your model and choose the right extensions from our ecosystem. It walks you through critical questions about your data, hardware, and performance needs, guiding you to the best solution for your specific use case.
 
 ```mermaid
