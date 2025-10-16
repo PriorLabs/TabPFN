@@ -614,7 +614,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         }
         _patch_layernorm_no_affine(classifier.model_)
 
-        # From 2.9 PyTorch changed the default export mode form TorchScript to
+        # From 2.9 PyTorch changed the default export mode from TorchScript to
         # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
         # available in newer PyTorch versions, hence we don't always include it.
         export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
