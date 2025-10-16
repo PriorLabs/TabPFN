@@ -42,7 +42,7 @@ def bench(clf, name: str):
     preds = clf.predict(X_test)
     t_pred = time.perf_counter() - t1
 
-    print(f"[{name}] fit: {t_fit:.4f}s | predict_proba: {t_pred:.4f}s "
+    print(f"[{name}] fit: {t_fit:.4f}s | predict: {t_pred:.4f}s "
           f"| Acc: {accuracy_score(y_test, preds):.3f} ")
 
 # Baseline: no cache
