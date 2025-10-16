@@ -86,7 +86,6 @@ dev = [
   "pytest-xdist>=3.8.0",
   "pytest-mock>=3.14.1",
   "onnx>=1.19.0", # required for onnx export tests
-  "onnxscript>=0.5.3", # required for onnx export tests
   "psutil>=7.1.0", # required for testing internal memory tool on windows
   # Docs
   "mkdocs>=1.6.1",
@@ -108,7 +107,6 @@ ci = [
   "pytest>=8.4.2",
   "pytest-mock>=3.14.1",
   "onnx>=1.19.0",
-  "onnxscript>=0.5.3",
   "psutil>=7.1.0",
 ]
 
