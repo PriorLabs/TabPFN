@@ -218,9 +218,9 @@ def test_reshape_step_append_original_logic(
     assert Xt.shape[1] == expected_output_features
 
 
-def _get_preprocessing_steps() -> list[
-    Callable[..., FeaturePreprocessingTransformerStep],
-]:
+def _get_preprocessing_steps() -> (
+    list[Callable[..., FeaturePreprocessingTransformerStep],]
+):
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
         for cls in preprocessors.__dict__.values()
@@ -292,16 +292,16 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         # Test 1: Shuffling samples should give correspondingly shuffled results
         result_normal = obj.transform(x2)
         result_reversed = obj.transform(x2[::-1])
-        assert np.allclose(result_reversed.X[::-1], result_normal.X), (
-            f"Transform depends on sample order for {cls}"
-        )
+        assert np.allclose(
+            result_reversed.X[::-1], result_normal.X
+        ), f"Transform depends on sample order for {cls}"
 
         # Test 2: Transforming a subset should match the subset of full transformation
         result_full = obj.transform(x2)
         result_subset = obj.transform(x2[:4])
-        assert np.allclose(result_full.X[:4], result_subset.X), (
-            f"Transform depends on other samples in batch for {cls}"
-        )
+        assert np.allclose(
+            result_full.X[:4], result_subset.X
+        ), f"Transform depends on other samples in batch for {cls}"
 
         # Test 3: Categorical features should remain the same
         assert result_full.categorical_features == result_subset.categorical_features
@@ -401,9 +401,9 @@ def test__safe_power_transformer__power_transformer_fails__no_error():
     )
 
     # check if result contains nan or inf
-    assert np.all(np.isfinite(safe_result)), (
-        "SafePowerTransformer produced non-finite values"
-    )
+    assert np.all(
+        np.isfinite(safe_result)
+    ), "SafePowerTransformer produced non-finite values"
 
 
 def test__safe_power_transformer__transform_then_inverse_transform__returns_original():
@@ -458,14 +458,14 @@ def test_order_preserving_column_transformer():
 
     with pytest.raises(
         AssertionError,
-        match="OrderPreservingColumnTransformer only supports up to one transformer.",
+        match="OrderPreservingColumnTransformer only supports up to one transformer",
     ):
         OrderPreservingColumnTransformer(transformers=multiple_transformers)
 
     # Test assertion, due to unsupported encoder type (OneHotEncoder)
     incompatible_transformer = [("onehot", onehotencoder1, ["a", "b"])]
 
-    with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin."):
+    with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin"):
         OrderPreservingColumnTransformer(transformers=incompatible_transformer)
 
         # --- Mock dataset ---
