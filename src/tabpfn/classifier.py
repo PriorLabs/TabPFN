@@ -34,6 +34,7 @@ from tabpfn_common_utils.telemetry import track_model_call
 from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.base import (
+    ClassifierModelSpecs,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
@@ -72,7 +73,7 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
-    from tabpfn.architectures.interface import ArchitectureConfig
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
 
     try:
@@ -84,11 +85,17 @@ if TYPE_CHECKING:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """TabPFNClassifier class."""
 
-    config_: ArchitectureConfig
-    """The configuration of the loaded model to be used for inference.
+    configs_: list[ArchitectureConfig]
+    """The configurations of the loaded models to be used for inference.
 
-    The concrete type of this config is defined by the arhitecture in use and should be
-    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    The concrete type of these configs is defined by the architectures in use and should
+    be inspected at runtime, but they will be subclasses of ArchitectureConfig.
+    """
+
+    models_: list[Architecture]
+    """The loaded models to be used for inference.
+
+    The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
     interface_config_: ModelInterfaceConfig
@@ -153,7 +160,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        model_path: str | Path | Literal["auto"] = "auto",
+        model_path: str
+        | Path
+        | list[str | Path]
+        | Literal["auto"]
+        | ClassifierModelSpecs
+        | list[ClassifierModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -222,6 +234,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
+                Can be a list of paths to load multiple models. If a list is provided,
+                the models are applied across different estimators.
 
                 - If `"auto"`, the model will be downloaded upon first use. This
                   defaults to your system cache directory, but can be overwritten
@@ -547,7 +561,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             preprocess_transforms = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = EnsembleConfig.generate_for_classification(
-            n=self.n_estimators,
+            num_estimators=self.n_estimators,
             subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
@@ -564,6 +578,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else None,
             n_classes=self.n_classes_,
             random_state=rng,
+            num_models=len(self.models_),
         )
         assert len(ensemble_configs) == self.n_estimators
         return ensemble_configs, X, y
@@ -602,7 +617,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.fit_mode = "batched"
 
         # If there is a model, and we are lazy, we skip reinitialization
-        if not hasattr(self, "model_") or not no_refit:
+        if not hasattr(self, "models_") or not no_refit:
             byte_size, rng = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
@@ -614,7 +629,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X_preprocessed,
             y_train=y_preprocessed,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=configs,
             cat_ix=cat_ix,
             fit_mode="batched",
@@ -647,7 +662,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if not hasattr(self, "model_") or not self.differentiable_input:
+        if not hasattr(self, "models_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
             ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
         else:  # already fitted and prompt_tuning mode: no cat. features
@@ -660,7 +675,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X,
             y_train=y,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,

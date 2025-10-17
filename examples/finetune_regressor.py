@@ -158,7 +158,7 @@ def main() -> None:
 
     # Optimizer must be created AFTER get_preprocessed_datasets, which initializes the model
     optimizer = Adam(
-        regressor.model_.parameters(), lr=config["finetuning"]["learning_rate"]
+        regressor.models_[0].parameters(), lr=config["finetuning"]["learning_rate"]
     )
     print(
         f"--- Optimizer Initialized: Adam, LR: {config['finetuning']['learning_rate']} ---\n"

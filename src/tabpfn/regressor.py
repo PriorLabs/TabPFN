@@ -77,7 +77,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
-    from tabpfn.architectures.interface import ArchitectureConfig
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
@@ -129,11 +129,17 @@ RegressionResultType = Union[
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFNRegressor class."""
 
-    config_: ArchitectureConfig
-    """The configuration of the loaded model to be used for inference.
+    configs_: list[ArchitectureConfig]
+    """The configurations of the loaded models to be used for inference.
 
-    The concrete type of this config is defined by the arhitecture in use and should be
-    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    The concrete type of these configs is defined by the architectures in use and should
+    be inspected at runtime, but they will be subclasses of ArchitectureConfig.
+    """
+
+    models_: list[Architecture]
+    """The loaded models to be used for inference.
+
+    The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
     interface_config_: ModelInterfaceConfig
@@ -194,7 +200,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
-        model_path: str | Path | Literal["auto"] | RegressorModelSpecs = "auto",
+        model_path: str
+        | Path
+        | list[str | Path]
+        | Literal["auto"]
+        | RegressorModelSpecs
+        | list[RegressorModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -605,7 +616,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         preprocess_transforms = self.interface_config_.PREPROCESS_TRANSFORMS
 
         ensemble_configs = EnsembleConfig.generate_for_regression(
-            n=self.n_estimators,
+            num_estimators=self.n_estimators,
             subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
@@ -619,6 +630,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ),
             target_transforms=target_preprocessors,
             random_state=rng,
+            num_models=len(self.models_),
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -661,7 +673,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.fit_mode = "batched"
 
         # If there is a model, and we are lazy, we skip reinitialization
-        if not hasattr(self, "model_") or not no_refit:
+        if not hasattr(self, "models_") or not no_refit:
             byte_size, rng = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
@@ -673,7 +685,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X_preprocessed,
             y_train=y_preprocessed,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=configs,
             cat_ix=cat_ix,
             fit_mode="batched",
@@ -712,7 +724,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if not hasattr(self, "model_") or not self.differentiable_input:
+        if not hasattr(self, "models_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
             ensemble_configs, X, y, self.znorm_space_bardist_ = (
                 self._initialize_dataset_preprocessing(X, y, rng)
@@ -749,7 +761,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X,
             y_train=y,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,
