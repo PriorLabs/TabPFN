@@ -406,7 +406,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if n_jobs is not None:
             warnings.warn(
-                "TabPFNRegressor(n_jobs=...) is deprecated. "
+                "TabPFNClassifier(n_jobs=...) is deprecated. "
                 "Use `n_preprocessing_jobs` instead.",
                 DeprecationWarning,
                 stacklevel=2,
