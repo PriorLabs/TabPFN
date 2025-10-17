@@ -7,7 +7,7 @@ from functools import partial
 import numpy as np
 import pytest
 import torch
-from sklearn.preprocessing import PowerTransformer
+from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, PowerTransformer
 
 from tabpfn import preprocessors
 from tabpfn.preprocessors import (
@@ -17,6 +17,7 @@ from tabpfn.preprocessors import (
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,
 )
+from tabpfn.preprocessors.preprocessing_helpers import OrderPreservingColumnTransformer
 
 
 @pytest.fixture
@@ -434,3 +435,33 @@ def test__safe_power_transformer__transform_then_inverse_transform__returns_orig
             atol=1e-7,
             err_msg=f"Inverse transform failed for test case {i}",
         )
+
+
+def test_order_preserving_column_transformer_init():
+    """Should raise AssertionError if column sets overlap."""
+    ordinal_enc1 = OrdinalEncoder()
+    ordinal_enc2 = OrdinalEncoder()
+    onehotencoder1 = OneHotEncoder()
+
+    # Test assertion, due to overlapping columns across encoders!
+    # no disjoint subset of columns
+    overlapping_transformers = [
+        ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
+        ("ordinal_enc2", ordinal_enc2, ["b", "c"]),  # overlap on "b"
+    ]
+
+    with pytest.raises(AssertionError, match="disjoint"):
+        OrderPreservingColumnTransformer(transformers=overlapping_transformers)
+
+    # Test assertion, due to unsupported encoder type (OneHotEncoder)
+    incompatible_transformer = [("onehot", onehotencoder1, ["a", "b"])]
+
+    with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin."):
+        OrderPreservingColumnTransformer(transformers=incompatible_transformer)
+
+    # Test no assertion if everthing is compatible
+    non_overlapping_ordinal_encoders = [
+        ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
+        ("ordinal_enc2", ordinal_enc2, ["c"]),
+    ]
+    OrderPreservingColumnTransformer(transformers=non_overlapping_ordinal_encoders)

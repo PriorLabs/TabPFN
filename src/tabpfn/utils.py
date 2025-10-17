@@ -415,6 +415,13 @@ def get_ordinal_encoder(
     # using a regex on the type of the column, and using `object`, `"object"` and
     # `np.object` will not pick up strings.
     to_convert = ["category", "string"]
+
+    # Using a ColumnTransformer, where an inner transformer is applied only to a subset
+    # of columns, does not retain the original column order of the data, which later
+    # components in the PFN pipeline rely on (e.g., categorical indices).
+    # Therefore, we use a custom class that, under certain constraints
+    # (only OneToOneFeatureMixin transformers on disjoint column subsets),
+    # reconstructs the original order after encoding.
     return OrderPreservingColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
         remainder=FunctionTransformer(),

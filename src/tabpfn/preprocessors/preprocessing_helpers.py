@@ -7,6 +7,8 @@ from collections import UserList
 from typing import TYPE_CHECKING, NamedTuple
 from typing_extensions import Self
 
+from sklearn.base import OneToOneFeatureMixin
+
 if TYPE_CHECKING:
     import numpy as np
     import torch
@@ -209,6 +211,20 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
         """
         super().__init__(transformers=transformers, **kwargs)
 
+        # Check 1) all transformers are  subcass of OneToOneFeatureMixin and
+        # 2) all transformers operate on a disjoint column set
+
+        assert all(isinstance(t, OneToOneFeatureMixin) for _, t, _ in transformers), (
+            "OrderPreservingColumnTransformer currently only supports transformers "
+            "that are instances of OneToOneFeatureMixin."
+        )
+
+        cols = [set(c) for *_, c in transformers]
+        assert all(
+            a.isdisjoint(b) for i, a in enumerate(cols) for b in cols[i + 1 :]
+        ), "OrderPreservingColumnTransformer currently only supports multiple "
+        "transformers if all subsets of columns are disjoint across transformers."
+
     @override
     def transform(self, X: XType, **kwargs: dict[str, Any]) -> XType:
         original_columns = (
@@ -232,24 +248,19 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
     ) -> XType:
         check_is_fitted(self)
         assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
-        for name, _, col_subset in self.transformers_:
+        for name, _, col_subset in reversed(self.transformers_):
             if (
                 len(col_subset) > 0
                 and len(col_subset) < X.shape[-1]
                 and name != "remainder"
             ):
-                # In case that the encoder processed a true subset of features, AND is
-                # not the "remainder", then we need to restore the column order
-
-                # map original columns to indices in the transformed array
+                # Map original columns to indices in the transformed array
                 transformed_columns = col_subset + [
                     c for c in original_columns if c not in col_subset
                 ]
                 indices = [transformed_columns.index(c) for c in original_columns]
+                # restore the column order from before the transfomer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
-                # Once we restored the original columns, for one coder we can break out
-                # of the loop
-                break
         return X
 
 
