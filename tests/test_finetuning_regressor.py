@@ -162,15 +162,15 @@ def test_regressor_dataset_and_collator_batches_type(
         assert isinstance(batch, tuple)
         (
             X_trains_preprocessed,
-            X_tests_preprocessed,
+            _X_tests_preprocessed,
             y_trains_preprocessed,
-            y_test_standardized,
+            _y_test_standardized,
             cat_ixs,
             confs,
             raw_space_bardist_,
             bar_distribution,
-            x_test_raw,
-            y_test_raw,
+            _x_test_raw,
+            _y_test_raw,
         ) = batch
         for est_tensor in X_trains_preprocessed:
             assert isinstance(est_tensor, torch.Tensor)
@@ -199,7 +199,7 @@ def test_tabpfn_regressor_finetuning_loop(
     synthetic_regression_data,
 ) -> None:
     X, y = synthetic_regression_data
-    X_train, X_test, y_train, y_test = train_test_split(
+    X_train, _X_test, y_train, _y_test = train_test_split(
         X, y, test_size=0.3, random_state=42
     )
 
@@ -246,8 +246,8 @@ def test_tabpfn_regressor_finetuning_loop(
                 cat_ixs,
                 confs,
                 raw_space_bardist_,
-                bar_distribution,
-                batch_x_test_raw,
+                _bar_distribution,
+                _batch_x_test_raw,
                 batch_y_test_raw,
             ) = data_batch
 
@@ -260,9 +260,9 @@ def test_tabpfn_regressor_finetuning_loop(
             averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
 
             # --- Basic Shape Checks ---
-            assert (
-                averaged_pred_logits.ndim == 3
-            ), f"Expected 3D output, got {averaged_pred_logits.shape}"
+            assert averaged_pred_logits.ndim == 3, (
+                f"Expected 3D output, got {averaged_pred_logits.shape}"
+            )
 
             # Batch Size
             assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
@@ -284,15 +284,15 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(X_trains_preprocessed) == reg.n_estimators
             assert len(y_trains_preprocessed) == reg.n_estimators
             assert reg.model_ is not None, "Model not initialized after fit"
-            assert hasattr(
-                reg, "znorm_space_bardist_"
-            ), "Regressor missing 'znorm_space_bardist_' attribute after fit"
-            assert hasattr(
-                reg, "raw_space_bardist_"
-            ), "Regressor missing 'raw_space_bardist_' attribute after fit"
-            assert (
-                reg.znorm_space_bardist_ is not None
-            ), "reg.znorm_space_bardist_ is None"
+            assert hasattr(reg, "znorm_space_bardist_"), (
+                "Regressor missing 'znorm_space_bardist_' attribute after fit"
+            )
+            assert hasattr(reg, "raw_space_bardist_"), (
+                "Regressor missing 'raw_space_bardist_' attribute after fit"
+            )
+            assert reg.znorm_space_bardist_ is not None, (
+                "reg.znorm_space_bardist_ is None"
+            )
 
             lossfn = None
             if optimization_space == "raw_label_space":
@@ -372,13 +372,13 @@ def test_finetuning_consistency_bar_distribution(
     data_batch = next(iter(dataloader))
     (
         X_trains_preprocessed,
-        X_tests_preprocessed,
+        _X_tests_preprocessed,
         y_trains_preprocessed,
         y_test_standardized,
         cat_ixs,
         confs,
         raw_space_bardist_,
-        bar_distribution,
+        _bar_distribution,
         batch_x_test_raw,
         batch_y_test_raw,
     ) = data_batch
@@ -569,9 +569,9 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         p1_squeezed = tensor_p1_full.squeeze()
         p3_squeezed = tensor_p3_full.squeeze()
 
-        assert (
-            p1_squeezed.shape == p3_squeezed.shape
-        ), "Shapes of final model input tensors mismatch."
+        assert p1_squeezed.shape == p3_squeezed.shape, (
+            "Shapes of final model input tensors mismatch."
+        )
 
         atol = 1e-6
         tensors_match = torch.allclose(p1_squeezed, p3_squeezed, atol=atol)

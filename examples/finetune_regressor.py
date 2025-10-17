@@ -190,7 +190,7 @@ def main() -> None:
                     raw_space_bardist_,
                     znorm_space_bardist_,
                     _,
-                    y_test_raw,
+                    _y_test_raw,
                 ) = data_batch
 
                 regressor.raw_space_bardist_ = raw_space_bardist_[0]

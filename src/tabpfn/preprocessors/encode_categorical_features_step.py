@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing_extensions import override
 
 import numpy as np
@@ -212,8 +213,6 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
         if self.categorical_transformer_ is None:
             return X
-
-        import warnings
 
         with warnings.catch_warnings():
             warnings.filterwarnings(

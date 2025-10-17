@@ -6,16 +6,16 @@ def test__packages_can_still_be_imported_from_old_location() -> None:
 
     We moved the packages from tabpfn.model to tabpfn.architectures.base.
     """
-    import tabpfn.model.attention
-    import tabpfn.model.bar_distribution
-    import tabpfn.model.config
-    import tabpfn.model.encoders
-    import tabpfn.model.layer
-    import tabpfn.model.loading
-    import tabpfn.model.memory
-    import tabpfn.model.mlp
-    import tabpfn.model.preprocessing
-    import tabpfn.model.transformer
+    import tabpfn.model.attention  # noqa: PLC0415
+    import tabpfn.model.bar_distribution  # noqa: PLC0415
+    import tabpfn.model.config  # noqa: PLC0415
+    import tabpfn.model.encoders  # noqa: PLC0415
+    import tabpfn.model.layer  # noqa: PLC0415
+    import tabpfn.model.loading  # noqa: PLC0415
+    import tabpfn.model.memory  # noqa: PLC0415
+    import tabpfn.model.mlp  # noqa: PLC0415
+    import tabpfn.model.preprocessing  # noqa: PLC0415
+    import tabpfn.model.transformer  # noqa: PLC0415
 
     assert hasattr(tabpfn.model.attention, "Attention")
     assert hasattr(tabpfn.model.bar_distribution, "BarDistribution")

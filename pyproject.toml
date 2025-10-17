@@ -7,6 +7,7 @@ name = "tabpfn"
 version = "2.2.1"
 dependencies = [
   "torch>=2.1,<3",
+  "numpy>=1.21.6,<3",
   "scikit-learn>=1.2.0,<1.8",
   "typing_extensions>=4.12.0",
   "scipy>=1.11.1,<2",
@@ -20,7 +21,11 @@ dependencies = [
   # Once Python 3.10 is the minimum version, this can be removed.
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
-  "tabpfn-common-utils[telemetry-interactive]>=0.1.8"
+  "tabpfn-common-utils[telemetry-interactive]>=0.1.8",
+  # pyobjc-framework-Metal is required to determine the available memory for MPS
+  # devices for PyTorch <2.5, so we only need it on MacOS.
+  # Once the minimum PyTorch >= 2.5, this can be removed.
+  "pyobjc-framework-Metal; sys_platform == 'darwin'",
 ]
 requires-python = ">=3.9"
 authors = [
@@ -74,8 +79,8 @@ source = "https://github.com/priorlabs/tabpfn"
 dev = [
   # Lint/format
   "pre-commit>=4.3.0",
-  "ruff==0.8.6", # This version must be the same as in .pre-commit-config.yaml
-  "mypy==1.17.1", # This version must be the same as in .pre-commit-config.yaml
+  "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest>=8.4.2",
   "pytest-xdist>=3.8.0",
@@ -95,6 +100,14 @@ dev = [
   # We use Ruff for formatting but this allows mkdocstrings to format signatures in the
   # docs.
   "black>=25.9.0",
+]
+# The minimum subset of the dev dependencies required to run the tests on the CI.
+# The idea is to be as close to the deployment environment as possible.
+ci = [
+  "pytest>=8.4.2",
+  "pytest-mock>=3.14.1",
+  "onnx>=1.19.0",
+  "psutil>=7.1.0",
 ]
 
 [tool.pytest.ini_options]
@@ -226,8 +239,11 @@ exclude = [
   "**/*.ipynb",
 ]
 
-# Exclude a variety of commonly ignored directories.
 [tool.ruff.lint.per-file-ignores]
+# These files are copied without changes from extenal repositories, so ignore all rules.
+"src/tabpfn/misc/debug_versions.py" = ["ALL"]
+"src/tabpfn/misc/_sklearn_compat.py" = ["ALL"]
+
 "tests/*.py" = [
   "S101",
   "D101",

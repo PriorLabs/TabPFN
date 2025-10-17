@@ -1,3 +1,9 @@
+## Issue
+Please link the corresponding GitHub issue. If an issue does not already exist,
+please open one to describe the bug or feature request before creating a pull request.
+
+This allows us to discuss the proposal and helps avoid unnecessary work.
+
 ## Motivation and Context
 
 ---

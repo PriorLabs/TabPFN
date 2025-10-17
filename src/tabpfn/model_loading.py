@@ -14,8 +14,11 @@ import tempfile
 import urllib.request
 import urllib.response
 import warnings
+import zipfile
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from enum import Enum
+from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast, overload
 from urllib.error import URLError
@@ -125,7 +128,7 @@ def _try_huggingface_downloads(
     """
     """Try to download models and config using the HuggingFace Hub API."""
     try:
-        from huggingface_hub import hf_hub_download
+        from huggingface_hub import hf_hub_download  # noqa: PLC0415
     except ImportError as e:
         raise ImportError(
             "Please install huggingface_hub: pip install huggingface-hub",
@@ -687,8 +690,6 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
 
 
 def _extract_archive(path: Path, tmp: Path) -> None:
-    import zipfile
-
     with zipfile.ZipFile(path, "r") as archive:
         for member in archive.namelist():
             member_path = (tmp / member).resolve()
@@ -701,9 +702,6 @@ def load_fitted_tabpfn_model(
     path: Path | str, *, device: str | torch.device = "cpu"
 ) -> BaseEstimator:
     """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
-    from copy import deepcopy
-    from importlib import import_module
-
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)

@@ -12,6 +12,7 @@ import numpy as np
 import torch
 
 from tabpfn.settings import settings
+from tabpfn.utils import get_total_memory_windows
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 SAVE_PEAK_MEM_FACTOR = 8
@@ -63,9 +64,9 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
         **kwargs: Any,
     ) -> torch.Tensor:
         assert isinstance(self, torch.nn.Module)
-        assert (
-            save_peak_mem_factor is None or allow_inplace
-        ), "The parameter save_peak_mem_factor only supported with 'allow_inplace' set."
+        assert save_peak_mem_factor is None or allow_inplace, (
+            "The parameter save_peak_mem_factor only supported with 'allow_inplace' set"
+        )
         assert isinstance(x, torch.Tensor)
 
         tensor_inputs = list(tuple(self.parameters()) + tuple(args))
@@ -258,12 +259,13 @@ class MemoryUsageEstimator:
                 return recommended - allocated
 
         try:
-            # Fallback to using Metal API if torch.mps.recommended_max_memory is
-            # not available as it is only available in PyTorch 2.5.0 and later.
-            from Metal import MTLCreateSystemDefaultDevice
+            # Fallback to using Metal API because torch.mps.recommended_max_memory is
+            # only available in PyTorch 2.5.0 and later.
+            # Local import because `Metal` is only installed as a dependency on MacOS.
+            from Metal import MTLCreateSystemDefaultDevice  # noqa: PLC0415
         except ImportError as err:
             raise ImportError(
-                "pyobjc-framework-Metal is required to access the Metal "
+                "pyobjc-framework-metal is required to access the Metal "
                 "APIs for determining available free memory for MPS devices. "
                 "Please install it via `pip install pyobjc-framework-Metal`."
             ) from err
@@ -307,8 +309,6 @@ class MemoryUsageEstimator:
                     os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9
                 )
             except AttributeError:
-                from tabpfn.utils import get_total_memory_windows
-
                 if os.name == "nt":
                     free_memory = get_total_memory_windows()
                 else:
@@ -398,10 +398,10 @@ class MemoryUsageEstimator:
     @classmethod
     def reset_peak_memory_if_required(
         cls,
+        *,
         save_peak_mem: bool | Literal["auto"] | float | int,
         model: torch.nn.Module,
         X: torch.Tensor,
-        *,
         cache_kv: bool,
         device: torch.device,
         dtype_byte_size: int,

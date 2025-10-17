@@ -104,8 +104,11 @@ def test_regressor(
     model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if torch.device(device).type == "cpu" and inference_precision == "autocast":
-        pytest.skip("Only GPU supports inference_precision")
+    if inference_precision == "autocast":
+        if torch.device(device).type == "cpu":
+            pytest.skip("CPU device does not support 'autocast' inference.")
+        if torch.device(device).type == "mps" and torch.__version__ < "2.5":
+            pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
 
     # Use the environment-aware check to skip only if necessary
     if (
@@ -224,21 +227,21 @@ def test_regressor_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     # Test different prediction modes through the pipeline
     predictions_median = pipeline.predict(X, output_type="median")
-    assert predictions_median.shape == (
-        X.shape[0],
-    ), "Median predictions shape is incorrect"
+    assert predictions_median.shape == (X.shape[0],), (
+        "Median predictions shape is incorrect"
+    )
 
     predictions_mode = pipeline.predict(X, output_type="mode")
-    assert predictions_mode.shape == (
-        X.shape[0],
-    ), "Mode predictions shape is incorrect"
+    assert predictions_mode.shape == (X.shape[0],), (
+        "Mode predictions shape is incorrect"
+    )
 
     quantiles = pipeline.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
     assert isinstance(quantiles, list)
     assert len(quantiles) == 2
-    assert quantiles[0].shape == (
-        X.shape[0],
-    ), "Quantile predictions shape is incorrect"
+    assert quantiles[0].shape == (X.shape[0],), (
+        "Quantile predictions shape is incorrect"
+    )
 
 
 def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) -> None:
@@ -351,6 +354,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
+
+        # From 2.9 PyTorch changed the default export mode from TorchScript to
+        # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
+        # available in newer PyTorch versions, hence we don't always include it.
+        export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
             ModelWrapper(regressor.model_).eval(),
             (X, y, True, [[]]),
@@ -364,6 +372,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             output_names=["output"],
             opset_version=17,  # using 17 since we use torch>=2.1
             dynamic_axes=dynamic_axes,
+            **export_kwargs,
         )
 
 
@@ -556,35 +565,35 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     # Test different output types
     predictions_median = model.predict(X, output_type="median")
-    assert np.all(
-        predictions_median == 5.0
-    ), "Median predictions are not constant as expected"
+    assert np.all(predictions_median == 5.0), (
+        "Median predictions are not constant as expected"
+    )
 
     predictions_mode = model.predict(X, output_type="mode")
-    assert np.all(
-        predictions_mode == 5.0
-    ), "Mode predictions are not constant as expected"
+    assert np.all(predictions_mode == 5.0), (
+        "Mode predictions are not constant as expected"
+    )
 
     quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
     for quantile_prediction in quantiles:
-        assert np.all(
-            quantile_prediction == 5.0
-        ), "Quantile predictions are not constant as expected"
+        assert np.all(quantile_prediction == 5.0), (
+            "Quantile predictions are not constant as expected"
+        )
 
     full_output = model.predict(X, output_type="full")
-    assert np.all(
-        full_output["mean"] == 5.0
-    ), "Mean predictions are not constant as expected for full output"
-    assert np.all(
-        full_output["median"] == 5.0
-    ), "Median predictions are not constant as expected for full output"
-    assert np.all(
-        full_output["mode"] == 5.0
-    ), "Mode predictions are not constant as expected for full output"
+    assert np.all(full_output["mean"] == 5.0), (
+        "Mean predictions are not constant as expected for full output"
+    )
+    assert np.all(full_output["median"] == 5.0), (
+        "Median predictions are not constant as expected for full output"
+    )
+    assert np.all(full_output["mode"] == 5.0), (
+        "Mode predictions are not constant as expected for full output"
+    )
     for quantile_prediction in full_output["quantiles"]:
-        assert np.all(
-            quantile_prediction == 5.0
-        ), "Quantile predictions are not constant as expected for full output"
+        assert np.all(quantile_prediction == 5.0), (
+            "Quantile predictions are not constant as expected for full output"
+        )
 
 
 def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
@@ -596,9 +605,9 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     )
     assert model is not None, "model should be initialized for regressor"
     assert config is not None, "config should be initialized for regressor"
-    assert (
-        norm_criterion is not None
-    ), "norm_criterion should be initialized for regressor"
+    assert norm_criterion is not None, (
+        "norm_criterion should be initialized for regressor"
+    )
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
     regressor = TabPFNRegressor(device="cpu", random_state=42)
@@ -610,12 +619,12 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
     assert regressor.config_ is not None, "config_ should be initialized for regressor"
 
-    assert hasattr(
-        regressor, "znorm_space_bardist_"
-    ), "regressor should have znorm_space_bardist_ attribute"
-    assert (
-        regressor.znorm_space_bardist_ is not None
-    ), "znorm_space_bardist_ should be initialized for regressor"
+    assert hasattr(regressor, "znorm_space_bardist_"), (
+        "regressor should have znorm_space_bardist_ attribute"
+    )
+    assert regressor.znorm_space_bardist_ is not None, (
+        "znorm_space_bardist_ should be initialized for regressor"
+    )
 
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
@@ -632,9 +641,9 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
     assert reg2.config_ is not None, "config_ should be initialized for regressor2"
 
-    assert hasattr(
-        reg2, "znorm_space_bardist_"
-    ), "regressor2 should have znorm_space_bardist_ attribute"
-    assert (
-        reg2.znorm_space_bardist_ is not None
-    ), "znorm_space_bardist_ should be initialized for regressor2"
+    assert hasattr(reg2, "znorm_space_bardist_"), (
+        "regressor2 should have znorm_space_bardist_ attribute"
+    )
+    assert reg2.znorm_space_bardist_ is not None, (
+        "znorm_space_bardist_ should be initialized for regressor2"
+    )

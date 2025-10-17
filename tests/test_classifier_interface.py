@@ -118,8 +118,11 @@ def test_fit(
     model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    if torch.device(device).type == "cpu" and inference_precision in ["autocast"]:
-        pytest.skip("CPU device does not support 'autocast' inference.")
+    if inference_precision == "autocast":
+        if torch.device(device).type == "cpu":
+            pytest.skip("CPU device does not support 'autocast' inference.")
+        if torch.device(device).type == "mps" and torch.__version__ < "2.5":
+            pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
 
     # Use the environment-aware check to skip only if necessary
     if (
@@ -257,6 +260,37 @@ def test_predict_logits_and_consistency(
     assert log_loss(y, proba_from_predict_proba) < 5.0
 
 
+@pytest.mark.parametrize(("n_estimators"), [1, 2])
+def test_predict_raw_logits(
+    X_y: tuple[np.ndarray, np.ndarray],
+    n_estimators: int,
+):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    # Ensure y is int64 for consistency with classification tasks
+    y = y.astype(np.int64)
+
+    classifier = TabPFNClassifier(
+        n_estimators=n_estimators,
+        random_state=42,
+    )
+    classifier.fit(X, y)
+
+    logits = classifier.predict_raw_logits(X)
+    assert logits.shape[0] == n_estimators
+    assert isinstance(logits, np.ndarray)
+    assert logits.shape == (n_estimators, X.shape[0], classifier.n_classes_)
+    assert logits.dtype == np.float32
+    assert not np.isnan(logits).any()
+    assert not np.isinf(logits).any()
+    if classifier.n_classes_ > 1:
+        assert not np.all(logits == logits[:, 0:1]), (
+            "Logits are identical across classes for all samples, indicating "
+            "trivial output."
+        )
+
+
 def test_softmax_temperature_impact_on_logits_magnitude(
     X_y: tuple[np.ndarray, np.ndarray],
 ):
@@ -280,9 +314,9 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_high_temp.fit(X, y)
     logits_high_temp = model_high_temp.predict_logits(X)
 
-    assert np.mean(np.abs(logits_low_temp)) > np.mean(
-        np.abs(logits_high_temp)
-    ), "Low softmax temperature did not result in more extreme logits."
+    assert np.mean(np.abs(logits_low_temp)) > np.mean(np.abs(logits_high_temp)), (
+        "Low softmax temperature did not result in more extreme logits."
+    )
 
     model_temp_one = TabPFNClassifier(
         softmax_temperature=1.0, n_estimators=1, device="cpu", random_state=42
@@ -290,12 +324,12 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     model_temp_one.fit(X, y)
     logits_temp_one = model_temp_one.predict_logits(X)
 
-    assert not np.allclose(
-        logits_temp_one, logits_low_temp, atol=1e-6
-    ), "Logits did not change with low temperature."
-    assert not np.allclose(
-        logits_temp_one, logits_high_temp, atol=1e-6
-    ), "Logits did not change with high temperature."
+    assert not np.allclose(logits_temp_one, logits_low_temp, atol=1e-6), (
+        "Logits did not change with low temperature."
+    )
+    assert not np.allclose(logits_temp_one, logits_high_temp, atol=1e-6), (
+        "Logits did not change with high temperature."
+    )
 
 
 def test_balance_probabilities_alters_proba_output(
@@ -304,7 +338,7 @@ def test_balance_probabilities_alters_proba_output(
     """Verifies that enabling `balance_probabilities` indeed changes the output
     probabilities (assuming non-uniform class counts).
     """
-    X_full, y_full = X_y
+    X_full, _y_full = X_y
 
     # Introduce artificial imbalance to ensure balancing has an effect
     y_imbalanced = np.array(
@@ -333,9 +367,9 @@ def test_balance_probabilities_alters_proba_output(
     model_balance.fit(X_subset, y_imbalanced)
     proba_balance = model_balance.predict_proba(X_subset)
 
-    assert not np.allclose(
-        proba_no_balance, proba_balance, atol=1e-5
-    ), "Probabilities did not change when balance_probabilities was toggled."
+    assert not np.allclose(proba_no_balance, proba_balance, atol=1e-5), (
+        "Probabilities did not change when balance_probabilities was toggled."
+    )
 
 
 @pytest.mark.skip(
@@ -579,6 +613,11 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "y": {0: "num_labels"},
         }
         _patch_layernorm_no_affine(classifier.model_)
+
+        # From 2.9 PyTorch changed the default export mode from TorchScript to
+        # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
+        # available in newer PyTorch versions, hence we don't always include it.
+        export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
             ModelWrapper(classifier.model_).eval(),
             (X_tensor, y_tensor, True, [[]]),
@@ -592,6 +631,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             output_names=["output"],
             opset_version=17,  # using 17 since we use torch>=2.1
             dynamic_axes=dynamic_axes,
+            **export_kwargs,
         )
 
 
@@ -765,13 +805,13 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert classifier.model_ is not None, "model_ should be initialized for classifier"
 
     assert hasattr(classifier, "config_"), "classifier should have config_ attribute"
-    assert (
-        classifier.config_ is not None
-    ), "config_ should be initialized for classifier"
+    assert classifier.config_ is not None, (
+        "config_ should be initialized for classifier"
+    )
 
-    assert not hasattr(
-        classifier, "bardist_"
-    ), "classifier should not have bardist_ attribute"
+    assert not hasattr(classifier, "bardist_"), (
+        "classifier should not have bardist_ attribute"
+    )
 
     # 3) Reuse via ClassifierModelSpecs
     new_model_state = classifier.model_
@@ -782,15 +822,15 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     classifier2._initialize_model_variables()
 
     assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
-    assert (
-        classifier2.model_ is not None
-    ), "model_ should be initialized for classifier2"
+    assert classifier2.model_ is not None, (
+        "model_ should be initialized for classifier2"
+    )
 
     assert hasattr(classifier2, "config_"), "classifier2 should have config_ attribute"
-    assert (
-        classifier2.config_ is not None
-    ), "config_ should be initialized for classifier2"
+    assert classifier2.config_ is not None, (
+        "config_ should be initialized for classifier2"
+    )
 
-    assert not hasattr(
-        classifier2, "bardist_"
-    ), "classifier2 should not have bardist_ attribute"
+    assert not hasattr(classifier2, "bardist_"), (
+        "classifier2 should not have bardist_ attribute"
+    )

@@ -65,21 +65,26 @@ def classification_data_with_categoricals():
     ],
 )
 def test_save_load_happy_path(
-    estimator_class,
-    data_fixture,
-    saving_device,
-    loading_device,
-    request,
-    tmp_path,
-    monkeypatch,
-):
+    estimator_class: type[TabPFNRegressor] | type[TabPFNClassifier],
+    data_fixture: str,
+    saving_device: str,
+    loading_device: str,
+    request: pytest.FixtureRequest,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     X, y = request.getfixturevalue(data_fixture)
 
     # Simulate saving device
     if "cuda" in saving_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    elif "mps" in saving_device:
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
     elif "cpu" in saving_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     else:
         raise NotImplementedError(f"saving device: {saving_device} not found")
 
@@ -93,8 +98,13 @@ def test_save_load_happy_path(
     # Simulate saving device
     if "cuda" in loading_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    elif "mps" in loading_device:
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
     elif "cpu" in loading_device:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
     else:
         raise NotImplementedError(f"saving device: {loading_device} not found")
 
@@ -134,9 +144,8 @@ def test_save_load_happy_path(
 
 
 # --- Error Handling Tests ---
-def test_saving_unfitted_model_raises_error(regression_data, tmp_path):
+def test_saving_unfitted_model_raises_error(tmp_path: Path) -> None:
     """Tests that saving an unfitted model raises a RuntimeError."""
-    X, y = regression_data
     model = TabPFNRegressor()
     with pytest.raises(RuntimeError, match="Estimator must be fitted before saving"):
         model.save_fit_state(tmp_path / "model.tabpfn_fit")

@@ -61,22 +61,28 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@557e51de59eb14aaaba2ed9621916900a91d50c6 # v6.6.1
+        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution ${{ matrix.dependency-set }} .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
 
-      - name: Run Tests (exclude MPS params)
+      - name: Run Tests (including MPS)
+        if: ${{ matrix.dependency-set != 'lowest-direct' }}
+        run: pytest tests/
+
+      - name: Run Tests (without MPS)
+        if: ${{ matrix.dependency-set == 'lowest-direct' }}
         env:
-          TABPFN_EXCLUDE_DEVICES: "mps"
+          # The MPS tests are flakey on the CI for PyTorch < 2.3, possibly due to this
+          # https://github.com/pytorch/pytorch/issues/105839#issuecomment-1779116758,
+          # so disable the MPS device for these tests.
+          TABPFN_EXCLUDE_DEVICES: mps
         run: pytest tests/
 
   # -------------------------------------------------------------------
@@ -97,22 +103,18 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@557e51de59eb14aaaba2ed9621916900a91d50c6 # v6.6.1
+        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution highest .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
 
-      - name: Run Tests (exclude MPS params)
-        env:
-          TABPFN_EXCLUDE_DEVICES: "mps"
+      - name: Run Tests
         run: pytest tests/
 
   # -------------------------------------------------------------------
@@ -145,14 +147,12 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@557e51de59eb14aaaba2ed9621916900a91d50c6 # v6.6.1
+        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: |
-          uv pip install --system --resolution ${{ matrix.dependency-set }} .
-          uv pip install --system pytest pytest-mock psutil onnx
+        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
       - name: Initialize submodules

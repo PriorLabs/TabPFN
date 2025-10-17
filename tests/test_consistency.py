@@ -62,6 +62,7 @@ import platform
 import numpy as np
 import pytest
 import torch
+from sklearn.datasets import load_iris
 from sklearn.utils import check_random_state
 
 # mypy: ignore-errors
@@ -262,8 +263,6 @@ def get_tiny_regression_data():
 
 def get_iris_multiclass_data():
     """Get a small subset of iris data for multiclass testing."""
-    from sklearn.datasets import load_iris
-
     # Load iris dataset with 3 well-separated classes
     X, y = load_iris(return_X_y=True)
 
@@ -528,8 +527,10 @@ class TestTinyRegressorFitPreprocessors(ConsistencyTest):
     Use `fit_mode=fit_preprocessors`.
     """
 
+    DATASET_NAME = "tiny_regressor_fit_preprocessors"
+
     def get_dataset_name(self):
-        return "tiny_regressor_fit_preprocessors"
+        return self.DATASET_NAME
 
     def get_test_data(self):
         return get_tiny_regression_data()
@@ -609,11 +610,48 @@ class TestTinyRegressorFitWithCache(ConsistencyTest):
         self.run_test()
 
 
+class TestTinyRegressorSeveralDevices(ConsistencyTest):
+    """Test a regressor with several CPU devices, to simulate multi-device inference."""
+
+    def get_dataset_name(self):
+        # Use the same name as TestTinyRegressorFitPreprocessors so that the predictions
+        # of the two configurations are compared to each other: multi-device inference
+        # should not affect the result.
+        return TestTinyRegressorFitPreprocessors.DATASET_NAME
+
+    def get_test_data(self):
+        return get_tiny_regression_data()
+
+    def get_model(self):
+        regressor = TabPFNRegressor(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            # We select a fit mode that supports multi-device inference.
+            fit_mode="fit_preprocessors",
+        )
+        # The regressor does not allow specifying the same device twice, so override
+        # after the fact instead.
+        # Use lots of devices to maximise the chance of hitting a race condition.
+        regressor.devices_ = (torch.device("cpu"),) * DEFAULT_N_ESTIMATORS
+        return regressor
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on a very small regression dataset."""
+        self.run_test()
+
+
 class TestMulticlassClassifier(ConsistencyTest):
     """Test prediction consistency for a multiclass classifier."""
 
+    DATASET_NAME = "iris_multiclass"
+
     def get_dataset_name(self):
-        return "iris_multiclass"
+        return self.DATASET_NAME
 
     def get_test_data(self):
         return get_iris_multiclass_data()
@@ -624,6 +662,41 @@ class TestMulticlassClassifier(ConsistencyTest):
             random_state=FIXED_RANDOM_SEED,
             device="auto",
         )
+
+    def get_prediction_func(self):
+        return lambda model, X: model.predict_proba(X)
+
+    @platform_specific
+    def test_consistency(self):
+        """Test prediction consistency on iris multiclass dataset."""
+        self.run_test()
+
+
+class TestMulticlassClassifierSeveralDevices(ConsistencyTest):
+    """Test a classifier on several CPU devices, to simulate multi-device inference."""
+
+    def get_dataset_name(self):
+        # Use the same name as TestMulticlassClassifier so that the predictions of the
+        # two configurations are compared to each other: multi-device inference should
+        # not affect the result.
+        return TestMulticlassClassifier.DATASET_NAME
+
+    def get_test_data(self):
+        return get_iris_multiclass_data()
+
+    def get_model(self):
+        classifier = TabPFNClassifier(
+            n_estimators=DEFAULT_N_ESTIMATORS,
+            random_state=FIXED_RANDOM_SEED,
+            device="auto",
+            # We select a fit mode that supports multi-device inference.
+            fit_mode="fit_preprocessors",
+        )
+        # The classifier does not allow specifying the same device twice, so override it
+        # after the fact.
+        # Use lots of devices to maximise the chance of hitting a race condition.
+        classifier.devices_ = (torch.device("cpu"),) * DEFAULT_N_ESTIMATORS
+        return classifier
 
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
