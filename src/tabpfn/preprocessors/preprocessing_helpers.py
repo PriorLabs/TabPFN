@@ -152,9 +152,9 @@ class SequentialFeatureTransformer(UserList):
             X: 2d array of shape (n_samples, n_features)
             categorical_features: list of indices of categorical feature.
         """
-        assert len(self) > 0, (
-            "The SequentialFeatureTransformer must have at least one step."
-        )
+        assert (
+            len(self) > 0
+        ), "The SequentialFeatureTransformer must have at least one step."
         self.fit_transform(X, categorical_features)
         return self
 
@@ -164,9 +164,9 @@ class SequentialFeatureTransformer(UserList):
         Args:
             X: 2d array of shape (n_samples, n_features).
         """
-        assert len(self) > 0, (
-            "The SequentialFeatureTransformer must have at least one step."
-        )
+        assert (
+            len(self) > 0
+        ), "The SequentialFeatureTransformer must have at least one step."
         assert self.categorical_features_ is not None, (
             "The SequentialFeatureTransformer must be fit before it"
             " can be used to transform."
