@@ -21,8 +21,6 @@ from sklearn.base import (
     check_is_fitted,
     is_classifier,
 )
-from sklearn.compose import ColumnTransformer, make_column_selector
-from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
 from torch import nn
 
@@ -31,18 +29,15 @@ from tabpfn.architectures.base.encoders import (
     SequentialEncoder,
 )
 from tabpfn.constants import (
-    DEFAULT_NUMPY_PREPROCESSING_DTYPE,
     NA_PLACEHOLDER,
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.preprocessors.preprocessing_helpers import (
-    OrderPreservingColumnTransformer,
-)
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
+    from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
 
     from tabpfn.classifier import TabPFNClassifier, XType, YType
@@ -399,39 +394,6 @@ def fix_dtypes(  # noqa: D103
     if len(integer_columns) > 0:
         X[integer_columns] = X[integer_columns].astype(numeric_dtype)
     return X
-
-
-def get_ordinal_encoder(
-    *,
-    numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
-) -> OrderPreservingColumnTransformer:
-    """Create a ColumnTransformer that ordinally encodes string/category columns."""
-    oe = OrdinalEncoder(
-        # TODO: Could utilize the categorical dtype values directly instead of "auto"
-        categories="auto",
-        dtype=numpy_dtype,  # type: ignore
-        handle_unknown="use_encoded_value",
-        unknown_value=-1,
-        encoded_missing_value=np.nan,  # Missing stays missing
-    )
-
-    # Documentation of sklearn, deferring to pandas is misleading here. It's done
-    # using a regex on the type of the column, and using `object`, `"object"` and
-    # `np.object` will not pick up strings.
-    to_convert = ["category", "string"]
-
-    # Using a ColumnTransformer, where an inner transformer is applied only to a subset
-    # of columns, does not retain the original column order of the data, which later
-    # components in the PFN pipeline rely on (e.g., categorical indices).
-    # Therefore, we use a custom class that, under certain constraints
-    # (only OneToOneFeatureMixin transformers on disjoint column subsets),
-    # reconstructs the original order after encoding.
-    return OrderPreservingColumnTransformer(
-        transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
-        remainder=FunctionTransformer(),
-        sparse_threshold=0.0,
-        verbose_feature_names_out=False,
-    )
 
 
 def validate_Xy_fit(

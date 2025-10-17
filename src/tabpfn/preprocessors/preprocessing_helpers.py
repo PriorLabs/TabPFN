@@ -10,7 +10,6 @@ from typing_extensions import Self
 from sklearn.base import OneToOneFeatureMixin
 
 if TYPE_CHECKING:
-    import numpy as np
     import torch
 
 from collections.abc import Callable, Iterable, Sequence
@@ -22,10 +21,14 @@ from sklearn.base import (
     BaseEstimator,
     check_is_fitted,
 )
-from sklearn.compose import ColumnTransformer
+from sklearn.compose import ColumnTransformer, make_column_selector
+from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 if TYPE_CHECKING:
     from tabpfn.classifier import XType, YType
+import numpy as np
+
+from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
 
 
 class TransformResult(NamedTuple):
@@ -262,6 +265,39 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
                 # restore the column order from before the transfomer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
         return X
+
+
+def get_ordinal_encoder(
+    *,
+    numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
+) -> OrderPreservingColumnTransformer:
+    """Create a ColumnTransformer that ordinally encodes string/category columns."""
+    oe = OrdinalEncoder(
+        # TODO: Could utilize the categorical dtype values directly instead of "auto"
+        categories="auto",
+        dtype=numpy_dtype,  # type: ignore
+        handle_unknown="use_encoded_value",
+        unknown_value=-1,
+        encoded_missing_value=np.nan,  # Missing stays missing
+    )
+
+    # Documentation of sklearn, deferring to pandas is misleading here. It's done
+    # using a regex on the type of the column, and using `object`, `"object"` and
+    # `np.object` will not pick up strings.
+    to_convert = ["category", "string"]
+
+    # Using a ColumnTransformer, where an inner transformer is applied only to a subset
+    # of columns, does not retain the original column order of the data, which later
+    # components in the PFN pipeline rely on (e.g., categorical indices).
+    # Therefore, we use a custom class that, under certain constraints
+    # (only OneToOneFeatureMixin transformers on disjoint column subsets),
+    # reconstructs the original order after encoding.
+    return OrderPreservingColumnTransformer(
+        transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+        verbose_feature_names_out=False,
+    )
 
 
 __all__ = [

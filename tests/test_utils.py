@@ -16,9 +16,9 @@ from sklearn.preprocessing import LabelEncoder
 from tabpfn import TabPFNClassifier
 from tabpfn.config import ModelInterfaceConfig
 from tabpfn.constants import NA_PLACEHOLDER
+from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     fix_dtypes,
-    get_ordinal_encoder,
     get_total_memory_windows,
     infer_categorical_features,
     infer_devices,
