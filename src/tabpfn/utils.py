@@ -20,7 +20,6 @@ from sklearn.base import check_is_fitted, is_classifier
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 from sklearn.utils.multiclass import check_classification_targets
-from torch import nn
 
 from tabpfn.architectures.base.encoders import (
     MulticlassClassificationTargetEncoder,
@@ -728,7 +727,8 @@ def update_encoder_params(
         # and inference
         if not hasattr(model, "encoder"):
             raise ValueError(
-                "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+                "Model does not have an encoder, this breaks the TabPFN sklearn "
+                "wrapper."
             )
 
         encoder = model.encoder
@@ -739,8 +739,8 @@ def update_encoder_params(
         )
         if not hasattr(norm_layer, "remove_outliers"):
             raise ValueError(
-                "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
-                "this will break the TabPFN sklearn wrapper"
+                "InputNormalizationEncoderStep does not have a remove_outliers "
+                "attribute, this will break the TabPFN sklearn wrapper."
             )
         norm_layer.remove_outliers = (remove_outliers_std is not None) and (
             remove_outliers_std > 0
