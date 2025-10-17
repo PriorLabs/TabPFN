@@ -55,11 +55,11 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     default_classifier_preprocessor_configs,
 )
+from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
     get_embeddings,
-    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
     process_text_na_dataframe,
