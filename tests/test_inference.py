@@ -86,12 +86,10 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         ensemble_configs=_create_test_ensemble_configs(
             n_configs=5, n_classes=n_classes
         ),
-        # n_workers is currently disabled (it always uses 1 worker). However, it seems
-        # likely we might used it in the near future.
-        # We want to test a value >1 as this might mean the outputs are not in the same
-        # order as the input configs, and we want to check that the parallel evaluation
-        # code behaves correctly in this scenario.
-        n_workers=5,
+        # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
+        # in the same order as the input configs, and we want to check that the parallel
+        # evaluation code behaves correctly in this scenario.
+        n_preprocessing_jobs=5,
         rng=rng,
         dtype_byte_size=4,
         force_inference_dtype=None,
@@ -131,12 +129,10 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         cat_ix=[] * n_train,
         model=TestModel(),
         ensemble_configs=_create_test_ensemble_configs(n_configs=5, n_classes=3),
-        # n_workers is currently disabled (it always uses 1 worker). However, it seems
-        # likely we might used it in the near future.
-        # We want to test a value >1 as this might mean the outputs are not in the same
-        # order as the input configs, and we want to check that the parallel evaluation
-        # code behaves correctly in this scenario.
-        n_workers=5,
+        # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
+        # in the same order as the input configs, and we want to check that the parallel
+        # evaluation code behaves correctly in this scenario.
+        n_preprocessing_jobs=5,
         rng=rng,
         dtype_byte_size=4,
         force_inference_dtype=None,
