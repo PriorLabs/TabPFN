@@ -19,11 +19,11 @@ from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.utils import (
     fix_dtypes,
     get_ordinal_encoder,
+    get_total_memory_windows,
     infer_categorical_features,
     infer_devices,
     process_text_na_dataframe,
     validate_Xy_fit,
-    get_total_memory_windows
 )
 
 
