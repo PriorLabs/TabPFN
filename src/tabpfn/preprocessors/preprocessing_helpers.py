@@ -211,19 +211,19 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
         """
         super().__init__(transformers=transformers, **kwargs)
 
-        # Check 1) all transformers are  subcass of OneToOneFeatureMixin and
-        # 2) all transformers operate on a disjoint column set
-
-        assert all(isinstance(t, OneToOneFeatureMixin) for _, t, _ in transformers), (
+        # Check if there is a single transformer, of subtype OneToOneFeatureMixin
+        assert all(
+            isinstance(t, OneToOneFeatureMixin)
+            for name, t, _ in transformers
+            if name != "remaineder"
+        ), (
             "OrderPreservingColumnTransformer currently only supports transformers "
             "that are instances of OneToOneFeatureMixin."
         )
 
-        cols = [set(c) for *_, c in transformers]
-        assert all(
-            a.isdisjoint(b) for i, a in enumerate(cols) for b in cols[i + 1 :]
-        ), "OrderPreservingColumnTransformer currently only supports multiple "
-        "transformers if all subsets of columns are disjoint across transformers."
+        assert (
+            len([t for name, _, t in transformers if name != "remainder"]) <= 1
+        ), "OrderPreservingColumnTransformer only supports up to one transformer."
 
     @override
     def transform(self, X: XType, **kwargs: dict[str, Any]) -> XType:

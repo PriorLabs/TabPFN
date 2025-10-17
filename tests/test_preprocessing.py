@@ -5,9 +5,16 @@ from collections.abc import Callable
 from functools import partial
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
-from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder, PowerTransformer
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    OneHotEncoder,
+    OrdinalEncoder,
+    PowerTransformer,
+)
 
 from tabpfn import preprocessors
 from tabpfn.preprocessors import (
@@ -437,21 +444,23 @@ def test__safe_power_transformer__transform_then_inverse_transform__returns_orig
         )
 
 
-def test_order_preserving_column_transformer_init():
+def test_order_preserving_column_transformer():
     """Should raise AssertionError if column sets overlap."""
     ordinal_enc1 = OrdinalEncoder()
     ordinal_enc2 = OrdinalEncoder()
     onehotencoder1 = OneHotEncoder()
 
-    # Test assertion, due to overlapping columns across encoders!
-    # no disjoint subset of columns
-    overlapping_transformers = [
+    # Test assertion raised due to too many transformers
+    multiple_transformers = [
         ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
-        ("ordinal_enc2", ordinal_enc2, ["b", "c"]),  # overlap on "b"
+        ("ordinal_enc2", ordinal_enc2, ["c", "d"]),
     ]
 
-    with pytest.raises(AssertionError, match="disjoint"):
-        OrderPreservingColumnTransformer(transformers=overlapping_transformers)
+    with pytest.raises(
+        AssertionError,
+        match="OrderPreservingColumnTransformer only supports up to one transformer.",
+    ):
+        OrderPreservingColumnTransformer(transformers=multiple_transformers)
 
     # Test assertion, due to unsupported encoder type (OneHotEncoder)
     incompatible_transformer = [("onehot", onehotencoder1, ["a", "b"])]
@@ -459,9 +468,31 @@ def test_order_preserving_column_transformer_init():
     with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin."):
         OrderPreservingColumnTransformer(transformers=incompatible_transformer)
 
-    # Test no assertion if everthing is compatible
-    non_overlapping_ordinal_encoders = [
-        ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
-        ("ordinal_enc2", ordinal_enc2, ["c"]),
-    ]
-    OrderPreservingColumnTransformer(transformers=non_overlapping_ordinal_encoders)
+        # --- Mock dataset ---
+    mock_data_df = pd.DataFrame(
+        {
+            "a": [10, 20, 30, 40],
+            "b": ["x", "y", "x", "z"],
+        }
+    )
+
+    # Test if normal column transformer shuffles column order,
+    # while the OrderPreserving restores the original order
+    non_overlapping_ordinal_encoder = [("ordinal_enc1", ordinal_enc1, ["b"])]
+
+    vanilla_transformer = ColumnTransformer(
+        transformers=non_overlapping_ordinal_encoder, remainder=FunctionTransformer()
+    )
+
+    vanilla_output = vanilla_transformer.fit_transform(mock_data_df)
+
+    # Vanilla transformer shuffles column order
+    assert not np.array_equal(mock_data_df.iloc[:, 0].values, vanilla_output[:, 0])
+
+    preserving_transformer = OrderPreservingColumnTransformer(
+        transformers=non_overlapping_ordinal_encoder, remainder=FunctionTransformer()
+    )
+
+    # OrderPreserving transformer does not shuffle column order
+    preserved_output = preserving_transformer.fit_transform(mock_data_df)
+    np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
