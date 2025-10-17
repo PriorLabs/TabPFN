@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
+    from tabpfn.architectures.interface import Architecture
     from tabpfn.classifier import TabPFNClassifier, XType, YType
     from tabpfn.regressor import TabPFNRegressor
 
@@ -696,11 +697,10 @@ def translate_probs_across_borders(
 
 
 def update_encoder_params(
-    model: nn.Module,
+    models: list[Architecture],
     remove_outliers_std: float | None,
     seed: int | None,
     *,
-    inplace: Literal[True],
     differentiable_input: bool = False,
 ) -> None:
     """Update the loaded encoder elements and setting to be compatible with inference
@@ -712,59 +712,54 @@ def update_encoder_params(
         This only happens inplace.
 
     Args:
-        model: The model to update.
+        models: The models to update.
         remove_outliers_std: The standard deviation to remove outliers.
         seed: The seed to use, if any.
         inplace: Whether to do the operation inplace.
         differentiable_input: Whether the entire model including forward pass should
             be differentiable with pt autograd. This disables non-differentiable
             encoder steps.
-
-    Raises:
-        ValueError: If `inplace` is not `True`.
     """
-    if not inplace:
-        raise ValueError("Only inplace is supported")
-
     if remove_outliers_std is not None and remove_outliers_std <= 0:
         raise ValueError("remove_outliers_std must be greater than 0")
 
-    # TODO: find a less hacky way to change settings during training
-    # and inference
-    if not hasattr(model, "encoder"):
-        raise ValueError(
-            "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+    for model in models:
+        # TODO: find a less hacky way to change settings during training
+        # and inference
+        if not hasattr(model, "encoder"):
+            raise ValueError(
+                "Model does not have an encoder, this breaks the TabPFN sklearn wrapper."
+            )
+
+        encoder = model.encoder
+
+        # TODO: maybe check that norm_layer even exists
+        norm_layer = next(
+            e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
         )
-
-    encoder = model.encoder
-
-    # TODO: maybe check that norm_layer even exists
-    norm_layer = next(
-        e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
-    )
-    if not hasattr(norm_layer, "remove_outliers"):
-        raise ValueError(
-            "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
-            "this will break the TabPFN sklearn wrapper"
+        if not hasattr(norm_layer, "remove_outliers"):
+            raise ValueError(
+                "InputNormalizationEncoderStep does not have a remove_outliers attribute, "
+                "this will break the TabPFN sklearn wrapper"
+            )
+        norm_layer.remove_outliers = (remove_outliers_std is not None) and (
+            remove_outliers_std > 0
         )
-    norm_layer.remove_outliers = (remove_outliers_std is not None) and (
-        remove_outliers_std > 0
-    )
-    if norm_layer.remove_outliers:
-        norm_layer.remove_outliers_sigma = remove_outliers_std
+        if norm_layer.remove_outliers:
+            norm_layer.remove_outliers_sigma = remove_outliers_std
 
-    norm_layer.seed = seed
-    norm_layer.reset_seed()
+        norm_layer.seed = seed
+        norm_layer.reset_seed()
 
-    if differentiable_input:
-        diffable_steps = []  # only differentiable encoder steps.
-        for module in model.y_encoder:
-            if isinstance(module, MulticlassClassificationTargetEncoder):
-                pass
-            else:
-                diffable_steps.append(module)
+        if differentiable_input:
+            diffable_steps = []  # only differentiable encoder steps.
+            for module in model.y_encoder:
+                if isinstance(module, MulticlassClassificationTargetEncoder):
+                    pass
+                else:
+                    diffable_steps.append(module)
 
-        model.y_encoder = SequentialEncoder(*diffable_steps)
+            model.y_encoder = SequentialEncoder(*diffable_steps)
 
 
 def transform_borders_one(

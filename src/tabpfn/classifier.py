@@ -72,7 +72,7 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
-    from tabpfn.architectures.interface import ArchitectureConfig
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
 
     try:
@@ -84,11 +84,17 @@ if TYPE_CHECKING:
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """TabPFNClassifier class."""
 
-    config_: ArchitectureConfig
-    """The configuration of the loaded model to be used for inference.
+    configs_: list[ArchitectureConfig]
+    """The configurations of the loaded models to be used for inference.
 
-    The concrete type of this config is defined by the arhitecture in use and should be
-    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    The concrete type of these configs is defined by the architectures in use and should
+    be inspected at runtime, but they will be subclasses of ArchitectureConfig.
+    """
+
+    models_: list[Architecture]
+    """The loaded models to be used for inference.
+
+    The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
     interface_config_: ModelInterfaceConfig
@@ -549,7 +555,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             preprocess_transforms = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = EnsembleConfig.generate_for_classification(
-            n=self.n_estimators,
+            num_estimators=self.n_estimators,
             subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
@@ -566,6 +572,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else None,
             n_classes=self.n_classes_,
             random_state=rng,
+            num_models=len(self.models_),
         )
         assert len(ensemble_configs) == self.n_estimators
         return ensemble_configs, X, y
@@ -616,7 +623,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X_preprocessed,
             y_train=y_preprocessed,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=configs,
             cat_ix=cat_ix,
             fit_mode="batched",
@@ -662,7 +669,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X,
             y_train=y,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,

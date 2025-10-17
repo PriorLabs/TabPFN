@@ -66,7 +66,7 @@ def setup_model_and_optimizer(config: dict) -> tuple[TabPFNClassifier, Optimizer
     classifier._initialize_model_variables()
     # Optimizer uses finetuning-specific learning rate
     optimizer = Adam(
-        classifier.model_.parameters(), lr=config["finetuning"]["learning_rate"]
+        classifier.models_[0].parameters(), lr=config["finetuning"]["learning_rate"]
     )
 
     print(f"Using device: {config['device']}")

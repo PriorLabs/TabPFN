@@ -158,7 +158,7 @@ def main() -> None:
 
     # Optimizer must be created AFTER get_preprocessed_datasets, which initializes the model
     optimizer = Adam(
-        regressor.model_.parameters(), lr=config["finetuning"]["learning_rate"]
+        regressor.models_[0].parameters(), lr=config["finetuning"]["learning_rate"]
     )
     print(
         f"--- Optimizer Initialized: Adam, LR: {config['finetuning']['learning_rate']} ---\n"
@@ -193,8 +193,8 @@ def main() -> None:
                     _y_test_raw,
                 ) = data_batch
 
-                regressor.raw_space_bardist_ = raw_space_bardist_[0]
-                regressor.bardist_ = znorm_space_bardist_[0]
+                regressor.raw_space_bardists_ = [raw_space_bardist_[0]]
+                regressor.znorm_space_bardists_ = [znorm_space_bardist_[0]]
                 regressor.fit_from_preprocessed(
                     X_trains_preprocessed, y_trains_znorm, cat_ixs, confs
                 )

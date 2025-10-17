@@ -82,7 +82,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         X_train,
         y_train,
         cat_ix=[] * n_train,
-        model=TestModel(),
+        models=[TestModel()],
         ensemble_configs=_create_test_ensemble_configs(
             n_configs=5, n_classes=n_classes
         ),
@@ -129,7 +129,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         X_train,
         y_train,
         cat_ix=[] * n_train,
-        model=TestModel(),
+        models=[TestModel()],
         ensemble_configs=_create_test_ensemble_configs(n_configs=5, n_classes=3),
         # n_workers is currently disabled (it always uses 1 worker). However, it seems
         # likely we might used it in the near future.
@@ -178,7 +178,7 @@ def _create_test_ensemble_configs(
         ),
     ]
     return EnsembleConfig.generate_for_classification(
-        n=n_configs,
+        num_estimators=n_configs,
         subsample_size=None,
         max_index=n_classes - 1,
         add_fingerprint_feature=True,
@@ -188,6 +188,7 @@ def _create_test_ensemble_configs(
         class_shift_method=None,
         n_classes=n_classes,
         random_state=0,
+        num_models=1,
     )
 
 

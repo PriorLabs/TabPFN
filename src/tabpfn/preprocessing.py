@@ -49,7 +49,10 @@ T = TypeVar("T")
 
 
 def balance(x: Iterable[T], n: int) -> list[T]:
-    """Take a list of elements and make a new list where each appears `n` times."""
+    """Take a list of elements and make a new list where each appears `n` times.
+
+    E.g. balance([1, 2, 3], 2) -> [1, 1, 2, 2, 3, 3]
+    """
     return list(chain.from_iterable(repeat(elem, n) for elem in x))
 
 
@@ -306,9 +309,13 @@ class EnsembleConfig:
     """Configuration for an ensemble member.
 
     Attributes:
-        feature_shift_count: How much to shift the features columns.
-        class_permutation: Permutation to apply to classes
         preprocess_config: Preprocessor configuration to use.
+        add_fingerprint_feature: Whether to add fingerprint features.
+        polynomial_features: Maximum number of polynomial features to add, if any.
+        feature_shift_count: How much to shift the features columns.
+        feature_shift_decoder: How shift features
+        subsample_ix: Indices of samples to use for this ensemble member.
+            If `None`, no subsampling is done.
         subsample_ix: Indices of samples to use for this ensemble member.
             If `None`, no subsampling is done.
     """
@@ -319,12 +326,14 @@ class EnsembleConfig:
     feature_shift_count: int
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
+    # Internal index specifying which model to use for this ensemble member.
+    _model_index: int = 0
 
     @classmethod
     def generate_for_classification(
         cls,
         *,
-        n: int,
+        num_estimators: int,
         subsample_size: int | float | None,
         max_index: int,
         add_fingerprint_feature: bool,
@@ -334,6 +343,7 @@ class EnsembleConfig:
         class_shift_method: Literal["rotate", "shuffle"] | None,
         n_classes: int,
         random_state: int | np.random.Generator | None,
+        num_models: int,
     ) -> list[ClassifierEnsembleConfig]:
         """Generate ensemble configurations for classification.
 
@@ -357,58 +367,62 @@ class EnsembleConfig:
         """
         static_seed, rng = infer_random_state(random_state)
         start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
-        featshifts = np.arange(start, start + n)
-        featshifts = rng.choice(featshifts, size=n, replace=False)  # type: ignore
+        featshifts = np.arange(start, start + num_estimators)
+        featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore
 
         if class_shift_method == "rotate":
             arange = np.arange(0, n_classes)
             shifts = rng.permutation(n_classes).tolist()
             class_permutations = [np.roll(arange, s) for s in shifts]
             class_permutations = [  # type: ignore
-                class_permutations[c] for c in rng.choice(n_classes, n)
+                class_permutations[c] for c in rng.choice(n_classes, num_estimators)
             ]
         elif class_shift_method == "shuffle":
-            noise = rng.random((n * CLASS_SHUFFLE_OVERESTIMATE_FACTOR, n_classes))
+            noise = rng.random(
+                (num_estimators * CLASS_SHUFFLE_OVERESTIMATE_FACTOR, n_classes)
+            )
             shufflings = np.argsort(noise, axis=1)
             uniqs = np.unique(shufflings, axis=0)
-            balance_count = n // len(uniqs)
+            balance_count = num_estimators // len(uniqs)
             class_permutations = balance(uniqs, balance_count)
-            rand_count = n % len(uniqs)
+            rand_count = num_estimators % len(uniqs)
             if rand_count > 0:
                 class_permutations += [  # type: ignore
                     uniqs[i] for i in rng.choice(len(uniqs), size=rand_count)
                 ]
         elif class_shift_method is None:
-            class_permutations = [None] * n  # type: ignore
+            class_permutations = [None] * num_estimators  # type: ignore
         else:
             raise ValueError(f"Unknown {class_shift_method=}")
 
         subsamples: list[None] | list[np.ndarray]
         if isinstance(subsample_size, (int, float)):
             subsamples = generate_index_permutations(
-                n=n,
+                n=num_estimators,
                 max_index=max_index,
                 subsample=subsample_size,
                 random_state=static_seed,
             )
         elif subsample_size is None:
-            subsamples = [None] * n  # type: ignore
+            subsamples = [None] * num_estimators  # type: ignore
         else:
             raise ValueError(
                 f"Invalid subsample_samples: {subsample_size}",
             )
 
-        balance_count = n // len(preprocessor_configs)
+        balance_count = num_estimators // len(preprocessor_configs)
 
         # Replicate each config balance_count times
         configs_ = balance(preprocessor_configs, balance_count)
-
         # Number still needed to reach n
-        leftover = n - len(configs_)
-
+        leftover = num_estimators - len(configs_)
         if leftover > 0:
             # the preprocessor configs should be ordered by performance
             configs_.extend(preprocessor_configs[:leftover])
+
+        # Models are simply cycled through for the estimators.
+        # This ensures that different preprocessings are applied to different models.
+        model_indices = [i % num_models for i in range(num_estimators)]
 
         return [
             ClassifierEnsembleConfig(
@@ -419,12 +433,14 @@ class EnsembleConfig:
                 feature_shift_decoder=feature_shift_decoder,
                 subsample_ix=subsample_ix,
                 class_permutation=class_perm,
+                _model_index=model_index,
             )
-            for featshift, preprocess_config, subsample_ix, class_perm in zip(
+            for featshift, preprocess_config, subsample_ix, class_perm, model_index in zip(
                 featshifts,
                 configs_,
                 subsamples,
                 class_permutations,
+                model_indices,
             )
         ]
 
@@ -432,7 +448,7 @@ class EnsembleConfig:
     def generate_for_regression(
         cls,
         *,
-        n: int,
+        num_estimators: int,
         subsample_size: int | float | None,
         max_index: int,
         add_fingerprint_feature: bool,
@@ -441,6 +457,7 @@ class EnsembleConfig:
         preprocessor_configs: Sequence[PreprocessorConfig],
         target_transforms: Sequence[TransformerMixin | Pipeline | None],
         random_state: int | np.random.Generator | None,
+        num_models: int,
     ) -> list[RegressorEnsembleConfig]:
         """Generate ensemble configurations for regression.
 
@@ -463,19 +480,19 @@ class EnsembleConfig:
         """
         static_seed, rng = infer_random_state(random_state)
         start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
-        featshifts = np.arange(start, start + n)
-        featshifts = rng.choice(featshifts, size=n, replace=False)  # type: ignore
+        featshifts = np.arange(start, start + num_estimators)
+        featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore
 
         subsamples: list[None] | list[np.ndarray]
         if isinstance(subsample_size, (int, float)):
             subsamples = generate_index_permutations(
-                n=n,
+                n=num_estimators,
                 max_index=max_index,
                 subsample=subsample_size,
                 random_state=static_seed,
             )
         elif subsample_size is None:
-            subsamples = [None] * n
+            subsamples = [None] * num_estimators
         else:
             raise ValueError(
                 f"Invalid subsample_samples: {subsample_size}",
@@ -483,16 +500,19 @@ class EnsembleConfig:
 
         # Get equal representation of all preprocessor configs
         combos = list(product(preprocessor_configs, target_transforms))
-        balance_count = n // len(combos)
+        balance_count = num_estimators // len(combos)
         configs_ = balance(combos, balance_count)
-
         # Number still needed to reach n
-        leftover = n - len(configs_)
-
+        leftover = num_estimators - len(configs_)
         if leftover > 0:
             # the preprocessor configs should be ordered by performance
             # TODO: what about the target transforms?
             configs_ += combos[:leftover]
+
+        # Models are simply cycled through for the estimators.
+        # This ensures that different preprocessings and target transformations are
+        # applied to different models.
+        model_indices = [i % num_models for i in range(num_estimators)]
 
         return [
             RegressorEnsembleConfig(
@@ -503,11 +523,16 @@ class EnsembleConfig:
                 feature_shift_decoder=feature_shift_decoder,
                 subsample_ix=subsample_ix,
                 target_transform=target_transform,
+                _model_index=model_index,
             )
-            for featshift, subsample_ix, (preprocess_config, target_transform) in zip(
+            for featshift, subsample_ix, (
+                preprocess_config,
+                target_transform,
+            ), model_index in zip(
                 featshifts,
                 subsamples,
                 configs_,
+                model_indices,
             )
         ]
 
@@ -582,6 +607,9 @@ class EnsembleConfig:
 @dataclass
 class ClassifierEnsembleConfig(EnsembleConfig):
     """Configuration for a classifier ensemble member.
+
+    Attributes:
+        class_permutation: Permutation to apply to classes
 
     See [EnsembleConfig][tabpfn.preprocessing.EnsembleConfig] for more details.
     """

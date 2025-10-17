@@ -77,7 +77,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
-    from tabpfn.architectures.interface import ArchitectureConfig
+    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
@@ -129,11 +129,17 @@ RegressionResultType = Union[
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFNRegressor class."""
 
-    config_: ArchitectureConfig
-    """The configuration of the loaded model to be used for inference.
+    configs_: list[ArchitectureConfig]
+    """The configurations of the loaded models to be used for inference.
 
-    The concrete type of this config is defined by the arhitecture in use and should be
-    inspected at runtime, but it will be a subclass of ArchitectureConfig.
+    The concrete type of these configs is defined by the architectures in use and should
+    be inspected at runtime, but they will be subclasses of ArchitectureConfig.
+    """
+
+    models_: list[Architecture]
+    """The loaded models to be used for inference.
+
+    The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
     interface_config_: ModelInterfaceConfig
@@ -166,13 +172,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_outputs_: Literal[1]  # We only support single output
     """The number of outputs the model supports. Only 1 for now"""
 
-    znorm_space_bardist_: FullSupportBarDistribution
-    """The bar distribution of the target variable, used by the model.
-    This is the bar distribution in the normalized target space.
+    znorm_space_bardists_: list[FullSupportBarDistribution]
+    """The bar distributions of the target variables, used by the models.
+    These are the bar distributions in the normalized target space for each model.
     """
 
-    raw_space_bardist_: FullSupportBarDistribution
-    """The bar distribution in the raw target space, used for computing the
+    raw_space_bardists_: list[FullSupportBarDistribution]
+    """The bar distributions in the raw target space, used for computing the
     predictions."""
 
     use_autocast_: bool
@@ -537,7 +543,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     def _initialize_dataset_preprocessing(
         self, X: XType, y: YType, rng: np.random.Generator
-    ) -> tuple[list[RegressorEnsembleConfig], XType, YType, FullSupportBarDistribution]:
+    ) -> tuple[
+        list[RegressorEnsembleConfig],
+        XType,
+        YType,
+        list[FullSupportBarDistribution],
+    ]:
         """Prepare ensemble configs and validate X, y for one dataset/chunk.
         Handle the preprocessing of the input (X and y). We also return the
         BarDistribution here, since it is vital for computing the standardized
@@ -605,7 +616,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         preprocess_transforms = self.interface_config_.PREPROCESS_TRANSFORMS
 
         ensemble_configs = EnsembleConfig.generate_for_regression(
-            n=self.n_estimators,
+            num_estimators=self.n_estimators,
             subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
@@ -619,13 +630,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ),
             target_transforms=target_preprocessors,
             random_state=rng,
+            num_models=len(self.models_),
         )
 
-        self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
+        # Q(ben): why do we move the bardists to the device?
+        self.znorm_space_bardists_ = [
+            znorm_space_bardist.to(self.devices_[0])
+            for znorm_space_bardist in self.znorm_space_bardists_
+        ]
 
         assert len(ensemble_configs) == self.n_estimators
 
-        return ensemble_configs, X, y, self.znorm_space_bardist_
+        return ensemble_configs, X, y, self.znorm_space_bardists_
 
     @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
@@ -673,7 +689,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.executor_ = create_inference_engine(
             X_train=X_preprocessed,
             y_train=y_preprocessed,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=configs,
             cat_ix=cat_ix,
             fit_mode="batched",
@@ -714,7 +730,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if not hasattr(self, "model_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y, self.znorm_space_bardist_ = (
+            ensemble_configs, X, y, self.znorm_space_bardists_ = (
                 self._initialize_dataset_preprocessing(X, y, rng)
             )
         else:  # already fitted and prompt_tuning mode: no cat. features
@@ -729,11 +745,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.constant_value_ = y[0] if self.is_constant_target_ else None
 
         if self.is_constant_target_:
-            self.znorm_space_bardist_ = FullSupportBarDistribution(
-                borders=torch.tensor(
-                    [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
+            self.znorm_space_bardists_ = [
+                FullSupportBarDistribution(
+                    borders=torch.tensor(
+                        [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
+                    )
                 )
-            )
+                for _ in range(len(self.znorm_space_bardists_))
+            ]
             # No need to create an inference engine for a constant prediction
             return self
 
@@ -741,15 +760,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
-        self.raw_space_bardist_ = FullSupportBarDistribution(
-            self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+
+        self.raw_space_bardists_ = [
+            FullSupportBarDistribution(
+                znorm_space_bardist.borders * self.y_train_std_ + self.y_train_mean_,
+            ).float()
+            for znorm_space_bardist in self.znorm_space_bardists_
+        ]
 
         # Create the inference engine
         self.executor_ = create_inference_engine(
             X_train=X,
             y_train=y,
-            model=self.model_,
+            models=self.models_,
             ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,

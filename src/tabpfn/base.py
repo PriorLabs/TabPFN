@@ -6,8 +6,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
 import torch
 
@@ -92,7 +91,11 @@ def initialize_tabpfn_model(
     | ClassifierModelSpecs,
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> tuple[Architecture, ArchitectureConfig, FullSupportBarDistribution | None]:
+) -> tuple[
+    list[Architecture],
+    list[ArchitectureConfig],
+    list[FullSupportBarDistribution] | None,
+]:
     """Initializes a TabPFN model based on the provided configuration.
 
     Args:
@@ -110,10 +113,10 @@ def initialize_tabpfn_model(
         bar_distribution: The BarDistribution for regression (`None` if classifier).
     """
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        return model_path.model, model_path.config, model_path.norm_criterion
+        return [model_path.model], [model_path.config], [model_path.norm_criterion]
 
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
-        return model_path.model, model_path.config, None
+        return [model_path.model], [model_path.config], None
 
     if (
         model_path is None
@@ -126,7 +129,7 @@ def initialize_tabpfn_model(
         download_if_not_exists = True
 
         if which == "classifier":
-            model, _, config = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+            models, _, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
                 model_path=model_path,  # pyright: ignore[reportArgumentType]
                 # The classifier's bar distribution is not used;
                 check_bar_distribution_criterion=False,
@@ -135,9 +138,9 @@ def initialize_tabpfn_model(
                 version="v2",
                 download_if_not_exists=download_if_not_exists,
             )
-            norm_criterion = None
+            norm_criterions = None
         else:
-            model, bardist, config = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+            models, bardist, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
                 model_path=model_path,  # pyright: ignore[reportArgumentType]
                 # The regressor's bar distribution is required
                 check_bar_distribution_criterion=True,
@@ -146,9 +149,9 @@ def initialize_tabpfn_model(
                 version="v2",
                 download_if_not_exists=download_if_not_exists,
             )
-            norm_criterion = bardist
+            norm_criterions = bardist
 
-        return model, config, norm_criterion
+        return models, configs, norm_criterions  # pyright: ignore[reportReturnType]
 
     raise TypeError(
         "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
@@ -205,7 +208,7 @@ def create_inference_engine(  # noqa: PLR0913
     *,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model: Architecture,
+    models: list[Architecture],
     ensemble_configs: Any,
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
@@ -228,7 +231,7 @@ def create_inference_engine(  # noqa: PLR0913
     Args:
         X_train: Training features
         y_train: Training target
-        model: The loaded TabPFN model.
+        models: The loaded TabPFN models.
         ensemble_configs: The ensemble configurations to create multiple "prompts".
         cat_ix: Indices of inferred categorical features.
         fit_mode: Determines how we prepare inference (pre-cache or not).
@@ -255,7 +258,7 @@ def create_inference_engine(  # noqa: PLR0913
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
             rng=rng,
-            model=model,
+            models=models,
             n_workers=n_jobs,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
@@ -268,7 +271,7 @@ def create_inference_engine(  # noqa: PLR0913
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
             n_workers=n_jobs,
-            model=model,
+            models=models,
             rng=rng,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
@@ -280,7 +283,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             ensemble_configs=ensemble_configs,
             n_workers=n_jobs,
             devices=devices_,
@@ -295,7 +298,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_trains=X_train,
             y_trains=y_train,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             ensemble_configs=ensemble_configs,
             force_inference_dtype=forced_inference_dtype_,
             inference_mode=inference_mode,
@@ -449,26 +452,15 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    if model_type == "regressor":
-        (
-            calling_instance.model_,
-            calling_instance.config_,
-            calling_instance.znorm_space_bardist_,
-        ) = initialize_tabpfn_model(
-            model_path=calling_instance.model_path,
-            which="regressor",
-            fit_mode=calling_instance.fit_mode,  # Use the instance's fit_mode
-        )
-    elif model_type == "classifier":
-        (calling_instance.model_, calling_instance.config_, _) = (
-            initialize_tabpfn_model(
-                model_path=calling_instance.model_path,
-                which="classifier",
-                fit_mode=calling_instance.fit_mode,  # Use the instance's fit_mode
-            )
-        )
-    else:
-        raise ValueError(f"Invalid model_type: {model_type}")
+    models, configs, norm_or_bardists = initialize_tabpfn_model(
+        model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
+        which=model_type,
+        fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+    )
+    calling_instance.models_ = models
+    calling_instance.configs_ = configs
+    if model_type == "regressor" and norm_or_bardists is not None:
+        calling_instance.znorm_space_bardists_ = norm_or_bardists
 
     calling_instance.devices_ = infer_devices(calling_instance.device)
     (
@@ -498,10 +490,9 @@ def initialize_model_variables_helper(
             raise ValueError(f"Invalid model_type: {model_type}") from e
 
     update_encoder_params(  # Use the renamed function if available, or original one
-        model=calling_instance.model_,
+        models=calling_instance.models_,
         remove_outliers_std=outlier_removal_std,
         seed=static_seed,
-        inplace=True,
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng

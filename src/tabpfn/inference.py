@@ -60,11 +60,18 @@ class InferenceEngine(ABC):
     InferenceEngineCachePreprocessing engines also support toggling
     `torch.use_torch_inference_mode` via `use_torch_inference_mode`
     to enable/disable gradient tracking during prediction.
+
+    Attributes:
+        save_peak_mem: Whether to save peak memory usage.
+        dtype_byte_size: The byte size of the dtype.
+        models: The models to use for inference.
+        ensemble_configs: The ensemble configurations to use.
     """
 
     save_peak_mem: bool | Literal["auto"] | float | int
     dtype_byte_size: int
     ensemble_configs: Sequence[EnsembleConfig]
+    models: list[Architecture]
 
     @abstractmethod
     def iter_outputs(
@@ -74,9 +81,10 @@ class InferenceEngine(ABC):
         devices: Sequence[torch.device],
         autocast: bool,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
-        """Iterate over the outputs of the model.
+        """Iterate over the outputs of the model for each ensemble configuration.
 
-        One for each ensemble configuration that was used to initialize the executor.
+        Depending on the InferenceEngine used, this will run the forward pass of the
+        model for each estimator.
 
         Args:
             X: The input data to make predictions on.
@@ -114,12 +122,7 @@ class InferenceEngine(ABC):
         excluded to keep the file small and efficient.
         """
         state_copy = deepcopy(self)
-
-        # Decouple the large model weights before serialization
-        if hasattr(state_copy, "model"):
-            state_copy.model = None
-        if hasattr(state_copy, "models"):
-            state_copy.models = None  # For KV cache engine
+        state_copy.models = None  # type: ignore
 
         joblib.dump(state_copy, path)
 
@@ -140,11 +143,9 @@ class InferenceEngineOnDemand(InferenceEngine):
 
     X_train: np.ndarray
     y_train: np.ndarray
-    ensemble_configs: Sequence[EnsembleConfig]
     cat_ix: list[int]
     static_seed: int
     n_workers: int
-    model: Architecture
     force_inference_dtype: torch.dtype | None
 
     @classmethod
@@ -154,7 +155,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         y_train: np.ndarray,
         *,
         cat_ix: list[int],
-        model: Architecture,
+        models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
         rng: np.random.Generator,
         n_workers: int,
@@ -168,7 +169,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             X_train: The training data.
             y_train: The training target.
             cat_ix: The categorical indices.
-            model: The model to use.
+            models: The models to use.
             ensemble_configs: The ensemble configurations to use.
             rng: The random number generator.
             n_workers: The number of workers to use.
@@ -183,7 +184,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             y_train=y_train,
             ensemble_configs=ensemble_configs,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             static_seed=static_seed,
             n_workers=n_workers,
             dtype_byte_size=dtype_byte_size,
@@ -202,20 +203,32 @@ class InferenceEngineOnDemand(InferenceEngine):
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         rng = np.random.default_rng(self.static_seed)
 
-        ensemble_configs, preprocessings = itertools.tee(
-            fit_preprocessing(
-                configs=self.ensemble_configs,
-                X_train=self.X_train,
-                y_train=self.y_train,
-                random_state=rng,
-                cat_ix=self.cat_ix,
-                n_workers=self.n_workers,
-                parallel_mode="as-ready",
-            )
+        itr = fit_preprocessing(
+            configs=self.ensemble_configs,
+            X_train=self.X_train,
+            y_train=self.y_train,
+            random_state=rng,
+            cat_ix=self.cat_ix,
+            n_workers=self.n_workers,
+            parallel_mode="as-ready",
         )
+        ensemble_configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
 
         if self.force_inference_dtype is not None:
-            self.model.type(self.force_inference_dtype)
+            [model.type(self.force_inference_dtype) for model in self.models]
+
+        # Materialize and sort all items by model_index so that calls with model index 0
+        # run first, then 1, etc.
+        items = list(
+            zip(
+                ensemble_configs,
+                preprocessors,
+                X_trains,
+                y_trains,
+                cat_ixs,
+            )
+        )
+        items.sort(key=lambda t: t[0]._model_index)
 
         model_forward_functions = (
             partial(
@@ -226,15 +239,16 @@ class InferenceEngineOnDemand(InferenceEngine):
                 cat_ix=cat_ix,
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
+                model_index=ensemble_config._model_index,
             )
-            for _, preprocessor, X_train, y_train, cat_ix in preprocessings
+            for ensemble_config, preprocessor, X_train, y_train, cat_ix in items
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
         for (config, _, _, _, _), output in zip(ensemble_configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
-        self.model.cpu()
+        [model.cpu() for model in self.models]
 
     def _call_model(
         self,
@@ -247,6 +261,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         cat_ix: list[int],
         autocast: bool,
         only_return_standard_out: bool,
+        model_index: int,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -255,7 +270,11 @@ class InferenceEngineOnDemand(InferenceEngine):
         """
         # If several estimators are being run in parallel, then each thread needs its
         # own copy of the model so it can move it to its device.
-        model = deepcopy(self.model) if is_parallel else self.model
+        model = (
+            deepcopy(self.models[model_index])
+            if is_parallel
+            else self.models[model_index]
+        )
         model.to(device)
 
         X_full, y_train = _prepare_model_inputs(
@@ -291,8 +310,6 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             X_trains: The training data.
             y_trains    : The training target.
             cat_ix: The categorical indices.
-            model: The model to use.
-            ensemble_configs: The ensemble configurations to use.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             inference_mode: Whether to enable torch inference mode.
@@ -301,8 +318,6 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
     X_trains: list[torch.Tensor]
     y_trains: list[torch.Tensor]
     cat_ix: list[list[list[int]]]
-    model: Architecture
-    ensemble_configs: Sequence[EnsembleConfig]
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
 
@@ -313,7 +328,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         y_trains: list[torch.Tensor],
         *,
         cat_ix: list[list[list[int]]],
-        model: Architecture,
+        models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
         force_inference_dtype: torch.dtype | None,
         inference_mode: bool,
@@ -326,7 +341,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             X_trains: The training data.
             y_trains: The training target.
             cat_ix: The categorical indices.
-            model: The model to use.
+            models: The models to use.
             ensemble_configs: The ensemble configurations to use.
             inference_mode: Whether to use torch inference mode.
             dtype_byte_size: The byte size of the dtype.
@@ -338,7 +353,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             X_trains=X_trains,
             y_trains=y_trains,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             ensemble_configs=ensemble_configs,
             force_inference_dtype=force_inference_dtype,
             inference_mode=inference_mode,
@@ -357,7 +372,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         # This engine currently only supports one device, so just take the first.
         device = devices[0]
 
-        self.model = self.model.to(device)
+        self.models = [model.to(device) for model in self.models]
         ensemble_size = len(self.X_trains)
         for i in range(ensemble_size):
             train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
@@ -372,7 +387,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
-                output = self.model(
+                output = self.models[self.ensemble_configs[i]._model_index](
                     train_x_full.transpose(0, 1),
                     train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
@@ -381,7 +396,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
 
             yield output, self.ensemble_configs[i]
         if self.inference_mode:  ## if inference
-            self.model = self.model.cpu()
+            [model.cpu() for model in self.models]
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
@@ -404,9 +419,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     X_trains: Sequence[np.ndarray | torch.Tensor]
     y_trains: Sequence[np.ndarray | torch.Tensor]
     cat_ixs: Sequence[list[int]]
-    ensemble_configs: Sequence[EnsembleConfig]
     preprocessors: Sequence[SequentialFeatureTransformer]
-    model: Architecture
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
     no_preprocessing: bool = False
@@ -418,7 +431,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         y_train: np.ndarray | torch.Tensor,
         *,
         cat_ix: list[int],
-        model: Architecture,
+        models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
         rng: np.random.Generator,
@@ -434,7 +447,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             X_train: The training data.
             y_train: The training target.
             cat_ix: The categorical indices.
-            model: The model to use.
+            models: The models to use.
             ensemble_configs: The ensemble configurations to use.
             n_workers: The number of workers to use.
             rng: The random number generator.
@@ -462,7 +475,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         return InferenceEngineCachePreprocessing(
             X_trains=X_trains,
             y_trains=y_trains,
-            model=model,
+            models=models,
             cat_ixs=cat_ixs,
             ensemble_configs=configs,
             preprocessors=preprocessors,
@@ -483,7 +496,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         if self.force_inference_dtype is not None:
-            self.model.type(self.force_inference_dtype)
+            [model.type(self.force_inference_dtype) for model in self.models]
 
         if self.no_preprocessing:
             X_tests = (X for _ in range(len(self.ensemble_configs)))
@@ -491,6 +504,19 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             X_tests = (
                 preprocessor.transform(X).X for preprocessor in self.preprocessors
             )
+
+        # Materialize and sort all items by model_index so that calls with model index 0
+        # run first, then 1, etc.
+        items = list(
+            zip(
+                self.ensemble_configs,
+                self.X_trains,
+                X_tests,
+                self.y_trains,
+                self.cat_ixs,
+            )
+        )
+        items.sort(key=lambda t: t[0]._model_index)
 
         model_forward_functions = (
             partial(
@@ -501,18 +527,17 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 cat_ix=cat_ix,
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
+                model_index=ensemble_config._model_index,
             )
-            for X_train, X_test, y_train, cat_ix in zip(
-                self.X_trains, X_tests, self.y_trains, self.cat_ixs
-            )
+            for ensemble_config, X_train, X_test, y_train, cat_ix in items
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for output, config in zip(outputs, self.ensemble_configs):
-            yield _move_and_squeeze_output(output, devices[0]), config
+        for output, (ensemble_config, _, _, _, _) in zip(outputs, items):
+            yield _move_and_squeeze_output(output, devices[0]), ensemble_config
 
         if self.inference_mode:
-            self.model.cpu()
+            [model.cpu() for model in self.models]
 
     def _call_model(
         self,
@@ -525,6 +550,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         cat_ix: list[int],
         autocast: bool,
         only_return_standard_out: bool,
+        model_index: int,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -533,7 +559,11 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         """
         # If several estimators are being run in parallel, then each thread needs its
         # own copy of the model so it can move it to its device.
-        model = deepcopy(self.model) if is_parallel else self.model
+        model = (
+            deepcopy(self.models[model_index])
+            if is_parallel
+            else self.models[model_index]
+        )
         model.to(device)
 
         X_full, y_train = _prepare_model_inputs(
@@ -579,9 +609,7 @@ class InferenceEngineCacheKV(InferenceEngine):
     """
 
     preprocessors: list[SequentialFeatureTransformer]
-    ensemble_configs: Sequence[EnsembleConfig]
     cat_ixs: Sequence[list[int]]
-    models: list[Architecture]
     n_train_samples: list[int]
     force_inference_dtype: torch.dtype | None
 
@@ -594,7 +622,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         cat_ix: list[int],
         ensemble_configs: Sequence[EnsembleConfig],
         n_workers: int,
-        model: Architecture,
+        models: list[Architecture],
         devices: Sequence[torch.device],
         rng: np.random.Generator,
         dtype_byte_size: int,
@@ -611,7 +639,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             cat_ix: The categorical indices.
             ensemble_configs: The ensemble configurations to use.
             n_workers: The number of workers to use.
-            model: The model to use.
+            models: The models to use.
             devices: The devices to run the model on.
             rng: The random number generator.
             dtype_byte_size: Size of the dtype in bytes.
@@ -632,7 +660,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             n_workers=n_workers,
             parallel_mode="as-ready",
         )
-        models: list[Architecture] = []
+        ens_models: list[Architecture] = []
         preprocessors: list[SequentialFeatureTransformer] = []
         correct_order_configs: list[EnsembleConfig] = []
         cat_ixs: Sequence[list[int]] = []
@@ -644,7 +672,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             correct_order_configs.append(config)
             n_train_samples.append(len(y))
 
-            ens_model = deepcopy(model)
+            ens_model = deepcopy(models[config._model_index])
             ens_model = ens_model.to(device)
             if not isinstance(X, torch.Tensor):
                 X = torch.as_tensor(X, dtype=torch.float32, device=device)  # noqa: PLW2901
@@ -671,14 +699,14 @@ class InferenceEngineCacheKV(InferenceEngine):
             if device.type != "cpu":
                 ens_model = ens_model.cpu()
 
-            models.append(ens_model)
+            ens_models.append(ens_model)
 
         return InferenceEngineCacheKV(
             preprocessors=preprocessors,
             ensemble_configs=correct_order_configs,
             cat_ixs=cat_ixs,
             n_train_samples=n_train_samples,
-            models=models,
+            models=ens_models,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
