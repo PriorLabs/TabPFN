@@ -442,16 +442,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 DeprecationWarning,
                 stacklevel=2,
             )
-        self._n_preprocessing_jobs = n_preprocessing_jobs
+        self.n_preprocessing_jobs = n_preprocessing_jobs
 
         # Ping the usage service if telemetry enabled
         ping()
 
     @property
-    @deprecated("`n_jobs`is deprecated.", category=DeprecationWarning, stacklevel=2)
+    @deprecated("`n_jobs` is deprecated.", category=DeprecationWarning, stacklevel=2)
     def n_jobs(self) -> int:
         """The number of worker processes used for the preprocessing."""
-        return self._n_preprocessing_jobs
+        return self.n_preprocessing_jobs
 
     @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
@@ -701,7 +701,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode="batched",
             devices_=self.devices_,
             rng=rng,
-            n_preprocessing_jobs=self._n_preprocessing_jobs,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
@@ -777,7 +777,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             devices_=self.devices_,
             rng=rng,
-            n_preprocessing_jobs=self._n_preprocessing_jobs,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,

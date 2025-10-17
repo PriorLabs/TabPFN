@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Deprecated the parameters `TabPFNRegressor(n_jobs=...)` and
+- Deprecated the parameters `TabPFNClassifier(n_jobs=...)` and
   `TabPFNRegressor(n_jobs=...)` which had no effect, and replaced them with
   functioning `n_preprocessing_jobs`. We strongly recommend using the default value of
   `1`.
