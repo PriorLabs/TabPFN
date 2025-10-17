@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import pathlib
 import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
@@ -145,7 +146,7 @@ def initialize_tabpfn_model(
     if (
         model_path is None
         or model_path == "auto"
-        or isinstance(model_path, (ModelPath, list))  # pyright: ignore[reportArgumentType]
+        or isinstance(model_path, (str, pathlib.Path, list))  # pyright: ignore[reportArgumentType]
     ):
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore

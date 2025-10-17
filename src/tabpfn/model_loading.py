@@ -31,7 +31,6 @@ from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
-from tabpfn.constants import ModelPath
 from tabpfn.inference import InferenceEngine, InferenceEngineCacheKV
 from tabpfn.settings import settings
 
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.constants import ModelPath
 
 logger = logging.getLogger(__name__)
 
@@ -506,7 +506,7 @@ def _resolve_model_path(
                 _user_cache_dir(platform=sys.platform, appname="tabpfn")
             ]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
-    elif isinstance(model_path, ModelPath):
+    elif isinstance(model_path, (str, Path)):
         resolved_model_paths = [Path(model_path)]
         resolved_model_dirs = [resolved_model_paths[0].parent]
         resolved_model_names = [resolved_model_paths[0].name]
