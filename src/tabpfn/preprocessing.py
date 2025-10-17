@@ -327,10 +327,10 @@ class EnsembleConfig:
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
     # Internal index specifying which model to use for this ensemble member.
-    _model_index: int = 0
+    _model_index: int
 
     @classmethod
-    def generate_for_classification(
+    def generate_for_classification(  # noqa: PLR0913
         cls,
         *,
         num_estimators: int,
@@ -348,7 +348,7 @@ class EnsembleConfig:
         """Generate ensemble configurations for classification.
 
         Args:
-            n: Number of ensemble configurations to generate.
+            num_estimators: Number of ensemble configurations to generate.
             subsample_size:
                 Number of samples to subsample. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If `None`, no
@@ -361,6 +361,7 @@ class EnsembleConfig:
             class_shift_method: How to shift classes for classpermutation.
             n_classes: Number of classes.
             random_state: Random number generator.
+            num_models: Number of models to use.
 
         Returns:
             List of ensemble configurations.
@@ -426,7 +427,7 @@ class EnsembleConfig:
 
         return [
             ClassifierEnsembleConfig(
-                preprocess_config=preprocess_config,
+                preprocess_config=preprocesses_config,
                 feature_shift_count=featshift,
                 add_fingerprint_feature=add_fingerprint_feature,
                 polynomial_features=polynomial_features,
@@ -435,7 +436,13 @@ class EnsembleConfig:
                 class_permutation=class_perm,
                 _model_index=model_index,
             )
-            for featshift, preprocess_config, subsample_ix, class_perm, model_index in zip(
+            for (
+                featshift,
+                preprocesses_config,
+                subsample_ix,
+                class_perm,
+                model_index,
+            ) in zip(
                 featshifts,
                 configs_,
                 subsamples,
@@ -462,7 +469,7 @@ class EnsembleConfig:
         """Generate ensemble configurations for regression.
 
         Args:
-            n: Number of ensemble configurations to generate.
+            num_estimators: Number of ensemble configurations to generate.
             subsample_size:
                 Number of samples to subsample. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If `None`, no
@@ -474,6 +481,7 @@ class EnsembleConfig:
             preprocessor_configs: Preprocessor configurations to use on the data.
             target_transforms: Target transformations to apply.
             random_state: Random number generator.
+            num_models: Number of models to use.
 
         Returns:
             List of ensemble configurations.

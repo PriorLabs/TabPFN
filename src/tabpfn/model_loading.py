@@ -12,7 +12,6 @@ import shutil
 import sys
 import tempfile
 import urllib.request
-import urllib.response
 import warnings
 import zipfile
 from copy import deepcopy
@@ -386,7 +385,7 @@ def load_model_criterion_config(
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
-    download: bool,
+    download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
     list[nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution],
@@ -404,7 +403,7 @@ def load_model_criterion_config(
             Whether the model should know to cache the trainset representation.
         which: Whether the model is a regressor or classifier.
         version: The version of the model.
-        download: Whether to download the model if it doesn't exist.
+        download_if_not_exists: Whether to download the model if it doesn't exist.
 
     Returns:
         The model, criterion, and config.
@@ -428,9 +427,8 @@ def load_model_criterion_config(
     configs = []
 
     for i, path in enumerate(resolved_model_paths):
-        path.mkdir(parents=True, exist_ok=True)
         if not path.exists():
-            if not download:
+            if not download_if_not_exists:
                 raise ValueError(
                     f"Model path does not exist and downloading is disabled"
                     f"\nmodel path: {path}",
@@ -649,8 +647,11 @@ def save_tabpfn_model(
 
     models = model.models_
     znorm_space_bardists = [None] * len(models)
-    if isinstance(model, TabPFNRegressor) and hasattr(model, "znorm_space_bardists_"):
-        znorm_space_bardists = model.znorm_space_bardists_
+    if (
+        hasattr(model, "znorm_space_bardists_")
+        and model.znorm_space_bardists_ is not None  # type: ignore
+    ):
+        znorm_space_bardists = model.znorm_space_bardists_  # type: ignore
     configs = model.configs_
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 

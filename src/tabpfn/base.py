@@ -88,7 +88,9 @@ def initialize_tabpfn_model(
     model_path: ModelPath
     | list[ModelPath]
     | RegressorModelSpecs
-    | ClassifierModelSpecs,
+    | ClassifierModelSpecs
+    | list[RegressorModelSpecs]
+    | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
 ) -> tuple[
@@ -118,10 +120,24 @@ def initialize_tabpfn_model(
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
         return [model_path.model], [model_path.config], None
 
+    if isinstance(model_path, list) and isinstance(model_path[0], RegressorModelSpecs):
+        return (  # pyright: ignore[reportReturnType]
+            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.norm_criterion for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+        )
+
+    if isinstance(model_path, list) and isinstance(model_path[0], ClassifierModelSpecs):
+        return (
+            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            None,
+        )
+
     if (
         model_path is None
         or model_path == "auto"
-        or isinstance(model_path, (ModelPath, list[ModelPath]))  # pyright: ignore[reportArgumentType]
+        or isinstance(model_path, (ModelPath, list))  # pyright: ignore[reportArgumentType]
     ):
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
@@ -131,7 +147,7 @@ def initialize_tabpfn_model(
         if which == "classifier":
             models, _, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
                 model_path=model_path,  # pyright: ignore[reportArgumentType]
-                # The classifier's bar distribution is not used;
+                # The classifier's bar distribution is not used
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="classifier",
@@ -389,7 +405,7 @@ def get_preprocessed_datasets_helper(
         y_raw = [y_raw]
     assert len(X_raw) == len(y_raw), "X and y lists must have the same length."
 
-    if not hasattr(calling_instance, "model_") or calling_instance.model_ is None:
+    if not hasattr(calling_instance, "models_") or calling_instance.models_ is None:
         _, rng = calling_instance._initialize_model_variables()
     else:
         _static_seed, rng = infer_random_state(calling_instance.random_state)

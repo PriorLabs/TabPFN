@@ -244,13 +244,13 @@ def test_tabpfn_classifier_finetuning_loop(
             assert torch.isfinite(loss).all(), f"Loss is not finite: {loss.item()}"
 
             # --- Gradient Check ---
-            assert hasattr(clf, "model_"), "Classifier missing 'model_'"
-            assert clf.model_ is not None, "Classifier model is None"
-            clf.model_.zero_grad()
+            assert hasattr(clf, "models_")
+            assert clf.models_ is not None
+            clf.models_[0].zero_grad()
             loss.backward()
 
             gradients_found = False
-            for param in clf.model_.parameters():
+            for param in clf.models_[0].parameters():
                 if (
                     param.requires_grad
                     and param.grad is not None
@@ -563,22 +563,25 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         clf_standard.fit(X_train_raw, y_train_raw)
         # Ensure the internal model attribute exists after fit
         assert all(
-            [hasattr(clf_standard, "model_"), hasattr(clf_standard.model_, "forward")]
-        ), "Standard classifier model_ or model_.forward not found after fit."
+            [
+                hasattr(clf_standard, "models_"),
+                hasattr(clf_standard.models_[0], "forward"),
+            ]
+        ), "Standard classifier models_ or models_[0].forward not found after fit."
 
         tensor_p1_full = None
         # Patch the standard classifier's *internal model's* forward method
         # The internal model typically receives the combined train+test sequence
         with patch.object(
-            clf_standard.model_, "forward", wraps=clf_standard.model_.forward
+            clf_standard.models_[0], "forward", wraps=clf_standard.models_[0].forward
         ) as mock_forward_p1:
             _ = clf_standard.predict_proba(X_test_raw)
-            assert mock_forward_p1.called, "Standard model_.forward was not called."
+            assert mock_forward_p1.called, "Standard models_[0].forward was not called."
 
             # Capture the tensor input 'x' (usually the second positional argument)
             call_args_list = mock_forward_p1.call_args_list
             assert len(call_args_list) > 0, (
-                "No calls recorded for standard model_.forward."
+                "No calls recorded for standard models_[0].forward."
             )
             if len(call_args_list[0].args) > 1:
                 tensor_p1_full = call_args_list[0].args[0]
@@ -586,7 +589,7 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
 
             else:
                 self.fail(
-                    f"Standard model_.forward call had "
+                    f"Standard models_[0].forward call had "
                     f"unexpected arguments: {call_args_list[0].args}"
                 )
 
@@ -636,9 +639,12 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
             X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
         )
         assert all(
-            [hasattr(clf_batched, "model_"), hasattr(clf_batched.model_, "forward")]
+            [
+                hasattr(clf_batched, "models_"),
+                hasattr(clf_batched.models_[0], "forward"),
+            ]
         ), (
-            "Batched classifier model_ or model_.forward not"
+            "Batched classifier models_ or models_[0].forward not"
             "found after fit_from_preprocessed."
         )
 
@@ -647,21 +653,21 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         tensor_p2_full = None
         # Patch the *batched* classifier's internal model's forward method
         with patch.object(
-            clf_batched.model_, "forward", wraps=clf_batched.model_.forward
+            clf_batched.models_[0], "forward", wraps=clf_batched.models_[0].forward
         ) as mock_forward_p2:
             _ = clf_batched.forward(X_tests_p2)
-            assert mock_forward_p2.called, "Batched model_.forward was not called."
+            assert mock_forward_p2.called, "Batched models_[0].forward was not called."
 
             # Capture the tensor input 'x' (assuming same argument position as Path 1)
             call_args_list = mock_forward_p2.call_args_list
             assert len(call_args_list) > 0, (
-                "No calls recorded for batched model_.forward."
+                "No calls recorded for batched models_[0].forward."
             )
             if len(call_args_list[0].args) > 1:
                 tensor_p2_full = mock_forward_p2.call_args.args[0]
             else:
                 self.fail(
-                    f"Batched model_.forward call had "
+                    f"Batched models_[0].forward call had "
                     f"unexpected arguments: {call_args_list[0].args}"
                 )
 

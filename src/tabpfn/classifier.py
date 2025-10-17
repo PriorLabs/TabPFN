@@ -34,6 +34,7 @@ from tabpfn_common_utils.telemetry import track_model_call
 from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.base import (
+    ClassifierModelSpecs,
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
@@ -159,7 +160,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
-        model_path: str | list[str] | Path | list[Path] | Literal["auto"] = "auto",
+        model_path: str
+        | Path
+        | list[str | Path]
+        | Literal["auto"]
+        | ClassifierModelSpecs
+        | list[ClassifierModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -611,7 +617,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.fit_mode = "batched"
 
         # If there is a model, and we are lazy, we skip reinitialization
-        if not hasattr(self, "model_") or not no_refit:
+        if not hasattr(self, "models_") or not no_refit:
             byte_size, rng = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
@@ -656,7 +662,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if not hasattr(self, "model_") or not self.differentiable_input:
+        if not hasattr(self, "models_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
             ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
         else:  # already fitted and prompt_tuning mode: no cat. features

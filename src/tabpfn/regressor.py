@@ -200,7 +200,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
-        model_path: str | Path | Literal["auto"] | RegressorModelSpecs = "auto",
+        model_path: str
+        | Path
+        | list[str | Path]
+        | Literal["auto"]
+        | RegressorModelSpecs
+        | list[RegressorModelSpecs] = "auto",
         device: DevicesSpecification = "auto",
         ignore_pretraining_limits: bool = False,
         inference_precision: _dtype | Literal["autocast", "auto"] = "auto",
@@ -677,7 +682,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.fit_mode = "batched"
 
         # If there is a model, and we are lazy, we skip reinitialization
-        if not hasattr(self, "model_") or not no_refit:
+        if not hasattr(self, "models_") or not no_refit:
             byte_size, rng = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
@@ -728,7 +733,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if not hasattr(self, "model_") or not self.differentiable_input:
+        if not hasattr(self, "models_") or not self.differentiable_input:
             byte_size, rng = self._initialize_model_variables()
             ensemble_configs, X, y, self.znorm_space_bardists_ = (
                 self._initialize_dataset_preprocessing(X, y, rng)

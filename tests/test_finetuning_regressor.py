@@ -221,7 +221,7 @@ def test_tabpfn_regressor_finetuning_loop(
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
     )
 
-    optim_impl = Adam(reg.model_.parameters(), lr=1e-5)
+    optim_impl = Adam(reg.models_[0].parameters(), lr=1e-5)
 
     if inference_precision == torch.float64:
         pass
@@ -283,15 +283,15 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(X_tests_preprocessed) == reg.n_estimators
             assert len(X_trains_preprocessed) == reg.n_estimators
             assert len(y_trains_preprocessed) == reg.n_estimators
-            assert reg.model_ is not None, "Model not initialized after fit"
-            assert hasattr(reg, "znorm_space_bardist_"), (
-                "Regressor missing 'znorm_space_bardist_' attribute after fit"
+            assert reg.models_ is not None, "Model not initialized after fit"
+            assert hasattr(reg, "znorm_space_bardists_"), (
+                "Regressor missing 'znorm_space_bardists_' attribute after fit"
             )
-            assert hasattr(reg, "raw_space_bardist_"), (
-                "Regressor missing 'raw_space_bardist_' attribute after fit"
+            assert hasattr(reg, "raw_space_bardists_"), (
+                "Regressor missing 'raw_space_bardists_' attribute after fit"
             )
-            assert reg.znorm_space_bardist_ is not None, (
-                "reg.znorm_space_bardist_ is None"
+            assert reg.znorm_space_bardists_ is not None, (
+                "reg.znorm_space_bardists_ is None"
             )
 
             lossfn = None
@@ -314,7 +314,7 @@ def test_tabpfn_regressor_finetuning_loop(
             assert torch.isfinite(loss).all(), f"Loss is not finite: {loss.item()}"
 
             gradients_found = False
-            for param in reg.model_.parameters():
+            for param in reg.models_[0].parameters():
                 if (
                     param.requires_grad
                     and param.grad is not None
@@ -324,7 +324,7 @@ def test_tabpfn_regressor_finetuning_loop(
                     break
             assert gradients_found, "No non-zero gradients found."
 
-            reg.model_.zero_grad()
+            reg.models_[0].zero_grad()
             break  # Only test one batch
 
 
@@ -494,13 +494,13 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
 
         # --- 2. Path 1: Standard fit -> predict -> Capture Tensor ---
         reg_standard.fit(X_train_raw, y_train_raw)
-        assert hasattr(reg_standard, "model_")
-        assert hasattr(reg_standard.model_, "forward")
+        assert hasattr(reg_standard, "models_")
+        assert hasattr(reg_standard.models_[0], "forward")
 
         tensor_p1_full = None
         # Patch the standard regressor's internal model's forward method
         with patch.object(
-            reg_standard.model_, "forward", wraps=reg_standard.model_.forward
+            reg_standard.models_[0], "forward", wraps=reg_standard.models_[0].forward
         ) as mock_forward_p1:
             _ = reg_standard.predict(X_test_raw)  # Trigger the patched method
             assert mock_forward_p1.called
@@ -541,14 +541,14 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         reg_batched.fit_from_preprocessed(
             X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
         )
-        assert hasattr(reg_batched, "model_")
-        assert hasattr(reg_batched.model_, "forward")
+        assert hasattr(reg_batched, "models_")
+        assert hasattr(reg_batched.models_[0], "forward")
 
         # Step 3c: Call forward and capture the input tensor to the *internal model*
         tensor_p3_full = None
         # Patch the *batched* regressor's internal model's forward method
         with patch.object(
-            reg_batched.model_, "forward", wraps=reg_batched.model_.forward
+            reg_batched.models_[0], "forward", wraps=reg_batched.models_[0].forward
         ) as mock_forward_p3:
             # Pass the list of preprocessed test tensors obtained earlier
             _ = reg_batched.forward(X_tests_p2)
@@ -563,7 +563,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
 
         # --- 4. Comparison (Path 1 vs Path 3) ---
 
-        # Compare the two full tensors captured from the input to model_.forward
+        # Compare the two full tensors captured from the input to models_[0].forward
         # Squeeze dimensions of size 1 for direct comparison
         # shapes should be [N_Total, Features+1]
         p1_squeezed = tensor_p1_full.squeeze()

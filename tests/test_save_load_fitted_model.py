@@ -11,6 +11,7 @@ import torch
 from sklearn.datasets import make_classification, make_regression
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.model_loading import save_tabpfn_model
 
@@ -165,43 +166,101 @@ def test_loading_mismatched_types_raises_error(regression_data, tmp_path):
         TabPFNClassifier.load_from_fit_state(path)
 
 
-def test_saving_and_loading_model_with_weights(tmp_path):
+def _init_and_save_unique_checkpoint(
+    model: TabPFNRegressor | TabPFNClassifier,
+    save_path: Path,
+) -> tuple[torch.Tensor, ArchitectureConfig]:
+    model._initialize_model_variables()
+    first_param = next(model.models_[0].parameters())
+    with torch.no_grad():
+        first_param.copy_(torch.randn_like(first_param))
+    first_model_parameter = first_param.clone()
+    config_before_saving = deepcopy(model.configs_[0])
+    save_tabpfn_model(model, save_path)
+
+    return first_model_parameter, config_before_saving
+
+
+def test_saving_and_loading_model_with_weights(tmp_path: Path) -> None:
     """Tests that the saving format of the `save_tabpfn_model` method is compatible with
     the loading interface of `initialize_tabpfn_model`.
     """
     # initialize a TabPFNRegressor
     regressor = TabPFNRegressor(model_path="auto", device="cpu", random_state=42)
-    regressor._initialize_model_variables()
-
-    # make sure that the model does not use the standard parameter
-    first_param = next(regressor.model_.parameters())
-    with torch.no_grad():
-        first_param.zero_()
-    first_model_parameter = first_param.clone()
-    config_before_saving = deepcopy(regressor.config_)
-
-    # Save the model state
-    save_path = Path(tmp_path) / "model.ckp"
-    save_tabpfn_model(regressor, save_path)
+    save_path = tmp_path / "model.ckpt"
+    first_model_parameter, config_before_saving = _init_and_save_unique_checkpoint(
+        model=regressor,
+        save_path=save_path,
+    )
 
     # Load the model state
-    model, config, criterion = initialize_tabpfn_model(
+    models, configs, criterions = initialize_tabpfn_model(
         save_path, "regressor", fit_mode="low_memory"
     )
-    regressor = TabPFNRegressor(
+    loaded_regressor = TabPFNRegressor(
         model_path=RegressorModelSpecs(
-            model=model,
-            config=config,
-            norm_criterion=criterion,
+            model=models[0],
+            config=configs[0],
+            norm_criterion=criterions[0],
         ),
         device="cpu",
     )
 
     # then check the model is loaded correctly
-    regressor._initialize_model_variables()
+    loaded_regressor._initialize_model_variables()
     torch.testing.assert_close(
-        next(regressor.model_.parameters()),
+        next(loaded_regressor.models_[0].parameters()),
         first_model_parameter,
     )
-    # Check that the config is the same
-    assert regressor.config_ == config_before_saving
+    assert loaded_regressor.configs_[0] == config_before_saving
+
+
+@pytest.mark.parametrize(
+    ("estimator_class"),
+    [TabPFNRegressor, TabPFNClassifier],
+)
+def test_saving_and_loading_multiple_models_with_weights(
+    estimator_class: type[TabPFNRegressor] | type[TabPFNClassifier],
+    tmp_path: Path,
+) -> None:
+    """Test that saving and loading multiple models works."""
+    estimator = estimator_class(model_path="auto", device="cpu", random_state=42)
+    save_path_0 = tmp_path / "model_0.ckpt"
+    first_model_parameter_0, config_before_saving_0 = _init_and_save_unique_checkpoint(
+        model=estimator,
+        save_path=save_path_0,
+    )
+    estimator = estimator_class(model_path="auto", device="cpu", random_state=42)
+    save_path_1 = tmp_path / "model_1.ckpt"
+    first_model_parameter_1, config_before_saving_1 = _init_and_save_unique_checkpoint(
+        model=estimator,
+        save_path=save_path_1,
+    )
+
+    loaded_estimator = estimator_class(
+        model_path=[save_path_0, save_path_1],
+        device="cpu",
+        random_state=42,
+    )
+    loaded_estimator._initialize_model_variables()
+
+    torch.testing.assert_close(
+        next(loaded_estimator.models_[0].parameters()),
+        first_model_parameter_0,
+    )
+    torch.testing.assert_close(
+        next(loaded_estimator.models_[1].parameters()),
+        first_model_parameter_1,
+    )
+    assert loaded_estimator.configs_[0] == config_before_saving_0
+    assert loaded_estimator.configs_[1] == config_before_saving_1
+
+    with pytest.raises(ValueError, match="Your TabPFN estimator has multiple"):
+        save_tabpfn_model(loaded_estimator, Path(tmp_path) / "DOES_NOT_SAVE.ckpt")
+
+    save_tabpfn_model(
+        loaded_estimator,
+        [Path(tmp_path) / "0.ckpt", Path(tmp_path) / "1.ckpt"],
+    )
+    assert (tmp_path / "0.ckpt").exists()
+    assert (tmp_path / "1.ckpt").exists()

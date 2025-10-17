@@ -594,7 +594,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     with torch.no_grad():
         classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
-        # load the model so we can access it via classifier.model_
+        # load the model so we can access it via classifier.models_
         classifier.fit(X, y)
         # this is necessary if cuda is available
         classifier.predict(X)
@@ -801,36 +801,26 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     classifier = TabPFNClassifier(device="cpu", random_state=42)
     classifier._initialize_model_variables()
 
-    assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
-    assert classifier.model_ is not None, "model_ should be initialized for classifier"
+    assert hasattr(classifier, "models_")
+    assert classifier.models_ is not None
 
-    assert hasattr(classifier, "config_"), "classifier should have config_ attribute"
-    assert classifier.config_ is not None, (
-        "config_ should be initialized for classifier"
-    )
+    assert hasattr(classifier, "configs_")
+    assert classifier.configs_ is not None
 
-    assert not hasattr(classifier, "bardist_"), (
-        "classifier should not have bardist_ attribute"
-    )
+    assert not hasattr(classifier, "znorm_space_bardists_")
 
     # 3) Reuse via ClassifierModelSpecs
-    new_model_state = classifier.model_
-    new_config = classifier.config_
-    spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
+    spec = ClassifierModelSpecs(
+        model=classifier.models_[0], config=classifier.configs_[0]
+    )
 
     classifier2 = TabPFNClassifier(model_path=spec)
     classifier2._initialize_model_variables()
 
-    assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
-    assert classifier2.model_ is not None, (
-        "model_ should be initialized for classifier2"
-    )
+    assert hasattr(classifier2, "models_")
+    assert classifier2.models_ is not None
 
-    assert hasattr(classifier2, "config_"), "classifier2 should have config_ attribute"
-    assert classifier2.config_ is not None, (
-        "config_ should be initialized for classifier2"
-    )
+    assert hasattr(classifier2, "configs_")
+    assert classifier2.configs_ is not None
 
-    assert not hasattr(classifier2, "bardist_"), (
-        "classifier2 should not have bardist_ attribute"
-    )
+    assert not hasattr(classifier2, "znorm_space_bardists_")

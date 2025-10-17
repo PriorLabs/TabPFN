@@ -39,10 +39,12 @@ def clone_model_for_evaluation(
     Returns:
         A new instance of the model class, ready for evaluation.
     """
-    if hasattr(original_model, "model_") and original_model.model_ is not None:
+    if hasattr(original_model, "models_") and original_model.models_ is not None:
         # Deep copy necessary components to avoid modifying the original trained model
-        new_model_state = copy.deepcopy(original_model.model_)
-        new_config = copy.deepcopy(original_model.config_)
+        # Since this is for the purpose of fine tuning, at the moment,
+        # we only ever copy the first model and config.
+        new_model_state = copy.deepcopy(original_model.models_[0])
+        new_config = copy.deepcopy(original_model.configs_[0])
 
         model_spec_obj = None
         if isinstance(original_model, TabPFNClassifier):
@@ -52,7 +54,7 @@ def clone_model_for_evaluation(
             )
         elif isinstance(original_model, TabPFNRegressor):
             # Regressor also needs the distribution criterion copied
-            new_bar_dist = copy.deepcopy(original_model.bardist_)
+            new_bar_dist = copy.deepcopy(original_model.znorm_space_bardists_[0])
             model_spec_obj = RegressorModelSpecs(
                 model=new_model_state,
                 config=new_config,

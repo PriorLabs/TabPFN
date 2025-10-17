@@ -338,7 +338,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     with torch.no_grad():
         regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
-        # load the model so we can access it via classifier.model_
+        # load the model so we can access it via classifier.models_
         regressor.fit(X, y)
         # this is necessary if cuda is available
         regressor.predict(X)
@@ -613,37 +613,29 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     regressor = TabPFNRegressor(device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
-    assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
-    assert regressor.model_ is not None, "model_ should be initialized for regressor"
+    assert hasattr(regressor, "models_")
+    assert regressor.models_ is not None
 
-    assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
-    assert regressor.config_ is not None, "config_ should be initialized for regressor"
+    assert hasattr(regressor, "configs_")
+    assert regressor.configs_ is not None
 
-    assert hasattr(regressor, "znorm_space_bardist_"), (
-        "regressor should have znorm_space_bardist_ attribute"
-    )
-    assert regressor.znorm_space_bardist_ is not None, (
-        "znorm_space_bardist_ should be initialized for regressor"
-    )
+    assert hasattr(regressor, "znorm_space_bardists_")
+    assert regressor.znorm_space_bardists_ is not None
 
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
-        model=regressor.model_,
-        config=regressor.config_,
-        norm_criterion=regressor.znorm_space_bardist_,
+        model=regressor.models_[0],
+        config=regressor.configs_[0],
+        norm_criterion=regressor.znorm_space_bardists_[0],
     )
     reg2 = TabPFNRegressor(model_path=spec)
     reg2._initialize_model_variables()
 
-    assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
-    assert reg2.model_ is not None, "model_ should be initialized for regressor2"
+    assert hasattr(reg2, "models_")
+    assert reg2.models_ is not None
 
-    assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
-    assert reg2.config_ is not None, "config_ should be initialized for regressor2"
+    assert hasattr(reg2, "configs_")
+    assert reg2.configs_ is not None
 
-    assert hasattr(reg2, "znorm_space_bardist_"), (
-        "regressor2 should have znorm_space_bardist_ attribute"
-    )
-    assert reg2.znorm_space_bardist_ is not None, (
-        "znorm_space_bardist_ should be initialized for regressor2"
-    )
+    assert hasattr(reg2, "znorm_space_bardists_")
+    assert reg2.znorm_space_bardists_ is not None
