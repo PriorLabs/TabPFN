@@ -684,7 +684,7 @@ def fit_preprocessing(
     *,
     random_state: int | np.random.Generator | None,
     cat_ix: list[int],
-    n_workers: int,  # noqa: ARG001
+    n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
 ) -> Iterator[
     tuple[
@@ -703,7 +703,16 @@ def fit_preprocessing(
         y_train: Training target.
         random_state: Random number generator.
         cat_ix: Indices of categorical features.
-        n_workers: Number of workers to use.
+        n_preprocessing_jobs: Number of worker processes to use.
+            If `1`, then the preprocessing is performed in the current process. This
+                avoids multiprocessing overheads, but may not be able to full saturate
+                the CPU. Note that the preprocessing itself will parallelise over
+                multiple cores, so one job is often enough.
+            If `>1`, then different estimators are dispatched to different proceses,
+                which allows more parallelism but incurs some overhead.
+            If `-1`, then creates as many workers as CPU cores. As each worker itself
+                uses multiple cores, this is likely too many.
+            It is best to select this value by benchmarking.
         parallel_mode:
             Parallel mode to use.
 
@@ -719,31 +728,17 @@ def fit_preprocessing(
     """
     _, rng = infer_random_state(random_state)
 
-    # TODO: It seems like we really don't benefit from much more than 1,2,4 workers,
-    # even for the largest datasets from AutoMLBenchmark. Even then, the benefit is
-    # marginal. For now, we stick with single worker.
-    #
-    # The parameters worth tuning are `batch_size` and `n_jobs`
-    # * `n_jobs` - how many workers to spawn.
-    # * `batch_size` - how many tasks to send to a worker at once.
-    #
-    # For small datasets (for which this model is built for), it's quite hard to tune
-    # for increased performance and staying at 1 worker seems ideal. However for larger
-    # datasets, at the limit of what we support, having `len(configs) // 2` workers
-    # seemed good, with a `batch_size` of 2.
-    # NOTE: By setting `n_jobs` = 1, it effectively doesn't spawn anything and runs
-    # in-process
+    # Below we set batch_size to auto, but this could be further tuned.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
-            n_jobs=1,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             return_as=return_as,
-            batch_size="auto",  # type: ignore
+            batch_size="auto",
         )
     else:
         executor = joblib.Parallel(
-            n_jobs=1,
-            batch_size="auto",  # type: ignore
+            n_preprocessing_jobs=n_preprocessing_jobs, batch_size="auto"
         )
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
@@ -943,7 +938,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             y_train=y_train,
             random_state=self.rng,
             cat_ix=cat_ix,
-            n_workers=self.n_workers,
+            n_preprocessing_jobs=self.n_workers,
             parallel_mode="block",
         )
         (

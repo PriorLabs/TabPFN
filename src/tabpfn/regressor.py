@@ -23,8 +23,8 @@ import warnings
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Union
-from typing_extensions import Self, TypedDict, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
+from typing_extensions import Self, TypedDict, deprecated, overload
 
 import numpy as np
 import torch
@@ -206,7 +206,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ] = "fit_preprocessors",
         memory_saving_mode: bool | Literal["auto"] | float | int = "auto",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
-        n_jobs: int = -1,
+        n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
+        n_preprocessing_jobs: int = 1,
         inference_config: dict | ModelInterfaceConfig | None = None,
         differentiable_input: bool = False,
     ) -> None:
@@ -386,12 +387,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     passing `USE_SKLEARN_16_DECIMAL_PRECISION=True` as kwarg.
 
             n_jobs:
-                The number of workers for tasks that can be parallelized across CPU
-                cores. Currently, this is used for preprocessing the data in parallel
-                (if `n_estimators > 1`).
+                Deprecated, use `n_preprocessing_jobs` instead.
+                This parameter never had any effect.
 
-                - If `-1`, all available CPU cores are used.
-                - If `int`, the number of CPU cores to use is determined by `n_jobs`.
+            n_preprocessing_jobs:
+                The number of worker processes to use for the preprocessing.
+
+                If `1`, the preprocessing will be performed in the current process,
+                parallelised across multiple CPU cores. If `>1` and `n_estimators > 1`,
+                then different estimators will be dispatched to different processes.
+
+                We strongly recommend setting this to 1, which has the lowest overhead
+                and can often fully utilise the CPU. Values >1 can help if you have lots
+                of CPU cores available, but can also be slower.
 
             inference_config:
                 For advanced users, additional advanced arguments that adjust the
@@ -424,12 +432,26 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             memory_saving_mode
         )
         self.random_state = random_state
-        self.n_jobs = n_jobs
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
+        if n_jobs is not None:
+            warnings.warn(
+                "TabPFNRegressor(n_jobs=...) is deprecated. "
+                "Use `n_preprocessing_jobs` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        self._n_preprocessing_jobs = n_preprocessing_jobs
+
         # Ping the usage service if telemetry enabled
         ping()
+
+    @property
+    @deprecated("`n_jobs`is deprecated.", category=DeprecationWarning, stacklevel=2)
+    def n_jobs(self) -> int:
+        """The number of worker processes used for the preprocessing."""
+        return self._n_preprocessing_jobs
 
     @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
@@ -679,7 +701,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode="batched",
             devices_=self.devices_,
             rng=rng,
-            n_jobs=self.n_jobs,
+            n_preprocessing_jobs=self._n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
@@ -755,7 +777,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             devices_=self.devices_,
             rng=rng,
-            n_jobs=self.n_jobs,
+            n_preprocessing_jobs=self._n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,

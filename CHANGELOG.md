@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Deprecated the parameters `TabPFNRegressor(n_jobs=...)` and
+  `TabPFNRegressor(n_jobs=...)` which had no effect, and replaced them with
+  functioning `n_preprocessing_jobs`. We strongly recommend using the default value of
+  `1`.
 - Fixed bug on multi-GPU systems leading to worse results
 
 ## [2.2.0] - 2025-09-15
