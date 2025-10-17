@@ -120,14 +120,22 @@ def initialize_tabpfn_model(
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
         return [model_path.model], [model_path.config], None
 
-    if isinstance(model_path, list) and isinstance(model_path[0], RegressorModelSpecs):
+    if (
+        isinstance(model_path, list)
+        and len(model_path) > 0
+        and isinstance(model_path[0], RegressorModelSpecs)
+    ):
         return (  # pyright: ignore[reportReturnType]
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
         )
 
-    if isinstance(model_path, list) and isinstance(model_path[0], ClassifierModelSpecs):
+    if (
+        isinstance(model_path, list)
+        and len(model_path) > 0
+        and isinstance(model_path[0], ClassifierModelSpecs)
+    ):
         return (
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]

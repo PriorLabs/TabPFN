@@ -444,10 +444,10 @@ def load_model_criterion_config(
             if res != "ok":
                 repo_type = "clf" if which == "classifier" else "reg"
                 raise RuntimeError(
-                    f"Failed to download model to {resolved_model_paths}!\n\n"
+                    f"Failed to download model to {path}!\n\n"
                     f"For offline usage, please download the model manually from:\n"
-                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names}\n\n"
-                    f"Then place it at: {resolved_model_paths}",
+                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                    f"Then place it at: {path}",
                 ) from res[0]
 
         loaded_model, criterion, config = load_model(
@@ -643,7 +643,7 @@ def save_tabpfn_model(
     ):
         raise ValueError(
             f"Your TabPFN estimator has multiple internal models ({len(model.models_)})"
-            f" , so you must provide list of {len(model.models_)} save paths."
+            f", so you must provide a list of {len(model.models_)} save paths."
         )
 
     models = model.models_

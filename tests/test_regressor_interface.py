@@ -360,7 +360,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         # available in newer PyTorch versions, hence we don't always include it.
         export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
-            ModelWrapper(regressor.model_).eval(),
+            ModelWrapper(regressor.models_[0]).eval(),
             (X, y, True, [[]]),
             io.BytesIO(),
             input_names=[

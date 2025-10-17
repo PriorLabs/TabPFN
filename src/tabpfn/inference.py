@@ -215,36 +215,30 @@ class InferenceEngineOnDemand(InferenceEngine):
         if self.force_inference_dtype is not None:
             [model.type(self.force_inference_dtype) for model in self.models]
 
-        # Materialize and sort all items by model_index so that calls with model index 0
-        # run first, then 1, etc.
-        items = list(
-            zip(
-                ensemble_configs,
-                preprocessors,
-                X_trains,
-                y_trains,
-                cat_ixs,
-            )
+        # Create a sorted index order by model_index so that calls with model index 0
+        # run first, then model index 1, etc.
+        sorted_indices = sorted(
+            range(len(ensemble_configs)),
+            key=lambda i: ensemble_configs[i]._model_index,
         )
-        items.sort(key=lambda t: t[0]._model_index)
 
         model_forward_functions = (
             partial(
                 self._call_model,
-                X_train=X_train,
-                X_test=preprocessor.transform(X).X,
-                y_train=y_train,
-                cat_ix=cat_ix,
+                X_train=X_trains[i],
+                X_test=preprocessors[i].transform(X).X,
+                y_train=y_trains[i],
+                cat_ix=cat_ixs[i],
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
-                model_index=ensemble_config._model_index,
+                model_index=ensemble_configs[i]._model_index,
             )
-            for ensemble_config, preprocessor, X_train, y_train, cat_ix in items
+            for i in sorted_indices
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for config, output in zip(ensemble_configs, outputs):
-            yield _move_and_squeeze_output(output, devices[0]), config
+        for output, i in zip(outputs, sorted_indices):
+            yield _move_and_squeeze_output(output, devices[0]), ensemble_configs[i]
 
         [model.cpu() for model in self.models]
 
@@ -506,43 +500,33 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         if self.force_inference_dtype is not None:
             [model.type(self.force_inference_dtype) for model in self.models]
 
-        if self.no_preprocessing:
-            X_tests = (X for _ in range(len(self.ensemble_configs)))
-        else:
-            X_tests = (
-                preprocessor.transform(X).X for preprocessor in self.preprocessors
-            )
-
-        # Materialize and sort all items by model_index so that calls with model index 0
-        # run first, then 1, etc.
-        items = list(
-            zip(
-                self.ensemble_configs,
-                self.X_trains,
-                X_tests,
-                self.y_trains,
-                self.cat_ixs,
-            )
+        # Create a sorted index order by model_index so that calls with model index 0
+        # run first, then model index 1, etc.
+        sorted_indices = sorted(
+            range(len(self.ensemble_configs)),
+            key=lambda i: self.ensemble_configs[i]._model_index,
         )
-        items.sort(key=lambda t: t[0]._model_index)
+
+        def _transform_X_test(i: int) -> np.ndarray | torch.Tensor:
+            return X if self.no_preprocessing else self.preprocessors[i].transform(X).X
 
         model_forward_functions = (
             partial(
                 self._call_model,
-                X_train=X_train,
-                X_test=X_test,
-                y_train=y_train,
-                cat_ix=cat_ix,
+                X_train=self.X_trains[i],
+                X_test=_transform_X_test(i),
+                y_train=self.y_trains[i],
+                cat_ix=self.cat_ixs[i],
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
-                model_index=ensemble_config._model_index,
+                model_index=self.ensemble_configs[i]._model_index,
             )
-            for ensemble_config, X_train, X_test, y_train, cat_ix in items
+            for i in sorted_indices
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for output, (ensemble_config, _, _, _, _) in zip(outputs, items):
-            yield _move_and_squeeze_output(output, devices[0]), ensemble_config
+        for output, i in zip(outputs, sorted_indices):
+            yield _move_and_squeeze_output(output, devices[0]), self.ensemble_configs[i]
 
         if self.inference_mode:
             [model.cpu() for model in self.models]

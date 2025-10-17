@@ -313,9 +313,7 @@ class EnsembleConfig:
         add_fingerprint_feature: Whether to add fingerprint features.
         polynomial_features: Maximum number of polynomial features to add, if any.
         feature_shift_count: How much to shift the features columns.
-        feature_shift_decoder: How shift features
-        subsample_ix: Indices of samples to use for this ensemble member.
-            If `None`, no subsampling is done.
+        feature_shift_decoder: How to shift features.
         subsample_ix: Indices of samples to use for this ensemble member.
             If `None`, no subsampling is done.
     """
