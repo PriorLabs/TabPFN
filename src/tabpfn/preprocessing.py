@@ -732,14 +732,12 @@ def fit_preprocessing(
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
-            n_preprocessing_jobs=n_preprocessing_jobs,
+            n_jobs=n_preprocessing_jobs,
             return_as=return_as,
             batch_size="auto",
         )
     else:
-        executor = joblib.Parallel(
-            n_preprocessing_jobs=n_preprocessing_jobs, batch_size="auto"
-        )
+        executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 

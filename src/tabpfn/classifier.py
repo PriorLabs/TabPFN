@@ -406,21 +406,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if n_jobs is not None:
             warnings.warn(
-                "TabPFNClassifier(n_jobs=...) is deprecated. "
+                "TabPFNClassifier(n_jobs=...) is deprecated and has no effect. "
                 "Use `n_preprocessing_jobs` instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
+        self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
 
         # Ping the usage service if telemetry enabled
         ping()
-
-    @property
-    @deprecated("`n_jobs` is deprecated.", category=DeprecationWarning, stacklevel=2)
-    def n_jobs(self) -> int:
-        """The number of worker processes used for the preprocessing."""
-        return self.n_preprocessing_jobs
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:

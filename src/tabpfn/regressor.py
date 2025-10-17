@@ -437,21 +437,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if n_jobs is not None:
             warnings.warn(
-                "TabPFNRegressor(n_jobs=...) is deprecated. "
+                "TabPFNRegressor(n_jobs=...) is deprecated and has no effect. "
                 "Use `n_preprocessing_jobs` instead.",
                 DeprecationWarning,
                 stacklevel=2,
             )
+        self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
 
         # Ping the usage service if telemetry enabled
         ping()
-
-    @property
-    @deprecated("`n_jobs` is deprecated.", category=DeprecationWarning, stacklevel=2)
-    def n_jobs(self) -> int:
-        """The number of worker processes used for the preprocessing."""
-        return self.n_preprocessing_jobs
 
     @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
