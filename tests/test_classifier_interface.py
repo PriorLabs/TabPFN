@@ -612,14 +612,14 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
-        _patch_layernorm_no_affine(classifier.model_)
+        _patch_layernorm_no_affine(classifier.models_[0])
 
         # From 2.9 PyTorch changed the default export mode from TorchScript to
         # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
         # available in newer PyTorch versions, hence we don't always include it.
         export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
-            ModelWrapper(classifier.model_).eval(),
+            ModelWrapper(classifier.models_[0]).eval(),
             (X_tensor, y_tensor, True, [[]]),
             io.BytesIO(),
             input_names=[
@@ -649,10 +649,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     embeddings = model.get_embeddings(X, valid_data_source)
 
     # Need to access the model through the executor
-    model_instance = typing.cast(typing.Any, model.executor_).model
+    model_instances = typing.cast(typing.Any, model.executor_).models
     encoder_shape = next(
         m.out_features
-        for m in model_instance.encoder.modules()
+        for m in model_instances[0].encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
@@ -807,7 +807,7 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert hasattr(classifier, "configs_")
     assert classifier.configs_ is not None
 
-    assert not hasattr(classifier, "znorm_space_bardists_")
+    assert not hasattr(classifier, "znorm_space_bardist_")
 
     # 3) Reuse via ClassifierModelSpecs
     spec = ClassifierModelSpecs(
@@ -823,4 +823,4 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert hasattr(classifier2, "configs_")
     assert classifier2.configs_ is not None
 
-    assert not hasattr(classifier2, "znorm_space_bardists_")
+    assert not hasattr(classifier2, "znorm_space_bardist_")

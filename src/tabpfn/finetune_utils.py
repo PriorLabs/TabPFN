@@ -54,7 +54,7 @@ def clone_model_for_evaluation(
             )
         elif isinstance(original_model, TabPFNRegressor):
             # Regressor also needs the distribution criterion copied
-            new_bar_dist = copy.deepcopy(original_model.znorm_space_bardists_[0])
+            new_bar_dist = copy.deepcopy(original_model.znorm_space_bardist_)
             model_spec_obj = RegressorModelSpecs(
                 model=new_model_state,
                 config=new_config,

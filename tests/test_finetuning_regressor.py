@@ -284,14 +284,14 @@ def test_tabpfn_regressor_finetuning_loop(
             assert len(X_trains_preprocessed) == reg.n_estimators
             assert len(y_trains_preprocessed) == reg.n_estimators
             assert reg.models_ is not None, "Model not initialized after fit"
-            assert hasattr(reg, "znorm_space_bardists_"), (
-                "Regressor missing 'znorm_space_bardists_' attribute after fit"
+            assert hasattr(reg, "znorm_space_bardist_"), (
+                "Regressor missing 'znorm_space_bardist_' attribute after fit"
             )
-            assert hasattr(reg, "raw_space_bardists_"), (
-                "Regressor missing 'raw_space_bardists_' attribute after fit"
+            assert hasattr(reg, "raw_space_bardist_"), (
+                "Regressor missing 'raw_space_bardist_' attribute after fit"
             )
-            assert reg.znorm_space_bardists_ is not None, (
-                "reg.znorm_space_bardists_ is None"
+            assert reg.znorm_space_bardist_ is not None, (
+                "reg.znorm_space_bardist_ is None"
             )
 
             lossfn = None

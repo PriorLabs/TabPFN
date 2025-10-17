@@ -359,7 +359,7 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
-    list[nn.BCEWithLogitsLoss | nn.CrossEntropyLoss],
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
     list[ArchitectureConfig],
 ]: ...
 
@@ -374,7 +374,7 @@ def load_model_criterion_config(
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
-    list[Architecture], list[FullSupportBarDistribution], list[ArchitectureConfig]
+    list[Architecture], FullSupportBarDistribution, list[ArchitectureConfig]
 ]: ...
 
 
@@ -388,7 +388,7 @@ def load_model_criterion_config(
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
-    list[nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution],
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     list[ArchitectureConfig],
 ]:
     """Load the model, criterion, and config from the given path.
@@ -464,9 +464,10 @@ def load_model_criterion_config(
                 f" had a {type(criterion).__name__} criterion.",
             )
         loaded_models.append(loaded_model)
+        # TODO(ben): double-check if criterion match here
         criterions.append(criterion)
         configs.append(config)
-    return loaded_models, criterions, configs
+    return loaded_models, criterions[0], configs
 
 
 def _resolve_model_path(
@@ -646,18 +647,19 @@ def save_tabpfn_model(
         )
 
     models = model.models_
-    znorm_space_bardists = [None] * len(models)
+
+    znorm_space_bardist = None
     if (
-        hasattr(model, "znorm_space_bardists_")
-        and model.znorm_space_bardists_ is not None  # type: ignore
+        hasattr(model, "znorm_space_bardist_")
+        and model.znorm_space_bardist_ is not None  # type: ignore
     ):
-        znorm_space_bardists = model.znorm_space_bardists_  # type: ignore
+        znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
+
     configs = model.configs_
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 
-    for ens_model, znorm_space_bardist, config, path in zip(
+    for ens_model, config, path in zip(
         models,
-        znorm_space_bardists,
         configs,
         save_paths,
     ):

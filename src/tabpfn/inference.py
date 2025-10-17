@@ -64,12 +64,10 @@ class InferenceEngine(ABC):
         save_peak_mem: Whether to save peak memory usage.
         dtype_byte_size: The byte size of the dtype.
         models: The models to use for inference.
-        ensemble_configs: The ensemble configurations to use.
     """
 
     save_peak_mem: bool | Literal["auto"] | float | int
     dtype_byte_size: int
-    ensemble_configs: Sequence[EnsembleConfig]
     models: list[Architecture]
 
     @abstractmethod
@@ -146,6 +144,7 @@ class InferenceEngineOnDemand(InferenceEngine):
     static_seed: int
     n_workers: int
     force_inference_dtype: torch.dtype | None
+    ensemble_configs: list[EnsembleConfig]
 
     @classmethod
     def prepare(
@@ -244,7 +243,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         )
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for (config, _, _, _, _), output in zip(ensemble_configs, outputs):
+        for config, output in zip(ensemble_configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
         [model.cpu() for model in self.models]
@@ -309,6 +308,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             X_trains: The training data.
             y_trains    : The training target.
             cat_ix: The categorical indices.
+            ensemble_configs: The ensemble configurations to use.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             inference_mode: Whether to enable torch inference mode.
@@ -317,6 +317,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
     X_trains: list[torch.Tensor]
     y_trains: list[torch.Tensor]
     cat_ix: list[list[list[int]]]
+    ensemble_configs: list[list[EnsembleConfig]]
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
 
@@ -328,7 +329,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         *,
         cat_ix: list[list[list[int]]],
         models: list[Architecture],
-        ensemble_configs: Sequence[EnsembleConfig],
+        ensemble_configs: list[list[EnsembleConfig]],
         force_inference_dtype: torch.dtype | None,
         inference_mode: bool,
         dtype_byte_size: int,
@@ -347,6 +348,13 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
         """
+        for ensemble_config in ensemble_configs:
+            if len(ensemble_config) > 1:
+                raise ValueError(
+                    "Batched inference does not support multiple ensemble"
+                    " configurations because no preprocessing is applied."
+                )
+
         # We save it as a static seed to be reproducible across predicts
         return cls(
             X_trains=X_trains,
@@ -367,13 +375,13 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         *,
         devices: Sequence[torch.device],
         autocast: bool,
-    ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+    ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         # This engine currently only supports one device, so just take the first.
         device = devices[0]
 
         self.models = [model.to(device) for model in self.models]
-        ensemble_size = len(self.X_trains)
-        for i in range(ensemble_size):
+        batch_size = len(self.X_trains)
+        for i in range(batch_size):
             train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
             train_y_batch = self.y_trains[i]
             train_x_full = train_x_full.to(device)
@@ -386,7 +394,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
-                output = self.models[self.ensemble_configs[i]._model_index](
+                output = self.models[self.ensemble_configs[i][0]._model_index](
                     train_x_full.transpose(0, 1),
                     train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
@@ -421,6 +429,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     preprocessors: Sequence[SequentialFeatureTransformer]
     force_inference_dtype: torch.dtype | None
     inference_mode: bool
+    ensemble_configs: list[EnsembleConfig]
     no_preprocessing: bool = False
 
     @classmethod
@@ -611,6 +620,7 @@ class InferenceEngineCacheKV(InferenceEngine):
     cat_ixs: Sequence[list[int]]
     n_train_samples: list[int]
     force_inference_dtype: torch.dtype | None
+    ensemble_configs: list[EnsembleConfig]
 
     @classmethod
     def prepare(  # noqa: PLR0913

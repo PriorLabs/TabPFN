@@ -96,7 +96,7 @@ def initialize_tabpfn_model(
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
-    list[FullSupportBarDistribution] | None,
+    FullSupportBarDistribution | None,
 ]:
     """Initializes a TabPFN model based on the provided configuration.
 
@@ -115,7 +115,7 @@ def initialize_tabpfn_model(
         bar_distribution: The BarDistribution for regression (`None` if classifier).
     """
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        return [model_path.model], [model_path.config], [model_path.norm_criterion]
+        return [model_path.model], [model_path.config], model_path.norm_criterion
 
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
         return [model_path.model], [model_path.config], None
@@ -124,7 +124,7 @@ def initialize_tabpfn_model(
         return (  # pyright: ignore[reportReturnType]
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            [spec.norm_criterion for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
         )
 
     if isinstance(model_path, list) and isinstance(model_path[0], ClassifierModelSpecs):
@@ -154,7 +154,7 @@ def initialize_tabpfn_model(
                 version="v2",
                 download_if_not_exists=download_if_not_exists,
             )
-            norm_criterions = None
+            norm_criterion = None
         else:
             models, bardist, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
                 model_path=model_path,  # pyright: ignore[reportArgumentType]
@@ -165,9 +165,9 @@ def initialize_tabpfn_model(
                 version="v2",
                 download_if_not_exists=download_if_not_exists,
             )
-            norm_criterions = bardist
+            norm_criterion = bardist
 
-        return models, configs, norm_criterions  # pyright: ignore[reportReturnType]
+        return models, configs, norm_criterion  # pyright: ignore[reportReturnType]
 
     raise TypeError(
         "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
@@ -468,15 +468,15 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    models, configs, norm_or_bardists = initialize_tabpfn_model(
+    models, configs, norm_or_bardist = initialize_tabpfn_model(
         model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
         which=model_type,
         fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
     )
     calling_instance.models_ = models
     calling_instance.configs_ = configs
-    if model_type == "regressor" and norm_or_bardists is not None:
-        calling_instance.znorm_space_bardists_ = norm_or_bardists
+    if model_type == "regressor" and norm_or_bardist is not None:
+        calling_instance.znorm_space_bardist_ = norm_or_bardist
 
     calling_instance.devices_ = infer_devices(calling_instance.device)
     (

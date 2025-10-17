@@ -390,10 +390,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     embeddings = model.get_embeddings(X, valid_data_source)
 
     # Need to access the model through the executor
-    model_instance = typing.cast(typing.Any, model.executor_).model
+    model_instances = typing.cast(typing.Any, model.executor_).models
     encoder_shape = next(
         m.out_features
-        for m in model_instance.encoder.modules()
+        for m in model_instances[0].encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
@@ -619,14 +619,14 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(regressor, "configs_")
     assert regressor.configs_ is not None
 
-    assert hasattr(regressor, "znorm_space_bardists_")
-    assert regressor.znorm_space_bardists_ is not None
+    assert hasattr(regressor, "znorm_space_bardist_")
+    assert regressor.znorm_space_bardist_ is not None
 
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
         model=regressor.models_[0],
         config=regressor.configs_[0],
-        norm_criterion=regressor.znorm_space_bardists_[0],
+        norm_criterion=regressor.znorm_space_bardist_,
     )
     reg2 = TabPFNRegressor(model_path=spec)
     reg2._initialize_model_variables()
@@ -637,5 +637,5 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     assert hasattr(reg2, "configs_")
     assert reg2.configs_ is not None
 
-    assert hasattr(reg2, "znorm_space_bardists_")
-    assert reg2.znorm_space_bardists_ is not None
+    assert hasattr(reg2, "znorm_space_bardist_")
+    assert reg2.znorm_space_bardist_ is not None
