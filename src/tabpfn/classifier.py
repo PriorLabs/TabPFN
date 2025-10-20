@@ -420,6 +420,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         This is set after the model is loaded and initialized.
         """
+        if not hasattr(self, "models_"):
+            raise ValueError(
+                "The model has not been initialized yet. Please initialize the model "
+                "before using the `model_` property."
+            )
         if len(self.models_) > 1:
             raise ValueError(
                 "The `model_` property is not supported when multiple models are used. "
