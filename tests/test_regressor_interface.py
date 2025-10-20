@@ -67,7 +67,8 @@ _smoke_grid = product(
     ["fit_preprocessors"],  # fit_mode
     ["auto"],  # inference_precision
     [remove_outliers_stds[0]],  # remove_outliers_std
-    other_models,  # every non-first model path
+    # every non-first model path and multiple models test
+    [*other_models, [primary_model, other_models[0]]],
 )
 
 all_combinations = list(_full_grid) + list(_smoke_grid)
@@ -77,7 +78,7 @@ all_combinations = list(_full_grid) + list(_smoke_grid)
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y, _ = sklearn.datasets.make_regression(
-        n_samples=50, n_features=9, random_state=0, coef=True
+        n_samples=30, n_features=4, random_state=0, coef=True
     )
     return X, y
 
@@ -180,6 +181,36 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
     tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
+
+
+def test_multiple_models_predict_different_results(
+    X_y: tuple[np.ndarray, np.ndarray],
+):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    single_model = primary_model
+    two_identical_models = [primary_model, primary_model]
+    two_different_models = [primary_model, other_models[0]]
+
+    def get_prediction(model_paths: list[str]) -> np.ndarray:
+        regressor = TabPFNRegressor(
+            n_estimators=2,
+            random_state=42,
+            model_path=model_paths,
+        )
+        regressor.fit(X, y)
+        return regressor.predict(X)
+
+    single_model_pred = get_prediction(model_paths=[single_model])
+    two_identical_models_pred = get_prediction(model_paths=two_identical_models)
+    two_different_models_pred = get_prediction(model_paths=two_different_models)
+
+    assert not np.all(single_model_pred == single_model_pred[0:1]), (
+        "Logits are identical across classes for all samples, indicating trivial output"
+    )
+    assert np.all(single_model_pred == two_identical_models_pred)
+    assert not np.all(single_model_pred == two_different_models_pred)
 
 
 # TODO: Should probably run a larger suite with different configurations

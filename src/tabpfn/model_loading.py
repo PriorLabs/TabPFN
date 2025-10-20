@@ -416,9 +416,6 @@ def load_model_criterion_config(
         )
     )
 
-    # TODO: Also make sure we don't load all models if only a single estimator
-    # is used. Print a warning in this case.
-
     for folder in resolved_model_dirs:
         folder.mkdir(parents=True, exist_ok=True)
 
@@ -467,7 +464,17 @@ def load_model_criterion_config(
         # TODO(ben): double-check if criterion match here
         criterions.append(criterion)
         configs.append(config)
-    return loaded_models, criterions[0], configs
+
+    first_criterion = criterions[0]
+    if isinstance(first_criterion, FullSupportBarDistribution):
+        for criterion in criterions[1:]:
+            if not first_criterion.has_equal_borders(criterion):
+                raise ValueError(
+                    f"The criterions {first_criterion} and {criterion} are different. "
+                    "This is not supported in the current implementation"
+                )
+
+    return loaded_models, first_criterion, configs
 
 
 def _resolve_model_path(

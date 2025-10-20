@@ -75,7 +75,8 @@ _smoke_grid = product(
     ["fit_preprocessors"],  # fit_mode
     ["auto"],  # inference_precision
     [None],  # remove_outliers_std
-    other_models,  # every non-first model path
+    # every non-first model path and multiple models test
+    [*other_models, [primary_model, other_models[0]]],
 )
 
 all_combinations = list(_full_grid) + list(_smoke_grid)
@@ -289,6 +290,39 @@ def test_predict_raw_logits(
             "Logits are identical across classes for all samples, indicating "
             "trivial output."
         )
+
+
+def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndarray]):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    single_model = primary_model
+    two_identical_models = [primary_model, primary_model]
+    two_different_models = [primary_model, other_models[0]]
+
+    # Ensure y is int64 for consistency with classification tasks
+    y = y.astype(np.int64)
+
+    def get_averaged_logits(model_paths: list[str]) -> np.ndarray:
+        classifier = TabPFNClassifier(
+            n_estimators=2,
+            random_state=42,
+            model_path=model_paths,
+        )
+        classifier.fit(X, y)
+        # shape: E=estimators, R=rows, C=columns
+        logits_ERC = classifier.predict_raw_logits(X)
+        return logits_ERC.mean(axis=0)
+
+    single_model_logits = get_averaged_logits(model_paths=[single_model])
+    two_identical_models_logits = get_averaged_logits(model_paths=two_identical_models)
+    two_different_models_logits = get_averaged_logits(model_paths=two_different_models)
+
+    assert not np.all(single_model_logits == single_model_logits[:, 0:1]), (
+        "Logits are identical across classes for all samples, indicating trivial output"
+    )
+    assert np.all(single_model_logits == two_identical_models_logits)
+    assert not np.all(single_model_logits == two_different_models_logits)
 
 
 def test_softmax_temperature_impact_on_logits_magnitude(

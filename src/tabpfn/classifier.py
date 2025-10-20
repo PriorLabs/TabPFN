@@ -162,7 +162,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         average_before_softmax: bool = False,
         model_path: str
         | Path
-        | list[str | Path]
+        | list[str]
+        | list[Path]
         | Literal["auto"]
         | ClassifierModelSpecs
         | list[ClassifierModelSpecs] = "auto",

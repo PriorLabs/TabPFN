@@ -151,6 +151,13 @@ def initialize_tabpfn_model(
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
+        if isinstance(model_path, list) and len(model_path) == 0:
+            raise ValueError(
+                "You provided a list of model paths with no entries. "
+                "Please provide a valid `model_path` argument, or use 'auto' to use "
+                "the default model."
+            )
+
         download_if_not_exists = True
 
         if which == "classifier":

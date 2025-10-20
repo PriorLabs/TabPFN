@@ -48,6 +48,10 @@ class BarDistribution(nn.Module):
         self.ignore_nan_targets = ignore_nan_targets
         self.to(borders.device)
 
+    def has_equal_borders(self, other: BarDistribution) -> bool:
+        """Check if two BarDistributions have equal borders."""
+        return torch.equal(self.borders, other.borders)  # pyright: ignore[reportArgumentType]
+
     @property
     def bucket_widths(self) -> torch.Tensor:
         return self.borders[1:] - self.borders[:-1]
