@@ -791,16 +791,16 @@ class DatasetCollectionWithPreprocessing(Dataset):
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
             fields (`znorm_space_bardist_`).
-        n_workers (int, optional): The number of workers to use for potentially
-            parallelized preprocessing steps (passed to `fit_preprocessing`).
-            Defaults to 1.
+        n_preprocessing_jobs: The number of workers to use for potentially parallelized
+            preprocessing steps (passed to `fit_preprocessing`).
 
     Attributes:
         configs (Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]):
             Stores the input dataset configuration collection.
         split_fn (Callable): Stores the splitting function.
         rng (np.random.Generator): Stores the random number generator.
-        n_workers (int): Stores the number of workers for preprocessing.
+        n_preprocessing_jobs (int): The number of worker processes that will be used for
+            the preprocessing.
     """
 
     def __init__(
@@ -810,12 +810,12 @@ class DatasetCollectionWithPreprocessing(Dataset):
         dataset_config_collection: Sequence[
             RegressorDatasetConfig | ClassifierDatasetConfig
         ],
-        n_workers: int = 1,
+        n_preprocessing_jobs: int = 1,
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
-        self.n_workers = n_workers
+        self.n_preprocessing_jobs = n_preprocessing_jobs
 
     def __len__(self):
         return len(self.configs)
@@ -936,7 +936,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             y_train=y_train,
             random_state=self.rng,
             cat_ix=cat_ix,
-            n_preprocessing_jobs=self.n_workers,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="block",
         )
         (
