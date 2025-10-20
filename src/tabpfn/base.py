@@ -124,7 +124,7 @@ def initialize_tabpfn_model(
     if (
         isinstance(model_path, list)
         and len(model_path) > 0
-        and isinstance(model_path[0], RegressorModelSpecs)
+        and all(isinstance(spec, RegressorModelSpecs) for spec in model_path)
     ):
         return (  # pyright: ignore[reportReturnType]
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
@@ -135,7 +135,7 @@ def initialize_tabpfn_model(
     if (
         isinstance(model_path, list)
         and len(model_path) > 0
-        and isinstance(model_path[0], ClassifierModelSpecs)
+        and all(isinstance(spec, ClassifierModelSpecs) for spec in model_path)
     ):
         return (
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]

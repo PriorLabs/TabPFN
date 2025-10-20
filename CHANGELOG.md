@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Allow to run classifier and regressor with multiple models [#557](https://github.com/PriorLabs/TabPFN/pull/557).
+- You can now fit and use TabPFNClassifier and TabPFNRegressor with multiple models in an ensemble. Please note: model attributes have changed! Instead of accessing the single `.model_`, you should now use `.models_` (a list of models). [#557](https://github.com/PriorLabs/TabPFN/pull/557)
 - Disable all telemetry in unit tests.
 
 ## [2.2.1] - 2025-09-17

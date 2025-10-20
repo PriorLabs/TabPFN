@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import itertools
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
@@ -18,7 +19,7 @@ import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import MemoryUsageEstimator
-from tabpfn.parallel_execute import parallel_execute
+from tabpfn.parallel_execute import ParallelFunction, parallel_execute
 from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
@@ -180,7 +181,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         return cls(
             X_train=X_train,
             y_train=y_train,
-            ensemble_configs=ensemble_configs,
+            ensemble_configs=list(ensemble_configs),
             cat_ix=cat_ix,
             models=models,
             static_seed=static_seed,
@@ -201,8 +202,13 @@ class InferenceEngineOnDemand(InferenceEngine):
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         rng = np.random.default_rng(self.static_seed)
 
-        itr = fit_preprocessing(
-            configs=self.ensemble_configs,
+        sorted_ensemble_configs = sorted(
+            self.ensemble_configs,
+            key=lambda c: c._model_index,
+        )
+
+        preprocessed_data_iterator = fit_preprocessing(
+            configs=sorted_ensemble_configs,
             X_train=self.X_train,
             y_train=self.y_train,
             random_state=rng,
@@ -210,35 +216,86 @@ class InferenceEngineOnDemand(InferenceEngine):
             n_workers=self.n_workers,
             parallel_mode="as-ready",
         )
-        ensemble_configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
 
         if self.force_inference_dtype is not None:
             [model.type(self.force_inference_dtype) for model in self.models]
 
-        # Create a sorted index order by model_index so that calls with model index 0
-        # run first, then model index 1, etc.
-        sorted_indices = sorted(
-            range(len(ensemble_configs)),
-            key=lambda i: ensemble_configs[i]._model_index,
+        # This generates a re-sorted execution generator to ensure
+        # models are evaluated in order.
+        def get_generator_sorted_by_model_index(
+            preprocessed_data_iterator: Iterator[
+                tuple[
+                    EnsembleConfig,
+                    SequentialFeatureTransformer,
+                    torch.Tensor | np.ndarray,
+                    torch.Tensor | np.ndarray,
+                    list[int],
+                ]
+            ],
+        ) -> Iterator[
+            tuple[
+                ParallelFunction[torch.Tensor | dict[str, torch.Tensor]],
+                EnsembleConfig,
+            ]
+        ]:
+            in_model_order_preprocessing_cache: dict[int, tuple] = {}
+            next_model_needed: int = 0
+
+            def _yield_available_cached_preprocessings() -> Iterator[
+                tuple[
+                    ParallelFunction[torch.Tensor | dict[str, torch.Tensor]],
+                    EnsembleConfig,
+                ]
+            ]:
+                nonlocal next_model_needed
+                while next_model_needed in in_model_order_preprocessing_cache:
+                    (
+                        ensemble_config_sorted,
+                        preproc_sorted,
+                        X_train_sorted,
+                        y_train_sorted,
+                        cat_ix_sorted,
+                    ) = in_model_order_preprocessing_cache.pop(next_model_needed)
+
+                    model_func = partial(
+                        self._call_model,
+                        X_train=X_train_sorted,
+                        X_test=preproc_sorted.transform(X).X,
+                        y_train=y_train_sorted,
+                        cat_ix=cat_ix_sorted,
+                        only_return_standard_out=only_return_standard_out,
+                        autocast=autocast,
+                        model_index=ensemble_config_sorted._model_index,
+                    )
+
+                    yield (model_func, ensemble_config_sorted)
+
+                    next_model_needed += 1
+
+            for preprocessed_data in preprocessed_data_iterator:
+                ensemble_config = preprocessed_data[0]
+                model_index = ensemble_config._model_index
+                in_model_order_preprocessing_cache[model_index] = preprocessed_data
+
+                yield from _yield_available_cached_preprocessings()
+
+            yield from _yield_available_cached_preprocessings()
+
+        sorted_models_generator = get_generator_sorted_by_model_index(
+            preprocessed_data_iterator=preprocessed_data_iterator
         )
 
-        model_forward_functions = (
-            partial(
-                self._call_model,
-                X_train=X_trains[i],
-                X_test=preprocessors[i].transform(X).X,
-                y_train=y_trains[i],
-                cat_ix=cat_ixs[i],
-                only_return_standard_out=only_return_standard_out,
-                autocast=autocast,
-                model_index=ensemble_configs[i]._model_index,
-            )
-            for i in sorted_indices
-        )
+        func_stream, config_stream = itertools.tee(sorted_models_generator)
+
+        model_forward_functions = (func for func, _ in func_stream)
+        ensemble_configs_iter = (config for _, config in config_stream)
+
+        # Run execution. This will pull from the generators,
+        # which pulls from the "re-sorter", which pulls from preprocessing.
         outputs = parallel_execute(devices, model_forward_functions)
 
-        for output, i in zip(outputs, sorted_indices):
-            yield _move_and_squeeze_output(output, devices[0]), ensemble_configs[i]
+        for output, config in zip(outputs, ensemble_configs_iter):
+            yield _move_and_squeeze_output(output, devices[0]), config
 
         [model.cpu() for model in self.models]
 

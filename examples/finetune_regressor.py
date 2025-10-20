@@ -145,6 +145,14 @@ def main() -> None:
     X_train, X_test, y_train, y_test = prepare_data(config)
     regressor, regressor_config = setup_regressor(config)
 
+    if len(regressor.models_) > 1:
+        raise ValueError(
+            f"Your TabPFNRegressor usese multiple models ({len(regressor.models_)}). "
+            "Finetuning is not supported for multiple models. Please use a single model."
+        )
+
+    model = regressor.models_[0]
+
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
     # Note: `max_data_size` corresponds to the finetuning `batch_size` in the config
     training_datasets = regressor.get_preprocessed_datasets(
@@ -157,9 +165,7 @@ def main() -> None:
     )
 
     # Optimizer must be created AFTER get_preprocessed_datasets, which initializes the model
-    optimizer = Adam(
-        regressor.models_[0].parameters(), lr=config["finetuning"]["learning_rate"]
-    )
+    optimizer = Adam(model.parameters(), lr=config["finetuning"]["learning_rate"])
     print(
         f"--- Optimizer Initialized: Adam, LR: {config['finetuning']['learning_rate']} ---\n"
     )

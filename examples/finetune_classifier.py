@@ -64,10 +64,16 @@ def setup_model_and_optimizer(config: dict) -> tuple[TabPFNClassifier, Optimizer
         **classifier_config, fit_mode="batched", differentiable_input=False
     )
     classifier._initialize_model_variables()
+
+    if len(classifier.models_) > 1:
+        raise ValueError(
+            f"Your TabPFNClassifier usese multiple models ({len(classifier.models_)}). "
+            "Finetuning is not supported for multiple models. Please use a single model."
+        )
+    model = classifier.models_[0]
+
     # Optimizer uses finetuning-specific learning rate
-    optimizer = Adam(
-        classifier.models_[0].parameters(), lr=config["finetuning"]["learning_rate"]
-    )
+    optimizer = Adam(model.parameters(), lr=config["finetuning"]["learning_rate"])
 
     print(f"Using device: {config['device']}")
     print(f"Optimizer: Adam, Finetuning LR: {config['finetuning']['learning_rate']}")
