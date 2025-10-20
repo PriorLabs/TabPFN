@@ -444,6 +444,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ping()
 
     @property
+    def model_(self) -> Architecture:
+        """The model used for inference.
+
+        This is set after the model is loaded and initialized.
+        """
+        if len(self.models_) > 1:
+            raise ValueError(
+                "The `model_` property is not supported when multiple models are used. "
+                "Use `models_` instead."
+            )
+        return self.models_[0]
+
+    @property
     def norm_bardist_(self) -> FullSupportBarDistribution:
         """WARNING: DEPRECATED. Please use `raw_space_bardist_` instead.
         This attribute will be removed in a future version.

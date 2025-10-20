@@ -414,6 +414,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Ping the usage service if telemetry enabled
         ping()
 
+    @property
+    def model_(self) -> Architecture:
+        """The model used for inference.
+
+        This is set after the model is loaded and initialized.
+        """
+        if len(self.models_) > 1:
+            raise ValueError(
+                "The `model_` property is not supported when multiple models are used. "
+                "Use `models_` instead."
+            )
+        return self.models_[0]
+
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
         return {
