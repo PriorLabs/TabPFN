@@ -684,7 +684,7 @@ def fit_preprocessing(
     *,
     random_state: int | np.random.Generator | None,
     cat_ix: list[int],
-    n_workers: int,  # noqa: ARG001
+    n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
 ) -> Iterator[
     tuple[
@@ -703,7 +703,16 @@ def fit_preprocessing(
         y_train: Training target.
         random_state: Random number generator.
         cat_ix: Indices of categorical features.
-        n_workers: Number of workers to use.
+        n_preprocessing_jobs: Number of worker processes to use.
+            If `1`, then the preprocessing is performed in the current process. This
+                avoids multiprocessing overheads, but may not be able to full saturate
+                the CPU. Note that the preprocessing itself will parallelise over
+                multiple cores, so one job is often enough.
+            If `>1`, then different estimators are dispatched to different proceses,
+                which allows more parallelism but incurs some overhead.
+            If `-1`, then creates as many workers as CPU cores. As each worker itself
+                uses multiple cores, this is likely too many.
+            It is best to select this value by benchmarking.
         parallel_mode:
             Parallel mode to use.
 
@@ -719,32 +728,16 @@ def fit_preprocessing(
     """
     _, rng = infer_random_state(random_state)
 
-    # TODO: It seems like we really don't benefit from much more than 1,2,4 workers,
-    # even for the largest datasets from AutoMLBenchmark. Even then, the benefit is
-    # marginal. For now, we stick with single worker.
-    #
-    # The parameters worth tuning are `batch_size` and `n_jobs`
-    # * `n_jobs` - how many workers to spawn.
-    # * `batch_size` - how many tasks to send to a worker at once.
-    #
-    # For small datasets (for which this model is built for), it's quite hard to tune
-    # for increased performance and staying at 1 worker seems ideal. However for larger
-    # datasets, at the limit of what we support, having `len(configs) // 2` workers
-    # seemed good, with a `batch_size` of 2.
-    # NOTE: By setting `n_jobs` = 1, it effectively doesn't spawn anything and runs
-    # in-process
+    # Below we set batch_size to auto, but this could be further tuned.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
-            n_jobs=1,
+            n_jobs=n_preprocessing_jobs,
             return_as=return_as,
-            batch_size="auto",  # type: ignore
+            batch_size="auto",
         )
     else:
-        executor = joblib.Parallel(
-            n_jobs=1,
-            batch_size="auto",  # type: ignore
-        )
+        executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 
@@ -798,16 +791,16 @@ class DatasetCollectionWithPreprocessing(Dataset):
             indices (`cat_ix`), and the specific preprocessing configurations
             (`config`) for that dataset. Regression configs require additional
             fields (`znorm_space_bardist_`).
-        n_workers (int, optional): The number of workers to use for potentially
-            parallelized preprocessing steps (passed to `fit_preprocessing`).
-            Defaults to 1.
+        n_preprocessing_jobs: The number of workers to use for potentially parallelized
+            preprocessing steps (passed to `fit_preprocessing`).
 
     Attributes:
         configs (Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]):
             Stores the input dataset configuration collection.
         split_fn (Callable): Stores the splitting function.
         rng (np.random.Generator): Stores the random number generator.
-        n_workers (int): Stores the number of workers for preprocessing.
+        n_preprocessing_jobs (int): The number of worker processes that will be used for
+            the preprocessing.
     """
 
     def __init__(
@@ -817,12 +810,12 @@ class DatasetCollectionWithPreprocessing(Dataset):
         dataset_config_collection: Sequence[
             RegressorDatasetConfig | ClassifierDatasetConfig
         ],
-        n_workers: int = 1,
+        n_preprocessing_jobs: int = 1,
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
-        self.n_workers = n_workers
+        self.n_preprocessing_jobs = n_preprocessing_jobs
 
     def __len__(self):
         return len(self.configs)
@@ -943,7 +936,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             y_train=y_train,
             random_state=self.rng,
             cat_ix=cat_ix,
-            n_workers=self.n_workers,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="block",
         )
         (
