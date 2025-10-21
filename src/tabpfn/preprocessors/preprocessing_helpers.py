@@ -218,7 +218,7 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
         assert all(
             isinstance(t, OneToOneFeatureMixin)
             for name, t, _ in transformers
-            if name != "remaineder"
+            if name != "remainder"
         ), (
             "OrderPreservingColumnTransformer currently only supports transformers "
             "that are instances of OneToOneFeatureMixin."
@@ -257,9 +257,10 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
                 and len(col_subset) < X.shape[-1]
                 and name != "remainder"
             ):
+                col_subset_list = list(col_subset)
                 # Map original columns to indices in the transformed array
-                transformed_columns = col_subset + [
-                    c for c in original_columns if c not in col_subset
+                transformed_columns = col_subset_list + [
+                    c for c in original_columns if c not in col_subset_list
                 ]
                 indices = [transformed_columns.index(c) for c in original_columns]
                 # restore the column order from before the transfomer has been applied
