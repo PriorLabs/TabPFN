@@ -25,7 +25,11 @@ dependencies = [
   # pyobjc-framework-Metal is required to determine the available memory for MPS
   # devices for PyTorch <2.5, so we only need it on MacOS.
   # Once the minimum PyTorch >= 2.5, this can be removed.
-  "pyobjc-framework-Metal; sys_platform == 'darwin'",
+  "pyobjc-framework-Metal>=9.0,<13.0; sys_platform == 'darwin'",
+  # This one we pin because it's included indirectly by pyobjc-framework-Metal
+  # and for some reason pinning that alone doesn't prevent us from pulling in
+  # pyobjc-core==12.0 which isn't built for Python 3.9.
+  "pyobjc-core>=9.0,<13.0; sys_platform == 'darwin'",
 ]
 requires-python = ">=3.9"
 authors = [
@@ -106,8 +110,8 @@ dev = [
 ci = [
   "pytest>=8.4.2",
   "pytest-mock>=3.14.1",
-  "onnx>=1.19.0",
   "psutil>=7.1.0",
+  "onnx>=1.19.0",
 ]
 
 [tool.pytest.ini_options]
