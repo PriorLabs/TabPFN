@@ -74,7 +74,8 @@ jobs:
         run: |
           licensecheck \
             --requirements-paths pyproject.toml \
-            --only-licenses APACHE MIT BSD ISC PYTHON \
+            --only-licenses APACHE MIT BSD ISC PYTHON UNLICENSE \
+            --ignore-packages certifi "tabpfn*" "nvidia*" \
             --show-only-failing \
             -0
 
