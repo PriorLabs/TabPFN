@@ -66,7 +66,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
+        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]" --exclude pyobjc-framework-metal
         shell: bash
 
       ## Ignore notes:
