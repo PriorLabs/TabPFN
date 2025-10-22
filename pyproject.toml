@@ -104,7 +104,7 @@ dev = [
 # The minimum subset of the dev dependencies required to run the tests on the CI.
 # The idea is to be as close to the deployment environment as possible.
 ci = [
-  "licensecheck>=2025.1.0",
+#  "licensecheck>=2025.1.0",
   "onnx>=1.19.0",
   "psutil>=7.1.0",
   "pytest-mock>=3.14.1",
