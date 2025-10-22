@@ -75,8 +75,6 @@ jobs:
           licensecheck \
             --requirements-paths pyproject.toml \
             --only-licenses APACHE MIT BSD ISC PYTHON \
-            #--ignore-licenses ZOPE \
-            #--ignore-packages bidict certifi "tabpfn*" "nvidia*" "mailchimp-*" vertex_ai "pl_*" flask-cors mypy-extensions \
             --show-only-failing \
             -0
 
