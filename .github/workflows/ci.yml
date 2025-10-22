@@ -69,6 +69,11 @@ jobs:
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]" --exclude pyobjc-framework-metal
         shell: bash
 
+      - name: Find who depends on pyobjc-framework-metal (mac only)
+        run: |
+          uv pip install --system pipdeptree
+          pipdeptree -r -p pyobjc-framework-metal
+
       ## Ignore notes:
       ## einops: Appears to be MIT. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
       ## certifi: MPL. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
