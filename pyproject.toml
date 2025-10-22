@@ -25,7 +25,7 @@ dependencies = [
   # pyobjc-framework-Metal is required to determine the available memory for MPS
   # devices for PyTorch <2.5, so we only need it on MacOS.
   # Once the minimum PyTorch >= 2.5, this can be removed.
-  "pyobjc-framework-Metal; sys_platform == 'darwin'",
+  "pyobjc-framework-Metal>=9.0,<13.0; sys_platform == 'darwin'",
 ]
 requires-python = ">=3.9"
 authors = [
