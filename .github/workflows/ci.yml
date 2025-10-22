@@ -70,6 +70,7 @@ jobs:
         shell: bash
 
       - name: 'Check for forbidden licenses'
+        shell: bash
         run: |
           licensecheck \
             --requirements-paths pyproject.toml \
