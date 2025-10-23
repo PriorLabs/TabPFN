@@ -54,6 +54,7 @@ class ModelType(str, Enum):  # noqa: D101
 
 class ModelVersion(str, Enum):  # noqa: D101
     V2 = "v2"
+    V2_5 = "v2.5"
 
 
 @dataclass
@@ -98,6 +99,22 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
+    @classmethod
+    def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "v2.5_classification_ii02f5gb_best_as_of_2867200.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn-private-test",
+            default_filename="v2.5_classification_ii02f5gb_best_as_of_2867200.ckpt",
+            filenames=filenames,
+        )
+
+    def get_fallback_urls(self) -> list[str]:  # noqa: D102
+        return [
+            f"https://huggingface.co/{self.repo_id}/resolve/main/{filename}?download=true"
+            for filename in self.filenames
+        ]
 
 def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
     if version == ModelVersion.V2:
@@ -105,6 +122,9 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
             return ModelSource.get_classifier_v2()
         if model_type == ModelType.REGRESSOR:
             return ModelSource.get_regressor_v2()
+    elif version == ModelVersion.V2_5:
+        if model_type == ModelType.CLASSIFIER:
+            return ModelSource.get_classifier_v2_5()
 
     raise ValueError(
         f"Unsupported version/model combination: {version.value}/{model_type.value}",
@@ -244,7 +264,7 @@ def _try_direct_downloads(
 def download_model(
     to: Path,
     *,
-    version: Literal["v2"],
+    version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
 ) -> Literal["ok"] | list[Exception]:
@@ -263,7 +283,7 @@ def download_model(
     errors: list[Exception] = []
 
     try:
-        model_source = _get_model_source(ModelVersion(version), ModelType(which))
+        model_source = _get_model_source(version, ModelType(which))
     except ValueError as e:
         return [e]
 
@@ -294,7 +314,8 @@ def download_all_models(to: Path) -> None:
         for ckpt_name in model_source.filenames:
             download_model(
                 to=to / ckpt_name,
-                version="v2",
+                # TODO: Add v2.5 support once it's released.
+                version=ModelVersion.V2,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
@@ -354,7 +375,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["classifier"],
     download: bool,
 ) -> tuple[
@@ -370,7 +391,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["regressor"],
     download: bool,
 ) -> tuple[Architecture, FullSupportBarDistribution, ArchitectureConfig]: ...
@@ -382,7 +403,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2",
     download: bool,
 ) -> tuple[
     Architecture,
@@ -406,9 +427,12 @@ def load_model_criterion_config(
     Returns:
         The model, criterion, and config.
     """
+    model_version = ModelVersion(version)
+    print(f"BRR 1: Entrypoint for model loading? {model_path=} {which=} {model_version=}")
     (model_path, model_dir, model_name, which) = resolve_model_path(
-        model_path, which, version
+        model_path, which, model_version
     )
+    print(f"BRR 2: {model_path=} {model_dir=} {model_name=} {which=}")
 
     model_dir.mkdir(parents=True, exist_ok=True)
     if not model_path.exists():
@@ -421,7 +445,7 @@ def load_model_criterion_config(
         logger.info(f"Downloading model to {model_path}.")
         res = download_model(
             model_path,
-            version=version,
+            version=model_version,
             which=cast("Literal['classifier', 'regressor']", which),
             model_name=model_name,
         )
@@ -452,7 +476,7 @@ def load_model_criterion_config(
 def resolve_model_path(
     model_path: None | str | Path,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2",
 ) -> tuple[Path, Path, str, str]:
     """Resolves the model path, using the official default model if no path is provided.
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings
 from collections.abc import Sequence
 from pathlib import Path
@@ -121,6 +122,7 @@ def initialize_tabpfn_model(
         config: The configuration object associated with the loaded model.
         bar_distribution: The BarDistribution for regression (`None` if classifier).
     """
+    print(f"BRR 0: Earlier entrypoint for model loading? {model_path=} {which=} {fit_mode=}")
     model, config, norm_criterion = None, None, None
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
         model = model_path.model
@@ -135,6 +137,7 @@ def initialize_tabpfn_model(
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
+        version = os.getenv("TABPFN_MODEL_VERSION_OVERRIDE", "v2")
         # Load model with potential caching
         if which == "classifier":
             # The classifier's bar distribution is not used;
@@ -144,7 +147,7 @@ def initialize_tabpfn_model(
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="classifier",
-                version="v2",
+                version=version,
                 download=download,
             )
             norm_criterion = None
@@ -155,7 +158,7 @@ def initialize_tabpfn_model(
                 check_bar_distribution_criterion=True,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="regressor",
-                version="v2",
+                version=version,
                 download=download,
             )
             norm_criterion = bardist
