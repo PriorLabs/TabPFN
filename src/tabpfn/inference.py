@@ -143,7 +143,7 @@ class InferenceEngineOnDemand(InferenceEngine):
     y_train: np.ndarray
     cat_ix: list[int]
     static_seed: int
-    n_workers: int
+    n_preprocessing_jobs: int
     force_inference_dtype: torch.dtype | None
     ensemble_configs: list[EnsembleConfig]
 
@@ -157,7 +157,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
         rng: np.random.Generator,
-        n_workers: int,
+        n_preprocessing_jobs: int,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
@@ -171,7 +171,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             models: The models to use.
             ensemble_configs: The ensemble configurations to use.
             rng: The random number generator.
-            n_workers: The number of workers to use.
+            n_preprocessing_jobs: The number of workers to use.
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
@@ -185,7 +185,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             cat_ix=cat_ix,
             models=models,
             static_seed=static_seed,
-            n_workers=n_workers,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
@@ -213,7 +213,7 @@ class InferenceEngineOnDemand(InferenceEngine):
             y_train=self.y_train,
             random_state=rng,
             cat_ix=self.cat_ix,
-            n_workers=self.n_workers,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="as-ready",
         )
 
@@ -492,7 +492,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         cat_ix: list[int],
         models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
-        n_workers: int,
+        n_preprocessing_jobs: int,
         rng: np.random.Generator,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
@@ -508,7 +508,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             cat_ix: The categorical indices.
             models: The models to use.
             ensemble_configs: The ensemble configurations to use.
-            n_workers: The number of workers to use.
+            n_preprocessing_jobs: The number of workers to use.
             rng: The random number generator.
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
@@ -527,7 +527,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             y_train=y_train,
             random_state=rng,
             cat_ix=cat_ix,
-            n_workers=n_workers,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             parallel_mode="block",
         )
         configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
@@ -671,7 +671,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         *,
         cat_ix: list[int],
         ensemble_configs: Sequence[EnsembleConfig],
-        n_workers: int,
+        n_preprocessing_jobs: int,
         models: list[Architecture],
         devices: Sequence[torch.device],
         rng: np.random.Generator,
@@ -688,7 +688,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             y_train: The training target.
             cat_ix: The categorical indices.
             ensemble_configs: The ensemble configurations to use.
-            n_workers: The number of workers to use.
+            n_preprocessing_jobs: The number of workers to use.
             models: The models to use.
             devices: The devices to run the model on.
             rng: The random number generator.
@@ -707,7 +707,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             y_train=y_train,
             random_state=rng,
             cat_ix=cat_ix,
-            n_workers=n_workers,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             parallel_mode="as-ready",
         )
         ens_models: list[Architecture] = []
