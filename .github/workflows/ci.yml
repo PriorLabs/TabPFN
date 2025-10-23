@@ -69,6 +69,25 @@ jobs:
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
+      - name: Find who depends on pyobjc-framework-metal (mac only)
+        run: |
+          uv pip install --system pipdeptree
+          pipdeptree -r -p nvidia-cublas-cu12
+          pipdeptree -r -p nvidia-cuda-cupti-cu12
+          pipdeptree -r -p nvidia-cuda-nvrtc-cu12
+          pipdeptree -r -p nvidia-cuda-runtime-cu12
+          pipdeptree -r -p nvidia-cudnn-cu12
+          pipdeptree -r -p nvidia-cufft-cu12
+          pipdeptree -r -p nvidia-cufile-cu12
+          pipdeptree -r -p nvidia-curand-cu12
+          pipdeptree -r -p nvidia-cusolver-cu12
+          pipdeptree -r -p nvidia-cusparse-cu12
+          pipdeptree -r -p nvidia-cusparselt-cu12
+          pipdeptree -r -p nvidia-nccl-cu12
+          pipdeptree -r -p nvidia-nvjitlink-cu12
+          pipdeptree -r -p nvidia-nvshmem-cu12
+          pipdeptree -r -p nvidia-nvtx-cu12
+
       # Ignore notes:
       # einops: Appears to be MIT. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
       # certifi: MPL. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
@@ -125,6 +144,25 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
+
+      - name: Find who depends on pyobjc-framework-metal (mac only)
+        run: |
+          uv pip install --system pipdeptree
+          pipdeptree -r -p nvidia-cublas-cu12
+          pipdeptree -r -p nvidia-cuda-cupti-cu12
+          pipdeptree -r -p nvidia-cuda-nvrtc-cu12
+          pipdeptree -r -p nvidia-cuda-runtime-cu12
+          pipdeptree -r -p nvidia-cudnn-cu12
+          pipdeptree -r -p nvidia-cufft-cu12
+          pipdeptree -r -p nvidia-cufile-cu12
+          pipdeptree -r -p nvidia-curand-cu12
+          pipdeptree -r -p nvidia-cusolver-cu12
+          pipdeptree -r -p nvidia-cusparse-cu12
+          pipdeptree -r -p nvidia-cusparselt-cu12
+          pipdeptree -r -p nvidia-nccl-cu12
+          pipdeptree -r -p nvidia-nvjitlink-cu12
+          pipdeptree -r -p nvidia-nvshmem-cu12
+          pipdeptree -r -p nvidia-nvtx-cu12
 
       # Ignore notes:
       # einops: Appears to be MIT. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
