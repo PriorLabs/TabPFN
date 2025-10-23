@@ -80,7 +80,7 @@ jobs:
           licensecheck \
             --requirements-paths pyproject.toml \
             --only-licenses APACHE MIT BSD ISC PYTHON UNLICENSE \
-            --ignore-packages certifi einops "tabpfn*" \
+            --ignore-packages certifi einops "nvidia*" "tabpfn*" \
             --show-only-failing \
             -0
 
