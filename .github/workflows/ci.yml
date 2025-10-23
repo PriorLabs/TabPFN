@@ -74,20 +74,20 @@ jobs:
           uv pip install --system pipdeptree
           pipdeptree -r -p pyobjc-framework-metal
 
-      ## Ignore notes:
-      ## einops: Appears to be MIT. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
-      ## certifi: MPL. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
-      ## tabpfn*: Our packages
-      ## TODO: Add note on nvidia*.
-      #- name: 'Check for forbidden licenses'
-      #  shell: bash
-      #  run: |
-      #    licensecheck \
-      #      --requirements-paths pyproject.toml \
-      #      --only-licenses APACHE MIT BSD ISC PYTHON UNLICENSE \
-      #      --ignore-packages certifi einops "nvidia*" "tabpfn*" \
-      #      --show-only-failing \
-      #      -0
+      # Ignore notes:
+      # einops: Appears to be MIT. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
+      # certifi: MPL. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
+      # tabpfn*: Our packages
+      # TODO: Add note on nvidia*.
+      - name: 'Check for forbidden licenses'
+        shell: bash
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --only-licenses APACHE MIT BSD ISC PYTHON UNLICENSE \
+            --ignore-packages certifi einops "nvidia*" "tabpfn*" \
+            --show-only-failing \
+            -0
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
