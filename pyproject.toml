@@ -399,3 +399,28 @@ reportPrivateImportUsage = false
 reportUnnecessaryComparison = false
 reportConstantRedefinition = false
 reportUntypedFunctionDecorator = false
+
+[tool.licensecheck]
+# Acceptable licenses
+only_licenses = [
+    "APACHE",
+    "MIT",
+    "BSD",
+    "ISC",
+    "PYTHON",
+    "UNLICENSE",
+]
+
+# Packages that we don't consider
+ignore_packages = [
+    # Appears to be MIT, but the tool doesn't know. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
+    "einops",
+    #"nvidia*",
+    # Our packages
+    "tabpfn*",
+]
+
+# Specific exemption for certifi with MPL since we know we don't modify it.
+allow_packages = [
+    "certifi (MPL)",
+]
