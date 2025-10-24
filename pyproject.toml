@@ -109,10 +109,11 @@ dev = [
 # The minimum subset of the dev dependencies required to run the tests on the CI.
 # The idea is to be as close to the deployment environment as possible.
 ci = [
-  "pytest>=8.4.2",
-  "pytest-mock>=3.14.1",
+  "licensecheck>=2025.1.0",
   "onnx>=1.19.0",
   "psutil>=7.1.0",
+  "pytest-mock>=3.14.1",
+  "pytest>=8.4.2",
 ]
 
 [tool.pytest.ini_options]
@@ -398,3 +399,25 @@ reportPrivateImportUsage = false
 reportUnnecessaryComparison = false
 reportConstantRedefinition = false
 reportUntypedFunctionDecorator = false
+
+[tool.licensecheck]
+# Acceptable licenses
+only_licenses = [
+    "APACHE",
+    "MIT",
+    "BSD",
+    "ISC",
+    "PYTHON",
+    "UNLICENSE",
+]
+
+# Packages that we don't consider
+ignore_packages = [
+    # Uses MPL, but acceptable because we don't modify it. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
+    "certifi",
+    # Appears to be MIT, but the tool doesn't know. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
+    "einops",
+    "nvidia*",
+    # Our packages
+    "tabpfn*",
+]

@@ -69,6 +69,14 @@ jobs:
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
+      - name: 'Check for forbidden licenses'
+        shell: bash
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --show-only-failing \
+            -0
+
       - name: Initialize submodules
         run: git submodule update --init --recursive
 
@@ -110,6 +118,14 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
+
+      - name: 'Check for forbidden licenses'
+        shell: bash
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --show-only-failing \
+            -0
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
