@@ -12,7 +12,6 @@ import shutil
 import sys
 import tempfile
 import urllib.request
-import urllib.response
 import warnings
 import zipfile
 from copy import deepcopy
@@ -32,7 +31,7 @@ from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
-from tabpfn.inference import InferenceEngine
+from tabpfn.inference import InferenceEngine, InferenceEngineCacheKV
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.constants import ModelPath
 
 logger = logging.getLogger(__name__)
 
@@ -350,44 +350,46 @@ def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
 
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
     version: Literal["v2"],
     which: Literal["classifier"],
-    download: bool,
+    download_if_not_exists: bool,
 ) -> tuple[
-    Architecture,
+    list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
-    ArchitectureConfig,
+    list[ArchitectureConfig],
 ]: ...
 
 
 @overload
 def load_model_criterion_config(
-    model_path: str | Path | None,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
     version: Literal["v2"],
     which: Literal["regressor"],
-    download: bool,
-) -> tuple[Architecture, FullSupportBarDistribution, ArchitectureConfig]: ...
+    download_if_not_exists: bool,
+) -> tuple[
+    list[Architecture], FullSupportBarDistribution, list[ArchitectureConfig]
+]: ...
 
 
 def load_model_criterion_config(
-    model_path: None | str | Path,
+    model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
-    download: bool,
+    download_if_not_exists: bool,
 ) -> tuple[
-    Architecture,
+    list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-    ArchitectureConfig,
+    list[ArchitectureConfig],
 ]:
     """Load the model, criterion, and config from the given path.
 
@@ -401,59 +403,90 @@ def load_model_criterion_config(
             Whether the model should know to cache the trainset representation.
         which: Whether the model is a regressor or classifier.
         version: The version of the model.
-        download: Whether to download the model if it doesn't exist.
+        download_if_not_exists: Whether to download the model if it doesn't exist.
 
     Returns:
         The model, criterion, and config.
     """
-    (model_path, model_dir, model_name, which) = resolve_model_path(
-        model_path, which, version
-    )
-
-    model_dir.mkdir(parents=True, exist_ok=True)
-    if not model_path.exists():
-        if not download:
-            raise ValueError(
-                f"Model path does not exist and downloading is disabled"
-                f"\nmodel path: {model_path}",
-            )
-
-        logger.info(f"Downloading model to {model_path}.")
-        res = download_model(
-            model_path,
+    (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
+        _resolve_model_path(
+            model_path=model_path,
+            which=which,
             version=version,
-            which=cast("Literal['classifier', 'regressor']", which),
-            model_name=model_name,
         )
-        if res != "ok":
-            repo_type = "clf" if which == "classifier" else "reg"
-            raise RuntimeError(
-                f"Failed to download model to {model_path}!\n\n"
-                f"For offline usage, please download the model manually from:\n"
-                f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{model_name}\n\n"
-                f"Then place it at: {model_path}",
-            ) from res[0]
-
-    loaded_model, criterion, config = load_model(
-        path=model_path, cache_trainset_representation=cache_trainset_representation
     )
-    if check_bar_distribution_criterion and not isinstance(
-        criterion,
-        FullSupportBarDistribution,
-    ):
-        raise ValueError(
-            f"The model loaded, '{model_path}', was expected to have a"
-            " FullSupportBarDistribution criterion, but instead "
-            f" had a {type(criterion).__name__} criterion.",
+
+    for folder in resolved_model_dirs:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    loaded_models = []
+    criterions = []
+    configs = []
+
+    for i, path in enumerate(resolved_model_paths):
+        if not path.exists():
+            if not download_if_not_exists:
+                raise ValueError(
+                    f"Model path does not exist and downloading is disabled"
+                    f"\nmodel path: {path}",
+                )
+
+            logger.info(f"Downloading model to {path}.")
+            res = download_model(
+                path,
+                version=version,
+                which=cast("Literal['classifier', 'regressor']", which),
+                model_name=resolved_model_names[i],
+            )
+            if res != "ok":
+                repo_type = "clf" if which == "classifier" else "reg"
+                raise RuntimeError(
+                    f"Failed to download model to {path}!\n\n"
+                    f"For offline usage, please download the model manually from:\n"
+                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                    f"Then place it at: {path}",
+                ) from res[0]
+
+        loaded_model, criterion, config = load_model(
+            path=path,
+            cache_trainset_representation=cache_trainset_representation,
         )
-    return loaded_model, criterion, config
+        if check_bar_distribution_criterion and not isinstance(
+            criterion,
+            FullSupportBarDistribution,
+        ):
+            raise ValueError(
+                f"The model loaded, '{path}', was expected to have a"
+                " FullSupportBarDistribution criterion, but instead "
+                f" had a {type(criterion).__name__} criterion.",
+            )
+        loaded_models.append(loaded_model)
+        # TODO(ben): double-check if criterion match here
+        criterions.append(criterion)
+        configs.append(config)
+
+    first_criterion = criterions[0]
+    if isinstance(first_criterion, FullSupportBarDistribution):
+        for criterion in criterions[1:]:
+            if not first_criterion.has_equal_borders(criterion):
+                raise ValueError(
+                    f"The criterions {first_criterion} and {criterion} are different. "
+                    "This is not supported in the current implementation"
+                )
+
+    return loaded_models, first_criterion, configs
 
 
-def resolve_model_path(
-    model_path: None | str | Path,
+def _resolve_model_path(
+    model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
-) -> tuple[Path, Path, str, str]:
+) -> tuple[
+    list[Path],
+    list[Path],
+    list[str],
+    Literal["regressor", "classifier"],
+]:
     """Resolves the model path, using the official default model if no path is provided.
 
     Args:
@@ -464,32 +497,32 @@ def resolve_model_path(
         version: The model version (currently only 'v2').
 
     Returns:
-        A tuple containing the resolved model Path, the parent directory Path,
-        the model's filename, and the model type.
+        A tuple containing lists of resolved model Path(s),
+        the parent directory Path(s), the model's filename(s), and model type Literal.
     """
     if model_path is None:
         # Get the source information to find the official default model filename.
         model_source = _get_model_source(ModelVersion(version), ModelType(which))
-        model_name = model_source.default_filename
+        resolved_model_names = [model_source.default_filename]
 
         # Determine the cache directory for storing models.
         if settings.tabpfn.model_cache_dir is not None:
-            model_dir = settings.tabpfn.model_cache_dir
+            resolved_model_dirs = [settings.tabpfn.model_cache_dir]
         else:
-            model_dir = _user_cache_dir(platform=sys.platform, appname="tabpfn")
-
-        # Construct the full path to the default model.
-        model_path = model_dir / model_name
+            resolved_model_dirs = [
+                _user_cache_dir(platform=sys.platform, appname="tabpfn")
+            ]
+        resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
+    elif isinstance(model_path, (str, Path)):
+        resolved_model_paths = [Path(model_path)]
+        resolved_model_dirs = [resolved_model_paths[0].parent]
+        resolved_model_names = [resolved_model_paths[0].name]
     else:
-        # If a path is provided, simply parse it.
-        if not isinstance(model_path, (str, Path)):
-            raise ValueError(f"Invalid model_path: {model_path}")
+        resolved_model_paths = [Path(p) for p in model_path]
+        resolved_model_dirs = [p.parent for p in resolved_model_paths]
+        resolved_model_names = [p.name for p in resolved_model_paths]
 
-        model_path = Path(model_path)
-        model_dir = model_path.parent
-        model_name = model_path.name
-
-    return model_path, model_dir, model_name, which
+    return resolved_model_paths, resolved_model_dirs, resolved_model_names, which
 
 
 def get_loss_criterion(
@@ -596,7 +629,8 @@ def get_n_out(
 
 
 def save_tabpfn_model(
-    model: TabPFNRegressor | TabPFNClassifier, save_path: Path | str
+    model: TabPFNRegressor | TabPFNClassifier,
+    save_path: Path | str | list[Path | str],
 ) -> None:
     """Save the underlying TabPFN foundation model to ``save_path``.
 
@@ -611,31 +645,50 @@ def save_tabpfn_model(
         save_path:
             Path to save the checkpoint to.
     """
-    # Get model state dict
-    model_state = model.model_.state_dict()
+    if len(model.models_) > 1 and (
+        not isinstance(save_path, list) or len(save_path) != len(model.models_)
+    ):
+        raise ValueError(
+            f"Your TabPFN estimator has multiple internal models ({len(model.models_)})"
+            f", so you must provide a list of {len(model.models_)} save paths."
+        )
 
-    # Get bardist state dict and prefix with 'criterion.'
+    models = model.models_
+
+    znorm_space_bardist = None
     if (
         hasattr(model, "znorm_space_bardist_")
-        and model.znorm_space_bardist_ is not None
+        and model.znorm_space_bardist_ is not None  # type: ignore
     ):
-        bardist_state = {
-            f"criterion.{k}": v
-            for k, v in model.znorm_space_bardist_.state_dict().items()
-        }
-        # Combine model and bardist states
-        state_dict = {**model_state, **bardist_state}
-    else:
-        state_dict = model_state
+        znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
 
-    # Create checkpoint with correct structure
-    checkpoint = {"state_dict": state_dict, "config": asdict(model.config_)}
+    configs = model.configs_
+    save_paths = save_path if isinstance(save_path, list) else [save_path]
 
-    # Save the checkpoint
-    torch.save(checkpoint, save_path)
+    for ens_model, config, path in zip(
+        models,
+        configs,
+        save_paths,
+    ):
+        model_state = ens_model.state_dict()
+
+        if znorm_space_bardist is not None:
+            bardist_state = {
+                f"criterion.{k}": v for k, v in znorm_space_bardist.state_dict().items()
+            }
+            state_dict = {**model_state, **bardist_state}
+        else:
+            state_dict = model_state
+
+        checkpoint = {"state_dict": state_dict, "config": asdict(config)}
+
+        torch.save(checkpoint, path)
 
 
-def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
+def save_fitted_tabpfn_model(
+    estimator: BaseEstimator,
+    path: Path | str,
+) -> None:
     """Persist a fitted TabPFN estimator to ``path``.
 
     This stores the initialization parameters and the fitted state, but crucially
@@ -649,7 +702,7 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         raise ValueError("Path must end with .tabpfn_fit")
 
     # Attributes that are handled separately or should not be saved.
-    blacklist = {"model_", "executor_", "config_", "devices_"}
+    blacklist = {"models_", "executor_", "configs_", "devices_"}
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -729,7 +782,7 @@ def load_fitted_tabpfn_model(
             raise TypeError(f"Unknown estimator class '{saved_cls_name}'")
 
         est = cls(**params)
-        # This is critical: it loads the base model weights into `est.model_`
+        # This is critical: it loads the base model weights into `est.models_`
         est._initialize_model_variables()
 
         # 2. Restore all other fitted attributes
@@ -741,18 +794,17 @@ def load_fitted_tabpfn_model(
         est.executor_ = InferenceEngine.load_state(tmp / "executor_state.joblib")
 
         # 4. Re-link the foundation model with the loaded engine
-        if hasattr(est.executor_, "model") and est.executor_.model is None:
-            est.executor_.model = est.model_
-
-        if hasattr(est.executor_, "models") and est.executor_.models is None:
-            est.executor_.models = [
-                deepcopy(est.model_) for _ in range(len(est.executor_.ensemble_configs))
-            ]
+        if est.executor_.models is None:
+            if isinstance(est.executor_, InferenceEngineCacheKV):  # type: ignore
+                est.executor_.models = [
+                    deepcopy(est.models_[config._model_index])
+                    for config in est.executor_.ensemble_configs  # type: ignore
+                ]
+            else:
+                est.executor_.models = [deepcopy(model) for model in est.models_]
 
         # 5. Move all torch components to the target device
         est.devices_ = (torch.device(device),)
-        if hasattr(est.executor_, "model") and est.executor_.model is not None:
-            est.executor_.model.to(device)
         if hasattr(est.executor_, "models"):
             est.executor_.models = [m.to(device) for m in est.executor_.models]
 

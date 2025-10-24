@@ -75,7 +75,8 @@ _smoke_grid = product(
     ["fit_preprocessors"],  # fit_mode
     ["auto"],  # inference_precision
     [None],  # remove_outliers_std
-    other_models,  # every non-first model path
+    # every non-first model path and multiple models test
+    [*other_models, [primary_model, other_models[0]]],
 )
 
 all_combinations = list(_full_grid) + list(_smoke_grid)
@@ -289,6 +290,39 @@ def test_predict_raw_logits(
             "Logits are identical across classes for all samples, indicating "
             "trivial output."
         )
+
+
+def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndarray]):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    single_model = primary_model
+    two_identical_models = [primary_model, primary_model]
+    two_different_models = [primary_model, other_models[0]]
+
+    # Ensure y is int64 for consistency with classification tasks
+    y = y.astype(np.int64)
+
+    def get_averaged_logits(model_paths: list[str]) -> np.ndarray:
+        classifier = TabPFNClassifier(
+            n_estimators=2,
+            random_state=42,
+            model_path=model_paths,
+        )
+        classifier.fit(X, y)
+        # shape: E=estimators, R=rows, C=columns
+        logits_ERC = classifier.predict_raw_logits(X)
+        return logits_ERC.mean(axis=0)
+
+    single_model_logits = get_averaged_logits(model_paths=[single_model])
+    two_identical_models_logits = get_averaged_logits(model_paths=two_identical_models)
+    two_different_models_logits = get_averaged_logits(model_paths=two_different_models)
+
+    assert not np.all(single_model_logits == single_model_logits[:, 0:1]), (
+        "Logits are identical across classes for all samples, indicating trivial output"
+    )
+    assert np.all(single_model_logits == two_identical_models_logits)
+    assert not np.all(single_model_logits == two_different_models_logits)
 
 
 def test_softmax_temperature_impact_on_logits_magnitude(
@@ -594,7 +628,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     with torch.no_grad():
         classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
-        # load the model so we can access it via classifier.model_
+        # load the model so we can access it via classifier.models_
         classifier.fit(X, y)
         # this is necessary if cuda is available
         classifier.predict(X)
@@ -612,14 +646,14 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
-        _patch_layernorm_no_affine(classifier.model_)
+        _patch_layernorm_no_affine(classifier.models_[0])
 
         # From 2.9 PyTorch changed the default export mode from TorchScript to
         # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
         # available in newer PyTorch versions, hence we don't always include it.
         export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
-            ModelWrapper(classifier.model_).eval(),
+            ModelWrapper(classifier.models_[0]).eval(),
             (X_tensor, y_tensor, True, [[]]),
             io.BytesIO(),
             input_names=[
@@ -649,10 +683,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     embeddings = model.get_embeddings(X, valid_data_source)
 
     # Need to access the model through the executor
-    model_instance = typing.cast(typing.Any, model.executor_).model
+    model_instances = typing.cast(typing.Any, model.executor_).models
     encoder_shape = next(
         m.out_features
-        for m in model_instance.encoder.modules()
+        for m in model_instances[0].encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
@@ -801,36 +835,26 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     classifier = TabPFNClassifier(device="cpu", random_state=42)
     classifier._initialize_model_variables()
 
-    assert hasattr(classifier, "model_"), "classifier should have model_ attribute"
-    assert classifier.model_ is not None, "model_ should be initialized for classifier"
+    assert hasattr(classifier, "models_")
+    assert classifier.models_ is not None
 
-    assert hasattr(classifier, "config_"), "classifier should have config_ attribute"
-    assert classifier.config_ is not None, (
-        "config_ should be initialized for classifier"
-    )
+    assert hasattr(classifier, "configs_")
+    assert classifier.configs_ is not None
 
-    assert not hasattr(classifier, "bardist_"), (
-        "classifier should not have bardist_ attribute"
-    )
+    assert not hasattr(classifier, "znorm_space_bardist_")
 
     # 3) Reuse via ClassifierModelSpecs
-    new_model_state = classifier.model_
-    new_config = classifier.config_
-    spec = ClassifierModelSpecs(model=new_model_state, config=new_config)
+    spec = ClassifierModelSpecs(
+        model=classifier.models_[0], config=classifier.configs_[0]
+    )
 
     classifier2 = TabPFNClassifier(model_path=spec)
     classifier2._initialize_model_variables()
 
-    assert hasattr(classifier2, "model_"), "classifier2 should have model_ attribute"
-    assert classifier2.model_ is not None, (
-        "model_ should be initialized for classifier2"
-    )
+    assert hasattr(classifier2, "models_")
+    assert classifier2.models_ is not None
 
-    assert hasattr(classifier2, "config_"), "classifier2 should have config_ attribute"
-    assert classifier2.config_ is not None, (
-        "config_ should be initialized for classifier2"
-    )
+    assert hasattr(classifier2, "configs_")
+    assert classifier2.configs_ is not None
 
-    assert not hasattr(classifier2, "bardist_"), (
-        "classifier2 should not have bardist_ attribute"
-    )
+    assert not hasattr(classifier2, "znorm_space_bardist_")

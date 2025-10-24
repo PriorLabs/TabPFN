@@ -93,8 +93,8 @@ class ModelInterfaceConfig:
 
     PREPROCESS_TRANSFORMS: list[PreprocessorConfig | dict] | None = None
     """The preprocessing applied to the data before passing it to TabPFN. See
-    `PreprocessorConfig` for options and more details. If a list of `PreprocessorConfig`
-    is provided, the preprocessors are (repeatedly) applied across different estimators.
+    `PreprocessorConfig` for options and more details. If multiple `PreprocessorConfig`
+    are provided, they are (repeatedly) applied across different estimators.
 
     By default, for classification, two preprocessors are applied:
         1. Uses the original input data, all features transformed with a quantile

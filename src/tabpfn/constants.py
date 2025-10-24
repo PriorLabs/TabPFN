@@ -7,7 +7,8 @@
 # enumeration of things
 from __future__ import annotations
 
-from typing import Any, Literal
+import pathlib
+from typing import Any, Literal, Union
 from typing_extensions import TypeAlias
 
 import joblib
@@ -22,6 +23,8 @@ XType: TypeAlias = Any
 SampleWeightType: TypeAlias = Any
 YType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
+
+ModelPath: TypeAlias = Union[str, pathlib.Path]
 
 NA_PLACEHOLDER = "__MISSING__"
 

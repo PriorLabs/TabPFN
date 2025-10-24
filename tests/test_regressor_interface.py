@@ -67,7 +67,8 @@ _smoke_grid = product(
     ["fit_preprocessors"],  # fit_mode
     ["auto"],  # inference_precision
     [remove_outliers_stds[0]],  # remove_outliers_std
-    other_models,  # every non-first model path
+    # every non-first model path and multiple models test
+    [*other_models, [primary_model, other_models[0]]],
 )
 
 all_combinations = list(_full_grid) + list(_smoke_grid)
@@ -77,7 +78,7 @@ all_combinations = list(_full_grid) + list(_smoke_grid)
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y, _ = sklearn.datasets.make_regression(
-        n_samples=50, n_features=9, random_state=0, coef=True
+        n_samples=30, n_features=4, random_state=0, coef=True
     )
     return X, y
 
@@ -180,6 +181,36 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
     tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
+
+
+def test_multiple_models_predict_different_results(
+    X_y: tuple[np.ndarray, np.ndarray],
+):
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    single_model = primary_model
+    two_identical_models = [primary_model, primary_model]
+    two_different_models = [primary_model, other_models[0]]
+
+    def get_prediction(model_paths: list[str]) -> np.ndarray:
+        regressor = TabPFNRegressor(
+            n_estimators=2,
+            random_state=42,
+            model_path=model_paths,
+        )
+        regressor.fit(X, y)
+        return regressor.predict(X)
+
+    single_model_pred = get_prediction(model_paths=[single_model])
+    two_identical_models_pred = get_prediction(model_paths=two_identical_models)
+    two_different_models_pred = get_prediction(model_paths=two_different_models)
+
+    assert not np.all(single_model_pred == single_model_pred[0:1]), (
+        "Logits are identical across classes for all samples, indicating trivial output"
+    )
+    assert np.all(single_model_pred == two_identical_models_pred)
+    assert not np.all(single_model_pred == two_different_models_pred)
 
 
 # TODO: Should probably run a larger suite with different configurations
@@ -338,7 +369,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
     with torch.no_grad():
         regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
-        # load the model so we can access it via classifier.model_
+        # load the model so we can access it via classifier.models_
         regressor.fit(X, y)
         # this is necessary if cuda is available
         regressor.predict(X)
@@ -360,7 +391,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         # available in newer PyTorch versions, hence we don't always include it.
         export_kwargs = {"dynamo": False} if torch.__version__ >= "2.9" else {}
         torch.onnx.export(
-            ModelWrapper(regressor.model_).eval(),
+            ModelWrapper(regressor.models_[0]).eval(),
             (X, y, True, [[]]),
             io.BytesIO(),
             input_names=[
@@ -390,10 +421,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     embeddings = model.get_embeddings(X, valid_data_source)
 
     # Need to access the model through the executor
-    model_instance = typing.cast(typing.Any, model.executor_).model
+    model_instances = typing.cast(typing.Any, model.executor_).models
     encoder_shape = next(
         m.out_features
-        for m in model_instance.encoder.modules()
+        for m in model_instances[0].encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
@@ -613,37 +644,29 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     regressor = TabPFNRegressor(device="cpu", random_state=42)
     regressor._initialize_model_variables()
 
-    assert hasattr(regressor, "model_"), "regressor should have model_ attribute"
-    assert regressor.model_ is not None, "model_ should be initialized for regressor"
+    assert hasattr(regressor, "models_")
+    assert regressor.models_ is not None
 
-    assert hasattr(regressor, "config_"), "regressor should have config_ attribute"
-    assert regressor.config_ is not None, "config_ should be initialized for regressor"
+    assert hasattr(regressor, "configs_")
+    assert regressor.configs_ is not None
 
-    assert hasattr(regressor, "znorm_space_bardist_"), (
-        "regressor should have znorm_space_bardist_ attribute"
-    )
-    assert regressor.znorm_space_bardist_ is not None, (
-        "znorm_space_bardist_ should be initialized for regressor"
-    )
+    assert hasattr(regressor, "znorm_space_bardist_")
+    assert regressor.znorm_space_bardist_ is not None
 
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
-        model=regressor.model_,
-        config=regressor.config_,
+        model=regressor.models_[0],
+        config=regressor.configs_[0],
         norm_criterion=regressor.znorm_space_bardist_,
     )
     reg2 = TabPFNRegressor(model_path=spec)
     reg2._initialize_model_variables()
 
-    assert hasattr(reg2, "model_"), "regressor2 should have model_ attribute"
-    assert reg2.model_ is not None, "model_ should be initialized for regressor2"
+    assert hasattr(reg2, "models_")
+    assert reg2.models_ is not None
 
-    assert hasattr(reg2, "config_"), "regressor2 should have config_ attribute"
-    assert reg2.config_ is not None, "config_ should be initialized for regressor2"
+    assert hasattr(reg2, "configs_")
+    assert reg2.configs_ is not None
 
-    assert hasattr(reg2, "znorm_space_bardist_"), (
-        "regressor2 should have znorm_space_bardist_ attribute"
-    )
-    assert reg2.znorm_space_bardist_ is not None, (
-        "znorm_space_bardist_ should be initialized for regressor2"
-    )
+    assert hasattr(reg2, "znorm_space_bardist_")
+    assert reg2.znorm_space_bardist_ is not None

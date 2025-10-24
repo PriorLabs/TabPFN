@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
+import pathlib
 import warnings
 from collections.abc import Sequence
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Literal, Union, overload
+from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
 import torch
 
@@ -18,6 +18,7 @@ from tabpfn.config import ModelInterfaceConfig
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
+    ModelPath,
     XType,
     YType,
 )
@@ -84,35 +85,28 @@ class RegressorModelSpecs(BaseModelSpecs):
 ModelSpecs = Union[RegressorModelSpecs, ClassifierModelSpecs]
 
 
-@overload
 def initialize_tabpfn_model(
-    model_path: (str | Path | Literal["auto"] | RegressorModelSpecs),
-    which: Literal["regressor"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> RegressorModelSpecs: ...
-
-
-@overload
-def initialize_tabpfn_model(
-    model_path: (str | Path | Literal["auto"] | ClassifierModelSpecs),
-    which: Literal["classifier"],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> ClassifierModelSpecs: ...
-
-
-def initialize_tabpfn_model(
-    model_path: str
-    | Path
-    | Literal["auto"]
+    model_path: ModelPath
+    | list[ModelPath]
     | RegressorModelSpecs
-    | ClassifierModelSpecs,
+    | ClassifierModelSpecs
+    | list[RegressorModelSpecs]
+    | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
-) -> ModelSpecs:
+) -> tuple[
+    list[Architecture],
+    list[ArchitectureConfig],
+    FullSupportBarDistribution | None,
+]:
     """Initializes a TabPFN model based on the provided configuration.
 
     Args:
         model_path: Path or directive ("auto") to load the pre-trained model from.
+            If a list of paths is provided, the models are applied across different
+            estimators. If a RegressorModelSpecs or ClassifierModelSpecs object is
+            provided, the model is loaded from the object.
+
         which: Which TabPFN model to load.
         fit_mode: Determines caching behavior.
 
@@ -121,54 +115,83 @@ def initialize_tabpfn_model(
         config: The configuration object associated with the loaded model.
         bar_distribution: The BarDistribution for regression (`None` if classifier).
     """
-    model, config, norm_criterion = None, None, None
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        model = model_path.model
-        config = model_path.config
-        norm_criterion = model_path.norm_criterion
-    elif isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
-        model = model_path.model
-        config = model_path.config
-    elif model_path is None or isinstance(model_path, (str, Path)):
-        # (after processing 'auto')
-        download = True
+        return [model_path.model], [model_path.config], model_path.norm_criterion
+
+    if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
+        return [model_path.model], [model_path.config], None
+
+    if (
+        isinstance(model_path, list)
+        and len(model_path) > 0
+        and all(isinstance(spec, RegressorModelSpecs) for spec in model_path)
+    ):
+        return (  # pyright: ignore[reportReturnType]
+            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
+        )
+
+    if (
+        isinstance(model_path, list)
+        and len(model_path) > 0
+        and all(isinstance(spec, ClassifierModelSpecs) for spec in model_path)
+    ):
+        return (
+            [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            None,
+        )
+
+    if (
+        model_path is None
+        or model_path == "auto"
+        or isinstance(model_path, (str, pathlib.Path, list))  # pyright: ignore[reportArgumentType]
+    ):
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
-        # Load model with potential caching
+        if isinstance(model_path, list) and len(model_path) == 0:
+            raise ValueError(
+                "You provided a list of model paths with no entries. "
+                "Please provide a valid `model_path` argument, or use 'auto' to use "
+                "the default model."
+            )
+
+        download_if_not_exists = True
+
         if which == "classifier":
-            # The classifier's bar distribution is not used;
-            # pass check_bar_distribution_criterion=False
-            model, _, config = load_model_criterion_config(
-                model_path=model_path,
+            models, _, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+                model_path=model_path,  # pyright: ignore[reportArgumentType]
+                # The classifier's bar distribution is not used
                 check_bar_distribution_criterion=False,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="classifier",
                 version="v2",
-                download=download,
+                download_if_not_exists=download_if_not_exists,
             )
             norm_criterion = None
         else:
-            # The regressor's bar distribution is required
-            model, bardist, config = load_model_criterion_config(
-                model_path=model_path,
+            models, bardist, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+                model_path=model_path,  # pyright: ignore[reportArgumentType]
+                # The regressor's bar distribution is required
                 check_bar_distribution_criterion=True,
                 cache_trainset_representation=(fit_mode == "fit_with_cache"),
                 which="regressor",
                 version="v2",
-                download=download,
+                download_if_not_exists=download_if_not_exists,
             )
             norm_criterion = bardist
-    else:
-        raise TypeError(
-            "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
-            + which
-            + "'. Expected 'classifier' or 'regressor'. and model_path"
-            + "is of of type"
-            + str(type(model_path))
-        )
 
-    return model, config, norm_criterion
+        return models, configs, norm_criterion  # pyright: ignore[reportReturnType]
+
+    raise TypeError(
+        "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
+        + which
+        + "'. Expected 'classifier' or 'regressor'. and model_path"
+        + "is of of type"
+        + str(type(model_path))
+    )
 
 
 def determine_precision(
@@ -217,7 +240,7 @@ def create_inference_engine(  # noqa: PLR0913
     *,
     X_train: np.ndarray,
     y_train: np.ndarray,
-    model: Architecture,
+    models: list[Architecture],
     ensemble_configs: Any,
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
@@ -240,7 +263,7 @@ def create_inference_engine(  # noqa: PLR0913
     Args:
         X_train: Training features
         y_train: Training target
-        model: The loaded TabPFN model.
+        models: The loaded TabPFN models.
         ensemble_configs: The ensemble configurations to create multiple "prompts".
         cat_ix: Indices of inferred categorical features.
         fit_mode: Determines how we prepare inference (pre-cache or not).
@@ -268,7 +291,7 @@ def create_inference_engine(  # noqa: PLR0913
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
             rng=rng,
-            model=model,
+            models=models,
             n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
@@ -280,8 +303,8 @@ def create_inference_engine(  # noqa: PLR0913
             y_train=y_train,
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
+            models=models,
             n_preprocessing_jobs=n_preprocessing_jobs,
-            model=model,
             rng=rng,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
@@ -293,7 +316,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             ensemble_configs=ensemble_configs,
             n_preprocessing_jobs=n_preprocessing_jobs,
             devices=devices_,
@@ -308,7 +331,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_trains=X_train,
             y_trains=y_train,
             cat_ix=cat_ix,
-            model=model,
+            models=models,
             ensemble_configs=ensemble_configs,
             force_inference_dtype=forced_inference_dtype_,
             inference_mode=inference_mode,
@@ -399,7 +422,7 @@ def get_preprocessed_datasets_helper(
         y_raw = [y_raw]
     assert len(X_raw) == len(y_raw), "X and y lists must have the same length."
 
-    if not hasattr(calling_instance, "model_") or calling_instance.model_ is None:
+    if not hasattr(calling_instance, "models_") or calling_instance.models_ is None:
         _, rng = calling_instance._initialize_model_variables()
     else:
         _static_seed, rng = infer_random_state(calling_instance.random_state)
@@ -462,26 +485,15 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    if model_type == "regressor":
-        (
-            calling_instance.model_,
-            calling_instance.config_,
-            calling_instance.znorm_space_bardist_,
-        ) = initialize_tabpfn_model(
-            model_path=calling_instance.model_path,
-            which="regressor",
-            fit_mode=calling_instance.fit_mode,  # Use the instance's fit_mode
-        )
-    elif model_type == "classifier":
-        (calling_instance.model_, calling_instance.config_, _) = (
-            initialize_tabpfn_model(
-                model_path=calling_instance.model_path,
-                which="classifier",
-                fit_mode=calling_instance.fit_mode,  # Use the instance's fit_mode
-            )
-        )
-    else:
-        raise ValueError(f"Invalid model_type: {model_type}")
+    models, configs, norm_or_bardist = initialize_tabpfn_model(
+        model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
+        which=model_type,
+        fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+    )
+    calling_instance.models_ = models
+    calling_instance.configs_ = configs
+    if model_type == "regressor" and norm_or_bardist is not None:
+        calling_instance.znorm_space_bardist_ = norm_or_bardist
 
     calling_instance.devices_ = infer_devices(calling_instance.device)
     (
@@ -511,10 +523,9 @@ def initialize_model_variables_helper(
             raise ValueError(f"Invalid model_type: {model_type}") from e
 
     update_encoder_params(  # Use the renamed function if available, or original one
-        model=calling_instance.model_,
+        models=calling_instance.models_,
         remove_outliers_std=outlier_removal_std,
         seed=static_seed,
-        inplace=True,
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng
