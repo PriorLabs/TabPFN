@@ -422,5 +422,5 @@ ignore_packages = [
 
 # Specific exemption for certifi with MPL since we know we don't modify it.
 allow_packages = [
-    "certifi (MPL)",
+    "certifi (MPL 2.0)",
 ]
