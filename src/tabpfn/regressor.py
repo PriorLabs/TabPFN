@@ -57,11 +57,11 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
+from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
     get_embeddings,
-    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
     process_text_na_dataframe,

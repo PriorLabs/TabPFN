@@ -1,7 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 """TabPFN with KV cache vs. without on binary classification (synthetic).
 
-`fit_mode="fit_with_cache"` builds a key–value (KV) cache *during* `fit`.
+`fit_mode="fit_with_cache"` builds a key-value (KV) cache *during* `fit`.
 This front-loads the cost of computing the training-set representation so
 `predict`/`predict_proba` run faster—especially when:
   • the training set is large, and/or
@@ -14,6 +14,7 @@ Implications:
 """
 
 import time
+
 from sklearn.datasets import make_classification
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
@@ -27,8 +28,7 @@ X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.05, random_state=42, stratify=y
 )
 
-
-def bench(clf: TabPFNClassifier, name: str):
+def bench(clf: TabPFNClassifier, name: str) -> None:
     t0 = time.perf_counter()
     clf.fit(X_train, y_train)
     t_fit = time.perf_counter() - t0
