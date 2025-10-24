@@ -413,14 +413,11 @@ only_licenses = [
 
 # Packages that we don't consider
 ignore_packages = [
+    # Uses MPL, but acceptable because we don't modify it. https://github.com/certifi/python-certifi/blob/fb14ac49a976b1695d84b1ac1307276a20b3aac9/LICENSE
+    "certifi",
     # Appears to be MIT, but the tool doesn't know. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
     "einops",
     #"nvidia*",
     # Our packages
     "tabpfn*",
-]
-
-# Specific exemption for certifi with MPL since we know we don't modify it.
-allow_packages = [
-    "certifi (MPL 2.0)",
 ]
