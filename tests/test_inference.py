@@ -84,7 +84,9 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         cat_ix=[] * n_train,
         models=[TestModel()],
         ensemble_configs=_create_test_ensemble_configs(
-            n_configs=5, n_classes=n_classes
+            n_configs=5,
+            n_classes=n_classes,
+            num_models=1,
         ),
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
@@ -123,12 +125,18 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
     X_test = rng.standard_normal(size=(2, n_features))
 
+    num_models = 3
+    models = [TestModel() for _ in range(num_models)]
     engine = InferenceEngineOnDemand.prepare(
         X_train,
         y_train,
         cat_ix=[] * n_train,
-        models=[TestModel()],
-        ensemble_configs=_create_test_ensemble_configs(n_configs=5, n_classes=3),
+        models=models,
+        ensemble_configs=_create_test_ensemble_configs(
+            n_configs=5,
+            n_classes=3,
+            num_models=num_models,
+        ),
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
@@ -149,15 +157,21 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     )
 
     assert len(outputs_sequential) == len(outputs_parallel)
+    last_model_index = 0
     for par_output, par_config in outputs_parallel:
+        # Test that models are executed in order.
+        assert par_config._model_index >= last_model_index
         seq_output = _find_seq_output(par_config, outputs_sequential)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
+        last_model_index = par_config._model_index
 
 
 def _create_test_ensemble_configs(
-    n_configs: int, n_classes: int
+    n_configs: int,
+    n_classes: int,
+    num_models: int,
 ) -> list[ClassifierEnsembleConfig]:
     preprocessor_configs = [
         PreprocessorConfig(
@@ -184,7 +198,7 @@ def _create_test_ensemble_configs(
         class_shift_method=None,
         n_classes=n_classes,
         random_state=0,
-        num_models=1,
+        num_models=num_models,
     )
 
 
