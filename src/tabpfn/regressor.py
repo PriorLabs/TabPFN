@@ -70,6 +70,7 @@ from tabpfn.utils import (
     validate_X_predict,
     validate_Xy_fit,
 )
+from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON
 
 if TYPE_CHECKING:
     import numpy.typing as npt
@@ -746,10 +747,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.constant_value_ = y[0] if self.is_constant_target_ else None
 
         if self.is_constant_target_:
+            # Use relative epsilon, s.t. it works for small and large constant values
+            border_adjustment = max(
+                abs(self.constant_value_ * REGRESSION_CONSTANT_TARGET_BORDER_EPSILON),
+                REGRESSION_CONSTANT_TARGET_BORDER_EPSILON
+            )
+            
             self.znorm_space_bardist_ = FullSupportBarDistribution(
-                borders=torch.tensor(
-                    [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
-                )
+                borders=torch.tensor([
+                    self.constant_value_ - border_adjustment,
+                    self.constant_value_ + border_adjustment,
+                ])
             )
             # No need to create an inference engine for a constant prediction
             return self

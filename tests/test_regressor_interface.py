@@ -552,48 +552,55 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
 def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     """Test that TabPFNRegressor predicts a constant
-    value when the target y is constant.
+    value when the target y is constant, for both small and large values.
     """
     X, _ = X_y
-    y_constant = np.full(X.shape[0], 5.0)  # Create a constant target array
+    
+    # Test both small and large constant values
+    constant_values = [1.0, 1e-5, 1e5, -1e-5, -1e5]
+    
+    for constant_value in constant_values:
+        y_constant = np.full(X.shape[0], constant_value)
 
-    model = TabPFNRegressor(n_estimators=2, random_state=42)
-    model.fit(X, y_constant)
+        model = TabPFNRegressor(n_estimators=2, random_state=42)
+        model.fit(X, y_constant)
 
-    predictions = model.predict(X)
-    assert np.all(predictions == 5.0), "Predictions are not constant as expected"
-
-    # Test different output types
-    predictions_median = model.predict(X, output_type="median")
-    assert np.all(predictions_median == 5.0), (
-        "Median predictions are not constant as expected"
-    )
-
-    predictions_mode = model.predict(X, output_type="mode")
-    assert np.all(predictions_mode == 5.0), (
-        "Mode predictions are not constant as expected"
-    )
-
-    quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
-    for quantile_prediction in quantiles:
-        assert np.all(quantile_prediction == 5.0), (
-            "Quantile predictions are not constant as expected"
+        predictions = model.predict(X)
+        assert np.all(predictions == constant_value), (
+            f"Predictions are not constant as expected for value {constant_value}"
         )
 
-    full_output = model.predict(X, output_type="full")
-    assert np.all(full_output["mean"] == 5.0), (
-        "Mean predictions are not constant as expected for full output"
-    )
-    assert np.all(full_output["median"] == 5.0), (
-        "Median predictions are not constant as expected for full output"
-    )
-    assert np.all(full_output["mode"] == 5.0), (
-        "Mode predictions are not constant as expected for full output"
-    )
-    for quantile_prediction in full_output["quantiles"]:
-        assert np.all(quantile_prediction == 5.0), (
-            "Quantile predictions are not constant as expected for full output"
+        # Test different output types
+        predictions_median = model.predict(X, output_type="median")
+        assert np.all(predictions_median == constant_value), (
+            f"Median predictions are not constant as expected for value {constant_value}"
         )
+
+        predictions_mode = model.predict(X, output_type="mode")
+        assert np.all(predictions_mode == constant_value), (
+            f"Mode predictions are not constant as expected for value {constant_value}"
+        )
+
+        quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
+        for quantile_prediction in quantiles:
+            assert np.all(quantile_prediction == constant_value), (
+                f"Quantile predictions are not constant as expected for value {constant_value}"
+            )
+
+        full_output = model.predict(X, output_type="full")
+        assert np.all(full_output["mean"] == constant_value), (
+            f"Mean predictions are not constant as expected for full output for value {constant_value}"
+        )
+        assert np.all(full_output["median"] == constant_value), (
+            f"Median predictions are not constant as expected for full output for value {constant_value}"
+        )
+        assert np.all(full_output["mode"] == constant_value), (
+            f"Mode predictions are not constant as expected for full output for value {constant_value}"
+        )
+        for quantile_prediction in full_output["quantiles"]:
+            assert np.all(quantile_prediction == constant_value), (
+                f"Quantile predictions are not constant as expected for full output for value {constant_value}"
+            )
 
 
 def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
