@@ -555,10 +555,10 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     value when the target y is constant, for both small and large values.
     """
     X, _ = X_y
-    
+
     # Test both small and large constant values
     constant_values = [1.0, 1e-5, 1e5, -1e-5, -1e5]
-    
+
     for constant_value in constant_values:
         y_constant = np.full(X.shape[0], constant_value)
 
@@ -573,7 +573,8 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         # Test different output types
         predictions_median = model.predict(X, output_type="median")
         assert np.all(predictions_median == constant_value), (
-            f"Median predictions are not constant as expected for value {constant_value}"
+            f"Median predictions are not constant as expected for "
+            f"value {constant_value}"
         )
 
         predictions_mode = model.predict(X, output_type="mode")
@@ -584,22 +585,27 @@ def test_constant_target(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.9])
         for quantile_prediction in quantiles:
             assert np.all(quantile_prediction == constant_value), (
-                f"Quantile predictions are not constant as expected for value {constant_value}"
+                f"Quantile predictions are not constant as expected for "
+                f"value {constant_value}"
             )
 
         full_output = model.predict(X, output_type="full")
         assert np.all(full_output["mean"] == constant_value), (
-            f"Mean predictions are not constant as expected for full output for value {constant_value}"
+            f"Mean predictions are not constant as expected for "
+            f"full output for value {constant_value}"
         )
         assert np.all(full_output["median"] == constant_value), (
-            f"Median predictions are not constant as expected for full output for value {constant_value}"
+            f"Median predictions are not constant as expected for "
+            f"full output for value {constant_value}"
         )
         assert np.all(full_output["mode"] == constant_value), (
-            f"Mode predictions are not constant as expected for full output for value {constant_value}"
+            f"Mode predictions are not constant as expected for "
+            f"full output for value {constant_value}"
         )
         for quantile_prediction in full_output["quantiles"]:
             assert np.all(quantile_prediction == constant_value), (
-                f"Quantile predictions are not constant as expected for full output for value {constant_value}"
+                f"Quantile predictions are not constant as expected for "
+                f"full output for value {constant_value}"
             )
 
 
