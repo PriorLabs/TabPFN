@@ -4,29 +4,25 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections import UserList
-from typing import TYPE_CHECKING, NamedTuple
-from typing_extensions import Self
-
-from sklearn.base import OneToOneFeatureMixin
+from collections.abc import Callable, Iterable, Sequence
+from typing import TYPE_CHECKING, Any, NamedTuple
+from typing_extensions import Self, override
 
 if TYPE_CHECKING:
     import torch
 
-from collections.abc import Callable, Iterable, Sequence
-from typing import TYPE_CHECKING, Any
-from typing_extensions import override
+    from tabpfn.classifier import XType, YType
 
+
+import numpy as np
 import pandas as pd
 from sklearn.base import (
     BaseEstimator,
+    OneToOneFeatureMixin,
     check_is_fitted,
 )
 from sklearn.compose import ColumnTransformer, make_column_selector
 from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
-
-if TYPE_CHECKING:
-    from tabpfn.classifier import XType, YType
-import numpy as np
 
 from tabpfn.constants import DEFAULT_NUMPY_PREPROCESSING_DTYPE
 
