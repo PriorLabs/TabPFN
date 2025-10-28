@@ -461,7 +461,6 @@ def load_model_criterion_config(
                 f" had a {type(criterion).__name__} criterion.",
             )
         loaded_models.append(loaded_model)
-        # TODO(ben): double-check if criterion match here
         criterions.append(criterion)
         configs.append(config)
 
