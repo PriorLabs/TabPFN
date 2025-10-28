@@ -1027,8 +1027,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             devices=self.devices_,
             autocast=self.use_autocast_,
         ):
+            output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
-                output = output.float() / self.softmax_temperature  # noqa: PLW2901
+                output = output / self.softmax_temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement
