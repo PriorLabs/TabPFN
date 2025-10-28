@@ -47,6 +47,7 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
 )
+from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
 from tabpfn.preprocessing import (
@@ -57,11 +58,11 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
 )
 from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
+from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
     get_embeddings,
-    get_ordinal_encoder,
     infer_categorical_features,
     infer_random_state,
     process_text_na_dataframe,
@@ -777,9 +778,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.constant_value_ = y[0] if self.is_constant_target_ else None
 
         if self.is_constant_target_:
+            # Use relative epsilon, s.t. it works for small and large constant values
+            border_adjustment = max(
+                abs(self.constant_value_ * REGRESSION_CONSTANT_TARGET_BORDER_EPSILON),
+                REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
+            )
+
             self.znorm_space_bardist_ = FullSupportBarDistribution(
                 borders=torch.tensor(
-                    [self.constant_value_ - 1e-5, self.constant_value_ + 1e-5]
+                    [
+                        self.constant_value_ - border_adjustment,
+                        self.constant_value_ + border_adjustment,
+                    ]
                 )
             )
             # No need to create an inference engine for a constant prediction

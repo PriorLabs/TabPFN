@@ -7,14 +7,23 @@ import threading
 from unittest.mock import MagicMock
 
 import numpy as np
+import pandas as pd
 import psutil
 import pytest
 import torch
+from sklearn.preprocessing import LabelEncoder
 
+from tabpfn import TabPFNClassifier
+from tabpfn.config import ModelInterfaceConfig
+from tabpfn.constants import NA_PLACEHOLDER
+from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
+    fix_dtypes,
     get_total_memory_windows,
     infer_categorical_features,
     infer_devices,
+    process_text_na_dataframe,
+    validate_Xy_fit,
 )
 
 
@@ -186,3 +195,180 @@ def test__infer_devices__device_selected_twice__raises() -> None:
         match="The list of devices for inference cannot contain the same device more ",
     ):
         infer_devices(devices=["cpu", "cpu"])
+
+
+# --- Test Data for the "test_process_text_na_dataframe" test ---
+test_cases = [
+    {
+        # Mixed dtypes & None / pd.Na
+        "df": pd.DataFrame(
+            {
+                "ratio": [0.4, 0.5, 0.6],
+                "risk": ["High", None, "Low"],
+                "height": ["Low", "Low", "Low"],
+                "amount": [10.2, 20.4, 20.5],
+                "type": ["guest", "member", pd.NA],
+            }
+        ),
+        "categorical_indices": [1, 2, 4],
+        "ground_truth": np.array(
+            [
+                [0.4, 0, 0, 10.2, 0],
+                [0.5, np.nan, 0, 20.4, 1],
+                [0.6, 1, 0, 20.5, np.nan],
+            ]
+        ),
+    },
+    {
+        # Mixed dtypes & no missing values
+        "df": pd.DataFrame(
+            {
+                "ratio": [0.4, 0.5, 0.6],
+                "risk": ["High", "Medium", "Low"],
+                "height": ["Low", "Low", "High"],
+                "amount": [10.2, 20.4, np.nan],
+                "type": ["guest", "member", "vip"],
+            }
+        ),
+        "categorical_indices": [1, 2, 4],
+        "ground_truth": np.array(
+            [
+                [0.4, 0, 1, 10.2, 0],
+                [0.5, 2, 1, 20.4, 1],
+                [0.6, 1, 0, np.nan, 2],
+            ]
+        ),
+    },
+    {
+        # All numerical no nan
+        "df": pd.DataFrame(
+            {
+                "ratio": [0.1, 0.2, 0.3],
+                "amount": [5.0, 15.5, 25.0],
+                "score": [1.0, 2.5, 3.5],
+            }
+        ),
+        "categorical_indices": [],
+        "ground_truth": np.array(
+            [
+                [0.1, 5.0, 1.0],
+                [0.2, 15.5, 2.5],
+                [0.3, 25.0, 3.5],
+            ]
+        ),
+    },
+    {
+        # all categorical no nan
+        "df": pd.DataFrame(
+            {
+                "risk": ["High", "High", "High"],
+                "height": ["Low", "Low", "Low"],
+                "type": ["guest", "guest", "guest"],
+            }
+        ),
+        "categorical_indices": [0, 1, 2],
+        "ground_truth": np.array(
+            [
+                [0, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]
+        ),
+    },
+]
+
+
+# --- Fixture for the "test_process_text_na_dataframe" test ---
+# prepare the DataFrame
+@pytest.fixture(params=test_cases)
+def prepared_tabpfn_data(request):
+    temp_df = request.param["df"].copy()
+    categorical_idx = request.param["categorical_indices"]
+    # Dummy target, as tests do not need a target
+    y = np.array([0, 1, 0])
+
+    cls = TabPFNClassifier()
+
+    X, y, feature_names_in, n_features_in = validate_Xy_fit(
+        temp_df,
+        y,
+        estimator=cls,
+        ensure_y_numeric=False,
+        max_num_samples=ModelInterfaceConfig.MAX_NUMBER_OF_SAMPLES,
+        max_num_features=ModelInterfaceConfig.MAX_NUMBER_OF_FEATURES,
+        ignore_pretraining_limits=False,
+    )
+
+    if feature_names_in is not None:
+        cls.feature_names_in_ = feature_names_in
+    cls.n_features_in_ = n_features_in
+
+    if not cls.differentiable_input:
+        _, counts = np.unique(y, return_counts=True)
+        cls.class_counts_ = counts
+        cls.label_encoder_ = LabelEncoder()
+        y = cls.label_encoder_.fit_transform(y)
+        cls.classes_ = cls.label_encoder_.classes_
+        cls.n_classes_ = len(cls.classes_)
+    else:
+        cls.label_encoder_ = None
+        if not hasattr(cls, "n_classes_"):
+            cls.n_classes_ = int(torch.max(torch.tensor(y)).item()) + 1
+        cls.classes_ = torch.arange(cls.n_classes_)
+
+    cls.inferred_categorical_indices_ = infer_categorical_features(
+        X=X,
+        provided=categorical_idx,
+        min_samples_for_inference=ModelInterfaceConfig.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+        max_unique_for_category=ModelInterfaceConfig.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+        min_unique_for_numerical=ModelInterfaceConfig.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+    )
+    return (
+        fix_dtypes(X, cat_indices=cls.inferred_categorical_indices_),
+        cls.inferred_categorical_indices_,
+        request.param["ground_truth"],
+    )
+
+
+# --- Actual test ---
+def test_process_text_na_dataframe(prepared_tabpfn_data):
+    X, categorical_idx, ground_truth = prepared_tabpfn_data  # use the fixture
+
+    ord_encoder = get_ordinal_encoder()
+    X_out = process_text_na_dataframe(
+        X,
+        placeholder=NA_PLACEHOLDER,
+        ord_encoder=ord_encoder,
+        fit_encoder=True,
+    )
+
+    assert X_out.shape[0] == ground_truth.shape[0]
+    assert X_out.shape[1] == ground_truth.shape[1]
+
+    for col_name in X.columns:
+        # col_name should already be a numeric index but using get_loc for safety
+        col_idx = X.columns.get_loc(col_name)
+        original_col = X[col_name].to_numpy()
+        output_col = X_out[:, col_idx]
+        gt_col = ground_truth[:, col_idx]
+        if col_idx not in categorical_idx:
+            # For numeric columns, values should be preserved (within float tolerance).
+            # NaNs should also be in the same positions.
+            np.testing.assert_allclose(
+                output_col,
+                original_col,
+                equal_nan=True,
+                rtol=1e-5,
+            )
+        else:
+            # OrdinalEncoder does not guarante that element order is preserved:
+
+            # First, check if np.nan are correctly positioned
+            # ! use np.isnan on outputcol -> must be numerical
+            # ! use pd.isna on original col -> can be any type
+            np.testing.assert_array_equal(np.isnan(output_col), pd.isna(original_col))
+            # Second, check if there are as many unique non-nan values, as expected
+            # e.g.: ["high", "mid", "low"] -> [0,2,1] or [2,1,0],...
+            assert len(np.unique(output_col[~pd.isna(output_col)])) == len(
+                np.unique(gt_col[~pd.isna(gt_col)])
+            )

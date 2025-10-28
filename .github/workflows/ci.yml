@@ -61,13 +61,21 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
+        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           enable-cache: true
 
       - name: Install dependencies
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
+
+      - name: 'Check for forbidden licenses'
+        shell: bash
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --show-only-failing \
+            -0
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
@@ -103,13 +111,21 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
+        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           enable-cache: true
 
       - name: Install dependencies
         run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
+
+      - name: 'Check for forbidden licenses'
+        shell: bash
+        run: |
+          licensecheck \
+            --requirements-paths pyproject.toml \
+            --show-only-failing \
+            -0
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
@@ -147,7 +163,7 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@3259c6206f993105e3a61b142c2d97bf4b9ef83d # v7.1.0
+        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
         with:
           enable-cache: true
 
