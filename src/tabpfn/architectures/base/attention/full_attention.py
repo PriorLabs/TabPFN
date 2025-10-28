@@ -17,17 +17,6 @@ from tabpfn.architectures.base.memory import support_save_peak_mem_factor
 if TYPE_CHECKING:
     from tabpfn.architectures.base.config import ModelConfig
 
-try:
-    from flash_attn.flash_attn_interface import (
-        flash_attn_unpadded_func,
-        flash_attn_unpadded_kvpacked_func,
-        flash_attn_unpadded_qkvpacked_func,
-    )
-
-    HAVE_FLASH_ATTN = True
-except (ModuleNotFoundError, ImportError):
-    HAVE_FLASH_ATTN = False
-
 TORCH_VERSION = torch.__version__.split(".")
 
 TORCH_2_ATTENTION_POSSIBLE = int(TORCH_VERSION[0]) >= 2
@@ -559,7 +548,54 @@ class MultiHeadAttention(Attention):
         return kv.reshape(*kv.shape[:-3], nhead * share_kv_across_n_heads, d)
 
     @staticmethod
-    def compute_attention_heads(  # noqa: C901, PLR0912
+    def scaled_dot_product_attention_chunked(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        dropout_p: float | None = None,
+        max_batch_size: int = 65_000,
+        **extra_inputs,
+    ) -> torch.Tensor:
+        """Scaled dot product attention with automatic chunking to handle
+        batch size limitations when batch size is larger than 65_535.
+        This is a workaround for the issue: https://github.com/pytorch/pytorch/issues/142228.
+
+        Args:
+            q: Query tensor
+            k: Key tensor
+            v: Value tensor
+            dropout_p: Dropout probability
+            max_batch_size: Maximum batch size for CUDA kernels (default 65_000)
+            extra_inputs: Additional arguments for scaled_dot_product_attention
+
+        Returns:
+            Attention output with same shape as input q
+        """
+        batch_size = q.shape[0]
+        output_chunks = []
+
+        for start_idx in range(0, batch_size, max_batch_size):
+            end_idx = min(start_idx + max_batch_size, batch_size)
+
+            q_chunk = q[start_idx:end_idx]
+            k_chunk = k[start_idx:end_idx]
+            v_chunk = v[start_idx:end_idx]
+
+            chunk_output = torch.nn.functional.scaled_dot_product_attention(
+                q_chunk,
+                k_chunk,
+                v_chunk,
+                dropout_p=dropout_p,
+                **extra_inputs,
+            )
+
+            output_chunks.append(chunk_output)
+
+        # Concatenate results along batch dimension
+        return torch.cat(output_chunks, dim=0)
+
+    @staticmethod
+    def compute_attention_heads(
         q: torch.Tensor | None,
         k: torch.Tensor | None,
         v: torch.Tensor | None,
@@ -582,98 +618,12 @@ class MultiHeadAttention(Attention):
         assert v is not None
 
         batch_size, seqlen_q, nhead, d_k = q.shape
-        _, seqlen_kv, nhead_kv, d_v = v.shape
+        _, _seqlen_kv, nhead_kv, d_v = v.shape
         share_kv_across_n_heads = nhead // nhead_kv
         if dropout_p is None:
             dropout_p = 0.0  # TODO: necessary?
 
-        use_flash_attention = (
-            HAVE_FLASH_ATTN
-            and torch.cuda.is_available()
-            and q.dtype == k.dtype == v.dtype == torch.float16
-        )
-
-        if use_flash_attention:
-            # TODO: add logging for something like this
-            # if use_flash_attention and USE_TORCH_2_GQA:
-            #     print("Using FlashAttention might be slower than"
-            #  "torch's implementation, try setting"
-            #  "`tabpfn.architectures.base.multi_head_attention.HAVE_FLASH_ATTN=False`.") # noqa: E501
-
-            def get_seqlen_cumsums(
-                batch_size: int,
-                seqlen: int,
-                device: torch.device,
-            ) -> torch.Tensor:
-                return torch.arange(
-                    0,
-                    (batch_size + 1) * seqlen,
-                    step=seqlen,
-                    dtype=torch.int32,
-                    device=device,
-                )
-
-            if qkv is not None:
-                attention_head_outputs = flash_attn_unpadded_qkvpacked_func(  # type: ignore
-                    qkv.reshape(batch_size * seqlen_q, 3, nhead, d_k),
-                    get_seqlen_cumsums(batch_size, seqlen_q, qkv.device),
-                    seqlen_q,
-                    dropout_p=dropout_p,
-                    softmax_scale=softmax_scale,  # defaults to 1/sqrt(d_k) if None
-                    causal=False,
-                    return_attn_probs=False,
-                    deterministic=False,
-                )
-            elif kv is not None:
-                kv = MultiHeadAttention.broadcast_kv_across_heads(
-                    kv,
-                    share_kv_across_n_heads,
-                )
-                attention_head_outputs = flash_attn_unpadded_kvpacked_func(  # type: ignore
-                    q.reshape(batch_size * seqlen_q, nhead, d_k),
-                    kv.reshape(batch_size * seqlen_kv, 2, nhead, d_k),
-                    get_seqlen_cumsums(batch_size, seqlen_q, q.device),
-                    get_seqlen_cumsums(batch_size, seqlen_kv, kv.device),
-                    seqlen_q,
-                    seqlen_kv,
-                    dropout_p=dropout_p,
-                    causal=False,
-                    return_attn_probs=False,
-                    deterministic=False,
-                )
-            else:
-                assert d_k <= d_v, (
-                    "This requirement is here for safety but not strictly necessary."
-                    "Needs testing/coding to remove."
-                )
-                if d_k < d_v:
-                    k = torch.nn.functional.pad(k, d_v - d_k)
-                    q = torch.nn.functional.pad(v, d_v - d_k)
-                    d_k_ = d_v
-                k = MultiHeadAttention.broadcast_kv_across_heads(
-                    k,
-                    share_kv_across_n_heads,
-                )
-                v = MultiHeadAttention.broadcast_kv_across_heads(
-                    v,
-                    share_kv_across_n_heads,
-                )
-                attention_head_outputs = flash_attn_unpadded_func(  # type: ignore
-                    q.reshape(batch_size * seqlen_q, nhead, d_k_),  # type: ignore
-                    k.reshape(batch_size * seqlen_kv, nhead, d_k_),  # type: ignore
-                    v.reshape(batch_size * seqlen_kv, nhead, d_v),
-                    get_seqlen_cumsums(batch_size, seqlen_q, q.device),
-                    get_seqlen_cumsums(batch_size, seqlen_kv, k.device),
-                    seqlen_q,
-                    seqlen_kv,
-                    dropout_p=dropout_p,
-                    softmax_scale=softmax_scale,
-                    causal=False,
-                    return_attn_probs=False,
-                    deterministic=False,
-                )
-
-        elif TORCH_2_ATTENTION_POSSIBLE:
+        if TORCH_2_ATTENTION_POSSIBLE:
             extra_inputs = {}
             if softmax_scale is not None:
                 extra_inputs["scale"] = (
@@ -693,12 +643,14 @@ class MultiHeadAttention(Attention):
                     share_kv_across_n_heads,
                 )
 
-            attention_head_outputs = torch.nn.functional.scaled_dot_product_attention(
-                q.transpose(1, 2),
-                k.transpose(1, 2),
-                v.transpose(1, 2),
-                dropout_p=dropout_p,
-                **extra_inputs,
+            attention_head_outputs = (
+                MultiHeadAttention.scaled_dot_product_attention_chunked(
+                    q.transpose(1, 2),
+                    k.transpose(1, 2),
+                    v.transpose(1, 2),
+                    dropout_p=dropout_p,
+                    **extra_inputs,
+                )
             )
             attention_head_outputs = attention_head_outputs.transpose(1, 2)
         else:

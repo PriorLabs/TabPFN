@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pytest
 import torch
+from torch.nn.functional import scaled_dot_product_attention
 
 from tabpfn.architectures.base.attention.full_attention import MultiHeadAttention
 from tabpfn.architectures.base.config import ModelConfig
@@ -110,5 +112,33 @@ def test_attention():
     assert torch.sqrt(torch.nn.functional.mse_loss(y, y_)) < 5e-5
 
 
-if __name__ == "__main__":
-    test_attention()
+@pytest.mark.parametrize(
+    ("batch_size", "seq_len", "num_heads", "head_dim"),
+    [
+        (100, 64, 8, 32),
+        (1100, 16, 2, 8),  # Large batch (will be chunked)
+    ],
+)
+def test_scaled_dot_product_attention_chunked(
+    batch_size: int, seq_len: int, num_heads: int, head_dim: int
+) -> None:
+    """Test that scaled_dot_product_attention_chunked is
+    equivalent to torch scaled_dot_product_attention.
+    """
+    torch.manual_seed(42)
+    q = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    k = torch.randn(batch_size, num_heads, seq_len, head_dim)
+    v = torch.randn(batch_size, num_heads, seq_len, head_dim)
+
+    # Test with dropout disabled for deterministic comparison
+    dropout_p = 0.0
+
+    torch.manual_seed(42)
+    original_output = scaled_dot_product_attention(q, k, v, dropout_p=dropout_p)
+
+    torch.manual_seed(42)
+    chunked_output = MultiHeadAttention.scaled_dot_product_attention_chunked(
+        q, k, v, dropout_p=dropout_p, max_batch_size=500
+    )
+
+    torch.testing.assert_close(original_output, chunked_output, rtol=1e-5, atol=1e-6)
