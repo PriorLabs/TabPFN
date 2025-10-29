@@ -417,12 +417,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_config:
                 For advanced users, additional advanced arguments that adjust the
                 behavior of the model interface.
-                See [tabpfn.constants.ModelInterfaceConfig][] for details and options.
+                See [tabpfn.inference_config.InferenceConfig][] for details and options.
 
-                - If `None`, the default ModelInterfaceConfig is used.
+                - If `None`, the default InferenceConfig is used.
                 - If `dict`, the key-value pairs are used to update the default
-                  `ModelInterfaceConfig`. Raises an error if an unknown key is passed.
-                - If `ModelInterfaceConfig`, the object is used as the configuration.
+                  `InferenceConfig`. Raises an error if an unknown key is passed.
+                - If `InferenceConfig`, the object is used as the configuration.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.

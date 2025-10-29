@@ -165,12 +165,12 @@ class InferenceConfig:
         *,
         inference_config: dict | InferenceConfig | None,
     ) -> InferenceConfig:
-        """Converts the user input to a `ModelInterfaceConfig` object.
+        """Converts the user input to a `InferenceConfig` object.
 
-        The input inference_config can be a dictionary, a `ModelInterfaceConfig` object,
+        The input inference_config can be a dictionary, a `InferenceConfig` object,
         or None. If a dictionary is passed, the keys must match the attributes of
-        `ModelInterfaceConfig`. If a `ModelInterfaceConfig` object is passed, it is
-        returned as is. If None is passed, a new `ModelInterfaceConfig` object is
+        `InferenceConfig`. If a `InferenceConfig` object is passed, it is
+        returned as is. If None is passed, a new `InferenceConfig` object is
         created with default values.
         """
         if inference_config is None:
