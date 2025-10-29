@@ -57,8 +57,8 @@ class KDITransformerWithNaN(KDITransformer):
             X = X.cpu().numpy()
 
         # If all-nan or empty, nanmean returns nan.
-        imputation = np.nan_to_num(np.nanmean(X, axis=0), nan=0)
-        X = np.nan_to_num(X, nan=imputation)
+        self.imputation_values_ = np.nan_to_num(np.nanmean(X, axis=0), nan=0)
+        X = np.nan_to_num(X, nan=self.imputation_values_)
 
         return super().fit(X, y)  # type: ignore
 
