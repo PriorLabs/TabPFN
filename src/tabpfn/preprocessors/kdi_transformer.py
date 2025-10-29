@@ -72,9 +72,7 @@ class KDITransformerWithNaN(KDITransformer):
         nan_mask = np.isnan(X)
 
         # Replace NaNs with the mean of columns
-        imputation = np.nanmean(X, axis=0)
-        imputation = np.nan_to_num(imputation, nan=0)
-        X = np.nan_to_num(X, nan=imputation)
+        X = np.nan_to_num(X, nan=self.imputation_values_)
 
         # Apply the transformation
         X = super().transform(X)
