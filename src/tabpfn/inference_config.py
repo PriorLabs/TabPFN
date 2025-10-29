@@ -4,14 +4,20 @@
 
 from __future__ import annotations
 
+import dataclasses
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Literal
 
-from tabpfn.preprocessing import PreprocessorConfig
+import pydantic
+
+from tabpfn.preprocessing import (
+    PreprocessorConfig,  # noqa: TC001 (Pydantic requires the import at runtime)
+)
 
 
-@dataclass
+# By default Pydantic dataclasses will ignore unrecognised config items, extra="forbid"
+# will raise an exception instead.
+@pydantic.dataclasses.dataclass(config=pydantic.ConfigDict(extra="forbid"))
 class InferenceConfig:
     """Additional configuration options for inference.
 
@@ -91,7 +97,9 @@ class InferenceConfig:
         - If a float, the percentage of samples to subsample.
     """
 
-    PREPROCESS_TRANSFORMS: list[PreprocessorConfig | dict] | None = None
+    PREPROCESS_TRANSFORMS: list[PreprocessorConfig] | Literal["v2_default"] | None = (
+        None
+    )
     """The preprocessing applied to the data before passing it to TabPFN. See
     `PreprocessorConfig` for options and more details. If multiple `PreprocessorConfig`
     are provided, they are (repeatedly) applied across different estimators.
@@ -160,40 +168,23 @@ class InferenceConfig:
     _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0
 
-    @staticmethod
-    def from_user_input(
-        *,
-        inference_config: dict | InferenceConfig | None,
+    def override_with_user_input(
+        self, user_config: dict | InferenceConfig | None
     ) -> InferenceConfig:
-        """Converts the user input to a `InferenceConfig` object.
+        """Return a new config with fields specified in `user_config` overwritten.
 
-        The input inference_config can be a dictionary, a `InferenceConfig` object,
-        or None. If a dictionary is passed, the keys must match the attributes of
-        `InferenceConfig`. If a `InferenceConfig` object is passed, it is
-        returned as is. If None is passed, a new `InferenceConfig` object is
-        created with default values.
+        Args:
+            user_config: Config provided by the user at inference time.
+                If a dictionary, then the keys must match attributes of
+                    `InferenceConfig` and will be used to override these attributes.
+                If an `InferenceConfig` object, then the whole config is overridden with
+                    the values from the user config.
+                If None, then a copy of this config is returned with no fields changed.
         """
-        if inference_config is None:
-            inference_config_ = InferenceConfig()
-        elif isinstance(inference_config, InferenceConfig):
-            inference_config_ = deepcopy(inference_config)
-        elif isinstance(inference_config, dict):
-            inference_config_ = InferenceConfig()
-            for key, value in inference_config.items():
-                if not hasattr(inference_config_, key):
-                    raise ValueError(
-                        f"Unknown kwarg passed to model construction: {key}",
-                    )
-                setattr(inference_config_, key, value)
-        else:
-            raise ValueError(f"Unknown {inference_config=} passed to model.")
-
-        if inference_config_.PREPROCESS_TRANSFORMS is not None:
-            inference_config_.PREPROCESS_TRANSFORMS = [
-                PreprocessorConfig.from_dict(config)
-                if isinstance(config, dict)
-                else config
-                for config in inference_config_.PREPROCESS_TRANSFORMS
-            ]
-
-        return inference_config_
+        if user_config is None:
+            return deepcopy(self)
+        if isinstance(user_config, InferenceConfig):
+            return deepcopy(user_config)
+        if isinstance(user_config, dict):
+            return dataclasses.replace(self, **user_config)
+        raise ValueError(f"Unknown {user_config=} passed to model.")

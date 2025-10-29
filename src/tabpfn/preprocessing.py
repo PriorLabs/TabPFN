@@ -199,43 +199,16 @@ class PreprocessorConfig:
             )
         )
 
-    def to_dict(self) -> dict:
-        """Convert the config to a dictionary.
-
-        Returns:
-            Dictionary representation of the config.
-        """
-        return {
-            "name": self.name,
-            "categorical_name": self.categorical_name,
-            "append_original": self.append_original,
-            "subsample_features": self.subsample_features,
-            "global_transformer_name": self.global_transformer_name,
-            "differentiable": self.differentiable,
-        }
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> PreprocessorConfig:
-        """Create a config from a dictionary.
-
-        Args:
-            config_dict: Dictionary containing the config parameters.
-
-        Returns:
-            PreprocessorConfig instance.
-        """
-        return cls(
-            name=config_dict["name"],
-            categorical_name=config_dict["categorical_name"],
-            append_original=config_dict["append_original"],
-            subsample_features=config_dict["subsample_features"],
-            global_transformer_name=config_dict["global_transformer_name"],
-            differentiable=config_dict.get("differentiable", False),
-        )
-
 
 def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Default preprocessor configurations for classification."""
+    """Get default preprocessor configurations for classification.
+
+    These are the defaults used when training new models, which will then be stored in
+    the model checkpoint.
+
+    See `v2_classifier_preprocessor_configs()` for the preprocessing used in v2 of the
+    model.
+    """
     return [
         PreprocessorConfig(
             "quantile_uni_coarse",
@@ -253,7 +226,45 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
 
 
 def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Default preprocessor configurations for regression."""
+    """Default preprocessor configurations for regression.
+
+    These are the defaults used when training new models, which will then be stored in
+    the model checkpoint.
+
+    See `v2_regressor_preprocessor_configs()` for the preprocessing used in v2 of the
+    model.
+    """
+    return [
+        PreprocessorConfig(
+            "quantile_uni",
+            append_original="auto",
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd",
+        ),
+        PreprocessorConfig("safepower", categorical_name="onehot"),
+    ]
+
+
+def v2_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
+    """Get the preprocessor configuration for classification in v2 of the model."""
+    return [
+        PreprocessorConfig(
+            "quantile_uni_coarse",
+            append_original="auto",
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd",
+            subsample_features=-1,
+        ),
+        PreprocessorConfig(
+            "none",
+            categorical_name="numeric",
+            subsample_features=-1,
+        ),
+    ]
+
+
+def v2_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
+    """Get the preprocessor configuration for regression in v2 of the model."""
     return [
         PreprocessorConfig(
             "quantile_uni",

@@ -640,16 +640,17 @@ def test_constant_target(
 
 def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
     # 1) Standalone initializer
-    model, config, norm_criterion = initialize_tabpfn_model(
+    model, arch_configs, norm_criterion, inference_config = initialize_tabpfn_model(
         model_path="auto",
         which="regressor",
         fit_mode="low_memory",
     )
     assert model is not None, "model should be initialized for regressor"
-    assert config is not None, "config should be initialized for regressor"
+    assert arch_configs is not None, "config should be initialized for regressor"
     assert norm_criterion is not None, (
         "norm_criterion should be initialized for regressor"
     )
+    assert inference_config is not None
 
     # 2) Test the sklearn-style wrapper on TabPFNRegressor
     regressor = TabPFNRegressor(device="cpu", random_state=42)
@@ -667,8 +668,9 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
         model=regressor.models_[0],
-        config=regressor.configs_[0],
+        arch_config=regressor.configs_[0],
         norm_criterion=regressor.znorm_space_bardist_,
+        inference_config=regressor.inference_config_,
     )
     reg2 = TabPFNRegressor(model_path=spec)
     reg2._initialize_model_variables()

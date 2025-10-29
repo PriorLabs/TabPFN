@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import logging
-import typing
 import warnings
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -56,6 +55,7 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     PreprocessorConfig,
     default_classifier_preprocessor_configs,
+    v2_classifier_preprocessor_configs,
 )
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
@@ -579,7 +579,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
-            preprocess_transforms = self.inference_config_.PREPROCESS_TRANSFORMS
+            preprocessor_configs = _get_preprocessor_configs(self.inference_config_)
 
             # Will convert inferred categorical indices to category dtype,
             # to be picked up by the ord_encoder, as well
@@ -595,7 +595,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         else:  # Minimal preprocessing for prompt tuning
             self.inferred_categorical_indices_ = []
             self.preprocessor_ = None
-            preprocess_transforms = [PreprocessorConfig("none", differentiable=True)]
+            preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = EnsembleConfig.generate_for_classification(
             num_estimators=self.n_estimators,
@@ -604,12 +604,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
-            preprocessor_configs=typing.cast(
-                "Sequence[PreprocessorConfig]",
-                preprocess_transforms
-                if preprocess_transforms is not None
-                else default_classifier_preprocessor_configs(),
-            ),
+            preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD
             if not self.differentiable_input
             else None,
@@ -1080,3 +1075,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
+
+
+def _get_preprocessor_configs(
+    inference_config: InferenceConfig,
+) -> list[PreprocessorConfig]:
+    if inference_config.PREPROCESS_TRANSFORMS == "v2_default":
+        return v2_classifier_preprocessor_configs()
+    if inference_config.PREPROCESS_TRANSFORMS is None:
+        return default_classifier_preprocessor_configs()
+    return inference_config.PREPROCESS_TRANSFORMS

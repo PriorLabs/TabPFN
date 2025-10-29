@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from urllib.error import URLError
 
 import joblib
@@ -32,6 +32,7 @@ from tabpfn.architectures.base.bar_distribution import (
     FullSupportBarDistribution,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineCacheKV
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -361,6 +362,7 @@ def load_model_criterion_config(
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
     list[ArchitectureConfig],
+    InferenceConfig,
 ]: ...
 
 
@@ -374,7 +376,10 @@ def load_model_criterion_config(
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
-    list[Architecture], FullSupportBarDistribution, list[ArchitectureConfig]
+    list[Architecture],
+    FullSupportBarDistribution,
+    list[ArchitectureConfig],
+    InferenceConfig,
 ]: ...
 
 
@@ -390,11 +395,16 @@ def load_model_criterion_config(
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     list[ArchitectureConfig],
+    InferenceConfig,
 ]:
-    """Load the model, criterion, and config from the given path.
+    """Load the model(s), criterion(s), and config(s) from the given path.
+
+    If multiple model paths are provided, then all models must use the same criterion
+    and inference config.
 
     Args:
-        model_path: The path to the model.
+        model_path: The path to the model, or list of paths if multiple models should be
+            loaded.
         check_bar_distribution_criterion:
             Whether to check if the criterion
             is a FullSupportBarDistribution, which is the expected criterion
@@ -406,7 +416,8 @@ def load_model_criterion_config(
         download_if_not_exists: Whether to download the model if it doesn't exist.
 
     Returns:
-        The model, criterion, and config.
+        list of models, the criterion, list of architecture configs, the inference
+        config
     """
     (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
         resolve_model_path(
@@ -421,7 +432,8 @@ def load_model_criterion_config(
 
     loaded_models = []
     criterions = []
-    configs = []
+    arch_configs = []
+    inference_configs = []
 
     for i, path in enumerate(resolved_model_paths):
         if not path.exists():
@@ -447,7 +459,7 @@ def load_model_criterion_config(
                     f"Then place it at: {path}",
                 ) from res[0]
 
-        loaded_model, criterion, config = load_model(
+        loaded_model, criterion, arch_config, inference_config = load_model(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
         )
@@ -462,7 +474,8 @@ def load_model_criterion_config(
             )
         loaded_models.append(loaded_model)
         criterions.append(criterion)
-        configs.append(config)
+        arch_configs.append(arch_config)
+        inference_configs.append(inference_config)
 
     first_criterion = criterions[0]
     if isinstance(first_criterion, FullSupportBarDistribution):
@@ -473,7 +486,17 @@ def load_model_criterion_config(
                     "This is not supported in the current implementation"
                 )
 
-    return loaded_models, first_criterion, configs
+    first_inference_config = inference_configs[0]
+    for inference_config in inference_configs[1:]:
+        if inference_config != first_inference_config:
+            raise ValueError(
+                "Inference configs for different models are different, which is not "
+                "supported. "
+                f"Config 1: {first_inference_config} \n"
+                f"Config 2: {inference_config}"
+            )
+
+    return loaded_models, first_criterion, arch_configs, first_inference_config
 
 
 def resolve_model_path(
@@ -559,6 +582,7 @@ def load_model(
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     ArchitectureConfig,
+    InferenceConfig,
 ]:
     """Loads a model from a given path. Only for inference.
 
@@ -574,7 +598,7 @@ def load_model(
     # `True`, dissallowing loading of arbitrary objects.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint = torch.load(path, map_location="cpu", weights_only=None)
+        checkpoint: dict = torch.load(path, map_location="cpu", weights_only=None)
 
     try:
         architecture_name = checkpoint["architecture_name"]
@@ -582,14 +606,14 @@ def load_model(
         architecture_name = "base"
     architecture = ARCHITECTURES[architecture_name]
     state_dict = checkpoint["state_dict"]
-    config, unused_config = architecture.parse_config(checkpoint["config"])
+    model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
     logger.debug(
         "Keys in config that were not parsed by architecture config: "
-        f"{', '.join(unused_config.keys())}"
+        f"{', '.join(unused_model_config.keys())}"
     )
 
     criterion_state_keys = [k for k in state_dict if "criterion." in k]
-    loss_criterion = get_loss_criterion(config)
+    loss_criterion = get_loss_criterion(model_config)
     if isinstance(loss_criterion, FullSupportBarDistribution):
         # Remove from state dict
         criterion_state = {
@@ -600,14 +624,35 @@ def load_model(
         assert len(criterion_state_keys) == 0, criterion_state_keys
 
     model = architecture.get_architecture(
-        config,
-        n_out=get_n_out(config, loss_criterion),
+        model_config,
+        n_out=get_n_out(model_config, loss_criterion),
         cache_trainset_representation=cache_trainset_representation,
     )
     model.load_state_dict(state_dict)
     model.eval()
 
-    return model, loss_criterion, config
+    inference_config = _get_inference_config_from_checkpoint(checkpoint)
+
+    return model, loss_criterion, model_config, inference_config
+
+
+def _get_inference_config_from_checkpoint(
+    checkpoint: dict[str, Any],
+) -> InferenceConfig:
+    """Return the config in the checkpoint, or an appropriate default config.
+
+    If there is no config in the checkpoint, try to guess the model version and thus get
+    the correct config.
+    """
+    if "inference_config" in checkpoint:
+        return InferenceConfig(**checkpoint["inference_config"])
+
+    inference_config = InferenceConfig()
+    # "architecture_name" was added to the checkpoint after the v2 release, so if this
+    # isn't present we assume it's v2.
+    if "architecture_name" not in checkpoint:
+        inference_config.PREPROCESS_TRANSFORMS = "v2_default"
+    return inference_config
 
 
 def get_n_out(

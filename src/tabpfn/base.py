@@ -28,7 +28,6 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.inference_config import InferenceConfig
 from tabpfn.model_loading import load_model_criterion_config
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
@@ -52,15 +51,22 @@ if TYPE_CHECKING:
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
+    from tabpfn.inference_config import InferenceConfig
     from tabpfn.regressor import TabPFNRegressor
 
 
 class BaseModelSpecs:
     """Base class for model specifications."""
 
-    def __init__(self, model: Architecture, config: ArchitectureConfig):
+    def __init__(
+        self,
+        model: Architecture,
+        arch_config: ArchitectureConfig,
+        inference_config: InferenceConfig,
+    ):
         self.model = model
-        self.config = config
+        self.architecture_config = arch_config
+        self.inference_config = inference_config
 
 
 class ClassifierModelSpecs(BaseModelSpecs):
@@ -75,10 +81,11 @@ class RegressorModelSpecs(BaseModelSpecs):
     def __init__(
         self,
         model: Architecture,
-        config: ArchitectureConfig,
+        arch_config: ArchitectureConfig,
+        inference_config: InferenceConfig,
         norm_criterion: FullSupportBarDistribution,
     ):
-        super().__init__(model, config)
+        super().__init__(model, arch_config, inference_config)
         self.norm_criterion = norm_criterion
 
 
@@ -98,6 +105,7 @@ def initialize_tabpfn_model(
     list[Architecture],
     list[ArchitectureConfig],
     FullSupportBarDistribution | None,
+    InferenceConfig,
 ]:
     """Initializes a TabPFN model based on the provided configuration.
 
@@ -111,25 +119,38 @@ def initialize_tabpfn_model(
         fit_mode: Determines caching behavior.
 
     Returns:
-        model: The loaded TabPFN model.
-        config: The configuration object associated with the loaded model.
-        bar_distribution: The BarDistribution for regression (`None` if classifier).
+        a list of models,
+        a list of architecture configs (associated with each model),
+        if regression, the bar distribution, otherwise None,
+        the inference config
     """
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
-        return [model_path.model], [model_path.config], model_path.norm_criterion
+        return (
+            [model_path.model],
+            [model_path.architecture_config],
+            model_path.norm_criterion,
+            model_path.inference_config,
+        )
 
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
-        return [model_path.model], [model_path.config], None
+        return (
+            [model_path.model],
+            [model_path.architecture_config],
+            None,
+            model_path.inference_config,
+        )
 
     if (
         isinstance(model_path, list)
         and len(model_path) > 0
         and all(isinstance(spec, RegressorModelSpecs) for spec in model_path)
     ):
+        _assert_inference_configs_equal(model_path)
         return (  # pyright: ignore[reportReturnType]
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
+            model_path[0].inference_config,
         )
 
     if (
@@ -137,10 +158,12 @@ def initialize_tabpfn_model(
         and len(model_path) > 0
         and all(isinstance(spec, ClassifierModelSpecs) for spec in model_path)
     ):
+        _assert_inference_configs_equal(model_path)
         return (
             [spec.model for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
-            [spec.config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
+            [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             None,
+            model_path[0].inference_config,
         )
 
     if (
@@ -161,7 +184,7 @@ def initialize_tabpfn_model(
         download_if_not_exists = True
 
         if which == "classifier":
-            models, _, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
+            models, _, arch_configs, inference_config = load_model_criterion_config(
                 model_path=model_path,  # pyright: ignore[reportArgumentType]
                 # The classifier's bar distribution is not used
                 check_bar_distribution_criterion=False,
@@ -172,18 +195,20 @@ def initialize_tabpfn_model(
             )
             norm_criterion = None
         else:
-            models, bardist, configs = load_model_criterion_config(  # pyright: ignore[reportCallIssue]
-                model_path=model_path,  # pyright: ignore[reportArgumentType]
-                # The regressor's bar distribution is required
-                check_bar_distribution_criterion=True,
-                cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                which="regressor",
-                version="v2",
-                download_if_not_exists=download_if_not_exists,
+            models, bardist, arch_configs, inference_config = (
+                load_model_criterion_config(
+                    model_path=model_path,  # pyright: ignore[reportArgumentType]
+                    # The regressor's bar distribution is required
+                    check_bar_distribution_criterion=True,
+                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
+                    which="regressor",
+                    version="v2",
+                    download_if_not_exists=download_if_not_exists,
+                )
             )
             norm_criterion = bardist
 
-        return models, configs, norm_criterion  # pyright: ignore[reportReturnType]
+        return models, arch_configs, norm_criterion, inference_config
 
     raise TypeError(
         "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
@@ -192,6 +217,15 @@ def initialize_tabpfn_model(
         + "is of of type"
         + str(type(model_path))
     )
+
+
+def _assert_inference_configs_equal(
+    model_specs: list[ClassifierModelSpecs] | list[RegressorModelSpecs],
+) -> None:
+    if not all(
+        spec.inference_config == model_specs[0].inference_config for spec in model_specs
+    ):
+        raise ValueError("All models must have the same inference config")
 
 
 def determine_precision(
@@ -485,15 +519,15 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    models, configs, norm_or_bardist = initialize_tabpfn_model(
+    models, arch_configs, maybe_bardist, inference_config_ = initialize_tabpfn_model(
         model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
         which=model_type,
         fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
     )
     calling_instance.models_ = models
-    calling_instance.configs_ = configs
-    if model_type == "regressor" and norm_or_bardist is not None:
-        calling_instance.znorm_space_bardist_ = norm_or_bardist
+    calling_instance.configs_ = arch_configs
+    if model_type == "regressor" and maybe_bardist is not None:
+        calling_instance.znorm_space_bardist_ = maybe_bardist
 
     calling_instance.devices_ = infer_devices(calling_instance.device)
     (
@@ -504,8 +538,8 @@ def initialize_model_variables_helper(
         calling_instance.inference_precision, calling_instance.devices_
     )
 
-    inference_config_ = InferenceConfig.from_user_input(
-        inference_config=calling_instance.inference_config
+    inference_config_ = inference_config_.override_with_user_input(
+        user_config=calling_instance.inference_config
     )
 
     calling_instance.inference_config_ = inference_config_

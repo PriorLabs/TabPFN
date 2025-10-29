@@ -822,14 +822,15 @@ def test_classifier_with_text_and_na() -> None:
 
 def test_initialize_model_variables_classifier_sets_required_attributes() -> None:
     # 1) Standalone initializer
-    model, config, norm_criterion = initialize_tabpfn_model(
+    models, arch_configs, norm_criterion, inference_config = initialize_tabpfn_model(
         model_path="auto",
         which="classifier",
         fit_mode="low_memory",
     )
-    assert model is not None, "model should be initialized for classifier"
-    assert config is not None, "config should be initialized for classifier"
+    assert models is not None, "model should be initialized for classifier"
+    assert arch_configs is not None, "config should be initialized for classifier"
     assert norm_criterion is None, "norm_criterion should be None for classifier"
+    assert inference_config is not None
 
     # 2) Test the sklearn-style wrapper on TabPFNClassifier
     classifier = TabPFNClassifier(device="cpu", random_state=42)
@@ -845,7 +846,9 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
 
     # 3) Reuse via ClassifierModelSpecs
     spec = ClassifierModelSpecs(
-        model=classifier.models_[0], config=classifier.configs_[0]
+        model=classifier.models_[0],
+        arch_config=classifier.configs_[0],
+        inference_config=classifier.inference_config_,
     )
 
     classifier2 = TabPFNClassifier(model_path=spec)

@@ -6,6 +6,7 @@ from typing import Any, Literal, overload
 from typing_extensions import override
 from unittest.mock import patch
 
+import pytest
 import torch
 from pydantic.dataclasses import dataclass
 from torch import Tensor
@@ -19,6 +20,8 @@ from tabpfn.architectures.interface import (
     ArchitectureConfig,
     ArchitectureModule,
 )
+from tabpfn.inference_config import InferenceConfig
+from tabpfn.preprocessing import PreprocessorConfig
 
 
 def test__load_model__no_architecture_name_in_checkpoint__loads_base_architecture(
@@ -30,7 +33,7 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_base_architectur
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    loaded_model, _, loaded_config = model_loading.load_model(path=checkpoint_path)
+    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
     assert isinstance(loaded_model, PerFeatureTransformer)
     assert isinstance(loaded_config, ModelConfig)
 
@@ -125,6 +128,113 @@ def test__load_model__architecture_name_in_checkpoint__loads_specified_architect
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    loaded_model, _, loaded_config = model_loading.load_model(path=checkpoint_path)
+    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
     assert isinstance(loaded_model, DummyArchitecture)
     assert isinstance(loaded_config, FakeConfig)
+
+
+def test__load_v2_checkpoint__returns_v2_default_preprocessings(
+    tmp_path: Path,
+) -> None:
+    arch_config = _get_minimal_base_architecture_config()
+    model = base.get_architecture(
+        arch_config, n_out=10, cache_trainset_representation=True
+    )
+    # v2 checkpoints have no "architecture_name" key
+    checkpoint = {
+        "state_dict": model.state_dict(),
+        "config": asdict(arch_config),
+    }
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    _, _, _, inference_config = model_loading.load_model_criterion_config(
+        model_path=[checkpoint_path, checkpoint_path],
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        which="classifier",
+        version="v2",
+        download_if_not_exists=False,
+    )
+
+    assert inference_config.PREPROCESS_TRANSFORMS == "v2_default"
+
+
+@patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
+def test__load_post_v2_ckpt_without_inference_config__returns_none_preprocessings(
+    tmp_path: Path,
+) -> None:
+    arch_config = {"max_num_classes": 10, "num_buckets": 100}
+    checkpoint = {
+        "state_dict": {},
+        "config": arch_config,
+        "architecture_name": "fake_arch",
+    }
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    _, _, _, inference_config = model_loading.load_model_criterion_config(
+        model_path=[checkpoint_path, checkpoint_path],
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        which="classifier",
+        version="v2",
+        download_if_not_exists=False,
+    )
+
+    assert inference_config.PREPROCESS_TRANSFORMS is None
+
+
+@patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
+def test__load_multiple_models_with_difference_inference_configs__raises(
+    tmp_path: Path,
+) -> None:
+    arch_config = {"max_num_classes": 10, "num_buckets": 100}
+    checkpoint_1 = {
+        "state_dict": {},
+        "config": arch_config,
+        "architecture_name": "fake_arch",
+        "inference_config": asdict(
+            InferenceConfig(
+                PREPROCESS_TRANSFORMS=[
+                    PreprocessorConfig(
+                        "quantile_uni_coarse",
+                        append_original="auto",
+                        categorical_name="ordinal_very_common_categories_shuffled",
+                        global_transformer_name="svd",
+                        subsample_features=-1,
+                    )
+                ]
+            )
+        ),
+    }
+    checkpoint_1_path = tmp_path / "checkpoint1.ckpt"
+    torch.save(checkpoint_1, checkpoint_1_path)
+    checkpoint_2 = {
+        "state_dict": {},
+        "config": arch_config,
+        "architecture_name": "fake_arch",
+        "inference_config": asdict(
+            InferenceConfig(
+                PREPROCESS_TRANSFORMS=[
+                    PreprocessorConfig(
+                        "none",
+                        categorical_name="numeric",
+                        subsample_features=-1,
+                    )
+                ]
+            )
+        ),
+    }
+    checkpoint_2_path = tmp_path / "checkpoint2.ckpt"
+    torch.save(checkpoint_2, checkpoint_2_path)
+
+    with pytest.raises(ValueError, match="Inference configs for different models"):
+        model_loading.load_model_criterion_config(
+            model_path=[checkpoint_1_path, checkpoint_2_path],
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            which="classifier",
+            version="v2",
+            download_if_not_exists=False,
+        )

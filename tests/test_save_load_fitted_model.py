@@ -194,14 +194,15 @@ def test_saving_and_loading_model_with_weights(tmp_path: Path) -> None:
     )
 
     # Load the model state
-    models, configs, criterion = initialize_tabpfn_model(
+    models, arch_configs, criterion, inference_config = initialize_tabpfn_model(
         save_path, "regressor", fit_mode="low_memory"
     )
     loaded_regressor = TabPFNRegressor(
         model_path=RegressorModelSpecs(
             model=models[0],
-            config=configs[0],
+            arch_config=arch_configs[0],
             norm_criterion=criterion,
+            inference_config=inference_config,
         ),
         device="cpu",
     )
