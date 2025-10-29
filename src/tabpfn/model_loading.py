@@ -409,7 +409,7 @@ def load_model_criterion_config(
         The model, criterion, and config.
     """
     (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
-        _resolve_model_path(
+        resolve_model_path(
             model_path=model_path,
             which=which,
             version=version,
@@ -476,7 +476,7 @@ def load_model_criterion_config(
     return loaded_models, first_criterion, configs
 
 
-def _resolve_model_path(
+def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
     version: Literal["v2"] = "v2",
