@@ -75,7 +75,7 @@ if TYPE_CHECKING:
     from torch.types import _dtype
 
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
-    from tabpfn.config import ModelInterfaceConfig
+    from tabpfn.inference_config import InferenceConfig
 
     try:
         from sklearn.base import Tags
@@ -99,7 +99,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
-    interface_config_: ModelInterfaceConfig
+    inference_config_: InferenceConfig
     """Additional configuration of the interface for expert users."""
 
     devices_: tuple[torch.device, ...]
@@ -181,7 +181,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
-        inference_config: dict | ModelInterfaceConfig | None = None,
+        inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
     ) -> None:
         """A TabPFN interface for classification.
@@ -527,8 +527,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y,
             estimator=self,
             ensure_y_numeric=False,
-            max_num_samples=self.interface_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.interface_config_.MAX_NUMBER_OF_FEATURES,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
@@ -559,7 +559,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.classes_ = torch.arange(self.n_classes_)
 
         # TODO: Support more classes with a fallback strategy.
-        if self.n_classes_ > self.interface_config_.MAX_NUMBER_OF_CLASSES:
+        if self.n_classes_ > self.inference_config_.MAX_NUMBER_OF_CLASSES:
             raise ValueError(
                 f"Number of classes {self.n_classes_} exceeds the maximal number of "
                 "classes supported by TabPFN. Consider using a strategy to reduce "
@@ -575,11 +575,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.inferred_categorical_indices_ = infer_categorical_features(
                 X=X,
                 provided=self.categorical_features_indices,
-                min_samples_for_inference=self.interface_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-                max_unique_for_category=self.interface_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-                min_unique_for_numerical=self.interface_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+                min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+                max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+                min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
-            preprocess_transforms = self.interface_config_.PREPROCESS_TRANSFORMS
+            preprocess_transforms = self.inference_config_.PREPROCESS_TRANSFORMS
 
             # Will convert inferred categorical indices to category dtype,
             # to be picked up by the ord_encoder, as well
@@ -599,10 +599,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         ensemble_configs = EnsembleConfig.generate_for_classification(
             num_estimators=self.n_estimators,
-            subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
-            add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
-            feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
-            polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
+            subsample_size=self.inference_config_.SUBSAMPLE_SAMPLES,
+            add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
+            feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
+            polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
             preprocessor_configs=typing.cast(
                 "Sequence[PreprocessorConfig]",
@@ -610,7 +610,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 if preprocess_transforms is not None
                 else default_classifier_preprocessor_configs(),
             ),
-            class_shift_method=self.interface_config_.CLASS_SHIFT_METHOD
+            class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD
             if not self.differentiable_input
             else None,
             n_classes=self.n_classes_,
@@ -855,7 +855,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         proba_tensor = self._raw_predict(X, return_logits=False)
         output = proba_tensor.float().detach().cpu().numpy()
 
-        if self.interface_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
+        if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
             output = np.around(output, decimals=SKLEARN_16_DECIMAL_PRECISION)
             output = np.where(output < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, output)
 

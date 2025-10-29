@@ -14,8 +14,8 @@ import torch
 from sklearn.preprocessing import LabelEncoder
 
 from tabpfn import TabPFNClassifier
-from tabpfn.config import ModelInterfaceConfig
 from tabpfn.constants import NA_PLACEHOLDER
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     fix_dtypes,
@@ -294,8 +294,8 @@ def prepared_tabpfn_data(request):
         y,
         estimator=cls,
         ensure_y_numeric=False,
-        max_num_samples=ModelInterfaceConfig.MAX_NUMBER_OF_SAMPLES,
-        max_num_features=ModelInterfaceConfig.MAX_NUMBER_OF_FEATURES,
+        max_num_samples=InferenceConfig.MAX_NUMBER_OF_SAMPLES,
+        max_num_features=InferenceConfig.MAX_NUMBER_OF_FEATURES,
         ignore_pretraining_limits=False,
     )
 
@@ -319,9 +319,9 @@ def prepared_tabpfn_data(request):
     cls.inferred_categorical_indices_ = infer_categorical_features(
         X=X,
         provided=categorical_idx,
-        min_samples_for_inference=ModelInterfaceConfig.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-        max_unique_for_category=ModelInterfaceConfig.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-        min_unique_for_numerical=ModelInterfaceConfig.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+        min_samples_for_inference=InferenceConfig.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+        max_unique_for_category=InferenceConfig.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+        min_unique_for_numerical=InferenceConfig.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
     )
     return (
         fix_dtypes(X, cat_indices=cls.inferred_categorical_indices_),

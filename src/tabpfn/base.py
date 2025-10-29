@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 import torch
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.config import ModelInterfaceConfig
 
 # --- TabPFN imports ---
 from tabpfn.constants import (
@@ -29,6 +28,7 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.model_loading import load_model_criterion_config
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
@@ -504,18 +504,17 @@ def initialize_model_variables_helper(
         calling_instance.inference_precision, calling_instance.devices_
     )
 
-    # Build the interface_config
-    _config = ModelInterfaceConfig.from_user_input(
-        inference_config=calling_instance.inference_config,
-    )  # shorter alias
+    inference_config_ = InferenceConfig.from_user_input(
+        inference_config=calling_instance.inference_config
+    )
 
-    calling_instance.interface_config_ = _config
+    calling_instance.inference_config_ = inference_config_
 
-    outlier_removal_std = _config.OUTLIER_REMOVAL_STD
+    outlier_removal_std = inference_config_.OUTLIER_REMOVAL_STD
     if outlier_removal_std == "auto":
         default_stds = {
-            "regressor": _config._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
-            "classifier": _config._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
+            "regressor": inference_config_._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
+            "classifier": inference_config_._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
         }
         try:
             outlier_removal_std = default_stds[model_type]

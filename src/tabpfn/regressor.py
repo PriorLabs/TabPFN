@@ -79,9 +79,9 @@ if TYPE_CHECKING:
     from torch.types import _dtype
 
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
-    from tabpfn.config import ModelInterfaceConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
+    from tabpfn.inference_config import InferenceConfig
 
     try:
         from sklearn.base import Tags
@@ -143,8 +143,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     The models can be different PyTorch modules, but will be subclasses of Architecture.
     """
 
-    interface_config_: ModelInterfaceConfig
-    """Additional configuration of the interface for expert users."""
+    inference_config_: InferenceConfig
+    """Additional configuration of inference for expert users."""
 
     devices_: tuple[torch.device, ...]
     """The devices determined to be used.
@@ -221,7 +221,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
-        inference_config: dict | ModelInterfaceConfig | None = None,
+        inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
     ) -> None:
         """A TabPFN interface for regression.
@@ -602,8 +602,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y,
             estimator=self,
             ensure_y_numeric=False,
-            max_num_samples=self.interface_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.interface_config_.MAX_NUMBER_OF_FEATURES,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
@@ -619,9 +619,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inferred_categorical_indices_ = infer_categorical_features(
             X=X,
             provided=self.categorical_features_indices,
-            min_samples_for_inference=self.interface_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-            max_unique_for_category=self.interface_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-            min_unique_for_numerical=self.interface_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
 
         # Will convert inferred categorical indices to category dtype,
@@ -644,20 +644,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         target_preprocessors: list[TransformerMixin | Pipeline | None] = []
         for (
             y_target_preprocessor
-        ) in self.interface_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
+        ) in self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
             if y_target_preprocessor is not None:
                 preprocessor = possible_target_transforms[y_target_preprocessor]
             else:
                 preprocessor = None
             target_preprocessors.append(preprocessor)
-        preprocess_transforms = self.interface_config_.PREPROCESS_TRANSFORMS
+        preprocess_transforms = self.inference_config_.PREPROCESS_TRANSFORMS
 
         ensemble_configs = EnsembleConfig.generate_for_regression(
             num_estimators=self.n_estimators,
-            subsample_size=self.interface_config_.SUBSAMPLE_SAMPLES,
-            add_fingerprint_feature=self.interface_config_.FINGERPRINT_FEATURE,
-            feature_shift_decoder=self.interface_config_.FEATURE_SHIFT_METHOD,
-            polynomial_features=self.interface_config_.POLYNOMIAL_FEATURES,
+            subsample_size=self.inference_config_.SUBSAMPLE_SAMPLES,
+            add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
+            feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
+            polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
             max_index=len(X),
             preprocessor_configs=typing.cast(
                 "Sequence[PreprocessorConfig]",
@@ -1092,7 +1092,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                         transform_borders_one(
                             std_borders,
                             target_transform=config_for_ensemble.target_transform,
-                            repair_nan_borders_after_transform=self.interface_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
+                            repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
                         )
                     )
                     if descending_borders:
