@@ -56,7 +56,10 @@ class KDITransformerWithNaN(KDITransformer):
         if isinstance(X, torch.Tensor):
             X = X.cpu().numpy()
 
-        X = np.nan_to_num(X, nan=np.nanmean(X, axis=0))
+        # If all-nan or empty, nanmean returns nan.
+        imputation = np.nan_to_num(np.nanmean(X, axis=0), nan=0)
+        X = np.nan_to_num(X, nan=imputation)
+
         return super().fit(X, y)  # type: ignore
 
     def transform(self, X: torch.Tensor | np.ndarray) -> np.ndarray:
