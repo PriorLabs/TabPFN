@@ -521,7 +521,7 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    models, architecture_configs, maybe_bardist, inference_config_ = (
+    models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
@@ -542,17 +542,17 @@ def initialize_model_variables_helper(
         calling_instance.inference_precision, calling_instance.devices_
     )
 
-    inference_config_ = inference_config_.override_with_user_input(
+    inference_config = inference_config.override_with_user_input(
         user_config=calling_instance.inference_config
     )
 
-    calling_instance.inference_config_ = inference_config_
+    calling_instance.inference_config_ = inference_config
 
-    outlier_removal_std = inference_config_.OUTLIER_REMOVAL_STD
+    outlier_removal_std = inference_config.OUTLIER_REMOVAL_STD
     if outlier_removal_std == "auto":
         default_stds = {
-            "regressor": inference_config_._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
-            "classifier": inference_config_._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
+            "regressor": inference_config._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
+            "classifier": inference_config._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
         }
         try:
             outlier_removal_std = default_stds[model_type]
