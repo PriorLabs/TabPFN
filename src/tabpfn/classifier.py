@@ -48,7 +48,10 @@ from tabpfn.constants import (
     YType,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
+from tabpfn.model_loading import (
+    load_fitted_tabpfn_model,
+    save_fitted_tabpfn_model,
+)
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,

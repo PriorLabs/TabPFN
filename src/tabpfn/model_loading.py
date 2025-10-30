@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from sklearn.base import BaseEstimator
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
 
@@ -97,6 +99,31 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
+    @classmethod
+    def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "v2.5_classification_ii02f5gb_best_as_of_2867200.ckpt",
+            "v2.5_classification_7vdcwfor_backup_large_features.cpkt",
+            "v2.5_classification_zrhrpcxm_best_finetuned.cpkt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn-private-test",
+            default_filename="v2.5_classification_zrhrpcxm_best_finetuned.cpkt",
+            filenames=filenames,
+        )
+
+    @classmethod
+    def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "v2.5_regression_z0dqxe04_best_as_of_1376500.cpkt",
+            "v2.5_regression_4edkolbq_best.cpkt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn-private-test",
+            default_filename="v2.5_regression_4edkolbq_best.cpkt",
+            filenames=filenames,
+        )
+
 
 def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
     if version == ModelVersion.V2:
@@ -104,6 +131,11 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
             return ModelSource.get_classifier_v2()
         if model_type == ModelType.REGRESSOR:
             return ModelSource.get_regressor_v2()
+    elif version == ModelVersion.V2_5:
+        if model_type == ModelType.CLASSIFIER:
+            return ModelSource.get_classifier_v2_5()
+        if model_type == ModelType.REGRESSOR:
+            return ModelSource.get_regressor_v2_5()
 
     raise ValueError(
         f"Unsupported version/model combination: {version.value}/{model_type.value}",
@@ -243,7 +275,7 @@ def _try_direct_downloads(
 def download_model(
     to: Path,
     *,
-    version: Literal["v2"],
+    version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
 ) -> Literal["ok"] | list[Exception]:
@@ -262,7 +294,7 @@ def download_model(
     errors: list[Exception] = []
 
     try:
-        model_source = _get_model_source(ModelVersion(version), ModelType(which))
+        model_source = _get_model_source(version, ModelType(which))
     except ValueError as e:
         return [e]
 
@@ -293,7 +325,8 @@ def download_all_models(to: Path) -> None:
         for ckpt_name in model_source.filenames:
             download_model(
                 to=to / ckpt_name,
-                version="v2",
+                # TODO: Add v2.5 support once it's released.
+                version=ModelVersion.V2,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
@@ -353,7 +386,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -370,7 +403,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -387,7 +420,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -417,11 +450,12 @@ def load_model_criterion_config(
         list of models, the criterion, list of architecture configs, the inference
         config
     """
+    model_version = ModelVersion(version)
     (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
         resolve_model_path(
             model_path=model_path,
             which=which,
-            version=version,
+            version=model_version.value,
         )
     )
 
@@ -444,7 +478,7 @@ def load_model_criterion_config(
             logger.info(f"Downloading model to {path}.")
             res = download_model(
                 path,
-                version=version,
+                version=model_version,
                 which=cast("Literal['classifier', 'regressor']", which),
                 model_name=resolved_model_names[i],
             )
@@ -500,7 +534,7 @@ def load_model_criterion_config(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -644,16 +678,16 @@ def _get_inference_config_from_checkpoint(
     release. Thus, if there is no config in the checkpoint, try to guess between v2 and
     v2.5 and get the correct config.
     """
+    # This is how we tell the checkpoints apart:
+    #     v2: "architecture_name" not present, as added after the v2 release
+    #   v2.5: "architecture_name" present, but "inference_config" not present
+    #  >v2.5: "inference_config" present, so don't need to guess a default config
     if "inference_config" in checkpoint:
         return InferenceConfig(**checkpoint["inference_config"])
-
-    # "architecture_name" was added to the checkpoint after the v2 release, so if this
-    # isn't present we assume it's v2.
-    # TODO: Add check for v2.5
     if "architecture_name" not in checkpoint:
         model_version = ModelVersion.V2
     else:
-        model_version = "latest"
+        model_version = ModelVersion.V2_5
 
     if isinstance(criterion, FullSupportBarDistribution):
         task_type = "regression"

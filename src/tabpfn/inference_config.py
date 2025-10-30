@@ -15,6 +15,8 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     default_classifier_preprocessor_configs,
     default_regressor_preprocessor_configs,
+    v2_5_classifier_preprocessor_configs,
+    v2_5_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -216,14 +218,14 @@ class InferenceConfig:
         """
         if model_version == ModelVersion.V2:
             if task_type == "multiclass":
-                return InferenceConfig(
-                    PREPROCESS_TRANSFORMS=v2_classifier_preprocessor_configs()
-                )
+                return _get_v2_and_v2_5_config(v2_classifier_preprocessor_configs())
             if task_type == "regression":
-                return InferenceConfig(
-                    PREPROCESS_TRANSFORMS=v2_regressor_preprocessor_configs()
-                )
-        # TODO: Add v2.5
+                return _get_v2_and_v2_5_config(v2_regressor_preprocessor_configs())
+        if model_version == ModelVersion.V2_5:
+            if task_type == "multiclass":
+                return _get_v2_and_v2_5_config(v2_5_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_and_v2_5_config(v2_5_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
@@ -236,7 +238,9 @@ class InferenceConfig:
         raise ValueError(f"Unknown {task_type=} {model_version=}")
 
 
-def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+def _get_v2_and_v2_5_config(
+    preprocessor_configs: list[PreprocessorConfig],
+) -> InferenceConfig:
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,

@@ -526,7 +526,7 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         "append_original": False,  # changed from default
         "categorical_name": "ordinal_very_common_categories_shuffled",
         "global_transformer_name": "svd",
-        "subsample_features": -1,
+        "max_features_per_estimator": 500,
     }
 
     object_config = PreprocessorConfig(
@@ -534,7 +534,7 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         append_original=False,  # changed from default
         categorical_name="ordinal_very_common_categories_shuffled",
         global_transformer_name="svd",
-        subsample_features=-1,
+        max_features_per_estimator=500,
     )
 
     # Create two models with same random state
@@ -865,3 +865,44 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
     assert classifier2.configs_ is not None
 
     assert not hasattr(classifier2, "znorm_space_bardist_")
+
+
+@pytest.mark.parametrize("n_features", [1, 2])
+def test__TabPFNClassifier__few_features__works(n_features: int) -> None:
+    """Test that TabPFNClassifier works correctly with 1 or 2 features."""
+    n_classes = 2
+    n_samples = 20 * n_classes
+
+    X, y = sklearn.datasets.make_classification(
+        n_samples=n_samples,
+        n_classes=n_classes,
+        n_features=n_features,
+        n_informative=n_features,
+        n_redundant=0,
+        n_clusters_per_class=1,
+        random_state=42,
+    )
+
+    model = TabPFNClassifier(
+        n_estimators=2,
+        random_state=42,
+    )
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    probabilities = model.predict_proba(X)
+    assert probabilities.shape == (
+        X.shape[0],
+        n_classes,
+    ), f"Probabilities shape is incorrect for {n_features} features"
+    assert np.allclose(probabilities.sum(axis=1), 1.0), "Probabilities do not sum to 1"
+
+    predictions = model.predict(X)
+    assert predictions.shape == (X.shape[0],), (
+        f"Predictions shape is incorrect for {n_features} features"
+    )
+
+    accuracy = accuracy_score(y, predictions)
+    assert accuracy > 0.3, f"Accuracy too low with {n_features} features: {accuracy}"

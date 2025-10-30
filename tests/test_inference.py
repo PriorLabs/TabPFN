@@ -179,12 +179,12 @@ def _create_test_ensemble_configs(
             append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
-            subsample_features=-1,
+            max_features_per_estimator=500,
         ),
         PreprocessorConfig(
             "none",
             categorical_name="numeric",
-            subsample_features=-1,
+            max_features_per_estimator=500,
         ),
     ]
     return EnsembleConfig.generate_for_classification(
