@@ -44,14 +44,14 @@ def clone_model_for_evaluation(
         # Since this is for the purpose of fine tuning, at the moment,
         # we only ever copy the first model and config.
         new_model_state = copy.deepcopy(original_model.models_[0])
-        new_arch_config = copy.deepcopy(original_model.configs_[0])
+        new_architecture_config = copy.deepcopy(original_model.configs_[0])
         new_inference_config = copy.deepcopy(original_model.inference_config_)
 
         model_spec_obj = None
         if isinstance(original_model, TabPFNClassifier):
             model_spec_obj = ClassifierModelSpecs(
                 model=new_model_state,
-                arch_config=new_arch_config,
+                architecture_config=new_architecture_config,
                 inference_config=new_inference_config,
             )
         elif isinstance(original_model, TabPFNRegressor):
@@ -59,7 +59,7 @@ def clone_model_for_evaluation(
             new_bar_dist = copy.deepcopy(original_model.znorm_space_bardist_)
             model_spec_obj = RegressorModelSpecs(
                 model=new_model_state,
-                arch_config=new_arch_config,
+                architecture_config=new_architecture_config,
                 inference_config=new_inference_config,
                 norm_criterion=new_bar_dist,
             )

@@ -640,13 +640,17 @@ def test_constant_target(
 
 def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
     # 1) Standalone initializer
-    model, arch_configs, norm_criterion, inference_config = initialize_tabpfn_model(
-        model_path="auto",
-        which="regressor",
-        fit_mode="low_memory",
+    model, architecture_configs, norm_criterion, inference_config = (
+        initialize_tabpfn_model(
+            model_path="auto",
+            which="regressor",
+            fit_mode="low_memory",
+        )
     )
     assert model is not None, "model should be initialized for regressor"
-    assert arch_configs is not None, "config should be initialized for regressor"
+    assert architecture_configs is not None, (
+        "config should be initialized for regressor"
+    )
     assert norm_criterion is not None, (
         "norm_criterion should be initialized for regressor"
     )
@@ -668,7 +672,7 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
     # 3) Reuse via RegressorModelSpecs
     spec = RegressorModelSpecs(
         model=regressor.models_[0],
-        arch_config=regressor.configs_[0],
+        architecture_config=regressor.configs_[0],
         norm_criterion=regressor.znorm_space_bardist_,
         inference_config=regressor.inference_config_,
     )

@@ -61,11 +61,11 @@ class BaseModelSpecs:
     def __init__(
         self,
         model: Architecture,
-        arch_config: ArchitectureConfig,
+        architecture_config: ArchitectureConfig,
         inference_config: InferenceConfig,
     ):
         self.model = model
-        self.architecture_config = arch_config
+        self.architecture_config = architecture_config
         self.inference_config = inference_config
 
 
@@ -81,11 +81,11 @@ class RegressorModelSpecs(BaseModelSpecs):
     def __init__(
         self,
         model: Architecture,
-        arch_config: ArchitectureConfig,
+        architecture_config: ArchitectureConfig,
         inference_config: InferenceConfig,
         norm_criterion: FullSupportBarDistribution,
     ):
-        super().__init__(model, arch_config, inference_config)
+        super().__init__(model, architecture_config, inference_config)
         self.norm_criterion = norm_criterion
 
 
@@ -184,18 +184,20 @@ def initialize_tabpfn_model(
         download_if_not_exists = True
 
         if which == "classifier":
-            models, _, arch_configs, inference_config = load_model_criterion_config(
-                model_path=model_path,  # pyright: ignore[reportArgumentType]
-                # The classifier's bar distribution is not used
-                check_bar_distribution_criterion=False,
-                cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                which="classifier",
-                version="v2",
-                download_if_not_exists=download_if_not_exists,
+            models, _, architecture_configs, inference_config = (
+                load_model_criterion_config(
+                    model_path=model_path,  # pyright: ignore[reportArgumentType]
+                    # The classifier's bar distribution is not used
+                    check_bar_distribution_criterion=False,
+                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
+                    which="classifier",
+                    version="v2",
+                    download_if_not_exists=download_if_not_exists,
+                )
             )
             norm_criterion = None
         else:
-            models, bardist, arch_configs, inference_config = (
+            models, bardist, architecture_configs, inference_config = (
                 load_model_criterion_config(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The regressor's bar distribution is required
@@ -208,7 +210,7 @@ def initialize_tabpfn_model(
             )
             norm_criterion = bardist
 
-        return models, arch_configs, norm_criterion, inference_config
+        return models, architecture_configs, norm_criterion, inference_config
 
     raise TypeError(
         "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
@@ -519,13 +521,15 @@ def initialize_model_variables_helper(
         dtype, and rng is a NumPy random Generator for use during inference.
     """
     static_seed, rng = infer_random_state(calling_instance.random_state)
-    models, arch_configs, maybe_bardist, inference_config_ = initialize_tabpfn_model(
-        model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
-        which=model_type,
-        fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+    models, architecture_configs, maybe_bardist, inference_config_ = (
+        initialize_tabpfn_model(
+            model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
+            which=model_type,
+            fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+        )
     )
     calling_instance.models_ = models
-    calling_instance.configs_ = arch_configs
+    calling_instance.configs_ = architecture_configs
     if model_type == "regressor" and maybe_bardist is not None:
         calling_instance.znorm_space_bardist_ = maybe_bardist
 

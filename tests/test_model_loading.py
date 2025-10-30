@@ -136,14 +136,14 @@ def test__load_model__architecture_name_in_checkpoint__loads_specified_architect
 def test__load_v2_checkpoint__returns_v2_preprocessings(
     tmp_path: Path,
 ) -> None:
-    arch_config = _get_minimal_base_architecture_config()
+    architecture_config = _get_minimal_base_architecture_config()
     model = base.get_architecture(
-        arch_config, n_out=10, cache_trainset_representation=True
+        architecture_config, n_out=10, cache_trainset_representation=True
     )
     # v2 checkpoints have no "architecture_name" key
     checkpoint = {
         "state_dict": model.state_dict(),
-        "config": asdict(arch_config),
+        "config": asdict(architecture_config),
     }
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
@@ -175,10 +175,10 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
 def test__load_post_v2_ckpt_without_inference_config__returns_v2_preprocessing(
     tmp_path: Path,
 ) -> None:
-    arch_config = {"max_num_classes": 10, "num_buckets": 100}
+    architecture_config = {"max_num_classes": 10, "num_buckets": 100}
     checkpoint = {
         "state_dict": {},
-        "config": arch_config,
+        "config": architecture_config,
         "architecture_name": "fake_arch",
     }
     checkpoint_path = tmp_path / "checkpoint.ckpt"
@@ -211,7 +211,7 @@ def test__load_post_v2_ckpt_without_inference_config__returns_v2_preprocessing(
 def test__load_checkpoints_with_inference_configs__returns_inference_config(
     tmp_path: Path,
 ) -> None:
-    arch_config = {"max_num_classes": 10, "num_buckets": 100}
+    architecture_config = {"max_num_classes": 10, "num_buckets": 100}
     inference_config = InferenceConfig(
         PREPROCESS_TRANSFORMS=[
             PreprocessorConfig(
@@ -226,7 +226,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
 
     checkpoint_1 = {
         "state_dict": {},
-        "config": arch_config,
+        "config": architecture_config,
         "architecture_name": "fake_arch",
         "inference_config": asdict(inference_config),
     }
@@ -234,7 +234,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
     torch.save(checkpoint_1, checkpoint_1_path)
     checkpoint_2 = {
         "state_dict": {},
-        "config": arch_config,
+        "config": architecture_config,
         "architecture_name": "fake_arch",
         "inference_config": asdict(inference_config),
     }
@@ -257,10 +257,10 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
 def test__load_multiple_models_with_difference_inference_configs__raises(
     tmp_path: Path,
 ) -> None:
-    arch_config = {"max_num_classes": 10, "num_buckets": 100}
+    architecture_config = {"max_num_classes": 10, "num_buckets": 100}
     checkpoint_1 = {
         "state_dict": {},
-        "config": arch_config,
+        "config": architecture_config,
         "architecture_name": "fake_arch",
         "inference_config": asdict(
             InferenceConfig(
@@ -280,7 +280,7 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
     torch.save(checkpoint_1, checkpoint_1_path)
     checkpoint_2 = {
         "state_dict": {},
-        "config": arch_config,
+        "config": architecture_config,
         "architecture_name": "fake_arch",
         "inference_config": asdict(
             InferenceConfig(

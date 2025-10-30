@@ -432,7 +432,7 @@ def load_model_criterion_config(
 
     loaded_models = []
     criterions = []
-    arch_configs = []
+    architecture_configs = []
     inference_configs = []
 
     for i, path in enumerate(resolved_model_paths):
@@ -459,7 +459,7 @@ def load_model_criterion_config(
                     f"Then place it at: {path}",
                 ) from res[0]
 
-        loaded_model, criterion, arch_config, inference_config = load_model(
+        loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
         )
@@ -474,7 +474,7 @@ def load_model_criterion_config(
             )
         loaded_models.append(loaded_model)
         criterions.append(criterion)
-        arch_configs.append(arch_config)
+        architecture_configs.append(architecture_config)
         inference_configs.append(inference_config)
 
     first_criterion = criterions[0]
@@ -496,7 +496,7 @@ def load_model_criterion_config(
                 f"Config 2: {inference_config}"
             )
 
-    return loaded_models, first_criterion, arch_configs, first_inference_config
+    return loaded_models, first_criterion, architecture_configs, first_inference_config
 
 
 def resolve_model_path(
