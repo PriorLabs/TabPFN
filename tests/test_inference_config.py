@@ -34,7 +34,6 @@ def test__override_with_user_input__dict_of_overrides__sets_values_correctly() -
                 "append_original": "auto",
                 "categorical_name": "ordinal_very_common_categories_shuffled",
                 "global_transformer_name": "svd",
-                "subsample_features": -1,
             }
         ],
         "POLYNOMIAL_FEATURES": "all",
