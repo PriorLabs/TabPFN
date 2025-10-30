@@ -187,4 +187,4 @@ class InferenceConfig:
             return deepcopy(user_config)
         if isinstance(user_config, dict):
             return dataclasses.replace(self, **user_config)
-        raise ValueError(f"Unknown {user_config=} passed to model.")
+        raise ValueError(f"{user_config=}\nUnknown user config provided, see config above.")
