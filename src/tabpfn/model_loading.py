@@ -31,6 +31,7 @@ from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
+from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngine, InferenceEngineCacheKV
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.settings import settings
@@ -49,12 +50,9 @@ FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/051
 
 
 class ModelType(str, Enum):  # noqa: D101
+    # TODO: Merge with TaskType in tabpfn.constants.
     CLASSIFIER = "classifier"
     REGRESSOR = "regressor"
-
-
-class ModelVersion(str, Enum):  # noqa: D101
-    V2 = "v2"
 
 
 @dataclass
@@ -651,16 +649,18 @@ def _get_inference_config_from_checkpoint(
 
     # "architecture_name" was added to the checkpoint after the v2 release, so if this
     # isn't present we assume it's v2.
-    is_v2 = "architecture_name" not in checkpoint
     # TODO: Add check for v2.5
+    if "architecture_name" not in checkpoint:
+        model_version = ModelVersion.V2
+    else:
+        model_version = "latest"
 
     if isinstance(criterion, FullSupportBarDistribution):
-        if is_v2:
-            return InferenceConfig.get_v2_for_regression()
-        return InferenceConfig.get_default_for_regression()
-    if is_v2:
-        return InferenceConfig.get_v2_for_classification()
-    return InferenceConfig.get_default_for_classification()
+        task_type = "regression"
+    else:
+        task_type = "multiclass"
+
+    return InferenceConfig.get_default(task_type, model_version)
 
 
 def get_n_out(

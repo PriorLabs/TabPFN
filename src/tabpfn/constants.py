@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import pathlib
+from enum import Enum
 from typing import Any, Literal, Union
 from typing_extensions import TypeAlias
 
@@ -25,6 +26,13 @@ YType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
 
 ModelPath: TypeAlias = Union[str, pathlib.Path]
+
+
+class ModelVersion(str, Enum):
+    """Version of the model."""
+
+    V2 = "v2"
+
 
 NA_PLACEHOLDER = "__MISSING__"
 
