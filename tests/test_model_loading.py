@@ -175,6 +175,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
 def test__load_post_v2_ckpt_without_inference_config__returns_v2_preprocessing(
     tmp_path: Path,
 ) -> None:
+    # TODO: Update this test to instead check for the v2.5 preprocessing.
     architecture_config = {"max_num_classes": 10, "num_buckets": 100}
     checkpoint = {
         "state_dict": {},

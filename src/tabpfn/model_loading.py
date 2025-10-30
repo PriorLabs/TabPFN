@@ -490,10 +490,10 @@ def load_model_criterion_config(
     for inference_config in inference_configs[1:]:
         if inference_config != first_inference_config:
             raise ValueError(
+                f"Config 1: {first_inference_config}\n"
+                f"Config 2: {inference_config}\n"
                 "Inference configs for different models are different, which is not "
-                "supported. "
-                f"Config 1: {first_inference_config} \n"
-                f"Config 2: {inference_config}"
+                "supported. See above."
             )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config
@@ -643,8 +643,8 @@ def _get_inference_config_from_checkpoint(
     """Return the config in the checkpoint, or an appropriate default config.
 
     We only started storing the inference config in the checkpoint after the v2.5
-    release. If there is no config in the checkpoint, try to guess the model version
-    and get the correct config.
+    release. Thus, if there is no config in the checkpoint, try to guess between v2 and
+    v2.5 and get the correct config.
     """
     if "inference_config" in checkpoint:
         return InferenceConfig(**checkpoint["inference_config"])
@@ -652,6 +652,7 @@ def _get_inference_config_from_checkpoint(
     # "architecture_name" was added to the checkpoint after the v2 release, so if this
     # isn't present we assume it's v2.
     is_v2 = "architecture_name" not in checkpoint
+    # TODO: Add check for v2.5
 
     if isinstance(criterion, FullSupportBarDistribution):
         if is_v2:
