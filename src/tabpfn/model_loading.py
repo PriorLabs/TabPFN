@@ -631,28 +631,35 @@ def load_model(
     model.load_state_dict(state_dict)
     model.eval()
 
-    inference_config = _get_inference_config_from_checkpoint(checkpoint)
+    inference_config = _get_inference_config_from_checkpoint(checkpoint, loss_criterion)
 
     return model, loss_criterion, model_config, inference_config
 
 
 def _get_inference_config_from_checkpoint(
     checkpoint: dict[str, Any],
+    criterion: nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
 ) -> InferenceConfig:
     """Return the config in the checkpoint, or an appropriate default config.
 
-    If there is no config in the checkpoint, try to guess the model version and thus get
-    the correct config.
+    We only started storing the inference config in the checkpoint after the v2.5
+    release. If there is no config in the checkpoint, try to guess the model version
+    and get the correct config.
     """
     if "inference_config" in checkpoint:
         return InferenceConfig(**checkpoint["inference_config"])
 
-    inference_config = InferenceConfig()
     # "architecture_name" was added to the checkpoint after the v2 release, so if this
     # isn't present we assume it's v2.
-    if "architecture_name" not in checkpoint:
-        inference_config.PREPROCESS_TRANSFORMS = "v2_default"
-    return inference_config
+    is_v2 = "architecture_name" not in checkpoint
+
+    if isinstance(criterion, FullSupportBarDistribution):
+        if is_v2:
+            return InferenceConfig.get_v2_for_regression()
+        return InferenceConfig.get_default_for_regression()
+    if is_v2:
+        return InferenceConfig.get_v2_for_classification()
+    return InferenceConfig.get_default_for_classification()
 
 
 def get_n_out(

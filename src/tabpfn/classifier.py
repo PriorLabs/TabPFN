@@ -54,8 +54,6 @@ from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
     PreprocessorConfig,
-    default_classifier_preprocessor_configs,
-    v2_classifier_preprocessor_configs,
 )
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
@@ -579,7 +577,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
-            preprocessor_configs = _get_preprocessor_configs(self.inference_config_)
+            preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
 
             # Will convert inferred categorical indices to category dtype,
             # to be picked up by the ord_encoder, as well
@@ -1075,13 +1073,3 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
-
-
-def _get_preprocessor_configs(
-    inference_config: InferenceConfig,
-) -> list[PreprocessorConfig]:
-    if inference_config.PREPROCESS_TRANSFORMS == "v2_default":
-        return v2_classifier_preprocessor_configs()
-    if inference_config.PREPROCESS_TRANSFORMS is None:
-        return default_classifier_preprocessor_configs()
-    return inference_config.PREPROCESS_TRANSFORMS

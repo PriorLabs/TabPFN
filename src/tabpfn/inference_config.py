@@ -11,7 +11,11 @@ from typing import Literal
 import pydantic
 
 from tabpfn.preprocessing import (
-    PreprocessorConfig,  # noqa: TC001 (Pydantic requires the import at runtime)
+    PreprocessorConfig,
+    default_classifier_preprocessor_configs,
+    default_regressor_preprocessor_configs,
+    v2_classifier_preprocessor_configs,
+    v2_regressor_preprocessor_configs,
 )
 
 
@@ -28,6 +32,29 @@ class InferenceConfig:
     Several of the preprocessing options are supported by our code for efficiency
     reasons (to avoid loading TabPFN multiple times). However, these can also be
     applied outside of the model interface.
+
+    This class must be serializable as it is peristed in the model checkpoints.
+
+    Do not edit the default values in this class, as this can affect the backwards
+    compatibility of the model checkpoints. Instead, edit `get_default_config()`.
+    """
+
+    PREPROCESS_TRANSFORMS: list[PreprocessorConfig]
+    """The preprocessing applied to the data before passing it to TabPFN. See
+    `PreprocessorConfig` for options and more details. If multiple `PreprocessorConfig`
+    are provided, they are (repeatedly) applied across different estimators.
+
+    By default, for classification, two preprocessors are applied:
+        1. Uses the original input data, all features transformed with a quantile
+            scaler, and the first n-many components of SVD transformer (whereby
+            n is a fract of on the number of features or samples). Categorical features
+            are ordinal encoded but all categories with less than 10 features are
+            ignored.
+        2. Uses the original input data, with categorical features as ordinal encoded.
+
+    By default, for regression, two preprocessor are applied:
+        1. The same as for classification, with a minimal different quantile scaler.
+        2. The original input data power transformed and categories onehot encoded.
     """
 
     MAX_UNIQUE_FOR_CATEGORICAL_FEATURES: int = 30
@@ -97,25 +124,6 @@ class InferenceConfig:
         - If a float, the percentage of samples to subsample.
     """
 
-    PREPROCESS_TRANSFORMS: list[PreprocessorConfig] | Literal["v2_default"] | None = (
-        None
-    )
-    """The preprocessing applied to the data before passing it to TabPFN. See
-    `PreprocessorConfig` for options and more details. If multiple `PreprocessorConfig`
-    are provided, they are (repeatedly) applied across different estimators.
-
-    By default, for classification, two preprocessors are applied:
-        1. Uses the original input data, all features transformed with a quantile
-            scaler, and the first n-many components of SVD transformer (whereby
-            n is a fract of on the number of features or samples). Categorical features
-            are ordinal encoded but all categories with less than 10 features are
-            ignored.
-        2. Uses the original input data, with categorical features as ordinal encoded.
-
-    By default, for regression, two preprocessor are applied:
-        1. The same as for classification, with a minimal different quantile scaler.
-        2. The original input data power transformed and categories onehot encoded.
-    """
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[
         Literal["safepower", "power", "quantile_norm", None],
         ...,
@@ -187,4 +195,46 @@ class InferenceConfig:
             return deepcopy(user_config)
         if isinstance(user_config, dict):
             return dataclasses.replace(self, **user_config)
-        raise ValueError(f"{user_config=}\nUnknown user config provided, see config above.")
+        raise ValueError(
+            f"{user_config=}\nUnknown user config provided, see config above."
+        )
+
+    @classmethod
+    def get_default_for_classification(cls) -> InferenceConfig:
+        """Return the default inference config for classification."""
+        return InferenceConfig(
+            PREPROCESS_TRANSFORMS=default_classifier_preprocessor_configs()
+        )
+
+    @classmethod
+    def get_default_for_regression(cls) -> InferenceConfig:
+        """Return the default inference config for regression."""
+        return InferenceConfig(
+            PREPROCESS_TRANSFORMS=default_regressor_preprocessor_configs()
+        )
+
+    @classmethod
+    def get_v2_for_classification(cls) -> InferenceConfig:
+        """Return the inference config used for v2 of the model for classification."""
+        return _get_v2_config(v2_classifier_preprocessor_configs())
+
+    @classmethod
+    def get_v2_for_regression(cls) -> InferenceConfig:
+        """Return the inference config used for v2 of the model for regression."""
+        return _get_v2_config(v2_regressor_preprocessor_configs())
+
+
+def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    return InferenceConfig(
+        MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
+        MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
+        MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE=100,
+        OUTLIER_REMOVAL_STD="auto",
+        FEATURE_SHIFT_METHOD="shuffle",
+        CLASS_SHIFT_METHOD="shuffle",
+        FINGERPRINT_FEATURE=True,
+        POLYNOMIAL_FEATURES="no",
+        SUBSAMPLE_SAMPLES=None,
+        PREPROCESS_TRANSFORMS=preprocessor_configs,
+        REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
+    )
