@@ -32,6 +32,7 @@ class ModelVersion(str, Enum):
     """Version of the model."""
 
     V2 = "v2"
+    V2_5 = "v2.5"
 
 
 NA_PLACEHOLDER = "__MISSING__"

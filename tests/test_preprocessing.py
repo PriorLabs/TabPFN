@@ -47,7 +47,7 @@ def test_preprocessing_large_dataset():
         transform_name="quantile_norm",
         apply_to_categorical=False,
         append_to_original=False,
-        subsample_features=-1,
+        max_features_per_estimator=500,
         global_transformer_name=None,
         random_state=42,
     )
@@ -185,9 +185,11 @@ def test_diff_znorm_transform_with_zero_std(
         # Test 'auto' mode below the threshold: should append original features
         pytest.param("auto", 10, 20, id="auto_below_threshold_appends"),
         # Test 'auto' mode above the threshold: should NOT append original features
-        pytest.param("auto", 600, 600, id="auto_above_threshold_replaces"),
-        # Test True: should always append, regardless of threshold
-        pytest.param(True, 600, 1200, id="true_always_appends"),
+        pytest.param("auto", 600, 500, id="auto_above_threshold_replaces"),
+        # If n features more than half of max_features_per_estimator we do not append
+        pytest.param("auto", 300, 300, id="auto_below_half_threshold_replaces"),
+        # True: always append after capping (600 → capped 500 → doubled)
+        pytest.param(True, 600, 1000, id="true_always_appends"),
         # Test False: should never append
         pytest.param(False, 10, 10, id="false_never_appends"),
     ],
@@ -208,6 +210,7 @@ def test_reshape_step_append_original_logic(
         transform_name="quantile_norm",
         append_to_original=append_to_original_setting,
         random_state=42,
+        max_features_per_estimator=500,
     )
 
     # ACT: Run the preprocessing

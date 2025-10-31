@@ -147,7 +147,7 @@ def main() -> None:
 
     if len(regressor.models_) > 1:
         raise ValueError(
-            f"Your TabPFNRegressor usese multiple models ({len(regressor.models_)}). "
+            f"Your TabPFNRegressor uses multiple models ({len(regressor.models_)}). "
             "Finetuning is not supported for multiple models. Please use a single model."
         )
 

@@ -6,14 +6,15 @@ architectures can import components from here to reuse them, and over time we sh
 refactor this architecture to improve reusability.
 """
 
-from typing import Any
+from __future__ import annotations
 
-from torch import nn
+from typing import TYPE_CHECKING, Any, Literal
 
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
+    MLPInputEncoderStep,
     MulticlassClassificationTargetEncoder,
     NanHandlingEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
@@ -23,7 +24,11 @@ from tabpfn.architectures.base.encoders import (
     VariableNumFeaturesEncoderStep,
 )
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
-from tabpfn.architectures.interface import ArchitectureConfig
+
+if TYPE_CHECKING:
+    from torch import nn
+
+    from tabpfn.architectures.interface import ArchitectureConfig
 
 
 def parse_config(config: dict[str, Any]) -> tuple[ArchitectureConfig, dict[str, Any]]:
@@ -86,6 +91,9 @@ def get_architecture(
             remove_outliers=config.remove_outliers,
             normalize_by_used_features=config.normalize_by_used_features,
             encoder_use_bias=config.encoder_use_bias,
+            encoder_type=config.encoder_type,
+            encoder_mlp_hidden_dim=config.encoder_mlp_hidden_dim,
+            encoder_mlp_num_layers=config.encoder_mlp_num_layers,
         ),
         y_encoder=get_y_encoder(
             num_inputs=1,
@@ -116,6 +124,9 @@ def get_encoder(  # noqa: PLR0913
     remove_outliers: bool,
     normalize_by_used_features: bool,
     encoder_use_bias: bool,
+    encoder_type: Literal["linear", "mlp"] = "linear",
+    encoder_mlp_hidden_dim: int | None = None,
+    encoder_mlp_num_layers: int = 2,
 ) -> nn.Module:
     inputs_to_merge = {"main": {"dim": num_features}}
 
@@ -156,15 +167,34 @@ def get_encoder(  # noqa: PLR0913
         ),
     ]
 
-    encoder_steps += [
-        LinearInputEncoderStep(
-            num_features=sum([i["dim"] for i in inputs_to_merge.values()]),
-            emsize=embedding_size,
-            bias=encoder_use_bias,
-            in_keys=tuple(inputs_to_merge),
-            out_keys=("output",),
-        ),
-    ]
+    num_input_features = sum(i["dim"] for i in inputs_to_merge.values())
+    if encoder_type == "mlp":
+        encoder_steps += [
+            MLPInputEncoderStep(
+                num_features=num_input_features,
+                emsize=embedding_size,
+                hidden_dim=encoder_mlp_hidden_dim,
+                activation="gelu",
+                num_layers=encoder_mlp_num_layers,
+                bias=encoder_use_bias,
+                in_keys=tuple(inputs_to_merge),
+                out_keys=("output",),
+            ),
+        ]
+    elif encoder_type == "linear":
+        encoder_steps += [
+            LinearInputEncoderStep(
+                num_features=num_input_features,
+                emsize=embedding_size,
+                bias=encoder_use_bias,
+                in_keys=tuple(inputs_to_merge),
+                out_keys=("output",),
+            ),
+        ]
+    else:
+        raise ValueError(
+            f"Invalid encoder type: {encoder_type} (expected 'linear' or 'mlp')"
+        )
 
     return SequentialEncoder(*encoder_steps, output_key="output")
 

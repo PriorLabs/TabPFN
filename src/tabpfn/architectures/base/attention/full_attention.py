@@ -653,6 +653,7 @@ class MultiHeadAttention(Attention):
                 )
             )
             attention_head_outputs = attention_head_outputs.transpose(1, 2)
+
         else:
             k = MultiHeadAttention.broadcast_kv_across_heads(k, share_kv_across_n_heads)
             v = MultiHeadAttention.broadcast_kv_across_heads(v, share_kv_across_n_heads)

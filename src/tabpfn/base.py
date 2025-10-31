@@ -171,15 +171,19 @@ def initialize_tabpfn_model(
         or model_path == "auto"
         or isinstance(model_path, (str, pathlib.Path, list))  # pyright: ignore[reportArgumentType]
     ):
-        if isinstance(model_path, str) and model_path == "auto":
-            model_path = None  # type: ignore
-
         if isinstance(model_path, list) and len(model_path) == 0:
             raise ValueError(
                 "You provided a list of model paths with no entries. "
                 "Please provide a valid `model_path` argument, or use 'auto' to use "
                 "the default model."
             )
+
+        if isinstance(model_path, str) and model_path == "auto":
+            model_path = None  # type: ignore
+
+        # Use the value instead of the enum to preserve the interface of
+        # load_model_criterion_config.
+        version = settings.tabpfn.model_version.value
 
         download_if_not_exists = True
 
@@ -191,7 +195,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="classifier",
-                    version="v2",
+                    version=version,
                     download_if_not_exists=download_if_not_exists,
                 )
             )
@@ -204,7 +208,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="regressor",
-                    version="v2",
+                    version=version,
                     download_if_not_exists=download_if_not_exists,
                 )
             )

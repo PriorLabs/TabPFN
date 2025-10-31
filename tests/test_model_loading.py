@@ -165,17 +165,24 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
         == "ordinal_very_common_categories_shuffled"
     )
     assert inference_config.PREPROCESS_TRANSFORMS[0].global_transformer_name == "svd"
-    assert inference_config.PREPROCESS_TRANSFORMS[0].subsample_features == -1
+    assert (
+        inference_config.PREPROCESS_TRANSFORMS[0].max_features_per_estimator
+        == 1_000_000
+    )
     assert inference_config.PREPROCESS_TRANSFORMS[1].name == "none"
     assert inference_config.PREPROCESS_TRANSFORMS[1].categorical_name == "numeric"
-    assert inference_config.PREPROCESS_TRANSFORMS[1].subsample_features == -1
+    assert (
+        inference_config.PREPROCESS_TRANSFORMS[1].max_features_per_estimator
+        == 1_000_000
+    )
 
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
-def test__load_post_v2_ckpt_without_inference_config__returns_v2_preprocessing(
+def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
     tmp_path: Path,
 ) -> None:
-    # TODO: Update this test to instead check for the v2.5 preprocessing.
+    # v2.5 checkpoints have a architecture_name but no inference_config
+    # classification checkpoints have max_num_classes > 0
     architecture_config = {"max_num_classes": 10, "num_buckets": 100}
     checkpoint = {
         "state_dict": {},
@@ -190,22 +197,64 @@ def test__load_post_v2_ckpt_without_inference_config__returns_v2_preprocessing(
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
         which="classifier",
-        version="v2",
+        version="v2.5",
+        download_if_not_exists=False,
+    )
+
+    assert len(inference_config.PREPROCESS_TRANSFORMS) == 2
+    assert inference_config.PREPROCESS_TRANSFORMS[0].name == "squashing_scaler_default"
+    assert inference_config.PREPROCESS_TRANSFORMS[0].append_original is False
+    assert (
+        inference_config.PREPROCESS_TRANSFORMS[0].categorical_name
+        == "ordinal_very_common_categories_shuffled"
+    )
+    assert (
+        inference_config.PREPROCESS_TRANSFORMS[0].global_transformer_name
+        == "svd_quarter_components"
+    )
+    assert inference_config.PREPROCESS_TRANSFORMS[0].max_features_per_estimator == 500
+    assert inference_config.PREPROCESS_TRANSFORMS[1].name == "none"
+    assert inference_config.PREPROCESS_TRANSFORMS[1].categorical_name == "numeric"
+    assert inference_config.PREPROCESS_TRANSFORMS[1].max_features_per_estimator == 500
+
+
+@patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
+def test__load_v2_5_regression_ckpt__returns_v2_5_preprocessing(
+    tmp_path: Path,
+) -> None:
+    # v2.5 checkpoints have a architecture_name but no inference_config
+    # regression checkpoints have max_num_classes 0
+    architecture_config = {"max_num_classes": 0, "num_buckets": 100}
+    checkpoint = {
+        "state_dict": {
+            "criterion.borders": torch.arange(101),
+            "criterion.losses_per_bucket": torch.randn((100,)),
+        },
+        "config": architecture_config,
+        "architecture_name": "fake_arch",
+    }
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    _, _, _, inference_config = model_loading.load_model_criterion_config(
+        model_path=[checkpoint_path, checkpoint_path],
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        which="classifier",
+        version="v2.5",
         download_if_not_exists=False,
     )
 
     assert len(inference_config.PREPROCESS_TRANSFORMS) == 2
     assert inference_config.PREPROCESS_TRANSFORMS[0].name == "quantile_uni_coarse"
     assert inference_config.PREPROCESS_TRANSFORMS[0].append_original == "auto"
+    assert inference_config.PREPROCESS_TRANSFORMS[0].categorical_name == "numeric"
+    assert inference_config.PREPROCESS_TRANSFORMS[0].global_transformer_name is None
+    assert inference_config.PREPROCESS_TRANSFORMS[1].name == "squashing_scaler_default"
     assert (
-        inference_config.PREPROCESS_TRANSFORMS[0].categorical_name
+        inference_config.PREPROCESS_TRANSFORMS[1].categorical_name
         == "ordinal_very_common_categories_shuffled"
     )
-    assert inference_config.PREPROCESS_TRANSFORMS[0].global_transformer_name == "svd"
-    assert inference_config.PREPROCESS_TRANSFORMS[0].subsample_features == -1
-    assert inference_config.PREPROCESS_TRANSFORMS[1].name == "none"
-    assert inference_config.PREPROCESS_TRANSFORMS[1].categorical_name == "numeric"
-    assert inference_config.PREPROCESS_TRANSFORMS[1].subsample_features == -1
 
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
@@ -220,7 +269,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
                 append_original="auto",
                 categorical_name="ordinal_very_common_categories_shuffled",
                 global_transformer_name="svd",
-                subsample_features=-1,
+                max_features_per_estimator=-1,
             )
         ]
     )
@@ -271,7 +320,7 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
                         append_original="auto",
                         categorical_name="ordinal_very_common_categories_shuffled",
                         global_transformer_name="svd",
-                        subsample_features=-1,
+                        max_features_per_estimator=-1,
                     )
                 ]
             )
@@ -289,7 +338,7 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
                     PreprocessorConfig(
                         "none",
                         categorical_name="numeric",
-                        subsample_features=-1,
+                        max_features_per_estimator=-1,
                     )
                 ]
             )
