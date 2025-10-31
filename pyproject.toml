@@ -418,6 +418,8 @@ ignore_packages = [
     "certifi",
     # Appears to be MIT, but the tool doesn't know. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
     "einops",
+    # Is Apache Licensed since 1.2 but the tool doesn't know. https://github.com/calvinmccarter/kditransform/blob/5ee7cfad665bb1078211c0becad8fbd31e78429d/LICENSE
+    "kditransform",
     "nvidia*",
     # Our packages
     "tabpfn*",
