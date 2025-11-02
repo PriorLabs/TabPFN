@@ -411,7 +411,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
 
 @pytest.mark.parametrize("data_source", ["train", "test"])
-def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) -> None:
+def test_get_embeddings(
+    X_y: tuple[np.ndarray, np.ndarray], data_source: Literal["train", "test"]
+) -> None:
     """Test that get_embeddings returns valid embeddings for a fitted model."""
     X, y = X_y
     n_estimators = 3
@@ -419,13 +421,11 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNRegressor(n_estimators=n_estimators)
     model.fit(X, y)
 
-    # Cast to Literal type for mypy
-    valid_data_source = typing.cast(Literal["train", "test"], data_source)
-    embeddings = model.get_embeddings(X, valid_data_source)
+    embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instances = typing.cast(typing.Any, model.executor_).models
-    hidden_size = model_instances[0].ninp
+    model_instance = model.executor_.model_caches[0]._model
+    hidden_size = model_instance.ninp
 
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators

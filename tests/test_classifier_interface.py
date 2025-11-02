@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 import os
-import typing
 from itertools import product
 from typing import Callable, Literal
 
@@ -736,7 +735,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
 
 @pytest.mark.parametrize("data_source", ["train", "test"])
-def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) -> None:
+def test_get_embeddings(
+    X_y: tuple[np.ndarray, np.ndarray], data_source: Literal["train", "test"]
+) -> None:
     """Test that get_embeddings returns valid embeddings for a fitted model."""
     X, y = X_y
     n_estimators = 3
@@ -744,15 +745,13 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)
 
-    # Cast to Literal type for mypy
-    valid_data_source = typing.cast(Literal["train", "test"], data_source)
-    embeddings = model.get_embeddings(X, valid_data_source)
+    embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instances = typing.cast(typing.Any, model.executor_).models
+    model_instance = model.executor_.model_caches[0]._model
     encoder_shape = next(
         m.out_features
-        for m in model_instances[0].encoder.modules()
+        for m in model_instance.encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
