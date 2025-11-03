@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 # Public fallback base URL for model downloads
 FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/05152025"
 
+# Special string used to identify v2.5 models in model paths.
+V_2_5_IDENTIFIER = "v2.5"
+
 
 class ModelType(str, Enum):  # noqa: D101
     # TODO: Merge with TaskType in tabpfn.constants.
@@ -318,15 +321,16 @@ def download_model(
 def download_all_models(to: Path) -> None:
     """Download all v2 classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
-    for model_source, model_type in [
-        (ModelSource.get_classifier_v2(), "classifier"),
-        (ModelSource.get_regressor_v2(), "regressor"),
+    for model_version, model_source, model_type in [
+        (ModelVersion.V2, ModelSource.get_classifier_v2(), "classifier"),
+        (ModelVersion.V2, ModelSource.get_regressor_v2(), "regressor"),
+        (ModelVersion.V2_5, ModelSource.get_classifier_v2_5(), "classifier"),
+        (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
             download_model(
                 to=to / ckpt_name,
-                # TODO: Add v2.5 support once it's released.
-                version=ModelVersion.V2,
+                version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
@@ -531,10 +535,34 @@ def load_model_criterion_config(
     return loaded_models, first_criterion, architecture_configs, first_inference_config
 
 
+def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
+    if model_path is None:
+        return settings.tabpfn.model_version.value
+    if V_2_5_IDENTIFIER in str(model_path):
+        return ModelVersion.V2_5
+    return ModelVersion.V2
+
+
+def resolve_model_version(model_path: ModelPath | list[ModelPath] | None) -> ModelVersion:
+    """Resolve the model version from the model path, using the official default model if no path is provided."""
+    if isinstance(model_path, list):
+        if len(model_path) == 0:
+            return _resolve_model_version(None)
+        else:
+            resolved_model_versions = [_resolve_model_version(p) for p in model_path]
+            if len(set(resolved_model_versions)) > 1:
+                raise ValueError(
+                    "All model paths must have the same version."
+                )
+            return resolved_model_versions[0]
+    else:
+        return _resolve_model_version(model_path)
+
+
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2.5",
 ) -> tuple[
     list[Path],
     list[Path],

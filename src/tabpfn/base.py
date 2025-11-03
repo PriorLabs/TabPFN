@@ -28,7 +28,7 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.model_loading import load_model_criterion_config
+from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
     ClassifierDatasetConfig,
@@ -181,10 +181,7 @@ def initialize_tabpfn_model(
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
-        # Use the value instead of the enum to preserve the interface of
-        # load_model_criterion_config.
-        version = settings.tabpfn.model_version.value
-
+        version = resolve_model_version(model_path)  # type: ignore
         download_if_not_exists = True
 
         if which == "classifier":
@@ -195,7 +192,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="classifier",
-                    version=version,
+                    version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
             )
@@ -208,7 +205,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="regressor",
-                    version=version,
+                    version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
             )

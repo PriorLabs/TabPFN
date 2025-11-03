@@ -32,8 +32,8 @@ class TabPFNSettings(BaseSettings):
         "If not set, uses platform-specific user cache directory.",
     )
     model_version: ModelVersion = Field(
-        default=ModelVersion.V2,
-        description="The version of the TabPFN model to use.",
+        default=ModelVersion.V2_5,
+        description="The version of the TabPFN model to use by default.",
     )
 
     # Performance/Memory Settings
