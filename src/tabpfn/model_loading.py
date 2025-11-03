@@ -319,7 +319,7 @@ def download_model(
 
 
 def download_all_models(to: Path) -> None:
-    """Download all v2 classifier and regressor models into a local directory."""
+    """Download all available classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
     for model_version, model_source, model_type in [
         (ModelVersion.V2, ModelSource.get_classifier_v2(), "classifier"),
