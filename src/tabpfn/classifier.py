@@ -830,28 +830,34 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         if tuning_config_resolved is None:
             if self.eval_metric_ is ClassifierEvalMetrics.F1:
-                logging.warning(
+                warnings.warn(
                     f"You specified '{self.eval_metric_}' as the eval metric but "
                     "haven't specified any tuning configuration. Consider configuring "
                     "tuning via the `tuning_config` argument of the TabPFNClassifier "
-                    "to improve predictive performance."
+                    "to improve predictive performance.",
+                    UserWarning,
+                    stacklevel=2,
                 )
             if self.eval_metric_ is ClassifierEvalMetrics.BALANCED_ACCURACY:
-                logging.warning(
+                warnings.warn(
                     f"You specified '{self.eval_metric_}' as the eval metric but "
                     "haven't specified any tuning configuration. "
                     f"For metric '{self.eval_metric_}' we recommend "
                     "balancing the probabilities by class counts which can be achieved "
-                    "by setting `balance_probabilities` to True."
+                    "by setting `balance_probabilities` to True.",
+                    UserWarning,
+                    stacklevel=2,
                 )
             return
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
-            logging.warning(
+            warnings.warn(
                 f"You specified '{self.eval_metric_}' as the eval metric with "
                 "threshold tuning or temperature calibration enabled. "
                 "ROC AUC is independent of these tunings and they will not "
-                "improve this metric. Consider disabling them."
+                "improve this metric. Consider disabling them.",
+                UserWarning,
+                stacklevel=2,
             )
 
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(

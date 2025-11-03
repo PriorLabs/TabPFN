@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import io
-import logging
 import os
 import typing
 from itertools import product
@@ -1063,7 +1062,6 @@ def test__logits_to_probabilities__same_as_predict_proba(
 
 
 def test__fit_with_f1_metric_without_tuning_config__warns(
-    caplog: pytest.LogCaptureFixture,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """Test that warning is issued when F1 metric used without tuning config."""
@@ -1078,22 +1076,14 @@ def test__fit_with_f1_metric_without_tuning_config__warns(
         ),
     )
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.warns(
+        UserWarning,
+        match=r".*f1.*haven't specified any tuning configuration.*",
+    ):
         clf.fit(X, y)
 
-    assert any(
-        "haven't specified any tuning configuration" in record.message
-        and "f1" in record.message.lower()
-        for record in caplog.records
-    ), (
-        "Expected warning about F1 metric without tuning config, "
-        f"but got: {[r.message for r in caplog.records]}"
-    )
 
-
-def test__fit_with_small_dataset_and_tuning__warns(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
+def test__fit_with_small_dataset_and_tuning__warns() -> None:
     """Test that warning is issued when F1 metric used without tuning config."""
     default_rng = np.random.default_rng(seed=42)
     X = default_rng.random((MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1, 10))
@@ -1110,20 +1100,14 @@ def test__fit_with_small_dataset_and_tuning__warns(
         ),
     )
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.warns(
+        UserWarning,
+        match=r".*We recommend tuning only for datasets with more than.*",
+    ):
         clf.fit(X, y)
-
-    assert any(
-        "We recommend tuning only for datasets with more than" in record.message
-        for record in caplog.records
-    ), (
-        "Expected warning about small dataset and tuning, "
-        f"but got: {[r.message for r in caplog.records]}"
-    )
 
 
 def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
-    caplog: pytest.LogCaptureFixture,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """Test that warning is issued when ROC AUC metric used with threshold tuning."""
@@ -1145,16 +1129,11 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
         random_state=0,
     )
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.warns(
+        UserWarning,
+        match=(
+            r".*roc_auc.*with threshold tuning or temperature calibration "
+            r"enabled.*is independent of these tunings.*"
+        ),
+    ):
         clf.fit(X, y)
-
-    assert any(
-        "roc_auc" in record.message.lower()
-        and "with threshold tuning or temperature calibration enabled"
-        in record.message.lower()
-        and "is independent of these tunings" in record.message.lower()
-        for record in caplog.records
-    ), (
-        "Expected warning about ROC AUC metric with threshold tuning, "
-        f"but got: {[r.message for r in caplog.records]}"
-    )

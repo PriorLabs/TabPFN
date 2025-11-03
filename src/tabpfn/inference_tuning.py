@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-import logging
+import warnings
 from enum import Enum
 from typing import TYPE_CHECKING, Callable, Literal
 from typing_extensions import Self
@@ -230,7 +230,7 @@ def find_optimal_classification_threshold_single_class(
     Returns:
         The optimal threshold.
     """
-    thresholds = np.linspace(0.01, 0.99, 99)
+    thresholds = np.linspace(0.01, 0.99, 198)
     thresholds_and_losses: list[tuple[float, float]] = []  # (threshold, metric)
 
     for threshold in thresholds:
@@ -311,7 +311,7 @@ def find_optimal_temperature(
     Returns:
         The temperature that minimizes the log loss.
     """
-    temperatures = np.linspace(0.6, 1.4, 41)
+    temperatures = np.linspace(0.6, 1.4, 82)
     best_log_loss = float("inf")
     best_temperature = current_default_temperature
 
@@ -395,19 +395,23 @@ def resolve_tuning_config(
         tuning_config.calibrate_temperature or tuning_config.tune_decision_thresholds
     )
     if not compute_holdout_logits:
-        logging.warning(
+        warnings.warn(
             "You specified a tuning configuration but no tuning features were enabled. "
             "Set `calibrate_temperature=True` or `tune_decision_thresholds=True` to "
-            "enable tuning."
+            "enable tuning.",
+            UserWarning,
+            stacklevel=3,
         )
         return None
 
     if num_samples < MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING:
-        logging.warning(
+        warnings.warn(
             f"You have `{num_samples}` samples in the training data and specified "
             "a tuning configuration. "
             "We recommend tuning only for datasets with more than "
-            f"{MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING} samples. "
+            f"{MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING} samples. ",
+            UserWarning,
+            stacklevel=3,
         )
 
     return tuning_config.resolve(num_samples=num_samples)
