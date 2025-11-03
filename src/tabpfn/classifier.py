@@ -921,7 +921,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
             holdout_y_true.append(y_holdout_Nh)
             calibration_classifier = self._get_tuning_classifier()
-            calibration_classifier.fit(X_train_NtF, y_train_Nt)
+            with warnings.catch_warnings():
+                # Filter expected warnings during tuning
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*haven't specified any tuning configuration*",
+                    category=UserWarning,
+                )
+                calibration_classifier.fit(X_train_NtF, y_train_Nt)
 
             # E=num estimators, Nh=num holdout samples, C=num classes
             raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
