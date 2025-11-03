@@ -1150,9 +1150,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else torch.from_numpy(np.asarray(raw_logits))
         )
         used_temperature = (
-            self.softmax_temperature_
-            if softmax_temperature is None
-            else softmax_temperature
+            softmax_temperature
+            if softmax_temperature is not None
+            else (
+                self.softmax_temperature_
+                if hasattr(self, "softmax_temperature_")
+                else self.softmax_temperature
+            )
         )
         use_average_before_softmax = (
             self.average_before_softmax

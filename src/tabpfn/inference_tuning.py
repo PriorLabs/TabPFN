@@ -306,9 +306,6 @@ def find_optimal_temperature(
     best_log_loss = float("inf")
     best_temperature = current_default_temperature
 
-    if raw_logits.ndim == 3:
-        raw_logits = raw_logits.mean(axis=0)
-
     # TODO: think about vectorizing this loop.
     for temperature in temperatures:
         probas = logits_to_probabilities_fn(raw_logits, temperature)
