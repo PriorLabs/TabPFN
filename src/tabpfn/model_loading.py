@@ -544,7 +544,7 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
 
 
 def resolve_model_version(
-    model_path: ModelPath | list[ModelPath] | None
+    model_path: ModelPath | list[ModelPath] | None,
 ) -> ModelVersion:
     """Resolve the model version from the model path."""
     if isinstance(model_path, list):
@@ -552,9 +552,7 @@ def resolve_model_version(
             return _resolve_model_version(None)
         resolved_model_versions = [_resolve_model_version(p) for p in model_path]
         if len(set(resolved_model_versions)) > 1:
-            raise ValueError(
-                "All model paths must have the same version."
-            )
+            raise ValueError("All model paths must have the same version.")
         return resolved_model_versions[0]
     return _resolve_model_version(model_path)
 
