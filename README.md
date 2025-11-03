@@ -97,6 +97,13 @@ print("Mean Squared Error (MSE):", mse)
 print("R² Score:", r2)
 ```
 
+### Important Tips
+
+Always use TabPFN in batch prediction mode - each predict call requires the training set to be recomputed so calling predict on 100 samples separately is almost 100 times slower and ore expensive than a single call.
+Do not apply data scaling or one-hot encoding when feeding data to the model.
+Make sure a GPU is available - on CPU TabPFN is slow to execute.
+Dataset size is limited - TabPFN works best on datasets with less than 10,000 samples and 500 features. If they are larger we recommend looking at the [Large datasets guide](https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py).
+
 ### Best Results
 
 For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble.
