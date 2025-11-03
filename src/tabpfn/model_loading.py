@@ -682,7 +682,7 @@ def _get_inference_config_from_checkpoint(
     #     v2: "architecture_name" not present, as added after the v2 release
     #   v2.5: "architecture_name" present, but "inference_config" not present
     #  >v2.5: "inference_config" present, so don't need to guess a default config
-    if "inference_config" in checkpoint:
+    if "inference_config" in checkpoint and checkpoint["inference_config"] is not None:
         return InferenceConfig(**checkpoint["inference_config"])
     if "architecture_name" not in checkpoint:
         model_version = ModelVersion.V2
