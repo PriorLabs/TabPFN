@@ -537,7 +537,7 @@ def load_model_criterion_config(
 
 def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     if model_path is None:
-        return settings.tabpfn.model_version.value
+        return settings.tabpfn.model_version
     if V_2_5_IDENTIFIER in str(model_path):
         return ModelVersion.V2_5
     return ModelVersion.V2
