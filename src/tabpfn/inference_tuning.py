@@ -355,9 +355,9 @@ def get_default_tuning_holdout_n_splits(n_samples: int) -> int:
 
 
 def resolve_tuning_config(
-    tuning_config: dict | TuningConfig | None,
+    tuning_config: dict | ClassifierTuningConfig | None,
     num_samples: int,
-) -> TuningConfig | ClassifierTuningConfig | None:
+) -> ClassifierTuningConfig | None:
     """Resolves the tuning configuration by checking if tuning is needed,
     resolving 'auto' values for holdout parameters, and returning the appropriate
     type of tuning configuration if the input is a dict.
@@ -376,18 +376,14 @@ def resolve_tuning_config(
     if tuning_config is None:
         return None
 
-    if isinstance(tuning_config, dict):
-        if "tune_decision_thresholds" in tuning_config:
-            tuning_config = ClassifierTuningConfig(**tuning_config)
-        else:
-            tuning_config = TuningConfig(**tuning_config)
+    tuning_config = (
+        ClassifierTuningConfig(**tuning_config)
+        if isinstance(tuning_config, dict)
+        else tuning_config
+    )
 
     compute_holdout_logits = bool(
-        tuning_config.calibrate_temperature
-        or (
-            isinstance(tuning_config, ClassifierTuningConfig)
-            and tuning_config.tune_decision_thresholds
-        )
+        tuning_config.calibrate_temperature or tuning_config.tune_decision_thresholds
     )
     if not compute_holdout_logits:
         logging.warning(

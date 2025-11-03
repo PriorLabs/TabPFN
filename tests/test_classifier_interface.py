@@ -981,12 +981,21 @@ def test__fit_with_tuning_config__works_with_different_eval_metrics(
     )
     max_num_classes = len(np.unique(y))
 
-    tuning_config = ClassifierTuningConfig(
-        calibrate_temperature=calibrate_temperature,
-        tune_decision_thresholds=tune_decision_thresholds,
-        tuning_holdout_frac=tuning_holdout_pct,
-        tuning_n_folds=tuning_holdout_n_splits,
-    )
+    if eval_metric is ClassifierEvalMetrics.ACCURACY:
+        tuning_config = ClassifierTuningConfig(
+            calibrate_temperature=calibrate_temperature,
+            tune_decision_thresholds=tune_decision_thresholds,
+            tuning_holdout_frac=tuning_holdout_pct,
+            tuning_n_folds=tuning_holdout_n_splits,
+        )
+    else:
+        # Also check parsing tuning config as dict.
+        tuning_config = {
+            "calibrate_temperature": calibrate_temperature,
+            "tune_decision_thresholds": tune_decision_thresholds,
+            "tuning_holdout_frac": tuning_holdout_pct,
+            "tuning_n_folds": tuning_holdout_n_splits,
+        }
 
     kwargs = {
         "fit_mode": "fit_preprocessors",
@@ -1015,6 +1024,8 @@ def test__fit_with_tuning_config__works_with_different_eval_metrics(
     tabpfn_no_tuning.fit(X, y)
     preds_no_tuning = tabpfn_no_tuning.predict_proba(X[0 : X.shape[0] // 4])
 
+    assert np.allclose(preds_with_tuning, preds_no_tuning, atol=1e-5) == expected_equal
+
     if calibrate_temperature:
         assert (
             tabpfn_with_tuning.softmax_temperature_
@@ -1026,8 +1037,6 @@ def test__fit_with_tuning_config__works_with_different_eval_metrics(
             == tabpfn_no_tuning.softmax_temperature_
             == tabpfn_with_tuning.softmax_temperature
         )
-
-    assert np.allclose(preds_with_tuning, preds_no_tuning, atol=1e-5) == expected_equal
 
 
 def test__logits_to_probabilities__same_as_predict_proba(

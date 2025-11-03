@@ -436,7 +436,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             tuning_config:
                 The settings to use to tune the model's predictions for the specified
                 `eval_metric`. See
-                [tabpfn.inference_tuning.ClassiferTuningConfig][] for details
+                [tabpfn.inference_tuning.ClassifierTuningConfig][] for details
                 and options.
         """
         super().__init__()
@@ -811,10 +811,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X: XType,
         y: YType,
     ) -> None:
-        """If tuning_config is specified, calibrate and tune thresholds.
+        """If this class was initialized with a 'tuning_config', calibrate and tune.
 
         This first computes scores on validation holdout data and then calibrates the
-        softmax temperature and tunes the decision thresholds.
+        softmax temperature and tunes the decision thresholds as per the tuning
+        configuration. Results are stored in the 'tuned_classification_thresholds_' and
+        'softmax_temperature_' attributes.
         """
         assert self.eval_metric_ is not None
 
@@ -844,7 +846,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             return
 
-        assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
             X=X,
             y=y,
@@ -1152,11 +1153,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         used_temperature = (
             softmax_temperature
             if softmax_temperature is not None
-            else (
-                self.softmax_temperature_
-                if hasattr(self, "softmax_temperature_")
-                else self.softmax_temperature
-            )
+            else getattr(self, "softmax_temperature_", self.softmax_temperature)
         )
         use_average_before_softmax = (
             self.average_before_softmax
