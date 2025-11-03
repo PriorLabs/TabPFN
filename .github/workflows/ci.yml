@@ -85,12 +85,15 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Run Tests (including MPS)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         if: ${{ matrix.dependency-set != 'lowest-direct' }}
         run: pytest tests/
 
       - name: Run Tests (without MPS)
         if: ${{ matrix.dependency-set == 'lowest-direct' }}
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           # The MPS tests are flakey on the CI for PyTorch < 2.3, possibly due to this
           # https://github.com/pytorch/pytorch/issues/105839#issuecomment-1779116758,
           # so disable the MPS device for these tests.
@@ -135,6 +138,8 @@ jobs:
         run: git submodule update --init --recursive
 
       - name: Run Tests
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: pytest tests/
 
   # -------------------------------------------------------------------
@@ -180,6 +185,7 @@ jobs:
 
       - name: Run GPU Test Suite
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
