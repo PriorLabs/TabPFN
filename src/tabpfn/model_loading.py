@@ -543,8 +543,10 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     return ModelVersion.V2
 
 
-def resolve_model_version(model_path: ModelPath | list[ModelPath] | None) -> ModelVersion:
-    """Resolve the model version from the model path, using the official default model if no path is provided."""
+def resolve_model_version(
+    model_path: ModelPath | list[ModelPath] | None
+) -> ModelVersion:
+    """Resolve the model version from the model path."""
     if isinstance(model_path, list):
         if len(model_path) == 0:
             return _resolve_model_version(None)
