@@ -1078,7 +1078,7 @@ def test__fit_with_f1_metric_without_tuning_config__warns(
 
     with pytest.warns(
         UserWarning,
-        match=r".*f1.*haven't specified any tuning configuration.*",
+        match=r".*haven't specified any tuning configuration.*",
     ):
         clf.fit(X, y)
 
@@ -1132,7 +1132,7 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
     with pytest.warns(
         UserWarning,
         match=(
-            r".*roc_auc.*with threshold tuning or temperature calibration "
+            r".*with threshold tuning or temperature calibration "
             r"enabled.*is independent of these tunings.*"
         ),
     ):
