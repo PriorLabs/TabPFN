@@ -97,7 +97,7 @@ print("Mean Squared Error (MSE):", mse)
 print("R² Score:", r2)
 ```
 
-### Important Tips
+### Usage Tips
 
 Always use TabPFN in batch prediction mode - each predict call requires the training set to be recomputed so calling predict on 100 samples separately is almost 100 times slower and ore expensive than a single call.
 Do not apply data scaling or one-hot encoding when feeding data to the model.
