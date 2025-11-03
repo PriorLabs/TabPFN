@@ -20,7 +20,14 @@ from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
 from tabpfn import TabPFNClassifier
+from tabpfn.architectures import base
+from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
+from tabpfn.inference_tuning import (
+    MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
+    ClassificationEvalMetrics,
+    ClassifierTuningConfig,
+)
 from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
@@ -93,6 +100,26 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
         n_redundant=0,
         random_state=0,
     )
+
+
+def _create_dummy_classifier_model_specs(
+    max_num_classes: int = 10,
+) -> ClassifierModelSpecs:
+    minimal_config = ModelConfig(
+        emsize=8,
+        features_per_group=1,
+        max_num_classes=max_num_classes,
+        nhead=2,
+        nlayers=2,
+        remove_duplicate_features=True,
+        num_buckets=100,
+    )
+    model = base.get_architecture(
+        config=minimal_config,
+        n_out=max_num_classes,
+        cache_trainset_representation=False,
+    )
+    return ClassifierModelSpecs(model=model, config=minimal_config)
 
 
 @pytest.mark.parametrize(
@@ -906,3 +933,109 @@ def test__TabPFNClassifier__few_features__works(n_features: int) -> None:
 
     accuracy = accuracy_score(y, predictions)
     assert accuracy > 0.3, f"Accuracy too low with {n_features} features: {accuracy}"
+
+
+@pytest.mark.parametrize(
+    (
+        "eval_metric",
+        "tuning_holdout_pct",
+        "tuning_holdout_n_splits",
+        "tune_decision_thresholds",
+        "calibrate_temperature",
+        "expected_equal",
+    ),
+    [
+        (ClassificationEvalMetrics.F1, 0.1, 1, False, True, False),
+        (ClassificationEvalMetrics.ACCURACY, 0.2, 1, False, False, True),
+        (ClassificationEvalMetrics.ACCURACY, 0.05, 2, True, False, False),
+        (ClassificationEvalMetrics.F1, 0.2, 1, False, True, False),
+        (ClassificationEvalMetrics.BALANCED_ACCURACY, 0.1, 1, False, False, True),
+    ],
+)
+def test__fit_with_tuning_config__works_with_different_eval_metrics(
+    eval_metric: ClassificationEvalMetrics,
+    tuning_holdout_pct: float,
+    tuning_holdout_n_splits: int,
+    tune_decision_thresholds: bool,
+    calibrate_temperature: bool,
+    expected_equal: bool,
+) -> None:
+    X, y = sklearn.datasets.make_classification(
+        n_samples=MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING + 1,
+        n_classes=2,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
+    max_num_classes = len(np.unique(y))
+
+    tuning_config = ClassifierTuningConfig(
+        calibrate_temperature=calibrate_temperature,
+        tune_decision_thresholds=tune_decision_thresholds,
+        tuning_holdout_frac=tuning_holdout_pct,
+        tuning_n_folds=tuning_holdout_n_splits,
+    )
+
+    kwargs = {
+        "fit_mode": "fit_preprocessors",
+        "eval_metric": eval_metric,
+        "n_estimators": 1,
+        "device": "cpu",
+        "inference_precision": torch.float32,
+        "random_state": 0,
+        "model_path": _create_dummy_classifier_model_specs(
+            max_num_classes=max_num_classes
+        ),
+    }
+
+    torch.random.manual_seed(0)
+    tabpfn_with_tuning = TabPFNClassifier(
+        tuning_config=tuning_config,
+        **kwargs,
+    )
+    tabpfn_with_tuning.fit(X, y)
+    preds_with_tuning = tabpfn_with_tuning.predict_proba(X[0 : X.shape[0] // 4])
+
+    assert len(preds_with_tuning) == X.shape[0] // 4
+
+    torch.random.manual_seed(0)
+    tabpfn_no_tuning = TabPFNClassifier(**kwargs)
+    tabpfn_no_tuning.fit(X, y)
+    preds_no_tuning = tabpfn_no_tuning.predict_proba(X[0 : X.shape[0] // 4])
+
+    if calibrate_temperature:
+        assert (
+            tabpfn_with_tuning.softmax_temperature_
+            != tabpfn_no_tuning.softmax_temperature_
+        )
+    else:
+        assert (
+            tabpfn_with_tuning.softmax_temperature_
+            == tabpfn_no_tuning.softmax_temperature_
+            == tabpfn_with_tuning.softmax_temperature
+        )
+
+    assert np.allclose(preds_with_tuning, preds_no_tuning, atol=1e-4) == expected_equal
+
+
+def test__logits_to_probabilities__same_as_predict_proba(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = X_y
+    max_num_classes = len(np.unique(y))
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        random_state=42,
+        model_path=_create_dummy_classifier_model_specs(
+            max_num_classes=max_num_classes
+        ),
+    )
+    model.fit(X, y)
+
+    raw_logits = model.predict_raw_logits(X)
+    probas = model.logits_to_probabilities(raw_logits)
+
+    expected_probas = model.predict_proba(X)
+    assert np.allclose(probas, expected_probas, atol=1e-4)
