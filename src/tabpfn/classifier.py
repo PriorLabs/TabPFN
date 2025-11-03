@@ -50,7 +50,7 @@ from tabpfn.constants import (
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.inference_tuning import (
-    ClassificationEvalMetrics,
+    ClassifierEvalMetrics,
     ClassifierTuningConfig,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
@@ -92,7 +92,7 @@ if TYPE_CHECKING:
     except ImportError:
         Tags = Any
 
-DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassificationEvalMetrics.ACCURACY
+DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
@@ -169,7 +169,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The tuned classification thresholds for each class or None if no tuning is
     specified."""
 
-    eval_metric_: ClassificationEvalMetrics
+    eval_metric_: ClassifierEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
 
     softmax_temperature_: float
@@ -206,7 +206,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
-        eval_metric: str | ClassificationEvalMetrics | None = None,
+        eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
     ) -> None:
         """A TabPFN interface for classification.
@@ -430,12 +430,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 calibrating the model's probabilities and tuning the decision
                 thresholds during the `fit()/predict()` calls. The tuning can be
                 enabled by configuring the `tuning_config` argument, see below.
-                For currently supported metrics, see [tabpfn.classifier.EvalMetric][].
+                For currently supported metrics, see
+                [tabpfn.classifier.ClassifierEvalMetrics][].
 
             tuning_config:
                 The settings to use to tune the model's predictions for the specified
-                `eval_metric`.
-                See [tabpfn.inference_tuning.ClassiferTuningConfig][] for details
+                `eval_metric`. See
+                [tabpfn.inference_tuning.ClassiferTuningConfig][] for details
                 and options.
         """
         super().__init__()
@@ -826,14 +827,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_samples=X.shape[0],
         )
         if tuning_config_resolved is None:
-            if self.eval_metric_ is ClassificationEvalMetrics.F1:
+            if self.eval_metric_ is ClassifierEvalMetrics.F1:
                 logging.warning(
                     f"You specified '{self.eval_metric_}' as the eval metric but "
                     "haven't specified any tuning configuration. Consider configuring "
                     "tuning via the `tuning_config` argument of the TabPFNClassifier "
                     "to improve predictive performance."
                 )
-            if self.eval_metric_ is ClassificationEvalMetrics.BALANCED_ACCURACY:
+            if self.eval_metric_ is ClassifierEvalMetrics.BALANCED_ACCURACY:
                 logging.warning(
                     f"You specified '{self.eval_metric_}' as the eval metric but "
                     "haven't specified any tuning configuration. "
@@ -1375,16 +1376,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
 
 def _validate_eval_metric(
-    eval_metric: str | ClassificationEvalMetrics | None,
-) -> ClassificationEvalMetrics:
+    eval_metric: str | ClassifierEvalMetrics | None,
+) -> ClassifierEvalMetrics:
     if eval_metric is None:
         return DEFAULT_CLASSIFICATION_EVAL_METRIC
-    if isinstance(eval_metric, ClassificationEvalMetrics):
+    if isinstance(eval_metric, ClassifierEvalMetrics):
         return eval_metric
     try:
-        return ClassificationEvalMetrics(eval_metric)  # Convert string to Enum
+        return ClassifierEvalMetrics(eval_metric)  # Convert string to Enum
     except ValueError as err:
-        valid_values = [e.value for e in ClassificationEvalMetrics]
+        valid_values = [e.value for e in ClassifierEvalMetrics]
         raise ValueError(
             f"Invalid eval_metric: `{eval_metric}`. Must be one of {valid_values}"
         ) from err

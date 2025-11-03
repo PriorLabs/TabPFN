@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from tabpfn.inference_tuning import (
-    ClassificationEvalMetrics,
+    ClassifierEvalMetrics,
     ClassifierTuningConfig,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
@@ -26,7 +26,7 @@ def test__find_optimal_classification_threshold_single_class__threshold_in_inter
     expected_interval: tuple[float, float],
 ) -> None:
     best_threshold = find_optimal_classification_threshold_single_class(
-        metric_name=ClassificationEvalMetrics.F1,
+        metric_name=ClassifierEvalMetrics.F1,
         y_true=y_true,
         y_pred_probas=y_pred_probs,
     )
@@ -139,7 +139,7 @@ def test__find_optimal_classification_thresholds__works_for_multiclass_f1(
     expected_thresholds: list[tuple[float, float]],
 ) -> None:
     thresholds = find_optimal_classification_thresholds(
-        metric_name=ClassificationEvalMetrics.F1,
+        metric_name=ClassifierEvalMetrics.F1,
         y_true=y_true,
         y_pred_probas=y_pred_probas,
         n_classes=len(expected_thresholds),

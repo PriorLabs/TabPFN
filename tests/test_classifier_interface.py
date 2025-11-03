@@ -27,7 +27,7 @@ from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
-    ClassificationEvalMetrics,
+    ClassifierEvalMetrics,
     ClassifierTuningConfig,
 )
 from tabpfn.model_loading import ModelSource
@@ -955,16 +955,16 @@ def test__TabPFNClassifier__few_features__works(n_features: int) -> None:
         "expected_equal",
     ),
     [
-        (ClassificationEvalMetrics.F1, 0.1, 1, False, True, False),
-        (ClassificationEvalMetrics.ACCURACY, 0.2, 1, False, False, True),
-        (ClassificationEvalMetrics.ACCURACY, 0.7, 1, True, False, False),
-        (ClassificationEvalMetrics.F1, 0.05, 2, True, False, False),
-        (ClassificationEvalMetrics.F1, 0.2, 1, False, True, False),
-        (ClassificationEvalMetrics.BALANCED_ACCURACY, 0.1, 1, False, False, True),
+        (ClassifierEvalMetrics.F1, 0.1, 1, False, True, False),
+        (ClassifierEvalMetrics.ACCURACY, 0.2, 1, False, False, True),
+        (ClassifierEvalMetrics.ACCURACY, 0.7, 1, True, False, False),
+        (ClassifierEvalMetrics.F1, 0.05, 2, True, False, False),
+        (ClassifierEvalMetrics.F1, 0.2, 1, False, True, False),
+        (ClassifierEvalMetrics.BALANCED_ACCURACY, 0.1, 1, False, False, True),
     ],
 )
 def test__fit_with_tuning_config__works_with_different_eval_metrics(
-    eval_metric: ClassificationEvalMetrics,
+    eval_metric: ClassifierEvalMetrics,
     tuning_holdout_pct: float,
     tuning_holdout_n_splits: int,
     tune_decision_thresholds: bool,

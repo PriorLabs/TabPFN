@@ -79,7 +79,7 @@ class ClassifierTuningConfig(TuningConfig):
     Set to True to enable."""
 
 
-class ClassificationEvalMetrics(str, Enum):
+class ClassifierEvalMetrics(str, Enum):
     """Metric by which predictions will be ultimately evaluated on test data."""
 
     F1 = "f1"
@@ -108,15 +108,12 @@ METRIC_NAME_TO_OBJECTIVE = {
         y_true,
         y_pred,
     ),
-    "log_loss": lambda y_true, y_pred: log_loss(
-        y_true,
-        y_pred,
-    ),
+    "log_loss": log_loss,
 }
 
 
 def compute_metric_to_minimize(
-    metric_name: ClassificationEvalMetrics,
+    metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> float:
@@ -172,7 +169,7 @@ def get_tuning_splits(
 
 
 def find_optimal_classification_thresholds(
-    metric_name: ClassificationEvalMetrics,
+    metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred_probas: np.ndarray,
     n_classes: int,
@@ -190,7 +187,7 @@ def find_optimal_classification_thresholds(
     """
     optimal_thresholds = []
 
-    # TODO: vectorize this loop lop and the one in
+    # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
     for i in range(n_classes):
         y_true_ovr = (y_true == i).astype(int)
@@ -207,7 +204,7 @@ def find_optimal_classification_thresholds(
 
 
 def find_optimal_classification_threshold_single_class(
-    metric_name: ClassificationEvalMetrics,
+    metric_name: ClassifierEvalMetrics,
     y_true: np.ndarray,
     y_pred_probas: np.ndarray,
 ) -> float:
@@ -263,11 +260,11 @@ def select_robust_optimal_threshold(
     close_mask = losses <= (best_loss + plateau_delta)
 
     # Find the contiguous region around the global minimum index
-    max_index = int(np.argmin(losses))
-    start = max_index
+    min_loss_index = int(np.argmin(losses))
+    start = min_loss_index
     while start - 1 >= 0 and close_mask[start - 1]:
         start -= 1
-    end = max_index
+    end = min_loss_index
     num_points = len(losses)
     while end + 1 < num_points and close_mask[end + 1]:
         end += 1
@@ -322,33 +319,6 @@ def find_optimal_temperature(
             best_temperature = temperature
 
     return best_temperature
-
-
-def eval_metric_benefits_from_temperature_calibration(
-    eval_metric: ClassificationEvalMetrics,
-) -> bool:
-    """Whether the evaluation metric benefits from calibrating the temperature."""
-    return eval_metric in {
-        ClassificationEvalMetrics.LOG_LOSS,  # directly benefits from calibration
-        ClassificationEvalMetrics.F1,  # indirect benefit
-        ClassificationEvalMetrics.ACCURACY,  # indirect benefit
-        # Benefits indirectly from threshold tuning but we perform
-        # a hard rescaling based on class counts. That's why we comment it here.
-        # ClassificationEvalMetrics.BALANCED_ACCURACY,  # indirect benefit
-    }
-
-
-def eval_metric_benefits_from_threshold_tuning(
-    eval_metric: ClassificationEvalMetrics,
-) -> bool:
-    """Whether the evaluation metric benefits from threshold tuning."""
-    return eval_metric in {
-        ClassificationEvalMetrics.F1,
-        # Benefits directly from threshold tuning but we perform
-        # a hard rescaling based on class counts. That's why we comment it here.
-        # ClassificationEvalMetrics.BALANCED_ACCURACY,
-        ClassificationEvalMetrics.ACCURACY,
-    }
 
 
 def get_default_tuning_holdout_pct(n_samples: int) -> float:
@@ -432,7 +402,7 @@ def resolve_tuning_config(
 
     if num_samples < MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING:
         logging.warning(
-            f"You have `{num_samples}` samples in the training data and specifed "
+            f"You have `{num_samples}` samples in the training data and specified "
             "a tuning configuration. "
             "We recommend tuning only for datasets with more than "
             f"{MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING} samples. "
