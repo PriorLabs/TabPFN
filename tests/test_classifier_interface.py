@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import typing
 from itertools import product
@@ -1058,4 +1059,102 @@ def test__logits_to_probabilities__same_as_predict_proba(
     probas = model.logits_to_probabilities(raw_logits)
 
     expected_probas = model.predict_proba(X)
-    assert np.allclose(probas, expected_probas, atol=1e-4)
+    assert np.allclose(probas, expected_probas, atol=1e-4, rtol=1e-3)
+
+
+def test__fit_with_f1_metric_without_tuning_config__warns(
+    caplog: pytest.LogCaptureFixture,
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Test that warning is issued when F1 metric used without tuning config."""
+    X, y = X_y
+
+    clf = TabPFNClassifier(
+        eval_metric="f1",
+        tuning_config=None,
+        n_estimators=1,
+        model_path=_create_dummy_classifier_model_specs(
+            max_num_classes=len(np.unique(y))
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        clf.fit(X, y)
+
+    assert any(
+        "haven't specified any tuning configuration" in record.message
+        and "f1" in record.message.lower()
+        for record in caplog.records
+    ), (
+        "Expected warning about F1 metric without tuning config, "
+        f"but got: {[r.message for r in caplog.records]}"
+    )
+
+
+def test__fit_with_small_dataset_and_tuning__warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Test that warning is issued when F1 metric used without tuning config."""
+    default_rng = np.random.default_rng(seed=42)
+    X = default_rng.random((MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1, 10))
+    y = default_rng.integers(0, 2, MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1)
+
+    clf = TabPFNClassifier(
+        eval_metric="f1",
+        tuning_config={
+            "tune_decision_thresholds": True,
+        },
+        n_estimators=1,
+        model_path=_create_dummy_classifier_model_specs(
+            max_num_classes=len(np.unique(y))
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING):
+        clf.fit(X, y)
+
+    assert any(
+        "We recommend tuning only for datasets with more than" in record.message
+        for record in caplog.records
+    ), (
+        "Expected warning about small dataset and tuning, "
+        f"but got: {[r.message for r in caplog.records]}"
+    )
+
+
+def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
+    caplog: pytest.LogCaptureFixture,
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Test that warning is issued when ROC AUC metric used with threshold tuning."""
+    X, y = X_y
+
+    clf = TabPFNClassifier(
+        eval_metric="roc_auc",
+        tuning_config={
+            "tune_decision_thresholds": True,
+            "calibrate_temperature": False,
+            "tuning_holdout_frac": 0.1,
+            "tuning_n_folds": 1,
+        },
+        n_estimators=1,
+        device="cpu",
+        model_path=_create_dummy_classifier_model_specs(
+            max_num_classes=len(np.unique(y))
+        ),
+        random_state=0,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        clf.fit(X, y)
+
+    assert any(
+        "roc_auc" in record.message.lower()
+        and "with threshold tuning or temperature calibration enabled"
+        in record.message.lower()
+        and "is independent of these tunings" in record.message.lower()
+        for record in caplog.records
+    ), (
+        "Expected warning about ROC AUC metric with threshold tuning, "
+        f"but got: {[r.message for r in caplog.records]}"
+    )

@@ -16,7 +16,7 @@ from sklearn.metrics import (
     log_loss,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import StratifiedKFold
 
 if TYPE_CHECKING:
     import torch
@@ -151,14 +151,23 @@ def get_tuning_splits(
         (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
         Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
     """
-    splitter = StratifiedShuffleSplit(
-        n_splits=n_splits,
-        test_size=holdout_frac,
+    # We want to use StratifiedKFold to ensure that no train samples are used twice.
+    # Therefore, we have to invert the holdout_frac to get the number of folds to
+    # use for StratifiedKFold. Round holdout_frac to 2 digits to avoid needing
+    # more than 100 folds
+    rounded_holdout_frac = round(holdout_frac, 2)
+    n_folds = max(2, round(1 / rounded_holdout_frac))
+
+    splitter = StratifiedKFold(
+        n_splits=n_folds,
+        shuffle=True,
         random_state=random_state,
     )
 
     splits: list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]] = []
-    for train_indices, holdout_indices in splitter.split(X, y):
+    for i, (train_indices, holdout_indices) in enumerate(splitter.split(X, y)):
+        if i >= n_splits:
+            break
         X_train_NtF = X[train_indices]
         X_holdout_NhF = X[holdout_indices]
         y_train_Nt = y[train_indices]

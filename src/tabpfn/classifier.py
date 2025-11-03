@@ -846,6 +846,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             return
 
+        if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+            logging.warning(
+                f"You specified '{self.eval_metric_}' as the eval metric with "
+                "threshold tuning or temperature calibration enabled. "
+                "ROC AUC is independent of these tunings and they will not "
+                "improve this metric. Consider disabling them."
+            )
+
         holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
             X=X,
             y=y,
