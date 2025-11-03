@@ -23,6 +23,8 @@ from tabpfn import TabPFNClassifier
 from tabpfn.architectures import base
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
+from tabpfn.constants import ModelVersion
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassificationEvalMetrics,
@@ -119,7 +121,15 @@ def _create_dummy_classifier_model_specs(
         n_out=max_num_classes,
         cache_trainset_representation=False,
     )
-    return ClassifierModelSpecs(model=model, config=minimal_config)
+    inference_config = InferenceConfig.get_default(
+        task_type="multiclass",
+        model_version=ModelVersion.V2_5,
+    )
+    return ClassifierModelSpecs(
+        model=model,
+        architecture_config=minimal_config,
+        inference_config=inference_config,
+    )
 
 
 @pytest.mark.parametrize(
@@ -947,7 +957,8 @@ def test__TabPFNClassifier__few_features__works(n_features: int) -> None:
     [
         (ClassificationEvalMetrics.F1, 0.1, 1, False, True, False),
         (ClassificationEvalMetrics.ACCURACY, 0.2, 1, False, False, True),
-        (ClassificationEvalMetrics.ACCURACY, 0.05, 2, True, False, False),
+        (ClassificationEvalMetrics.ACCURACY, 0.7, 1, True, False, False),
+        (ClassificationEvalMetrics.F1, 0.05, 2, True, False, False),
         (ClassificationEvalMetrics.F1, 0.2, 1, False, True, False),
         (ClassificationEvalMetrics.BALANCED_ACCURACY, 0.1, 1, False, False, True),
     ],
@@ -1016,7 +1027,7 @@ def test__fit_with_tuning_config__works_with_different_eval_metrics(
             == tabpfn_with_tuning.softmax_temperature
         )
 
-    assert np.allclose(preds_with_tuning, preds_no_tuning, atol=1e-4) == expected_equal
+    assert np.allclose(preds_with_tuning, preds_no_tuning, atol=1e-5) == expected_equal
 
 
 def test__logits_to_probabilities__same_as_predict_proba(
