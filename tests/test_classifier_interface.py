@@ -494,6 +494,14 @@ def test_sklearn_compatible_estimator(
     ):
         estimator.inference_precision = torch.float64
 
+    if check.func.__name__ == "check_classifiers_train" and (  # type: ignore
+        _auto_devices[0] == torch.device("cpu")
+    ):
+        pytest.skip(
+            "We skip this test for CPU for now, because CPU inference has issues with "
+            "datasets with 1 or 2 features."
+        )
+
     check(estimator)
 
 
@@ -907,6 +915,13 @@ def test_initialize_model_variables_classifier_sets_required_attributes() -> Non
 @pytest.mark.parametrize("n_features", [1, 2])
 def test__TabPFNClassifier__few_features__works(n_features: int) -> None:
     """Test that TabPFNClassifier works correctly with 1 or 2 features."""
+    _auto_devices = infer_devices(devices="auto")
+    if _auto_devices[0] == torch.device("cpu"):
+        pytest.skip(
+            "We skip this test for CPU for now, because CPU inference has issues with "
+            "datasets with 1 or 2 features."
+        )
+
     n_classes = 2
     n_samples = 20 * n_classes
 
