@@ -1,7 +1,7 @@
 #  Copyright (c) Prior Labs GmbH 2025.
-"""Example of using TabPFN for classification with an eval_metric and tuning.
+"""Example of using TabPFN for binary classification with an eval_metric and tuning.
 
-This example demonstrates how to use calibrate and tune the predictions
+This example demonstrates how to calibrate and tune the predictions
 of a TabPFNClassifier with an eval_metric and tuning_config.
 """
 
@@ -11,11 +11,11 @@ from sklearn.model_selection import StratifiedShuffleSplit
 
 from tabpfn import TabPFNClassifier
 
-MINORITY_FRAC = 0.02
+MINORITY_FRAC = 0.04
 
 # Generate an imbalanced dataset
 X, y = make_classification(
-    n_samples=2500,
+    n_samples=3_000,
     n_features=4,
     n_classes=2,
     n_informative=4,
