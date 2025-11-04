@@ -601,7 +601,14 @@ class PerFeatureTransformer(Architecture):
             )
 
             # out: s b e
-            train_encoder_out = encoder_out[:, :single_eval_pos, -1].transpose(0, 1)
+            thinking_rows_offset = (
+                self.add_thinking_tokens.num_thinking_rows
+                if self.add_thinking_tokens is not None
+                else 0
+            )
+            train_encoder_out = encoder_out[
+                :, thinking_rows_offset:single_eval_pos, -1
+            ].transpose(0, 1)
             output_decoded["train_embeddings"] = train_encoder_out
             output_decoded["test_embeddings"] = test_encoder_out
 
