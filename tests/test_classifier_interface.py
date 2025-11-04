@@ -229,7 +229,7 @@ def test_predict_logits_and_consistency(
     pipeline.
     """
     X, y = sklearn.datasets.make_classification(
-        n_samples=60,
+        n_samples=80,
         n_classes=3,
         n_features=3,
         n_informative=3,
