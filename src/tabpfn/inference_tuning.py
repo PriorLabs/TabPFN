@@ -52,12 +52,12 @@ class TuningConfig:
             A new TuningConfig instance with resolved values.
         """
         tuning_holdout_frac = (
-            get_default_tuning_holdout_pct(n_samples=num_samples)
+            get_default_tuning_holdout_frac(n_samples=num_samples)
             if self.tuning_holdout_frac == "auto"
             else self.tuning_holdout_frac
         )
         tuning_n_folds = (
-            get_default_tuning_holdout_n_splits(n_samples=num_samples)
+            get_default_tuning_n_folds(n_samples=num_samples)
             if self.tuning_n_folds == "auto"
             else self.tuning_n_folds
         )
@@ -327,39 +327,39 @@ def find_optimal_temperature(
     return best_temperature
 
 
-def get_default_tuning_holdout_pct(n_samples: int) -> float:
+def get_default_tuning_holdout_frac(n_samples: int) -> float:
     """Gets the default tuning holdout percentage based on a heuristic.
 
     We aim to tradeoff between computational cost and accuracy.
     """
-    n_samples_to_pct = {
+    n_samples_to_holdout_frac = {
         2_000: 0.1,
         5_000: 0.2,
         10_000: 0.2,
         20_000: 0.2,
         50_000: 0.3,
     }
-    for n_samples_threshold, pct in n_samples_to_pct.items():
+    for n_samples_threshold, frac in n_samples_to_holdout_frac.items():
         if n_samples <= n_samples_threshold:
-            return pct
+            return frac
     return 0.2
 
 
-def get_default_tuning_holdout_n_splits(n_samples: int) -> int:
+def get_default_tuning_n_folds(n_samples: int) -> int:
     """Gets the default tuning holdout number of splits based on a heuristic.
 
     We aim to tradeoff between computational cost and accuracy.
     """
-    n_samples_to_splits = {
+    n_samples_to_n_folds = {
         2_000: 10,
         5_000: 5,
         10_000: 3,
         20_000: 2,
         50_000: 1,
     }
-    for n_samples_threshold, n_splits in n_samples_to_splits.items():
+    for n_samples_threshold, n_folds in n_samples_to_n_folds.items():
         if n_samples <= n_samples_threshold:
-            return n_splits
+            return n_folds
     return 1
 
 
