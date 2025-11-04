@@ -601,9 +601,11 @@ class PerFeatureTransformer(Architecture):
             )
 
             # out: s b e
-            thinking_rows_offset = 0
-            if self.add_thinking_tokens is not None:
-                thinking_rows_offset = self.add_thinking_tokens.num_thinking_rows
+            thinking_rows_offset = (
+                self.add_thinking_tokens.num_thinking_rows
+                if self.add_thinking_tokens is not None
+                else 0
+            )
             train_encoder_out = encoder_out[
                 :, thinking_rows_offset:single_eval_pos, -1
             ].transpose(0, 1)

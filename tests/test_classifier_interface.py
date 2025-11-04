@@ -509,15 +509,15 @@ def test_balanced_probabilities() -> None:
         n_features=n_features,
         n_informative=n_features,
         n_redundant=0,
-        weights=[0.7, 0.2],  # Imbalanced classes
+        weights=[0.7, 0.3],  # Imbalanced classes
         random_state=42,
     )
 
-    model_unbalanced = TabPFNClassifier(balance_probabilities=False)
+    model_unbalanced = TabPFNClassifier(balance_probabilities=False, random_state=42)
     model_unbalanced.fit(X, y)
     proba_unbalanced = model_unbalanced.predict_proba(X)
 
-    model_balanced = TabPFNClassifier(balance_probabilities=True)
+    model_balanced = TabPFNClassifier(balance_probabilities=True, random_state=42)
     model_balanced.fit(X, y)
     proba_balanced = model_balanced.predict_proba(X)
 

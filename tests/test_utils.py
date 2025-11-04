@@ -377,8 +377,8 @@ def test_process_text_na_dataframe(prepared_tabpfn_data):
 
 def test_balance_probas_by_class_counts():
     """Test balancing probabilities by class counts."""
-    probas = torch.tensor([[0.9, 0.1], [0.8, 0.2], [0.3, 0.7]])
-    class_counts = np.array([90, 10])
+    probas = torch.tensor([[0.2, 0.8], [0.6, 0.4], [0.5, 0.5]])
+    class_counts = np.array([1, 2])
 
     balanced = balance_probas_by_class_counts(probas, class_counts)
 
@@ -386,7 +386,5 @@ def test_balance_probas_by_class_counts():
     sums = balanced.sum(dim=-1)
     assert torch.allclose(sums, torch.ones(3), rtol=1e-5, atol=1e-5)
 
-    expected_balanced = torch.tensor(
-        [[0.5000, 0.5000], [0.3077, 0.6923], [0.0455, 0.9545]]
-    )
+    expected_balanced = torch.tensor([[1 / 3, 2 / 3], [0.75, 0.25], [2 / 3, 1 / 3]])
     assert torch.allclose(balanced, expected_balanced, rtol=1e-4, atol=1e-4)
