@@ -219,7 +219,6 @@ def test_fit(
     ),
 )
 def test_predict_logits_and_consistency(
-    X_y: tuple[np.ndarray, np.ndarray],
     n_estimators,
     device,
     softmax_temperature,
@@ -229,7 +228,15 @@ def test_predict_logits_and_consistency(
     under various configuration permutations that affect the post-processing
     pipeline.
     """
-    X, y = X_y
+    X, y = sklearn.datasets.make_classification(
+        n_samples=80,
+        n_classes=3,
+        n_features=3,
+        n_informative=3,
+        n_redundant=0,
+        n_clusters_per_class=1,
+        random_state=42,
+    )
 
     # Ensure y is int64 for consistency with classification tasks
     y = y.astype(np.int64)
