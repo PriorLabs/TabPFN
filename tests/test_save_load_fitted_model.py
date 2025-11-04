@@ -13,6 +13,7 @@ from sklearn.datasets import make_classification, make_regression
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.inference_tuning import ClassifierEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
 
 from .utils import get_pytest_devices
@@ -265,3 +266,31 @@ def test_saving_and_loading_multiple_models_with_weights(
     )
     assert (tmp_path / "0.ckpt").exists()
     assert (tmp_path / "1.ckpt").exists()
+
+
+def test_saving_and_loading_with_tuning_config(
+    tmp_path: Path,
+) -> None:
+    """Test that saving and loading a model with a tuning config works."""
+    estimator = TabPFNClassifier(
+        device="cpu",
+        random_state=42,
+        eval_metric="f1",
+        # TODO: test the case when dataclass is used
+        tuning_config={
+            "tune_decision_thresholds": True,
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.1,
+            "tuning_n_folds": 1,
+        },
+    )
+    X, y = make_classification(
+        n_samples=50, n_features=5, n_classes=3, n_informative=3, random_state=42
+    )
+    path = tmp_path / "model.tabpfn_fit"
+    estimator.fit(X, y)
+    estimator.save_fit_state(path)
+    loaded_estimator = TabPFNClassifier.load_from_fit_state(path)
+    assert loaded_estimator.tuned_classification_thresholds_ is not None
+    assert loaded_estimator.softmax_temperature_ is not None
+    assert loaded_estimator.eval_metric_ is ClassifierEvalMetrics.F1
