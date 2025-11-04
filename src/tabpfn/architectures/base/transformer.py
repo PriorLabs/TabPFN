@@ -635,8 +635,19 @@ class PerFeatureTransformer(Architecture):
             )
             positional_embedding_rng = None
         else:
+            seed = self.random_embedding_seed
+
+            if x.device == torch.device("cpu"):
+                # For datasets with few features (for example 1 or 2), the seed
+                # becomes important. During training, we generate random numbers
+                # on the GPU. Switching to CPU with the same generates different
+                # numbers and can lead to suboptimal results for small datasets.
+                # For CPU, we therefore fix the seed to a value that works well also
+                # for a few features.
+                seed = 819
+
             positional_embedding_rng = torch.Generator(device=x.device).manual_seed(
-                self.random_embedding_seed
+                seed
             )
 
         if self.feature_positional_embedding == "normal_rand_vec":
