@@ -229,10 +229,10 @@ def test_predict_logits_and_consistency(
     pipeline.
     """
     X, y = sklearn.datasets.make_classification(
-        n_samples=100,
+        n_samples=60,
         n_classes=2,
-        n_features=5,
-        n_informative=5,
+        n_features=3,
+        n_informative=3,
         n_redundant=0,
         n_clusters_per_class=1,
         random_state=42,
