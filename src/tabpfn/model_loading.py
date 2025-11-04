@@ -81,6 +81,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
             "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
             "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
+            "tabpfn-v2-classifier-v2_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
@@ -95,6 +96,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-regressor-09gpqh39.ckpt",
             "tabpfn-v2-regressor-2noar4o2.ckpt",
             "tabpfn-v2-regressor-wyl4o83o.ckpt",
+            "tabpfn-v2-regressor-v2_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-reg",
@@ -108,11 +110,11 @@ class ModelSource:  # noqa: D101
             "v2.5_classification_ii02f5gb_best_as_of_2867200.ckpt",
             "v2.5_classification_7vdcwfor_backup_large_features.cpkt",
             "v2.5_classification_zrhrpcxm_best_finetuned.cpkt",
-            "tabpfn-v2.5-classifier.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn-private-test",
-            default_filename="tabpfn-v2.5-classifier.ckpt",
+            default_filename="tabpfn-v2.5-classifier-v2.5_default.ckpt",
             filenames=filenames,
         )
 
@@ -121,11 +123,11 @@ class ModelSource:  # noqa: D101
         filenames = [
             "v2.5_regression_z0dqxe04_best_as_of_1376500.cpkt",
             "v2.5_regression_4edkolbq_best.cpkt",
-            "tabpfn-v2.5-regressor.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn-private-test",
-            default_filename="tabpfn-v2.5-regressor.ckpt",
+            default_filename="tabpfn-v2.5-regressor-v2.5_default.ckpt",
             filenames=filenames,
         )
 
