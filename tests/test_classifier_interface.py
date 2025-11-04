@@ -731,17 +731,10 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
         if isinstance(m, nn.Linear)
     )
 
-    num_thinking_rows = 0
-    if (
-        hasattr(model.model_, "add_thinking_tokens")
-        and model.model_.add_thinking_tokens is not None
-        and data_source == "train"
-    ):
-        num_thinking_rows = model.model_.add_thinking_tokens.num_thinking_rows
-    expected_num_embeddings = X.shape[0] + num_thinking_rows
-    expected_shape = (n_estimators, expected_num_embeddings, encoder_shape)
     assert isinstance(embeddings, np.ndarray)
-    assert embeddings.shape == expected_shape
+    assert embeddings.shape[0] == n_estimators
+    assert embeddings.shape[1] == X.shape[0]
+    assert embeddings.shape[2] == encoder_shape
 
 
 def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):
