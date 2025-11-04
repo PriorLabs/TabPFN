@@ -637,14 +637,15 @@ class PerFeatureTransformer(Architecture):
         else:
             seed = self.random_embedding_seed
 
+            # For datasets with a small number of features (1, 2, or 3 features),
+            # the seed becomes important. Since during training, we generate
+            # random numbers on the GPU, the same seed on CPU or MPS can be suboptimal.
+            # For CPU and MPS, we therefore fix the seed to values that work
+            # well also for datasets with few features.
             if x.device == torch.device("cpu"):
-                # For datasets with few features (for example 1 or 2), the seed
-                # becomes important. During training, we generate random numbers
-                # on the GPU. Switching to CPU with the same generates different
-                # numbers and can lead to suboptimal results for small datasets.
-                # For CPU, we therefore fix the seed to a value that works well also
-                # for a few features.
                 seed = 819
+            if x.device == torch.device("mps"):
+                seed = 42
 
             positional_embedding_rng = torch.Generator(device=x.device).manual_seed(
                 seed
