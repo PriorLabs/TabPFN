@@ -127,10 +127,7 @@ class InferenceConfig:
         - If a float, the percentage of samples to subsample.
     """
 
-    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[
-        Literal["safepower", "power", "quantile_norm", None],
-        ...,
-    ] = (None, "safepower")
+    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
     it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
@@ -140,11 +137,9 @@ class InferenceConfig:
     more than one estimator).
 
     The options are:
-        - If None, no preprocessing is done.
-        - If "power", a power transformation is applied.
-        - If "safepower", a power transformation is applied with a safety factor to
-            avoid numerical issues.
-        - If "quantile_norm", a quantile normalization is applied.
+        - None: no preprocessing is done.
+        - One of the options from
+          `tabpfn.preprocessors.get_all_reshape_feature_distribution_preprocessors()`
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
