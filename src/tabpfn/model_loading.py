@@ -81,6 +81,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
             "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
             "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
+            "tabpfn-v2-classifier-v2_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
@@ -95,6 +96,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-regressor-09gpqh39.ckpt",
             "tabpfn-v2-regressor-2noar4o2.ckpt",
             "tabpfn-v2-regressor-wyl4o83o.ckpt",
+            "tabpfn-v2-regressor-v2_default.ckpt"
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-reg",
