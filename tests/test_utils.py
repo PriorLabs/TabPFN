@@ -18,6 +18,7 @@ from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
+    balance_probas_by_class_counts,
     fix_dtypes,
     get_total_memory_windows,
     infer_categorical_features,
@@ -372,3 +373,20 @@ def test_process_text_na_dataframe(prepared_tabpfn_data):
             assert len(np.unique(output_col[~pd.isna(output_col)])) == len(
                 np.unique(gt_col[~pd.isna(gt_col)])
             )
+
+
+def test_balance_probas_by_class_counts():
+    """Test balancing probabilities by class counts."""
+    probas = torch.tensor([[0.9, 0.1], [0.8, 0.2], [0.3, 0.7]])
+    class_counts = np.array([90, 10])
+
+    balanced = balance_probas_by_class_counts(probas, class_counts)
+
+    # Check that each row sums to one
+    sums = balanced.sum(dim=-1)
+    assert torch.allclose(sums, torch.ones(3), rtol=1e-5, atol=1e-5)
+
+    expected_balanced = torch.tensor(
+        [[0.5000, 0.5000], [0.3077, 0.6923], [0.0455, 0.9545]]
+    )
+    assert torch.allclose(balanced, expected_balanced, rtol=1e-4, atol=1e-4)

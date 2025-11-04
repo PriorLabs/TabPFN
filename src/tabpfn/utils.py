@@ -987,3 +987,23 @@ def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
             items_list.append([batch[r][item_idx] for r in range(batch_sz)])
 
     return tuple(items_list)
+
+
+def balance_probas_by_class_counts(
+    probas: torch.Tensor,
+    class_counts: np.ndarray,
+) -> torch.Tensor:
+    """Balance probabilities by class counts.
+
+    Args:
+        probas: The probabilities to balance.
+        class_counts: The class counts to use for balancing.
+
+    Returns:
+        The balanced probabilities.
+    """
+    class_prob_in_train = class_counts / class_counts.sum()
+    balanced_probas = probas / torch.from_numpy(class_prob_in_train).float().to(
+        probas.device
+    )
+    return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
