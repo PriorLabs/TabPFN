@@ -108,6 +108,7 @@ class ModelSource:  # noqa: D101
     def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_default-2.ckpt",
             "tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt",
             "tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt",
             "tabpfn-v2.5-classifier-v2.5_large-samples.ckpt",
