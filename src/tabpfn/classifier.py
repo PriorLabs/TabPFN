@@ -274,14 +274,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If set to "auto", the
-                device is selected based on availability in the following order of
-                priority: "cuda:0", "mps", and then "cpu". You can also set the device
-                manually to a PyTorch device string e.g. "cuda:1".
+                The device(s) to use for inference.
 
-                See PyTorch's documentation on devices for more information about
-                supported devices.
+                If "auto": a single device is selected based on availability in the
+                following order of priority: "cuda:0", "mps", "cpu".
 
+                To manually select a single device: specify a PyTorch device string e.g.
+                "cuda:1". See PyTorch's documentation for information about supported
+                devices.
+
+                To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
+                ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
+                larger datasets, by executing the estimators in parallel on the GPUs.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
