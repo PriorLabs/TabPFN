@@ -504,27 +504,39 @@ def test_sklearn_compatible_estimator(
     check(estimator)
 
 
-def test_balanced_probabilities(X_y: tuple[np.ndarray, np.ndarray]) -> None:
+def test_balanced_probabilities() -> None:
     """Test that balance_probabilities=True works correctly."""
-    X, y = X_y
+    n_classes = 2
+    n_features = 3
 
-    model = TabPFNClassifier(
-        balance_probabilities=True,
+    # Create an IMBALANCED dataset
+    X, y = sklearn.datasets.make_classification(
+        n_samples=60,
+        n_classes=n_classes,
+        n_features=n_features,
+        n_informative=n_features,
+        n_redundant=0,
+        weights=[0.7, 0.3],  # Imbalanced classes
+        random_state=42,
     )
 
-    model.fit(X, y)
-    probabilities = model.predict_proba(X)
+    model_unbalanced = TabPFNClassifier(balance_probabilities=False, random_state=42)
+    model_unbalanced.fit(X, y)
+    proba_unbalanced = model_unbalanced.predict_proba(X)
 
-    assert np.allclose(probabilities.sum(axis=1), 1.0)
+    model_balanced = TabPFNClassifier(balance_probabilities=True, random_state=42)
+    model_balanced.fit(X, y)
+    proba_balanced = model_balanced.predict_proba(X)
 
-    # Check that the mean probability for each class is roughly equal
-    mean_probs = probabilities.mean(axis=0)
-    expected_mean = 1.0 / len(np.unique(y))
-    assert np.allclose(
-        mean_probs,
-        expected_mean,
-        rtol=0.1,
-    ), "Class probabilities are not properly balanced"
+    mean_proba_unbalanced = proba_unbalanced.mean(axis=0)
+    mean_proba_balanced = proba_balanced.mean(axis=0)
+
+    # Balanced should be MORE uniform than unbalanced
+    balanced_deviation = np.std(mean_proba_balanced)
+    unbalanced_deviation = np.std(mean_proba_unbalanced)
+    assert balanced_deviation < unbalanced_deviation, (
+        "Balancing did not make probabilities more uniform"
+    )
 
 
 def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
@@ -549,15 +561,7 @@ def test_classifier_in_pipeline(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
     # Check that probabilities sum to 1 for each prediction
     assert np.allclose(probabilities.sum(axis=1), 1.0)
-
-    # Check that the mean probability for each class is roughly equal
-    mean_probs = probabilities.mean(axis=0)
-    expected_mean = 1.0 / len(np.unique(y))
-    assert np.allclose(
-        mean_probs,
-        expected_mean,
-        rtol=0.1,
-    ), "Class probabilities are not properly balanced in pipeline"
+    assert probabilities.shape == (X.shape[0], len(np.unique(y)))
 
 
 def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) -> None:

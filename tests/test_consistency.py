@@ -29,9 +29,10 @@ CI Configuration:
 - Test runs on different platforms should set FORCE_CONSISTENCY_TESTS=1
 
 If you need to update reference values:
-1. Run: python tests/test_consistency.py
-2. Include the updated reference files in your PR
-3. Document the reason for the update in your PR description
+2. Delete the reference files you want to regenerate.
+3. Run: `FORCE_CONSISTENCY_TESTS=1 pytest tests/test_consistency.py`
+4. Include the updated reference files in your PR
+5. Document the reason for the update in your PR description
 
 How It Works:
 ------------

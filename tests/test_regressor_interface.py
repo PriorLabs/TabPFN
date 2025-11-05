@@ -422,16 +422,12 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
 
     # Need to access the model through the executor
     model_instances = typing.cast(typing.Any, model.executor_).models
-    encoder_shape = next(
-        m.out_features
-        for m in model_instances[0].encoder.modules()
-        if isinstance(m, nn.Linear)
-    )
+    hidden_size = model_instances[0].ninp
 
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == encoder_shape
+    assert embeddings.shape[2] == hidden_size
 
 
 def test_overflow_bug_does_not_occur():

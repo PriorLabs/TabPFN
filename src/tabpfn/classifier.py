@@ -70,6 +70,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
+    balance_probas_by_class_counts,
     fix_dtypes,
     get_embeddings,
     infer_categorical_features,
@@ -1141,9 +1142,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
         """Applies class balancing to a probability tensor."""
-        class_prob_in_train = self.class_counts_ / self.class_counts_.sum()
-        balanced_probas = probas / torch.Tensor(class_prob_in_train).to(probas.device)
-        return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
+        return balance_probas_by_class_counts(probas, self.class_counts_)
 
     def logits_to_probabilities(
         self,
