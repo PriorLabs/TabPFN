@@ -108,7 +108,13 @@ class ModelSource:  # noqa: D101
     def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-samples.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real-large-features.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real-large-samples-and-features.ckpt",
             "tabpfn-v2.5-classifier-v2.5_real.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_variant.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
@@ -120,7 +126,12 @@ class ModelSource:  # noqa: D101
     def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v2.5-regressor-v2.5_default.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_low-skew.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_quantiles.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_real-variant.ckpt",
             "tabpfn-v2.5-regressor-v2.5_real.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_small-samples.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_variant.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
