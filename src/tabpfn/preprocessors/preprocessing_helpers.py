@@ -267,7 +267,7 @@ class OrderPreservingColumnTransformer(ColumnTransformer):
 def get_ordinal_encoder(
     *,
     numpy_dtype: np.floating = DEFAULT_NUMPY_PREPROCESSING_DTYPE,  # type: ignore
-) -> OrderPreservingColumnTransformer:
+) -> ColumnTransformer:
     """Create a ColumnTransformer that ordinally encodes string/category columns."""
     oe = OrdinalEncoder(
         # TODO: Could utilize the categorical dtype values directly instead of "auto"
@@ -283,13 +283,19 @@ def get_ordinal_encoder(
     # `np.object` will not pick up strings.
     to_convert = ["category", "string"]
 
-    # Using a ColumnTransformer, where an inner transformer is applied only to a subset
-    # of columns, does not retain the original column order of the data, which later
-    # components in the PFN pipeline rely on (e.g., categorical indices).
-    # Therefore, we use a custom class that, under certain constraints
-    # (only OneToOneFeatureMixin transformers on disjoint column subsets),
-    # reconstructs the original order after encoding.
-    return OrderPreservingColumnTransformer(
+    # When using a ColumnTransformer with inner transformers applied to only a subset of
+    # columns, the original column order of the data is not preserved. Because we do not
+    # update the categorical indices after encoding, these indices may no longer align
+    # with the true categorical columns.
+
+    # Subsequent components rely on these categorical indices. For instance:
+    # - QuantileTransformer should only be applied to numerical features.
+    # - EncodeCategoricalFeaturesStep should be applied to all categorical features.
+
+    # Despite the column shuffling introduced by the vanilla ColumnTransformer, we
+    # observed better overall performance when using it. Therefore, we keep it.
+
+    return ColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
         remainder=FunctionTransformer(),
         sparse_threshold=0.0,
