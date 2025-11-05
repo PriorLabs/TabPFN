@@ -478,8 +478,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
         """Construct a regressor that uses the given version of the model.
 
-        In addition to selecting the model, this also configures the regressor with the
-        default settings associated with this model version.
+        In addition to selecting the model, this also configures certain settings to the
+        default values associated with this model version.
 
         Any kwargs will override the default settings.
         """
