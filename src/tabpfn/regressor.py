@@ -47,9 +47,10 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
 )
-from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON
+from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
+    ModelSource,
     load_fitted_tabpfn_model,
     save_fitted_tabpfn_model,
 )
@@ -225,7 +226,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
     ) -> None:
-        """A TabPFN interface for regression.
+        """Construct a TabPFN regressor.
+
+        This constructs a regressor using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Args:
             n_estimators:
@@ -468,6 +473,34 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Ping the usage service if telemetry enabled
         ping()
+
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct a regressor that uses the given version of the model.
+
+        In addition to selecting the model, this also configures the regressor with the
+        default settings associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        if version == ModelVersion.V2:
+            options = {
+                "model_path": ModelSource.get_regressor_v2().default_filename,
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V2_5:
+            options = {
+                "model_path": ModelSource.get_regressor_v2_5().default_filename,
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
 
     @property
     def model_(self) -> Architecture:

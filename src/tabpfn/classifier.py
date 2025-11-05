@@ -45,6 +45,7 @@ from tabpfn.base import (
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
+    ModelVersion,
     XType,
     YType,
 )
@@ -58,6 +59,7 @@ from tabpfn.inference_tuning import (
     resolve_tuning_config,
 )
 from tabpfn.model_loading import (
+    ModelSource,
     load_fitted_tabpfn_model,
     save_fitted_tabpfn_model,
 )
@@ -210,7 +212,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
     ) -> None:
-        """A TabPFN interface for classification.
+        """Construct a TabPFN classifier.
+
+        This constructs a classifier using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Args:
             n_estimators:
@@ -480,6 +486,34 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # Ping the usage service if telemetry enabled
         ping()
+
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct a classifier that uses the given version of the model.
+
+        In addition to selecting the model, this also configures the classifier with the
+        default settings associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        if version == ModelVersion.V2:
+            options = {
+                "model_path": ModelSource.get_classifier_v2().default_filename,
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V2_5:
+            options = {
+                "model_path": ModelSource.get_classifier_v2_5().default_filename,
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
 
     @property
     def model_(self) -> Architecture:

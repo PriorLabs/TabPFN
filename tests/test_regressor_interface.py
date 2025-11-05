@@ -20,6 +20,7 @@ from torch import nn
 
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.constants import ModelVersion
 from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
@@ -730,3 +731,34 @@ def test__TabPFNRegressor__few_features__works(n_features: int) -> None:
         assert q.shape == (X.shape[0],), (
             f"Quantile {i} shape is incorrect for {n_features} features"
         )
+
+
+def test__create_default_for_version__v2__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "regressor" in estimator.model_path
+    assert "-v2-" in estimator.model_path
+
+
+def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "regressor" in estimator.model_path
+    assert "-v2.5-" in estimator.model_path
+
+
+def test__create_default_for_version__passes_through_overrides() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(
+        ModelVersion.V2_5, n_estimators=16
+    )
+
+    assert estimator.n_estimators == 16
+    assert estimator.softmax_temperature == 0.9
