@@ -301,7 +301,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     For version 2.5, the pre-training limits are:
 
                     - 50_000 samples/rows
-                    - 2_000 features/columns (Note that for more than 500 features we 
+                    - 2_000 features/columns (Note that for more than 500 features we
                         subsample 500 features per estimator. It is therefore important
                         to use a sufficiently large number of `n_estimators`.)
                     - 10 classes, this is not ignorable and will raise an error
