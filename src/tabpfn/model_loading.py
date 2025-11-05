@@ -304,7 +304,7 @@ def download_model(
         logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    # For Version 2.5 we require gating, which we can't check here, so we skip direct
+    # For Version 2.5 we require gating, which we don't have in place for direct
     # downloads.
     if version == ModelVersion.V2:
         try:
