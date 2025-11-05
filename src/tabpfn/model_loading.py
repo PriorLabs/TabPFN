@@ -120,7 +120,7 @@ class ModelSource:  # noqa: D101
     def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v2.5-regressor-v2.5_default.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_real.ckpt"
+            "tabpfn-v2.5-regressor-v2.5_real.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
