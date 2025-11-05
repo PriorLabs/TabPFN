@@ -300,10 +300,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 !!! note
 
-                    The current pre-training limits are:
+                    For version 2.5, the pre-training limits are:
 
-                    - 10_000 samples/rows
-                    - 500 features/columns
+                    - 50_000 samples/rows
+                    - 2_000 features/columns
 
             device:
                 The device to use for inference with TabPFN. If `"auto"`, the device is
