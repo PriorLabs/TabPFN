@@ -7,7 +7,7 @@ import logging
 import sys
 from pathlib import Path
 
-from tabpfn.model_loading import _user_cache_dir, download_all_models
+from tabpfn.model_loading import get_cache_dir, download_all_models
 
 
 def main() -> None:
@@ -29,9 +29,7 @@ def main() -> None:
     logger = logging.getLogger(__name__)
 
     # Determine cache directory
-    cache_dir = args.cache_dir or _user_cache_dir(
-        platform=sys.platform, appname="tabpfn"
-    )
+    cache_dir = args.cache_dir or get_cache_dir()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info(f"Downloading all models to {cache_dir}")
