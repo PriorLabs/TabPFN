@@ -150,7 +150,6 @@ class InferenceConfig:
      To improve reproducibility,set `._sklearn_16_decimal_precision = True` before
      calling `.predict()` or `.predict_proba()`."""
 
-    # TODO: move this somewhere else to support that this might change.
     MAX_NUMBER_OF_CLASSES: int = 10
     """The number of classes seen during pretraining for classification. If the
     number of classes is larger than this number, TabPFN requires an additional step
@@ -213,27 +212,31 @@ class InferenceConfig:
         """
         if model_version == ModelVersion.V2:
             if task_type == "multiclass":
-                return _get_v2_and_v2_5_config(v2_classifier_preprocessor_configs())
+                return _get_v2_config(v2_classifier_preprocessor_configs())
             if task_type == "regression":
-                return _get_v2_and_v2_5_config(v2_regressor_preprocessor_configs())
+                return _get_v2_config(v2_regressor_preprocessor_configs())
         if model_version == ModelVersion.V2_5:
             if task_type == "multiclass":
-                return _get_v2_and_v2_5_config(v2_5_classifier_preprocessor_configs())
+                return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
-                return _get_v2_and_v2_5_config(v2_5_regressor_preprocessor_configs())
+                return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
-                PREPROCESS_TRANSFORMS=default_classifier_preprocessor_configs()
+                PREPROCESS_TRANSFORMS=default_classifier_preprocessor_configs(),
+                MAX_NUMBER_OF_FEATURES=2000,
+                MAX_NUMBER_OF_SAMPLES=50_000,
             )
         if task_type == "regression":
             return InferenceConfig(
-                PREPROCESS_TRANSFORMS=default_regressor_preprocessor_configs()
+                PREPROCESS_TRANSFORMS=default_regressor_preprocessor_configs(),
+                MAX_NUMBER_OF_FEATURES=2000,
+                MAX_NUMBER_OF_SAMPLES=50_000,
             )
         raise ValueError(f"Unknown {task_type=} {model_version=}")
 
 
-def _get_v2_and_v2_5_config(
+def _get_v2_config(
     preprocessor_configs: list[PreprocessorConfig],
 ) -> InferenceConfig:
     return InferenceConfig(
@@ -248,4 +251,36 @@ def _get_v2_and_v2_5_config(
         SUBSAMPLE_SAMPLES=None,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
+        USE_SKLEARN_16_DECIMAL_PRECISION=False,
+        MAX_NUMBER_OF_CLASSES=10,
+        MAX_NUMBER_OF_FEATURES=500,
+        MAX_NUMBER_OF_SAMPLES=10_000,
+        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
+        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
+        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
+    )
+
+
+def _get_v2_5_config(
+    preprocessor_configs: list[PreprocessorConfig],
+) -> InferenceConfig:
+    return InferenceConfig(
+        MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
+        MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
+        MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE=100,
+        OUTLIER_REMOVAL_STD="auto",
+        FEATURE_SHIFT_METHOD="shuffle",
+        CLASS_SHIFT_METHOD="shuffle",
+        FINGERPRINT_FEATURE=True,
+        POLYNOMIAL_FEATURES="no",
+        SUBSAMPLE_SAMPLES=None,
+        PREPROCESS_TRANSFORMS=preprocessor_configs,
+        REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
+        USE_SKLEARN_16_DECIMAL_PRECISION=False,
+        MAX_NUMBER_OF_CLASSES=10,
+        MAX_NUMBER_OF_FEATURES=2000,
+        MAX_NUMBER_OF_SAMPLES=50_000,
+        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
+        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
+        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
     )
