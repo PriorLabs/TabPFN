@@ -607,7 +607,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X,
             y,
             estimator=self,
-            ensure_y_numeric=False,
+            ensure_y_numeric=True,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
