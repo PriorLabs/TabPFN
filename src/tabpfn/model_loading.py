@@ -356,13 +356,19 @@ def download_all_models(to: Path) -> None:
             )
 
 
-def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
+def get_cache_dir() -> Path:  # noqa: PLR0911
+    """Get the cache directory for TabPFN models, as appropriate for the platform."""
+    if settings.tabpfn.model_cache_dir is not None:
+        return settings.tabpfn.model_cache_dir
+
+    platform = sys.platform
+    appname = "tabpfn"
     use_instead_path = (Path.cwd() / ".tabpfn_models").resolve()
 
-    # https://docs.python.org/3/library/sys.html#sys.platform
     if platform == "win32":
-        # Honestly, I don't want to do what `platformdirs` does:
+        # Do something similar to platformdirs, but very simplified:
         # https://github.com/tox-dev/platformdirs/blob/b769439b2a3b70769a93905944a71b3e63ef4823/src/platformdirs/windows.py#L252-L265
+        # Unclear how well this works.
         APPDATA_PATH = os.environ.get("APPDATA", "")
         if APPDATA_PATH.strip() != "":
             return Path(APPDATA_PATH) / appname
@@ -606,12 +612,7 @@ def resolve_model_path(
         resolved_model_names = [model_source.default_filename]
 
         # Determine the cache directory for storing models.
-        if settings.tabpfn.model_cache_dir is not None:
-            resolved_model_dirs = [settings.tabpfn.model_cache_dir]
-        else:
-            resolved_model_dirs = [
-                _user_cache_dir(platform=sys.platform, appname="tabpfn")
-            ]
+        resolved_model_dirs = [get_cache_dir()]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
     elif isinstance(model_path, (str, Path)):
         resolved_model_paths = [Path(model_path)]
