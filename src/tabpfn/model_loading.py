@@ -189,32 +189,31 @@ def _try_huggingface_downloads(
         if suppress_warnings:
             warnings.filterwarnings("ignore")
 
+        # Download model checkpoint
+        local_path = hf_hub_download(
+            repo_id=source.repo_id,
+            filename=filename,
+            local_dir=base_path.parent,
+        )
+        # Move model file to desired location
+        Path(local_path).rename(base_path)
+
+        # Download config.json only to increment the download counter. We do not
+        # actually use this file so it is removed immediately after download.
+        # Note that we also handle model caching ourselves, so we don't double
+        # count, even with removing the config.json afterwards.
         try:
-            # Download model checkpoint
-            local_path = hf_hub_download(
+            config_local_path = hf_hub_download(
                 repo_id=source.repo_id,
-                filename=filename,
+                filename="config.json",
                 local_dir=base_path.parent,
             )
-            # Move model file to desired location
-            Path(local_path).rename(base_path)
+            Path(config_local_path).unlink(missing_ok=True)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Failed to download config.json: {e!s}")
+            # Continue even if config.json download fails
 
-            # Download config.json only to increment the download counter. We do not
-            # actually use this file so it is removed immediately after download.
-            try:
-                config_local_path = hf_hub_download(
-                    repo_id=source.repo_id,
-                    filename="config.json",
-                    local_dir=base_path.parent,
-                )
-                Path(config_local_path).unlink(missing_ok=True)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Failed to download config.json: {e!s}")
-                # Continue even if config.json download fails
-
-            logger.info(f"Successfully downloaded to {base_path}")
-        except Exception as e:
-            raise Exception("HuggingFace download failed!") from e
+        logger.info(f"Successfully downloaded to {base_path}")
 
 
 def _try_direct_downloads(
@@ -302,15 +301,23 @@ def download_model(
         _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
         return "ok"
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"HuggingFace downloads failed: {e!s}")
+        logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    try:
-        _try_direct_downloads(to, model_source, model_name)
-        return "ok"
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Direct URL downloads failed: {e!s}")
-        errors.append(e)
+    # For Version 2.5 we require gating, which we can't check here, so we skip direct
+    # downloads.
+    if version == ModelVersion.V2:
+        try:
+            _try_direct_downloads(to, model_source, model_name)
+            return "ok"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Direct URL downloads failed: {e!s}")
+            errors.append(e)
+    else:
+        logger.warning(
+            "For commercial usage, we provide alternative download options for v2.5, "
+            "please reach out to us at sales@priorlabs.ai."
+        )
 
     return errors
 
