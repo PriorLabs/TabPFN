@@ -107,13 +107,11 @@ class ModelSource:  # noqa: D101
     @classmethod
     def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "v2.5_classification_ii02f5gb_best_as_of_2867200.ckpt",
-            "v2.5_classification_7vdcwfor_backup_large_features.cpkt",
-            "v2.5_classification_zrhrpcxm_best_finetuned.cpkt",
             "tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real.ckpt",
         ]
         return cls(
-            repo_id="Prior-Labs/tabpfn-private-test",
+            repo_id="Prior-Labs/tabpfn_2_5",
             default_filename="tabpfn-v2.5-classifier-v2.5_default.ckpt",
             filenames=filenames,
         )
@@ -121,12 +119,11 @@ class ModelSource:  # noqa: D101
     @classmethod
     def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "v2.5_regression_z0dqxe04_best_as_of_1376500.cpkt",
-            "v2.5_regression_4edkolbq_best.cpkt",
             "tabpfn-v2.5-regressor-v2.5_default.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_real.ckpt"
         ]
         return cls(
-            repo_id="Prior-Labs/tabpfn-private-test",
+            repo_id="Prior-Labs/tabpfn_2_5",
             default_filename="tabpfn-v2.5-regressor-v2.5_default.ckpt",
             filenames=filenames,
         )
