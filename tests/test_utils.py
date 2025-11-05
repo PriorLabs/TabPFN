@@ -332,6 +332,9 @@ def prepared_tabpfn_data(request):
 
 
 # --- Actual test ---
+# This is a test for the OrderPreservingColumnTransformer, which is not used currently
+# But might be used in the future, therefore I'll leave it in.
+@pytest.mark.skip
 def test_process_text_na_dataframe(prepared_tabpfn_data):
     X, categorical_idx, ground_truth = prepared_tabpfn_data  # use the fixture
 

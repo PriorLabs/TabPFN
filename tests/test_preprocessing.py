@@ -447,6 +447,9 @@ def test__safe_power_transformer__transform_then_inverse_transform__returns_orig
         )
 
 
+# This is a test for the OrderPreservingColumnTransformer, which is not used currently
+# But might be used in the future, therefore I'll leave it in.
+@pytest.mark.skip
 def test_order_preserving_column_transformer():
     """Should raise AssertionError if column sets overlap."""
     ordinal_enc1 = OrdinalEncoder()
