@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
+from tabpfn_common_utils.telemetry import set_model_config
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from urllib.error import URLError
 
@@ -488,6 +489,11 @@ def load_model_criterion_config(
             version=model_version.value,
         )
     )
+
+    # Even though model_path can be a list of paths, we currently
+    # only use a single path
+    if len(resolved_model_paths) == 1:
+        set_model_config(resolved_model_paths[0], version)
 
     for folder in resolved_model_dirs:
         folder.mkdir(parents=True, exist_ok=True)
