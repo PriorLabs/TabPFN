@@ -490,16 +490,8 @@ def load_model_criterion_config(
         )
     )
 
-    # Even though model_path can be a list of paths, we currently
-    # only use a single path
-    if len(resolved_model_paths) == 1:
-        # Only set model config if the model path is in the list of available model
-        # filenames to avoid passing arbitrary paths containing e.g. PII
-        _filenames = _get_model_filenames(which, model_version.value)
-
-        _path = resolved_model_paths[0]
-        if _path.name in _filenames:
-            set_model_config(_path.name, model_version.value)
+    # Anonymously track the model config for usage telemetry
+    _log_model_config(resolved_model_paths, which, model_version)
 
     for folder in resolved_model_dirs:
         folder.mkdir(parents=True, exist_ok=True)
@@ -581,25 +573,28 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     return ModelVersion.V2
 
 
-def _get_model_filenames(
-    which: Literal["classifier", "regressor"], version: Literal["v2", "v2.5"]
-) -> list[str]:
-    """Get all available model filenames for a given type and version.
+def _log_model_config(
+    model_paths: list[Path],
+    which: Literal["classifier", "regressor"],
+    version: ModelVersion,
+) -> None:
+    """Set the model config (model_path and model_version) for anonymous
+    usage telemetry.
 
     Args:
+        model_paths: The path(s) to the model.
         which: The type of model ('classifier' or 'regressor').
         version: The model version (currently only 'v2' or 'v2.5').
-
-    Returns:
-        A list of the available model file names.
     """
-    # Convert string literals to enums
-    model_type = ModelType(which)
-    model_version = ModelVersion(version)
+    if len(model_paths) != 1:
+        return
 
-    # Get the ModelSource which contains filenames
-    model_source = _get_model_source(model_version, model_type)
-    return [filename for filename in model_source.filenames]
+    model_type = ModelType(which)
+    model_source = _get_model_source(version, model_type)
+
+    path: Path = model_paths[0]
+    if path.name in model_source.filenames:
+        set_model_config(path.name, version.value)
 
 
 def resolve_model_version(
