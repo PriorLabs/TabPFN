@@ -24,6 +24,7 @@ from urllib.error import URLError
 
 import joblib
 import torch
+from huggingface_hub.errors import GatedRepoError
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
@@ -513,6 +514,8 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
+                if isinstance(res[0], GatedRepoError):
+                    raise _get_gated_repo_exception(res[0])
                 repo_type = "clf" if which == "classifier" else "reg"
                 raise RuntimeError(
                     f"Failed to download model to {path}!\n\n"
@@ -559,6 +562,15 @@ def load_model_criterion_config(
             )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config
+
+
+def _get_gated_repo_exception(e: GatedRepoError) -> None:
+    raise RuntimeError(
+        "To use TabPFN-2.5 onwards you must agree to the license.\n"
+        "To do this, visit https://huggingface.co/Prior-Labs/tabpfn_2_5 . \n"
+        "Then, log in to your HuggingFace account here, by following "
+        "https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication",
+    ) from e
 
 
 def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
