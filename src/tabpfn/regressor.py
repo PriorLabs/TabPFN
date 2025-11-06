@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
+    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
@@ -220,7 +221,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = "fit_preprocessors",
-        memory_saving_mode: bool | Literal["auto"] | float | int = "auto",
+        memory_saving_mode: MemorySavingMode = "auto",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -370,30 +371,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   attribute internally.
 
             memory_saving_mode:
-                Enable GPU/CPU memory saving mode. This can help to prevent
-                out-of-memory errors that result from computations that would consume
-                more memory than available on the current device. We save memory by
-                automatically batching certain model computations within TabPFN to
-                reduce the total required memory. The options are:
+                Enable GPU/CPU memory saving mode. This can both avoid out-of-memory
+                errors and improve fit+predict speed by reducing memory pressure.
 
-                - If `bool`, enable/disable memory saving mode.
-                - If `"auto"`, we will estimate the amount of memory required for the
-                  forward pass and apply memory saving if it is more than the
-                  available GPU/CPU memory. This is the recommended setting as it
-                  allows for speed-ups and prevents memory errors depending on
-                  the input data.
-                - If `float` or `int`, we treat this value as the maximum amount of
-                  available GPU/CPU memory (in GB). We will estimate the amount
-                  of memory required for the forward pass and apply memory saving
-                  if it is more than this value. Passing a float or int value for
-                  this parameter is the same as setting it to True and explicitly
-                  specifying the maximum free available memory
+                It saves memory by automatically batching certain model computations
+                within TabPFN.
+
+                - If "auto": memory saving mode is enabled/disabled automatically based
+                    on a heuristic
+                - If True/False: memory saving mode is forced enabled/disabled.
+
+                If speed is important to your application, you may wish to manually tune
+                this option by comparing the time taken for fit+predict with it set to
+                False and True.
 
                 !!! warning
                     This does not batch the original input data. We still recommend to
-                    batch this as necessary if you run into memory errors! For example,
-                    if the entire input data does not fit into memory, even the memory
-                    save mode will not prevent memory errors.
+                    batch the test set as necessary if you run out of memory.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -455,9 +449,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode: Literal["low_memory", "fit_preprocessors", "batched"] = fit_mode
-        self.memory_saving_mode: bool | Literal["auto"] | float | int = (
-            memory_saving_mode
-        )
+        self.memory_saving_mode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input

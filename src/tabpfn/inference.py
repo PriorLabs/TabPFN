@@ -18,7 +18,10 @@ import joblib
 import numpy as np
 import torch
 
-from tabpfn.architectures.base.memory import MemoryUsageEstimator
+from tabpfn.architectures.base.memory import (
+    set_save_peak_memory,
+    should_save_peak_mem,
+)
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
@@ -217,6 +220,14 @@ class InferenceEngineOnDemand(InferenceEngine):
             parallel_mode="in-order",
         )
 
+        save_peak_mem = should_save_peak_mem(
+            self.save_peak_mem,
+            X_train_shape=self.X_train.shape,
+            X_test_shape=X.shape,
+            devices=devices,
+            dtype_byte_size=self.dtype_byte_size,
+        )
+
         ensemble_configs, preprocessings = itertools.tee(preprocessed_data_iterator)
 
         if self.force_inference_dtype is not None:
@@ -232,6 +243,7 @@ class InferenceEngineOnDemand(InferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
                 model_index=config._model_index,
+                save_peak_mem=save_peak_mem,
             )
             for config, preprocessor, X_train, y_train, cat_ix in preprocessings
         )
@@ -254,6 +266,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool,
         model_index: int,
+        save_peak_mem: bool,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -274,15 +287,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         )
         batched_cat_ix = [cat_ix]
 
-        MemoryUsageEstimator.reset_peak_memory_if_required(
-            save_peak_mem=self.save_peak_mem,
-            model=model,
-            X=X_full,
-            cache_kv=False,
-            dtype_byte_size=self.dtype_byte_size,
-            device=device,
-            safety_factor=1.2,
-        )
+        set_save_peak_memory(model, enabled=save_peak_mem)
 
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
             return model(
@@ -419,6 +424,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
 
     X_trains: Sequence[np.ndarray | torch.Tensor]
     y_trains: Sequence[np.ndarray | torch.Tensor]
+    X_train_shape_before_preprocessing: tuple[int, int]
     cat_ixs: Sequence[list[int]]
     preprocessors: Sequence[SequentialFeatureTransformer]
     force_inference_dtype: torch.dtype | None
@@ -477,6 +483,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         return InferenceEngineCachePreprocessing(
             X_trains=X_trains,
             y_trains=y_trains,
+            X_train_shape_before_preprocessing=X_train.shape,
             models=models,
             cat_ixs=cat_ixs,
             ensemble_configs=configs,
@@ -500,6 +507,17 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         if self.force_inference_dtype is not None:
             [model.type(self.force_inference_dtype) for model in self.models]
 
+        if self.inference_mode:
+            save_peak_mem = should_save_peak_mem(
+                memory_saving_mode=self.save_peak_mem,
+                X_train_shape=self.X_train_shape_before_preprocessing,
+                X_test_shape=X.shape,
+                devices=devices,
+                dtype_byte_size=self.dtype_byte_size,
+            )
+        else:
+            save_peak_mem = False
+
         # Create a sorted index order by model_index so that calls with model index 0
         # run first, then model index 1, etc.
         sorted_indices = sorted(
@@ -520,6 +538,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
                 model_index=self.ensemble_configs[i]._model_index,
+                save_peak_mem=save_peak_mem,
             )
             for i in sorted_indices
         )
@@ -543,6 +562,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool,
         model_index: int,
+        save_peak_mem: bool,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -558,21 +578,12 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         )
         model.to(device)
 
+        set_save_peak_memory(model, enabled=save_peak_mem)
+
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
         batched_cat_ix = [cat_ix]
-
-        if self.inference_mode:
-            MemoryUsageEstimator.reset_peak_memory_if_required(
-                save_peak_mem=self.save_peak_mem,
-                model=model,
-                X=X_full,
-                cache_kv=False,
-                device=device,
-                dtype_byte_size=self.dtype_byte_size,
-                safety_factor=1.2,
-            )
 
         with (
             get_autocast_context(device, enabled=autocast),
@@ -717,7 +728,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         # This engine currently only supports one device, so just take the first.
         device = devices[0]
 
-        for preprocessor, model, config, cat_ix, X_train_len in zip(
+        for preprocessor, model, config, cat_ix, _X_train_len in zip(
             self.preprocessors,
             self.models,
             self.ensemble_configs,
@@ -729,16 +740,10 @@ class InferenceEngineCacheKV(InferenceEngine):
             X_test = X_test.unsqueeze(1)
             batched_cat_ix = [cat_ix]
 
-            MemoryUsageEstimator.reset_peak_memory_if_required(
-                save_peak_mem=self.save_peak_mem,
-                model=model,
-                X=X_test,
-                cache_kv=True,
-                device=device,
-                dtype_byte_size=self.dtype_byte_size,
-                safety_factor=1.2,  # TODO(Arjun): make customizable
-                n_train_samples=X_train_len,
-            )
+            # When the KV cache is enabled, we assume we are under memory pressure and
+            # enable the saving mode.
+            # TODO: Use the heuristic in this case also.
+            set_save_peak_memory(model, enabled=True)
 
             model = model.to(device)  # noqa: PLW2901
 

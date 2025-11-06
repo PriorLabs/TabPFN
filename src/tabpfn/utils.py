@@ -5,9 +5,7 @@
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import os
-import platform
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -787,48 +785,6 @@ def transform_borders_one(
         )
 
     return logit_cancel_mask, descending_borders, borders_t
-
-
-# Terminology: Use memory to referent physical memory, swap for swap memory
-def get_total_memory_windows() -> float:
-    """Get the total memory of the system for windows OS, using windows API.
-
-    Returns:
-        The total memory of the system in GB.
-    """
-    if platform.system() != "Windows":
-        return 0.0  # Function should not be called on non-Windows platforms
-
-    # ref: https://github.com/microsoft/windows-rs/blob/c9177f7a65c764c237a9aebbd3803de683bedaab/crates/tests/bindgen/src/fn_return_void_sys.rs#L12
-    # ref: https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex
-    # this class is needed to load the memory status with GlobalMemoryStatusEx function
-    # using win32 API, for more details see microsoft docs link above
-    class _MEMORYSTATUSEX(ctypes.Structure):
-        _fields_: typing.ClassVar = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    # Initialize the structure
-    mem_status = _MEMORYSTATUSEX()
-    # need to initialize length of structure, see Microsoft docs above
-    mem_status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-    try:
-        # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast("typing.Any", ctypes).windll
-        k32_lib = windll.LoadLibrary("kernel32.dll")
-        k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
-        return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
-    except (AttributeError, OSError):
-        # Fall back if not on Windows or if the function fails
-        return 0.0
 
 
 def split_large_data(

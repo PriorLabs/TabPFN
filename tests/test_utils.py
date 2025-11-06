@@ -1,14 +1,9 @@
-# use get_total_memory and compare it against result from psutils
-# run it only if the it is windows os.name == "nt"
 from __future__ import annotations
 
-import os
-import threading
 from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
-import psutil
 import pytest
 import torch
 from sklearn.preprocessing import LabelEncoder
@@ -20,38 +15,11 @@ from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     balance_probas_by_class_counts,
     fix_dtypes,
-    get_total_memory_windows,
     infer_categorical_features,
     infer_devices,
     process_text_na_dataframe,
     validate_Xy_fit,
 )
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
-def test_internal_windows_total_memory():
-    utils_result = get_total_memory_windows()
-    psutil_result = psutil.virtual_memory().total / 1e9
-    assert utils_result == psutil_result
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
-def test_internal_windows_total_memory_multithreaded():
-    # collect results from multiple threads
-    results = []
-
-    def get_memory() -> None:
-        results.append(get_total_memory_windows())
-
-    threads = []
-    for _ in range(10):
-        t = threading.Thread(target=get_memory)
-        threads.append(t)
-        t.start()
-    for t in threads:
-        t.join()
-    psutil_result = psutil.virtual_memory().total / 1e9
-    assert all(result == psutil_result for result in results)
 
 
 def test_infer_categorical_with_str_and_nan_provided_included():

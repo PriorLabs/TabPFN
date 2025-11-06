@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from pathlib import Path
 
-from tabpfn.model_loading import get_cache_dir, download_all_models
+from tabpfn.model_loading import download_all_models, get_cache_dir
 
 
 def main() -> None:
