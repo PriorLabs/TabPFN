@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 # Hard coded "random" embeddings (seed=42) used during training of size
 # 2000 x 48.
 col_embedding_path = Path(__file__).parent / "tabpfn_col_embedding.pt"
-COL_EMBEDDING = torch.load(col_embedding_path)
+COL_EMBEDDING = torch.load(col_embedding_path, weights_only=True)
 
 
 class LayerStack(nn.Module):
