@@ -594,6 +594,7 @@ def _log_model_config(
 
     path: Path = model_paths[0]
     # Check to avoid that we pass in arbitrary paths containing e.g. PII
+    # Ensure we whitelist model names so that no PII can be released.
     if path.name in model_source.filenames:
         set_model_config(path.name, version.value)
     else:
