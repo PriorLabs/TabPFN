@@ -128,7 +128,7 @@ def should_save_peak_mem(
     make inference faster. Enabling/disabling memory saving optimally can have a big
     impact on fit+predict speed, sometimes greater than 2x.
 
-    See details in [put PR here].
+    See details in https://github.com/PriorLabs/TabPFN/pull/605.
     """
     if isinstance(memory_saving_mode, bool):
         return memory_saving_mode
