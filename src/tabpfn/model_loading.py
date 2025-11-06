@@ -493,7 +493,13 @@ def load_model_criterion_config(
     # Even though model_path can be a list of paths, we currently
     # only use a single path
     if len(resolved_model_paths) == 1:
-        set_model_config(resolved_model_paths[0], version)
+        # Only set model config if the model path is in the list of available model
+        # filenames to avoid passing arbitrary paths containing e.g. PII
+        _filenames = _get_model_filenames(which, model_version.value)
+
+        _path = resolved_model_paths[0]
+        if _path.name in _filenames:
+            set_model_config(_path.name, model_version.value)
 
     for folder in resolved_model_dirs:
         folder.mkdir(parents=True, exist_ok=True)
@@ -573,6 +579,28 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     if V_2_5_IDENTIFIER in Path(model_path).name:
         return ModelVersion.V2_5
     return ModelVersion.V2
+
+
+def _get_model_filenames(
+    which: Literal["classifier", "regressor"],
+    version: Literal["v2", "v2.5"]
+) -> list[str]:
+    """Get all available model filenames for a given type and version.
+
+    Args:
+        which: The type of model ('classifier' or 'regressor').
+        version: The model version (currently only 'v2' or 'v2.5').
+
+    Returns:
+        A list of the available model file names.
+    """
+    # Convert string literals to enums
+    model_type = ModelType(which)
+    model_version = ModelVersion(version)
+
+    # Get the ModelSource which contains filenames
+    model_source = _get_model_source(model_version, model_type)
+    return [filename for filename in model_source.filenames]
 
 
 def resolve_model_version(
