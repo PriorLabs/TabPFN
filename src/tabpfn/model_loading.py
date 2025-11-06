@@ -593,6 +593,7 @@ def _log_model_config(
     model_source = _get_model_source(version, model_type)
 
     path: Path = model_paths[0]
+    # Check to avoid that we pass in arbitrary paths containing e.g. PII
     if path.name in model_source.filenames:
         set_model_config(path.name, version.value)
 
