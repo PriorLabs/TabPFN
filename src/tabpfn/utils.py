@@ -226,10 +226,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
     if isinstance(devices, (str, torch.device)):
         devices = (devices,)
 
-    # This is safe because torch.device(torch.device(...)) is a noop.
-    # torch.device(device) returns a fairly informative error message if `device` is not
-    # a valid device, thus do no extra error reporting.
-    devices = tuple(torch.device(device) for device in devices)
+    devices = tuple(_parse_device(device) for device in devices)
 
     if len(set(devices)) != len(devices):
         raise ValueError(
@@ -238,6 +235,20 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
         )
 
     return devices
+
+
+def _parse_device(device: str | torch.device) -> torch.device:
+    # This is safe because torch.device(torch.device(...)) is a noop.
+    # torch.device(device) returns a fairly informative error message if `device` is not
+    # a valid device, thus do no extra error reporting.
+    device = torch.device(device)
+
+    # In older versions of PyTorch, some torch.cuda functions fail if the device has no
+    # index. 0 is implicit if no index is specified, so add it.
+    if device == torch.device("cuda"):
+        device = torch.device("cuda:0")
+
+    return device
 
 
 def is_autocast_available(device_type: str) -> bool:
