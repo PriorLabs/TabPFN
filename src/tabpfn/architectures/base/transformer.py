@@ -695,7 +695,7 @@ class PerFeatureTransformer(Architecture):
             # Random numbers on CPU and GPU are different. We fixed the seed, so these
             # are not actually random, leading to a performance drop on CPU without
             # hardcoding them.
-            if embs.shape[1] == 48:  # 192 // 4
+            if embs.shape[1] == 48 and seed == 42:  # 192 // 4
                 embs[:2000] = COL_EMBEDDING[: embs.shape[0]].to(
                     device=embs.device, dtype=embs.dtype
                 )
