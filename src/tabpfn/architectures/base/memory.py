@@ -174,9 +174,7 @@ def _should_save_peak_mem_cuda(
     cell_threshold = baseline_cell_threshold * (
         baseline_dtype_byte_size / dtype_byte_size
     )
-    cell_threshold = baseline_cell_threshold * (
-        free_memory_bytes / baseline_gpu_memory_bytes
-    )
+    cell_threshold = cell_threshold * (free_memory_bytes / baseline_gpu_memory_bytes)
 
     # If we have multiple GPUs, we reduce the threshold a bit, based on empirical
     # results.
