@@ -369,7 +369,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.skip("onnx export is not tested on windows")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
+        regressor = TabPFNRegressor(
+            n_estimators=1, device="cpu", random_state=43, memory_saving_mode=True
+        )
         # load the model so we can access it via classifier.models_
         regressor.fit(X, y)
         # this is necessary if cuda is available
