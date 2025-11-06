@@ -19,12 +19,12 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from tabpfn_common_utils.telemetry import set_model_config
 from typing import TYPE_CHECKING, Any, Literal, cast, overload
 from urllib.error import URLError
 
 import joblib
 import torch
+from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
