@@ -154,7 +154,7 @@ def _should_save_peak_mem_cpu(
     X_train_shape: tuple[int, int], X_test_shape: tuple[int, int]
 ) -> bool:
     # TODO: Refine the CPU heuristic.
-    return _get_cells(X_train_shape, X_test_shape) > 200_000
+    return _get_num_cells(X_train_shape, X_test_shape) > 200_000
 
 
 def _should_save_peak_mem_cuda(
@@ -181,7 +181,7 @@ def _should_save_peak_mem_cuda(
     if len(devices) > 1:
         cell_threshold *= 0.8
 
-    return _get_cells(X_train_shape, X_test_shape) > cell_threshold
+    return _get_num_cells(X_train_shape, X_test_shape) > cell_threshold
 
 
 def _get_free_cuda_memory_bytes(device: torch.device) -> float:
@@ -192,7 +192,9 @@ def _get_free_cuda_memory_bytes(device: torch.device) -> float:
     return system_free_memory + pytorch_cache_free_memory
 
 
-def _get_cells(X_train_shape: tuple[int, int], X_test_shape: tuple[int, int]) -> int:
+def _get_num_cells(
+    X_train_shape: tuple[int, int], X_test_shape: tuple[int, int]
+) -> int:
     n_train, n_features = X_train_shape
     n_test, _ = X_test_shape
     return (n_train + n_test) * n_features

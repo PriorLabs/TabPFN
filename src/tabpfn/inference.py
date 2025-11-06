@@ -483,7 +483,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         return InferenceEngineCachePreprocessing(
             X_trains=X_trains,
             y_trains=y_trains,
-            X_train_shape_before_preprocessing=X_train.shape,
+            X_train_shape_before_preprocessing=tuple[int, int](X_train.shape),
             models=models,
             cat_ixs=cat_ixs,
             ensemble_configs=configs,
@@ -511,7 +511,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             save_peak_mem = should_save_peak_mem(
                 memory_saving_mode=self.save_peak_mem,
                 X_train_shape=self.X_train_shape_before_preprocessing,
-                X_test_shape=X.shape,
+                X_test_shape=tuple[int, int](X.shape),
                 devices=devices,
                 dtype_byte_size=self.dtype_byte_size,
             )
