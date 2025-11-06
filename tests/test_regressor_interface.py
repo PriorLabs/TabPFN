@@ -20,6 +20,7 @@ from torch import nn
 
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.constants import ModelVersion
 from tabpfn.model_loading import ModelSource
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
@@ -285,7 +286,7 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         "append_original": False,  # changed from default
         "categorical_name": "ordinal_very_common_categories_shuffled",
         "global_transformer_name": "svd",
-        "subsample_features": -1,
+        "max_features_per_estimator": 500,
     }
 
     object_config = PreprocessorConfig(
@@ -293,7 +294,7 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
         append_original=False,  # changed from default
         categorical_name="ordinal_very_common_categories_shuffled",
         global_transformer_name="svd",
-        subsample_features=-1,
+        max_features_per_estimator=500,
     )
 
     # Create two models with same random state
@@ -368,7 +369,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.skip("onnx export is not tested on windows")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(n_estimators=1, device="cpu", random_state=43)
+        regressor = TabPFNRegressor(
+            n_estimators=1, device="cpu", random_state=43, memory_saving_mode=True
+        )
         # load the model so we can access it via classifier.models_
         regressor.fit(X, y)
         # this is necessary if cuda is available
@@ -422,16 +425,12 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
 
     # Need to access the model through the executor
     model_instances = typing.cast(typing.Any, model.executor_).models
-    encoder_shape = next(
-        m.out_features
-        for m in model_instances[0].encoder.modules()
-        if isinstance(m, nn.Linear)
-    )
+    hidden_size = model_instances[0].ninp
 
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == encoder_shape
+    assert embeddings.shape[2] == hidden_size
 
 
 def test_overflow_bug_does_not_occur():
@@ -687,3 +686,81 @@ def test_initialize_model_variables_regressor_sets_required_attributes() -> None
 
     assert hasattr(reg2, "znorm_space_bardist_")
     assert reg2.znorm_space_bardist_ is not None
+
+
+@pytest.mark.parametrize("n_features", [1, 2])
+def test__TabPFNRegressor__few_features__works(n_features: int) -> None:
+    """Test that TabPFNRegressor works correctly with 1 or 2 features."""
+    n_samples = 50
+
+    X, y, _ = sklearn.datasets.make_regression(
+        n_samples=n_samples,
+        n_features=n_features,
+        random_state=42,
+        coef=True,
+    )
+
+    model = TabPFNRegressor(
+        n_estimators=2,
+        random_state=42,
+    )
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    predictions = model.predict(X)
+    assert predictions.shape == (X.shape[0],), (
+        f"Predictions shape is incorrect for {n_features} features"
+    )
+    assert not np.isnan(predictions).any(), "Predictions contain NaN values"
+    assert not np.isinf(predictions).any(), "Predictions contain infinite values"
+
+    predictions_median = model.predict(X, output_type="median")
+    assert predictions_median.shape == (X.shape[0],), (
+        f"Median predictions shape is incorrect for {n_features} features"
+    )
+
+    predictions_mode = model.predict(X, output_type="mode")
+    assert predictions_mode.shape == (X.shape[0],), (
+        f"Mode predictions shape is incorrect for {n_features} features"
+    )
+
+    quantiles = model.predict(X, output_type="quantiles", quantiles=[0.1, 0.5, 0.9])
+    assert isinstance(quantiles, list), "Quantiles should be returned as a list"
+    assert len(quantiles) == 3, "Should return 3 quantiles"
+    for i, q in enumerate(quantiles):
+        assert q.shape == (X.shape[0],), (
+            f"Quantile {i} shape is incorrect for {n_features} features"
+        )
+
+
+def test__create_default_for_version__v2__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "regressor" in estimator.model_path
+    assert "-v2-" in estimator.model_path
+
+
+def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+
+    assert isinstance(estimator, TabPFNRegressor)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "regressor" in estimator.model_path
+    assert "-v2.5-" in estimator.model_path
+
+
+def test__create_default_for_version__passes_through_overrides() -> None:
+    estimator = TabPFNRegressor.create_default_for_version(
+        ModelVersion.V2_5, n_estimators=16
+    )
+
+    assert estimator.n_estimators == 16
+    assert estimator.softmax_temperature == 0.9

@@ -1,4 +1,4 @@
-# 📊 Telemetry
+# Telemetry
 
 This project includes lightweight, anonymous telemetry to help us improve TabPFN.  
 We've designed this with two goals in mind:
@@ -10,7 +10,7 @@ If you'd rather not send telemetry, you can always opt out (see **Opting out**).
 
 ---
 
-## 🔍 What we collect
+## What we collect
 
 We only gather **very high-level usage signals** — enough to guide development, never enough to identify you or your data.  
 
@@ -34,7 +34,7 @@ Here's the full list:
 
 ---
 
-## 🛡️ How we protect your privacy
+## How we protect your privacy
 
 - **No inputs, no outputs, no code** ever leave your machine.  
 - **No personal data** is collected.  
@@ -45,7 +45,7 @@ This approach lets us understand dataset *patterns* (e.g. "most users run with ~
 
 ---
 
-## 🤔 Why collect telemetry?
+## Why we collect telemetry?
 
 Open-source projects don't get much feedback unless people file issues. Telemetry helps us:  
 - See which parts of TabPFN are most used (fit vs predict, classification vs regression)  
@@ -56,9 +56,10 @@ This information goes directly into **making TabPFN better** for the community.
 
 ---
 
-## 🚫 Opting out
+## Opting out
 
 Don't want to send telemetry? No problem — just set the environment variable:
 
 ```bash
 export TABPFN_DISABLE_TELEMETRY=1
+```

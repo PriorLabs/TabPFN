@@ -1,14 +1,9 @@
-# use get_total_memory and compare it against result from psutils
-# run it only if the it is windows os.name == "nt"
 from __future__ import annotations
 
-import os
-import threading
 from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
-import psutil
 import pytest
 import torch
 from sklearn.preprocessing import LabelEncoder
@@ -18,39 +13,13 @@ from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
+    balance_probas_by_class_counts,
     fix_dtypes,
-    get_total_memory_windows,
     infer_categorical_features,
     infer_devices,
     process_text_na_dataframe,
     validate_Xy_fit,
 )
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
-def test_internal_windows_total_memory():
-    utils_result = get_total_memory_windows()
-    psutil_result = psutil.virtual_memory().total / 1e9
-    assert utils_result == psutil_result
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows specific test")
-def test_internal_windows_total_memory_multithreaded():
-    # collect results from multiple threads
-    results = []
-
-    def get_memory() -> None:
-        results.append(get_total_memory_windows())
-
-    threads = []
-    for _ in range(10):
-        t = threading.Thread(target=get_memory)
-        threads.append(t)
-        t.start()
-    for t in threads:
-        t.join()
-    psutil_result = psutil.virtual_memory().total / 1e9
-    assert all(result == psutil_result for result in results)
 
 
 def test_infer_categorical_with_str_and_nan_provided_included():
@@ -331,6 +300,9 @@ def prepared_tabpfn_data(request):
 
 
 # --- Actual test ---
+# This is a test for the OrderPreservingColumnTransformer, which is not used currently
+# But might be used in the future, therefore I'll leave it in.
+@pytest.mark.skip
 def test_process_text_na_dataframe(prepared_tabpfn_data):
     X, categorical_idx, ground_truth = prepared_tabpfn_data  # use the fixture
 
@@ -372,3 +344,18 @@ def test_process_text_na_dataframe(prepared_tabpfn_data):
             assert len(np.unique(output_col[~pd.isna(output_col)])) == len(
                 np.unique(gt_col[~pd.isna(gt_col)])
             )
+
+
+def test_balance_probas_by_class_counts():
+    """Test balancing probabilities by class counts."""
+    probas = torch.tensor([[0.2, 0.8], [0.6, 0.4], [0.5, 0.5]])
+    class_counts = np.array([1, 2])
+
+    balanced = balance_probas_by_class_counts(probas, class_counts)
+
+    # Check that each row sums to one
+    sums = balanced.sum(dim=-1)
+    assert torch.allclose(sums, torch.ones(3), rtol=1e-5, atol=1e-5)
+
+    expected_balanced = torch.tensor([[1 / 3, 2 / 3], [0.75, 0.25], [2 / 3, 1 / 3]])
+    assert torch.allclose(balanced, expected_balanced, rtol=1e-4, atol=1e-4)

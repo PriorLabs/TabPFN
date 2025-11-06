@@ -15,6 +15,8 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     default_classifier_preprocessor_configs,
     default_regressor_preprocessor_configs,
+    v2_5_classifier_preprocessor_configs,
+    v2_5_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -125,10 +127,7 @@ class InferenceConfig:
         - If a float, the percentage of samples to subsample.
     """
 
-    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[
-        Literal["safepower", "power", "quantile_norm", None],
-        ...,
-    ] = (None, "safepower")
+    REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
     it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
@@ -138,11 +137,9 @@ class InferenceConfig:
     more than one estimator).
 
     The options are:
-        - If None, no preprocessing is done.
-        - If "power", a power transformation is applied.
-        - If "safepower", a power transformation is applied with a safety factor to
-            avoid numerical issues.
-        - If "quantile_norm", a quantile normalization is applied.
+        - None: no preprocessing is done.
+        - One of the options from
+          `tabpfn.preprocessors.get_all_reshape_feature_distribution_preprocessors()`
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
@@ -153,7 +150,6 @@ class InferenceConfig:
      To improve reproducibility,set `._sklearn_16_decimal_precision = True` before
      calling `.predict()` or `.predict_proba()`."""
 
-    # TODO: move this somewhere else to support that this might change.
     MAX_NUMBER_OF_CLASSES: int = 10
     """The number of classes seen during pretraining for classification. If the
     number of classes is larger than this number, TabPFN requires an additional step
@@ -216,27 +212,33 @@ class InferenceConfig:
         """
         if model_version == ModelVersion.V2:
             if task_type == "multiclass":
-                return InferenceConfig(
-                    PREPROCESS_TRANSFORMS=v2_classifier_preprocessor_configs()
-                )
+                return _get_v2_config(v2_classifier_preprocessor_configs())
             if task_type == "regression":
-                return InferenceConfig(
-                    PREPROCESS_TRANSFORMS=v2_regressor_preprocessor_configs()
-                )
-        # TODO: Add v2.5
+                return _get_v2_config(v2_regressor_preprocessor_configs())
+        if model_version == ModelVersion.V2_5:
+            if task_type == "multiclass":
+                return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
-                PREPROCESS_TRANSFORMS=default_classifier_preprocessor_configs()
+                PREPROCESS_TRANSFORMS=default_classifier_preprocessor_configs(),
+                MAX_NUMBER_OF_FEATURES=2000,
+                MAX_NUMBER_OF_SAMPLES=50_000,
             )
         if task_type == "regression":
             return InferenceConfig(
-                PREPROCESS_TRANSFORMS=default_regressor_preprocessor_configs()
+                PREPROCESS_TRANSFORMS=default_regressor_preprocessor_configs(),
+                MAX_NUMBER_OF_FEATURES=2000,
+                MAX_NUMBER_OF_SAMPLES=50_000,
             )
         raise ValueError(f"Unknown {task_type=} {model_version=}")
 
 
-def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+def _get_v2_config(
+    preprocessor_configs: list[PreprocessorConfig],
+) -> InferenceConfig:
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
@@ -249,4 +251,36 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
         SUBSAMPLE_SAMPLES=None,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
+        USE_SKLEARN_16_DECIMAL_PRECISION=False,
+        MAX_NUMBER_OF_CLASSES=10,
+        MAX_NUMBER_OF_FEATURES=500,
+        MAX_NUMBER_OF_SAMPLES=10_000,
+        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
+        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
+        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
+    )
+
+
+def _get_v2_5_config(
+    preprocessor_configs: list[PreprocessorConfig],
+) -> InferenceConfig:
+    return InferenceConfig(
+        MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
+        MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
+        MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE=100,
+        OUTLIER_REMOVAL_STD="auto",
+        FEATURE_SHIFT_METHOD="shuffle",
+        CLASS_SHIFT_METHOD="shuffle",
+        FINGERPRINT_FEATURE=True,
+        POLYNOMIAL_FEATURES="no",
+        SUBSAMPLE_SAMPLES=None,
+        PREPROCESS_TRANSFORMS=preprocessor_configs,
+        REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
+        USE_SKLEARN_16_DECIMAL_PRECISION=False,
+        MAX_NUMBER_OF_CLASSES=10,
+        MAX_NUMBER_OF_FEATURES=2000,
+        MAX_NUMBER_OF_SAMPLES=50_000,
+        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
+        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
+        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
     )

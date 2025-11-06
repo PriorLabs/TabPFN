@@ -5,9 +5,7 @@
 from __future__ import annotations
 
 import contextlib
-import ctypes
 import os
-import platform
 import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, Union
@@ -228,10 +226,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
     if isinstance(devices, (str, torch.device)):
         devices = (devices,)
 
-    # This is safe because torch.device(torch.device(...)) is a noop.
-    # torch.device(device) returns a fairly informative error message if `device` is not
-    # a valid device, thus do no extra error reporting.
-    devices = tuple(torch.device(device) for device in devices)
+    devices = tuple(_parse_device(device) for device in devices)
 
     if len(set(devices)) != len(devices):
         raise ValueError(
@@ -240,6 +235,20 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
         )
 
     return devices
+
+
+def _parse_device(device: str | torch.device) -> torch.device:
+    # This is safe because torch.device(torch.device(...)) is a noop.
+    # torch.device(device) returns a fairly informative error message if `device` is not
+    # a valid device, thus do no extra error reporting.
+    device = torch.device(device)
+
+    # In older versions of PyTorch, some torch.cuda functions fail if the device has no
+    # index. 0 is implicit if no index is specified, so add it.
+    if device == torch.device("cuda"):
+        device = torch.device("cuda:0")
+
+    return device
 
 
 def is_autocast_available(device_type: str) -> bool:
@@ -789,48 +798,6 @@ def transform_borders_one(
     return logit_cancel_mask, descending_borders, borders_t
 
 
-# Terminology: Use memory to referent physical memory, swap for swap memory
-def get_total_memory_windows() -> float:
-    """Get the total memory of the system for windows OS, using windows API.
-
-    Returns:
-        The total memory of the system in GB.
-    """
-    if platform.system() != "Windows":
-        return 0.0  # Function should not be called on non-Windows platforms
-
-    # ref: https://github.com/microsoft/windows-rs/blob/c9177f7a65c764c237a9aebbd3803de683bedaab/crates/tests/bindgen/src/fn_return_void_sys.rs#L12
-    # ref: https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/ns-sysinfoapi-memorystatusex
-    # this class is needed to load the memory status with GlobalMemoryStatusEx function
-    # using win32 API, for more details see microsoft docs link above
-    class _MEMORYSTATUSEX(ctypes.Structure):
-        _fields_: typing.ClassVar = [
-            ("dwLength", ctypes.c_ulong),
-            ("dwMemoryLoad", ctypes.c_ulong),
-            ("ullTotalPhys", ctypes.c_ulonglong),
-            ("ullAvailPhys", ctypes.c_ulonglong),
-            ("ullTotalPageFile", ctypes.c_ulonglong),
-            ("ullAvailPageFile", ctypes.c_ulonglong),
-            ("ullTotalVirtual", ctypes.c_ulonglong),
-            ("ullAvailVirtual", ctypes.c_ulonglong),
-            ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
-        ]
-
-    # Initialize the structure
-    mem_status = _MEMORYSTATUSEX()
-    # need to initialize length of structure, see Microsoft docs above
-    mem_status.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
-    try:
-        # Use typing.cast to help mypy understand this Windows-only code
-        windll = typing.cast("typing.Any", ctypes).windll
-        k32_lib = windll.LoadLibrary("kernel32.dll")
-        k32_lib.GlobalMemoryStatusEx(ctypes.byref(mem_status))
-        return float(mem_status.ullTotalPhys) / 1e9  # Convert bytes to GB
-    except (AttributeError, OSError):
-        # Fall back if not on Windows or if the function fails
-        return 0.0
-
-
 def split_large_data(
     largeX: XType,
     largey: YType,
@@ -987,3 +954,23 @@ def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
             items_list.append([batch[r][item_idx] for r in range(batch_sz)])
 
     return tuple(items_list)
+
+
+def balance_probas_by_class_counts(
+    probas: torch.Tensor,
+    class_counts: np.ndarray,
+) -> torch.Tensor:
+    """Balance probabilities by class counts.
+
+    Args:
+        probas: The probabilities to balance.
+        class_counts: The class counts to use for balancing.
+
+    Returns:
+        The balanced probabilities.
+    """
+    class_prob_in_train = class_counts / class_counts.sum()
+    balanced_probas = probas / torch.from_numpy(class_prob_in_train).float().to(
+        probas.device
+    )
+    return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)

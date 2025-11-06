@@ -33,6 +33,7 @@ from tabpfn.preprocessors.preprocessing_helpers import (
     TransformResult,
 )
 from tabpfn.preprocessors.safe_power_transformer import SafePowerTransformer
+from tabpfn.preprocessors.squashing_scaler_transformer import SquashingScaler
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -162,16 +163,20 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         transform_name: str = "safepower",
         apply_to_categorical: bool = False,
         append_to_original: bool | Literal["auto"] = False,
-        subsample_features: float = -1,
+        max_features_per_estimator: int = 500,
         global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
     ):
         super().__init__()
+
+        if max_features_per_estimator <= 0:
+            raise ValueError("max_features_per_estimator must be a positive integer.")
+
         self.transform_name = transform_name
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
         self.random_state = random_state
-        self.subsample_features = float(subsample_features)
+        self.max_features_per_estimator = max_features_per_estimator
         self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
@@ -186,31 +191,16 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
 
         static_seed, rng = infer_random_state(self.random_state)
 
-        if (
-            self.global_transformer_name is not None
-            and self.global_transformer_name != "None"
-            and not (self.global_transformer_name == "svd" and n_features < 2)
-        ):
-            global_transformer_ = get_all_global_transformers(
-                n_samples,
-                n_features,
-                random_state=static_seed,
-            )[self.global_transformer_name]
-        else:
-            global_transformer_ = None
-
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
             random_state=static_seed,
         )
-        if self.subsample_features > 0:
-            subsample_features = int(self.subsample_features * n_features) + 1
-            # sampling more features than exist
-            replace = subsample_features > n_features
+        if n_features > self.max_features_per_estimator:
+            subsample_features = self.max_features_per_estimator
             self.subsampled_features_ = rng.choice(
                 list(range(n_features)),
                 subsample_features,
-                replace=replace,
+                replace=False,
             )
             categorical_features = [
                 new_idx
@@ -221,12 +211,31 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         else:
             self.subsampled_features_ = np.arange(n_features)
 
+        if (
+            self.global_transformer_name is not None
+            and self.global_transformer_name != "None"
+            and not (
+                self.global_transformer_name in ["svd", "svd_quarter_components"]
+                and n_features < 2
+            )
+        ):
+            global_transformer_ = get_all_global_transformers(
+                n_samples,
+                n_features,
+                random_state=static_seed,
+            )[self.global_transformer_name]
+        else:
+            global_transformer_ = None
+
         all_feats_ix = list(range(n_features))
         transformers = []
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
 
-        append_decision = n_features < self.APPEND_TO_ORIGINAL_THRESHOLD
+        append_decision = (
+            n_features < self.APPEND_TO_ORIGINAL_THRESHOLD
+            and n_features < (self.max_features_per_estimator / 2)
+        )
         self.append_to_original = (
             append_decision
             if self.append_to_original == "auto"
@@ -368,6 +377,38 @@ def get_all_global_transformers(
                                         min(
                                             num_examples // 10 + 1,
                                             num_features // 2,
+                                        ),
+                                    ),
+                                    random_state=random_state,
+                                ),
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
+        "svd_quarter_components": FeatureUnion(
+            [
+                ("passthrough", FunctionTransformer(func=_identity)),
+                (
+                    "svd",
+                    Pipeline(
+                        steps=[
+                            (
+                                "save_standard",
+                                _make_standard_scaler_safe(
+                                    ("standard", StandardScaler(with_mean=False)),
+                                ),
+                            ),
+                            (
+                                "svd",
+                                TruncatedSVD(
+                                    algorithm="arpack",
+                                    n_components=max(
+                                        1,
+                                        min(
+                                            num_examples // 10 + 1,
+                                            num_features // 4,
                                         ),
                                     ),
                                     random_state=random_state,
@@ -525,6 +566,8 @@ def get_all_reshape_feature_distribution_preprocessors(
             n_quantiles=num_examples,
             random_state=random_state,
         ),
+        "squashing_scaler_default": SquashingScaler(),
+        "squashing_scaler_max10": SquashingScaler(max_absolute_value=10.0),
         "robust": RobustScaler(unit_variance=True),
         # default FunctionTransformer yields the identity function
         "none": FunctionTransformer(),

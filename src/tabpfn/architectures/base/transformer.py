@@ -6,6 +6,7 @@ import logging
 import warnings
 from collections.abc import Callable, Iterable
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 from typing_extensions import Self, override
 
@@ -22,6 +23,7 @@ from tabpfn.architectures.base.encoders import (
     SequentialEncoder,
 )
 from tabpfn.architectures.base.layer import PerFeatureEncoderLayer
+from tabpfn.architectures.base.thinking_tokens import AddThinkingTokens
 from tabpfn.architectures.interface import Architecture
 
 if TYPE_CHECKING:
@@ -29,6 +31,11 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+# Hard coded "random" embeddings (seed=42) used during training of size
+# 2000 x 48.
+col_embedding_path = Path(__file__).parent / "tabpfn_col_embedding.pt"
+COL_EMBEDDING = torch.load(col_embedding_path, weights_only=True)
 
 
 class LayerStack(nn.Module):
@@ -38,7 +45,6 @@ class LayerStack(nn.Module):
         self,
         *,
         layers: Iterable[nn.Module],
-        recompute_each_layer: bool,
         min_num_layers_layer_dropout: int | None,
     ) -> None:
         super().__init__()
@@ -48,7 +54,6 @@ class LayerStack(nn.Module):
             if min_num_layers_layer_dropout is not None
             else len(self.layers)
         )
-        self.recompute_each_layer = recompute_each_layer
 
     @classmethod
     def of_repeated_layer(
@@ -56,13 +61,11 @@ class LayerStack(nn.Module):
         layer_creator: Callable[[], nn.Module],
         *,
         num_layers: int,
-        recompute_each_layer: bool = False,
         min_num_layers_layer_dropout: int | None = None,
     ) -> Self:
         """Returns an instance containing the given layer repeated num_layers times."""
         return cls(
             layers=[layer_creator() for _ in range(num_layers)],
-            recompute_each_layer=recompute_each_layer,
             min_num_layers_layer_dropout=min_num_layers_layer_dropout,
         )
 
@@ -70,6 +73,7 @@ class LayerStack(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
+        recompute_layer: bool,
         **kwargs: Any,
     ) -> torch.Tensor:
         n_layers = torch.randint(
@@ -77,7 +81,7 @@ class LayerStack(nn.Module):
         ).item()
 
         for layer in self.layers[:n_layers]:
-            if self.recompute_each_layer and x.requires_grad:
+            if recompute_layer and x.requires_grad:
                 x = checkpoint(partial(layer, **kwargs), x, use_reentrant=False)  # type: ignore
             else:
                 x = layer(x, **kwargs)
@@ -182,6 +186,14 @@ class PerFeatureTransformer(Architecture):
         self.cache_trainset_representation = cache_trainset_representation
         self.cached_embeddings: torch.Tensor | None = None
 
+        if config.num_thinking_rows > 0:
+            self.add_thinking_tokens = AddThinkingTokens(
+                num_thinking_rows=config.num_thinking_rows,
+                emsize=config.emsize,
+            )
+        else:
+            self.add_thinking_tokens = None
+
         layer_creator = lambda: PerFeatureEncoderLayer(
             config=config,
             dim_feedforward=nhid,
@@ -193,10 +205,11 @@ class PerFeatureTransformer(Architecture):
             **layer_kwargs,
         )
 
+        self.recompute_layer = config.recompute_layer
+
         self.transformer_encoder = LayerStack.of_repeated_layer(
             layer_creator=layer_creator,
             num_layers=config.nlayers,
-            recompute_each_layer=config.recompute_layer,
             min_num_layers_layer_dropout=min_num_layers_layer_dropout,
         )
 
@@ -294,6 +307,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
+        force_recompute_layer: bool = False,
     ) -> torch.Tensor: ...
 
     @overload
@@ -306,6 +320,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
+        force_recompute_layer: bool = False,
     ) -> dict[str, torch.Tensor]: ...
 
     @override
@@ -318,6 +333,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
+        force_recompute_layer: bool = False,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 
@@ -342,6 +358,8 @@ class PerFeatureTransformer(Architecture):
             categorical_inds: The indices of categorical features.
             style: The style vector.
             data_dags: The data DAGs for each example in the batch.
+            force_recompute_layer: Whether to force to recompute layers (i.e.
+            perform activation checkpointing for each layer).
         """
         assert style is None
 
@@ -535,6 +553,13 @@ class PerFeatureTransformer(Architecture):
             )
         del embedded_y, embedded_x
 
+        if self.add_thinking_tokens is not None:
+            embedded_input, single_eval_pos = self.add_thinking_tokens(
+                embedded_input,
+                single_eval_pos,
+            )
+
+        recompute_layer = self.recompute_layer or force_recompute_layer
         encoder_out = self.transformer_encoder(
             (
                 embedded_input
@@ -543,6 +568,7 @@ class PerFeatureTransformer(Architecture):
             ),
             single_eval_pos=single_eval_pos,
             cache_trainset_representation=self.cache_trainset_representation,
+            recompute_layer=recompute_layer,
         )  # b s f+1 e -> b s f+1 e
 
         # If we are using a decoder
@@ -581,7 +607,14 @@ class PerFeatureTransformer(Architecture):
             )
 
             # out: s b e
-            train_encoder_out = encoder_out[:, :single_eval_pos, -1].transpose(0, 1)
+            thinking_rows_offset = (
+                self.add_thinking_tokens.num_thinking_rows
+                if self.add_thinking_tokens is not None
+                else 0
+            )
+            train_encoder_out = encoder_out[
+                :, thinking_rows_offset:single_eval_pos, -1
+            ].transpose(0, 1)
             output_decoded["train_embeddings"] = train_encoder_out
             output_decoded["test_embeddings"] = test_encoder_out
 
@@ -599,9 +632,8 @@ class PerFeatureTransformer(Architecture):
         use_cached_embeddings: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if use_cached_embeddings and self.cached_embeddings is not None:
-            assert data_dags is None, (
-                "Caching embeddings is not supported with data_dags at this point."
-            )
+            msg = "Caching embeddings is not supported with data_dags at this point."
+            assert data_dags is None, msg
             x += self.cached_embeddings[None, None]
             return x, y
 
@@ -658,6 +690,13 @@ class PerFeatureTransformer(Architecture):
                 dtype=x.dtype,
                 generator=positional_embedding_rng,
             )
+            # Random numbers on CPU and GPU are different. We fixed the seed, so these
+            # are not actually random, leading to a performance drop on CPU without
+            # hardcoding them.
+            if embs.shape[1] == 48 and self.random_embedding_seed == 42:  # 192 // 4
+                embs[:2000] = COL_EMBEDDING[: embs.shape[0]].to(
+                    device=embs.device, dtype=embs.dtype
+                )
             embs = self.feature_positional_embedding_embeddings(embs)
             x += embs[None, None]
         elif self.feature_positional_embedding is None:
@@ -667,9 +706,8 @@ class PerFeatureTransformer(Architecture):
 
         self.cached_embeddings = None
         if cache_embeddings and embs is not None:
-            assert data_dags is None, (
-                "Caching embeddings is not supported with data_dags at this point."
-            )
+            msg = "Caching embeddings is not supported with data_dags at this point."
+            assert data_dags is None, msg
             self.cached_embeddings = embs
 
         # TODO(old) should this go into encoder?
@@ -733,28 +771,6 @@ class PerFeatureTransformer(Architecture):
         """
         for layer in (self.transformer_decoder or self.transformer_encoder).layers:
             layer.empty_trainset_representation_cache()
-
-    def _transform_categorical_indices_feat_groups(
-        self, categorical_inds: list[int], n_subgroups: int
-    ) -> list[list[int]]:
-        """Transform the categorical indices list(s)
-        to align with the feature groups.
-
-        Args:
-            categorical_inds: categorical indices as 2D list
-            n_subgroups: number of subgroups.
-        """
-        new_categorical_inds = []
-        for subgroup in range(n_subgroups):
-            subgroup_lower = subgroup * self.features_per_group
-            subgroup_upper = (subgroup + 1) * self.features_per_group
-            subgroup_indices = [
-                i - subgroup_lower
-                for i in categorical_inds
-                if subgroup_lower <= i < subgroup_upper
-            ]
-            new_categorical_inds.append(subgroup_indices)
-        return new_categorical_inds
 
 
 def _networkx_add_direct_connections(graph: nx.DiGraph) -> bool:

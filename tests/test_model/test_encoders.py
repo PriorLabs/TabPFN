@@ -10,6 +10,7 @@ from tabpfn.architectures.base import encoders
 from tabpfn.architectures.base.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
+    MLPInputEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     SequentialEncoder,
@@ -265,6 +266,48 @@ def test_linear_encoder():
     assert out.shape[-1] == F, "Output should have the requested number of features."
 
 
+@pytest.mark.parametrize("num_layers", [2, 3])
+def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
+    """Test MLP encoder input/output dimensions."""
+    N, B, F = 10, 3, 4
+    emsize = 8
+    x = torch.randn([N, B, F])
+
+    # Test basic MLP encoder with default hidden_dim (should equal emsize)
+    encoder = SequentialEncoder(
+        MLPInputEncoderStep(
+            num_features=F,
+            emsize=emsize,
+            num_layers=num_layers,
+        ),
+        output_key=None,
+    )
+    out = encoder({"main": x}, single_eval_pos=-1)["output"]
+    assert out.shape == (
+        N,
+        B,
+        emsize,
+    ), f"Output shape should be ({N}, {B}, {emsize}), got {out.shape}"
+
+    # Test with explicit hidden_dim
+    hidden_dim = 16
+    encoder = SequentialEncoder(
+        MLPInputEncoderStep(
+            num_features=F,
+            emsize=emsize,
+            hidden_dim=hidden_dim,
+            num_layers=num_layers,
+        ),
+        output_key=None,
+    )
+    out = encoder({"main": x}, single_eval_pos=-1)["output"]
+    assert out.shape == (
+        N,
+        B,
+        emsize,
+    ), f"Output shape should be ({N}, {B}, {emsize}), got {out.shape}"
+
+
 def test_combination():
     N, B, F, fixed_out = 10, 3, 4, 5
     x = torch.randn([N, B, F])
@@ -366,7 +409,10 @@ def test_interface():
             and cls is not encoders.SeqEncStep
         ):
             num_features = 4
-            if cls is encoders.LinearInputEncoderStep:
+            if (
+                cls is encoders.LinearInputEncoderStep
+                or cls is encoders.MLPInputEncoderStep
+            ):
                 obj = cls(num_features=num_features, emsize=16)
             elif cls is encoders.VariableNumFeaturesEncoderStep:
                 obj = cls(num_features=num_features)

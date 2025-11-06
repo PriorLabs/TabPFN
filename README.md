@@ -9,7 +9,7 @@
 
 <img src="https://github.com/PriorLabs/tabpfn-extensions/blob/main/tabpfn_summary.webp" width="80%" alt="TabPFN Summary">
 
-## 🏁 Quick Start
+## Quick Start
 
 ### Interactive Notebook Tutorial
 > [!TIP]
@@ -48,14 +48,18 @@ from sklearn.metrics import accuracy_score, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
+from tabpfn.constants import ModelVersion
 
 # Load data
 X, y = load_breast_cancer(return_X_y=True)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
 
 # Initialize a classifier
-clf = TabPFNClassifier()
+clf = TabPFNClassifier()  # Uses TabPFN 2.5 weights, finetuned on real data.
+# To use TabPFN v2:
+# clf = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
 clf.fit(X_train, y_train)
+
 
 # Predict probabilities
 prediction_probabilities = clf.predict_proba(X_test)
@@ -73,6 +77,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNRegressor
+from tabpfn.constants import ModelVersion
 
 # Load Boston Housing data
 df = fetch_openml(data_id=531, as_frame=True)  # Boston Housing dataset
@@ -83,7 +88,9 @@ y = df.target.astype(float)  # Ensure target is float for regression
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
 
 # Initialize the regressor
-regressor = TabPFNRegressor()
+regressor = TabPFNRegressor()  # Uses TabPFN-2.5 weights, trained on synthetic data only.
+# To use TabPFN v2:
+# regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 regressor.fit(X_train, y_train)
 
 # Predict on the test set
@@ -104,27 +111,7 @@ print("R² Score:", r2)
 - **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
 - **Mind the dataset size**: TabPFN works best on datasets with fewer than 10,000 samples and 500 features. For larger datasets, we recommend looking at the [Large datasets guide](https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py).
 
-### Best Results
-
-For optimal performance, use the `AutoTabPFNClassifier` or `AutoTabPFNRegressor` for post-hoc ensembling. These can be found in the [TabPFN Extensions](https://github.com/PriorLabs/tabpfn-extensions) repository. Post-hoc ensembling combines multiple TabPFN models into an ensemble.
-
-**Steps for Best Results:**
-1. Install the extensions:
-   ```bash
-   git clone https://github.com/priorlabs/tabpfn-extensions.git
-   pip install -e tabpfn-extensions
-   ```
-
-2.
-   ```python
-   from tabpfn_extensions.post_hoc_ensembles.sklearn_interface import AutoTabPFNClassifier
-
-   clf = AutoTabPFNClassifier(max_time=120, device="cuda") # 120 seconds tuning time
-   clf.fit(X_train, y_train)
-   predictions = clf.predict(X_test)
-   ```
-
-## 🌐 TabPFN Ecosystem
+## TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:
 
@@ -134,15 +121,15 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**
   A powerful companion repository packed with advanced utilities, integrations, and features - great place to contribute:
 
-  - 🔍 **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
-  - 🕵️‍♂️ **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
-  - 🧬 **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
-  - 🧠 **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
-  - 🌲 **`rf_pfn`**: Combine TabPFN with traditional models like Random Forests for hybrid approaches.
-  - ⚙️ **`hpo`**: Automated hyperparameter optimization tailored to TabPFN.
-  - 🔁 **`post_hoc_ensembles`**: Boost performance by ensembling multiple TabPFN models post-training.
+  -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
+  -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
+  -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
+  -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
+  -  **`rf_pfn`**: Combine TabPFN with traditional models like Random Forests for hybrid approaches.
+  -  **`hpo`**: Automated hyperparameter optimization tailored to TabPFN.
+  -  **`post_hoc_ensembles`**: Boost performance by ensembling multiple TabPFN models post-training.
 
-  ✨ To install:
+  To install:
   ```bash
   git clone https://github.com/priorlabs/tabpfn-extensions.git
   pip install -e tabpfn-extensions
@@ -154,7 +141,7 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN UX](https://ux.priorlabs.ai)**
   No-code graphical interface to explore TabPFN capabilities—ideal for business users and prototyping.
 
-## 🔀 TabPFN Workflow at a Glance
+## TabPFN Workflow at a Glance
 Follow this decision tree to build your model and choose the right extensions from our ecosystem. It walks you through critical questions about your data, hardware, and performance needs, guiding you to the best solution for your specific use case.
 
 ```mermaid
@@ -296,11 +283,20 @@ graph LR
 
 ```
 
-## 📜 License
+## License
 
-Prior Labs License (Apache 2.0 with additional attribution requirement): [here](https://priorlabs.ai/tabpfn-license/)
+The TabPFN-2.5 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/LICENSE). These are used by default.
 
-## 🤝 Join Our Community
+The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](https://priorlabs.ai/tabpfn-license/). To use the v2 model weights, instantiate your model as follows:
+
+```
+from tabpfn.constants import ModelVersion
+tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
+```
+
+
+
+## Join Our Community
 
 We're building the future of tabular machine learning and would love your involvement:
 
@@ -316,7 +312,7 @@ We're building the future of tabular machine learning and would love your involv
 
 3. **Stay Updated**: Star the repo and join Discord for the latest updates
 
-## 📚 Citation
+## Citation
 
 You can read our paper explaining TabPFN [here](https://doi.org/10.1038/s41586-024-08328-6).
 
@@ -350,12 +346,18 @@ You can read our paper explaining TabPFN [here](https://doi.org/10.1038/s41586-0
 ### **Usage & Compatibility**
 
 **Q: What dataset sizes work best with TabPFN?**
-A: TabPFN is optimized for **datasets up to 10,000 rows**. For larger datasets, consider using **Random Forest preprocessing** or other extensions. See our [Colab notebook](https://colab.research.google.com/drive/154SoIzNW1LHBWyrxNwmBqtFAr1uZRZ6a#scrollTo=OwaXfEIWlhC8) for strategies.
+A: TabPFN-2.5 is optimized for **datasets up to 50,000 rows**. For larger datasets, consider using **Random Forest preprocessing** or other extensions. See our [Colab notebook](https://colab.research.google.com/drive/154SoIzNW1LHBWyrxNwmBqtFAr1uZRZ6a#scrollTo=OwaXfEIWlhC8) for strategies.
 
 **Q: Why can't I use TabPFN with Python 3.8?**
-A: TabPFN v2 requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
+A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
 
 ### **Installation & Setup**
+
+**Q: How do I get access to TabPFN-2.5?**
+
+Visit [https://huggingface.co/Prior-Labs/tabpfn_2_5](https://huggingface.co/Prior-Labs/tabpfn_2_5) and accept the license terms. If access via huggingface is not an option for you, please contact us at [`sales@priorlabs.ai`](mailto:sales@priorlabs.ai).
+
+Downloading the model requires your machine to be logged into Hugging Face. To do so, run `hf auth login` in your terminal, see the [huggingface documentation](https://huggingface.co/docs/huggingface_hub/en/quick-start#authentication) for details..
 
 **Q: How do I use TabPFN without an internet connection?**
 
@@ -374,9 +376,9 @@ This script will download the main classifier and regressor models, as well as a
 
 **Manual Download**
 
-1. Download the model files manually from HuggingFace (or use the S3 fallback if HuggingFace is unavailable):
-   - Classifier: [tabpfn-v2-classifier.ckpt](https://huggingface.co/Prior-Labs/TabPFN-v2-clf/resolve/main/tabpfn-v2-classifier.ckpt) ([S3 fallback](https://storage.googleapis.com/tabpfn-v2-model-files/05152025/tabpfn-v2-classifier.ckpt))
-   - Regressor: [tabpfn-v2-regressor.ckpt](https://huggingface.co/Prior-Labs/TabPFN-v2-reg/resolve/main/tabpfn-v2-regressor.ckpt) ([S3 fallback](https://storage.googleapis.com/tabpfn-v2-model-files/05152025/tabpfn-v2-regressor.ckpt))
+1. Download the model files manually from HuggingFace:
+   - Classifier: [tabpfn-v2.5-classifier-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-classifier-v2.5_default.ckpt) (Note: the classifier default uses the model fine-tuned on real data).
+   - Regressor: [tabpfn-v2.5-regressor-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-regressor-v2.5_default.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
@@ -450,7 +452,7 @@ Not effective:
 - Adapt feature scaling
 - Convert categorical features to numerical values (e.g., one-hot encoding)
 
-## 🛠️ Development
+## Development
 
 1. Setup environment:
 ```bash
@@ -472,28 +474,19 @@ pre-commit run --all-files
 pytest tests/
 ```
 
-## 📊 Anonymous Telemetry
+## Anonymized Telemetry
 
-This project collects **anonymous usage telemetry** by default.
+This project collects fully anonymous usage telemetry with an option to opt-out of any telemetry or opt-in to extended telemetry.
 
-The data is used exclusively to help us understand how the library is being used and to guide future improvements.
+The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
 - **No personal data is collected**
 - **No code, model inputs, or outputs are ever sent**
 - **Data is strictly anonymous and cannot be linked to individuals**
 
-### What we collect
-We only collect high-level, non-identifying information such as:
-- Package version
-- Python version
-- How often fit and inference are called, including simple metadata like the dimensionality of the input and the type of task (e.g., classification vs. regression) (:warning: never the data itself)
+For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
 
-This data is processed in compliance with the **General Data Protection Regulation (GDPR)** principles of data minimization and purpose limitation.
-
-For more details, please see our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
-
-### How to opt out
-If you prefer not to send telemetry, you can disable it by setting the following environment variable:
+**To opt out**, set the following environment variable:
 
 ```bash
 export TABPFN_DISABLE_TELEMETRY=1

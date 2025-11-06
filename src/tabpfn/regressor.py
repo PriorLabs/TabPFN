@@ -47,9 +47,14 @@ from tabpfn.base import (
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
 )
-from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON
+from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
+from tabpfn.model_loading import (
+    ModelSource,
+    get_cache_dir,
+    load_fitted_tabpfn_model,
+    save_fitted_tabpfn_model,
+)
 from tabpfn.preprocessing import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
@@ -76,6 +81,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
+    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
@@ -215,14 +221,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = "fit_preprocessors",
-        memory_saving_mode: bool | Literal["auto"] | float | int = "auto",
+        memory_saving_mode: MemorySavingMode = "auto",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
     ) -> None:
-        """A TabPFN interface for regression.
+        """Construct a TabPFN regressor.
+
+        This constructs a regressor using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Args:
             n_estimators:
@@ -274,13 +284,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If set to "auto", the
-                device is selected based on availability in the following order of
-                priority: "cuda:0", "mps", and then "cpu". You can also set the device
-                manually to a PyTorch device string e.g. "cuda:1".
+                The device(s) to use for inference.
 
-                See PyTorch's documentation on devices for more information about
-                supported devices.
+                If "auto": a single device is selected based on availability in the
+                following order of priority: "cuda:0", "mps", "cpu".
+
+                To manually select a single device: specify a PyTorch device string e.g.
+                "cuda:1". See PyTorch's documentation for information about supported
+                devices.
+
+                To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
+                ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
+                larger datasets, by executing the estimators in parallel on the GPUs.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -297,10 +312,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 !!! note
 
-                    The current pre-training limits are:
+                    For version 2.5, the pre-training limits are:
 
-                    - 10_000 samples/rows
-                    - 500 features/columns
+                    - 50_000 samples/rows
+                    - 2_000 features/columns (Note that for more than 500 features we
+                        subsample 500 features per estimator. It is therefore important
+                        to use a sufficiently large number of `n_estimators`.)
 
             device:
                 The device to use for inference with TabPFN. If `"auto"`, the device is
@@ -354,30 +371,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   attribute internally.
 
             memory_saving_mode:
-                Enable GPU/CPU memory saving mode. This can help to prevent
-                out-of-memory errors that result from computations that would consume
-                more memory than available on the current device. We save memory by
-                automatically batching certain model computations within TabPFN to
-                reduce the total required memory. The options are:
+                Enable GPU/CPU memory saving mode. This can both avoid out-of-memory
+                errors and improve fit+predict speed by reducing memory pressure.
 
-                - If `bool`, enable/disable memory saving mode.
-                - If `"auto"`, we will estimate the amount of memory required for the
-                  forward pass and apply memory saving if it is more than the
-                  available GPU/CPU memory. This is the recommended setting as it
-                  allows for speed-ups and prevents memory errors depending on
-                  the input data.
-                - If `float` or `int`, we treat this value as the maximum amount of
-                  available GPU/CPU memory (in GB). We will estimate the amount
-                  of memory required for the forward pass and apply memory saving
-                  if it is more than this value. Passing a float or int value for
-                  this parameter is the same as setting it to True and explicitly
-                  specifying the maximum free available memory
+                It saves memory by automatically batching certain model computations
+                within TabPFN.
+
+                - If "auto": memory saving mode is enabled/disabled automatically based
+                    on a heuristic
+                - If True/False: memory saving mode is forced enabled/disabled.
+
+                If speed is important to your application, you may wish to manually tune
+                this option by comparing the time taken for fit+predict with it set to
+                False and True.
 
                 !!! warning
                     This does not batch the original input data. We still recommend to
-                    batch this as necessary if you run into memory errors! For example,
-                    if the entire input data does not fit into memory, even the memory
-                    save mode will not prevent memory errors.
+                    batch the test set as necessary if you run out of memory.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -439,9 +449,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode: Literal["low_memory", "fit_preprocessors", "batched"] = fit_mode
-        self.memory_saving_mode: bool | Literal["auto"] | float | int = (
-            memory_saving_mode
-        )
+        self.memory_saving_mode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -458,6 +466,38 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Ping the usage service if telemetry enabled
         ping()
+
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct a regressor that uses the given version of the model.
+
+        In addition to selecting the model, this also configures certain settings to the
+        default values associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        if version == ModelVersion.V2:
+            options = {
+                "model_path": str(
+                    get_cache_dir() / ModelSource.get_regressor_v2().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V2_5:
+            options = {
+                "model_path": str(
+                    get_cache_dir() / ModelSource.get_regressor_v2_5().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
 
     @property
     def model_(self) -> Architecture:
@@ -599,7 +639,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X,
             y,
             estimator=self,
-            ensure_y_numeric=False,
+            ensure_y_numeric=True,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,

@@ -8,6 +8,8 @@ from typing import Any
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from tabpfn.constants import ModelVersion
+
 
 class TabPFNSettings(BaseSettings):
     """Configuration settings for TabPFN.
@@ -28,6 +30,10 @@ class TabPFNSettings(BaseSettings):
         default=None,
         description="Custom directory for caching downloaded TabPFN models. "
         "If not set, uses platform-specific user cache directory.",
+    )
+    model_version: ModelVersion = Field(
+        default=ModelVersion.V2_5,
+        description="The version of the TabPFN model to use by default.",
     )
 
     # Performance/Memory Settings

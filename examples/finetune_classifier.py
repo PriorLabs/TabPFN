@@ -67,7 +67,7 @@ def setup_model_and_optimizer(config: dict) -> tuple[TabPFNClassifier, Optimizer
 
     if len(classifier.models_) > 1:
         raise ValueError(
-            f"Your TabPFNClassifier usese multiple models ({len(classifier.models_)}). "
+            f"Your TabPFNClassifier uses multiple models ({len(classifier.models_)}). "
             "Finetuning is not supported for multiple models. Please use a single model."
         )
     model = classifier.models_[0]

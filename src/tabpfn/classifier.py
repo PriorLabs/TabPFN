@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import warnings
 from collections.abc import Callable, Sequence
@@ -44,11 +45,25 @@ from tabpfn.base import (
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
+    ModelVersion,
     XType,
     YType,
 )
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
-from tabpfn.model_loading import load_fitted_tabpfn_model, save_fitted_tabpfn_model
+from tabpfn.inference_tuning import (
+    ClassifierEvalMetrics,
+    ClassifierTuningConfig,
+    find_optimal_classification_thresholds,
+    find_optimal_temperature,
+    get_tuning_splits,
+    resolve_tuning_config,
+)
+from tabpfn.model_loading import (
+    ModelSource,
+    get_cache_dir,
+    load_fitted_tabpfn_model,
+    save_fitted_tabpfn_model,
+)
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
@@ -58,6 +73,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
+    balance_probas_by_class_counts,
     fix_dtypes,
     get_embeddings,
     infer_categorical_features,
@@ -72,6 +88,7 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
+    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.inference_config import InferenceConfig
 
@@ -79,6 +96,8 @@ if TYPE_CHECKING:
         from sklearn.base import Tags
     except ImportError:
         Tags = Any
+
+DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
 
 
 class TabPFNClassifier(ClassifierMixin, BaseEstimator):
@@ -151,6 +170,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     preprocessor_: ColumnTransformer
     """The column transformer used to preprocess the input data to be numeric."""
 
+    tuned_classification_thresholds_: npt.NDArray[Any] | None
+    """The tuned classification thresholds for each class or None if no tuning is
+    specified."""
+
+    eval_metric_: ClassifierEvalMetrics
+    """The validated evaluation metric to optimize for during prediction."""
+
+    softmax_temperature_: float
+    """The softmax temperature used for prediction. This is set to the default softmax
+    temperature if no temperature tuning is done"""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -175,14 +205,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = "fit_preprocessors",
-        memory_saving_mode: bool | Literal["auto"] | float | int = "auto",
+        memory_saving_mode: MemorySavingMode = "auto",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
+        eval_metric: str | ClassifierEvalMetrics | None = None,
+        tuning_config: dict | ClassifierTuningConfig | None = None,
     ) -> None:
-        """A TabPFN interface for classification.
+        """Construct a TabPFN classifier.
+
+        This constructs a classifier using the latest model and settings. If you would
+        like to use a previous model version, use `create_default_for_version()`
+        instead. You can also use `model_path` to specify a particular model.
 
         Args:
             n_estimators:
@@ -246,14 +282,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   downloaded to this location.
 
             device:
-                The device to use for inference with TabPFN. If set to "auto", the
-                device is selected based on availability in the following order of
-                priority: "cuda:0", "mps", and then "cpu". You can also set the device
-                manually to a PyTorch device string e.g. "cuda:1".
+                The device(s) to use for inference.
 
-                See PyTorch's documentation on devices for more information about
-                supported devices.
+                If "auto": a single device is selected based on availability in the
+                following order of priority: "cuda:0", "mps", "cpu".
 
+                To manually select a single device: specify a PyTorch device string e.g.
+                "cuda:1". See PyTorch's documentation for information about supported
+                devices.
+
+                To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
+                ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
+                larger datasets, by executing the estimators in parallel on the GPUs.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -270,10 +310,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
                 !!! note
 
-                    The current pre-training limits are:
+                    For version 2.5, the pre-training limits are:
 
-                    - 10_000 samples/rows
-                    - 500 features/columns
+                    - 50_000 samples/rows
+                    - 2_000 features/columns (Note that for more than 500 features we
+                        subsample 500 features per estimator. It is therefore important
+                        to use a sufficiently large number of `n_estimators`.)
                     - 10 classes, this is not ignorable and will raise an error
                       if the model is used with more classes.
 
@@ -321,32 +363,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                   class in Fine-Tuning. The fit_from_preprocessed() function sets this
                   attribute internally.
 
-
             memory_saving_mode:
-                Enable GPU/CPU memory saving mode. This can help to prevent
-                out-of-memory errors that result from computations that would consume
-                more memory than available on the current device. We save memory by
-                automatically batching certain model computations within TabPFN to
-                reduce the total required memory. The options are:
+                Enable GPU/CPU memory saving mode. This can both avoid out-of-memory
+                errors and improve fit+predict speed by reducing memory pressure.
 
-                - If `bool`, enable/disable memory saving mode.
-                - If `"auto"`, we will estimate the amount of memory required for the
-                  forward pass and apply memory saving if it is more than the
-                  available GPU/CPU memory. This is the recommended setting as it
-                  allows for speed-ups and prevents memory errors depending on
-                  the input data.
-                - If `float` or `int`, we treat this value as the maximum amount of
-                  available GPU/CPU memory (in GB). We will estimate the amount
-                  of memory required for the forward pass and apply memory saving
-                  if it is more than this value. Passing a float or int value for
-                  this parameter is the same as setting it to True and explicitly
-                  specifying the maximum free available memory.
+                It saves memory by automatically batching certain model computations
+                within TabPFN.
+
+                - If "auto": memory saving mode is enabled/disabled automatically based
+                    on a heuristic
+                - If True/False: memory saving mode is forced enabled/disabled.
+
+                If speed is important to your application, you may wish to manually tune
+                this option by comparing the time taken for fit+predict with it set to
+                False and True.
 
                 !!! warning
                     This does not batch the original input data. We still recommend to
-                    batch this as necessary if you run into memory errors! For example,
-                    if the entire input data does not fit into memory, even the memory
-                    save mode will not prevent memory errors.
+                    batch the test set as necessary if you run out of memory.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -396,6 +430,21 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 differentiable with PyTorch.
                 This is useful for explainability and prompt-tuning, essential
                 in the prompttuning code.
+
+            eval_metric:
+                Metric by which predictions will be ultimately evaluated on test data.
+                This can be used to improve this metric on validation data by
+                calibrating the model's probabilities and tuning the decision
+                thresholds during the `fit()/predict()` calls. The tuning can be
+                enabled by configuring the `tuning_config` argument, see below.
+                For currently supported metrics, see
+                [tabpfn.classifier.ClassifierEvalMetrics][].
+
+            tuning_config:
+                The settings to use to tune the model's predictions for the specified
+                `eval_metric`. See
+                [tabpfn.inference_tuning.ClassifierTuningConfig][] for details
+                and options.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -426,9 +475,43 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.eval_metric = eval_metric
+        self.tuning_config = tuning_config
 
         # Ping the usage service if telemetry enabled
         ping()
+
+    @classmethod
+    def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
+        """Construct a classifier that uses the given version of the model.
+
+        In addition to selecting the model, this also configures certain settings to the
+        default values associated with this model version.
+
+        Any kwargs will override the default settings.
+        """
+        if version == ModelVersion.V2:
+            options = {
+                "model_path": str(
+                    get_cache_dir() / ModelSource.get_classifier_v2().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V2_5:
+            options = {
+                "model_path": str(
+                    get_cache_dir() / ModelSource.get_classifier_v2_5().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        else:
+            raise ValueError(f"Unknown version: {version}")
+
+        options.update(overrides)
+
+        return cls(**options)
 
     @property
     def model_(self) -> Architecture:
@@ -675,15 +758,52 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
+    def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
+        """Return a fresh classifier configured for holdout tuning."""
+        params = self.get_params(deep=False)
+
+        # Avoids sharing mutable config across instances
+        for key in params:
+            try:
+                if isinstance(params.get(key), dict):
+                    params[key] = copy.deepcopy(params[key])
+            except Exception as e:  # noqa: BLE001
+                logging.warning(
+                    "Error during initialization of tuning classifier when trying "
+                    f"to deepcopy configuration with name `{key}`: {e}. "
+                    "Falling back to original configuration"
+                )
+
+        forced = {
+            "fit_mode": "fit_preprocessors",
+            "differentiable_input": False,
+            "tuning_config": None,  # never tune inside tuning
+        }
+
+        params.update(forced)
+        params.update(overwrite_kwargs)
+
+        return TabPFNClassifier(**params)
+
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="fit", param_names=["X", "y"])
-    def fit(self, X: XType, y: YType) -> Self:
+    def fit(
+        self,
+        X: XType,
+        y: YType,
+    ) -> Self:
         """Fit the model.
 
         Args:
             X: The input data.
             y: The target variable.
+
+        Returns:
+            self
         """
+        # Validate eval_metric here instead of in __init__ as per sklearn convention
+        self.eval_metric_ = _validate_eval_metric(self.eval_metric)
+
         if self.fit_mode == "batched":
             logging.warning(
                 "The model was in 'batched' mode, likely after finetuning. "
@@ -701,7 +821,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        # Create the inference engine
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(
+            X=X,
+            y=y,
+        )
+
         self.executor_ = create_inference_engine(
             X_train=X,
             y_train=y,
@@ -720,6 +844,138 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         return self
+
+    def _maybe_calibrate_temperature_and_tune_decision_thresholds(
+        self,
+        X: XType,
+        y: YType,
+    ) -> None:
+        """If this class was initialized with a 'tuning_config', calibrate and tune.
+
+        This first computes scores on validation holdout data and then calibrates the
+        softmax temperature and tunes the decision thresholds as per the tuning
+        configuration. Results are stored in the 'tuned_classification_thresholds_' and
+        'softmax_temperature_' attributes.
+        """
+        assert self.eval_metric_ is not None
+
+        # Always set this to stay compatible with sklearn interface.
+        self.tuned_classification_thresholds_ = None
+        self.softmax_temperature_ = self.softmax_temperature
+
+        tuning_config_resolved = resolve_tuning_config(
+            tuning_config=self.tuning_config,
+            num_samples=X.shape[0],
+        )
+        if tuning_config_resolved is None:
+            if self.eval_metric_ is ClassifierEvalMetrics.F1:
+                warnings.warn(
+                    f"You specified '{self.eval_metric_}' as the eval metric but "
+                    "haven't specified any tuning configuration. Consider configuring "
+                    "tuning via the `tuning_config` argument of the TabPFNClassifier "
+                    "to improve predictive performance.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            if self.eval_metric_ is ClassifierEvalMetrics.BALANCED_ACCURACY:
+                warnings.warn(
+                    f"You specified '{self.eval_metric_}' as the eval metric but "
+                    "haven't specified any tuning configuration. "
+                    f"For metric '{self.eval_metric_}' we recommend "
+                    "balancing the probabilities by class counts which can be achieved "
+                    "by setting `balance_probabilities` to True.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            return
+
+        if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+            warnings.warn(
+                f"You specified '{self.eval_metric_}' as the eval metric with "
+                "threshold tuning or temperature calibration enabled. "
+                "ROC AUC is independent of these tunings and they will not "
+                "improve this metric. Consider disabling them.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        holdout_raw_logits, holdout_y_true = self._compute_holdout_validation_data(
+            X=X,
+            y=y,
+            holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
+            n_folds=int(tuning_config_resolved.tuning_n_folds),
+        )
+
+        # WARNING: ensure the calibration happens before threshold tuning!
+        if tuning_config_resolved.calibrate_temperature:
+            calibrated_softmax_temperature = self._get_calibrated_softmax_temperature(
+                holdout_raw_logits=holdout_raw_logits,
+                holdout_y_true=holdout_y_true,
+            )
+            self.softmax_temperature_ = calibrated_softmax_temperature
+
+        if tuning_config_resolved.tune_decision_thresholds:
+            holdout_probas = (
+                self.logits_to_probabilities(holdout_raw_logits)
+                .float()
+                .detach()
+                .cpu()
+                .numpy()
+            )
+            tuned_classification_thresholds = find_optimal_classification_thresholds(
+                metric_name=self.eval_metric_,
+                y_true=holdout_y_true,
+                y_pred_probas=holdout_probas,
+                n_classes=self.n_classes_,
+            )
+            self.tuned_classification_thresholds_ = tuned_classification_thresholds
+
+    def _compute_holdout_validation_data(
+        self,
+        X: XType,
+        y: YType,
+        holdout_frac: float,
+        n_folds: int,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Compute holdout validation data.
+
+        Returns:
+            tuple[np.ndarray, np.ndarray]:
+                - holdout_raw_logits: Array of holdout raw logits
+                    (shape `[n_estimators, n_holdout_samples, n_classes]`).
+                - holdout_y_true: Array of holdout y true labels
+                    (shape `[n_holdout_samples]`).
+        """
+        splits = get_tuning_splits(
+            X=copy.deepcopy(X),
+            y=copy.deepcopy(y),
+            holdout_frac=holdout_frac,
+            random_state=self.random_state,
+            n_splits=n_folds,
+        )
+
+        holdout_raw_logits = []
+        holdout_y_true = []
+        # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples
+        for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+            holdout_y_true.append(y_holdout_Nh)
+            calibration_classifier = self._get_tuning_classifier()
+            with warnings.catch_warnings():
+                # Filter expected warnings during tuning
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*haven't specified any tuning configuration*",
+                    category=UserWarning,
+                )
+                calibration_classifier.fit(X_train_NtF, y_train_Nt)
+
+            # E=num estimators, Nh=num holdout samples, C=num classes
+            raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
+            holdout_raw_logits.append(raw_logits_ENhC)
+
+        holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
+        holdout_y_true__all = np.concatenate(holdout_y_true, axis=0)
+        return holdout_raw_logits_all, holdout_y_true__all
 
     def _raw_predict(
         self,
@@ -770,9 +1026,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The predicted class labels as a NumPy array.
         """
-        proba = self._predict_proba(X)
-
-        y_pred = np.argmax(proba, axis=1)
+        probas = self._predict_proba(X=X)
+        y_pred = np.argmax(probas, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
             return self.label_encoder_.inverse_transform(y_pred)
 
@@ -845,21 +1100,74 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        proba_tensor = self._raw_predict(X, return_logits=False)
-        output = proba_tensor.float().detach().cpu().numpy()
-
+        probas = (
+            self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
+        )
+        probas = self._maybe_reweight_probas(probas=probas)
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
-            output = np.around(output, decimals=SKLEARN_16_DECIMAL_PRECISION)
-            output = np.where(output < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, output)
+            probas = np.around(probas, decimals=SKLEARN_16_DECIMAL_PRECISION)
+            probas = np.where(probas < PROBABILITY_EPSILON_ROUND_ZERO, 0.0, probas)
 
         # Ensure probabilities sum to 1 in case of minor floating point inaccuracies
         # going from torch to numpy
-        return output / output.sum(axis=1, keepdims=True)  # type: ignore
+        return probas / probas.sum(axis=1, keepdims=True)  # type: ignore
+
+    def _get_calibrated_softmax_temperature(
+        self,
+        holdout_raw_logits: np.ndarray,
+        holdout_y_true: np.ndarray,
+    ) -> float:
+        """Calibrate temperature based on the holdout logits and true labels."""
+
+        def logits_to_probabilities_fn(
+            raw_logits: np.ndarray | torch.Tensor,
+            softmax_temperature: float,
+        ) -> np.ndarray:
+            return (
+                self.logits_to_probabilities(
+                    raw_logits=raw_logits,
+                    softmax_temperature=softmax_temperature,
+                    average_before_softmax=self.average_before_softmax,
+                    balance_probabilities=self.balance_probabilities,
+                )
+                .float()
+                .detach()
+                .cpu()
+                .numpy()
+            )
+
+        return find_optimal_temperature(
+            raw_logits=holdout_raw_logits,
+            y_true=holdout_y_true,
+            logits_to_probabilities_fn=logits_to_probabilities_fn,
+            current_default_temperature=self.softmax_temperature_,
+        )
+
+    def _maybe_reweight_probas(self, probas: np.ndarray) -> np.ndarray:
+        """Reweights the probabilities if a target_metric is specified.
+
+        If a target metric is specified, the probabilities are reweighted based on
+        the true holdout sets labels and predicted logits. This is done to tune the
+        threshold for classification to the specified target metric.
+
+        Args:
+            probas: The predicted probabilities of the classes as a NumPy array.
+                Shape (n_samples, n_classes).
+
+        Returns:
+            The input probas if no tuning is done, otherwise the reweighted
+            probabilities.
+        """
+        if self.tuned_classification_thresholds_ is None:
+            return probas
+
+        probas = probas / np.maximum(self.tuned_classification_thresholds_, 1e-8)
+        return probas / probas.sum(axis=1, keepdims=True)
 
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
-        if self.softmax_temperature != 1.0:
-            return logits / self.softmax_temperature
+        if self.softmax_temperature_ != 1.0:
+            return logits / self.softmax_temperature_
         return logits
 
     def _average_across_estimators(self, tensors: torch.Tensor) -> torch.Tensor:
@@ -872,9 +1180,81 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
         """Applies class balancing to a probability tensor."""
-        class_prob_in_train = self.class_counts_ / self.class_counts_.sum()
-        balanced_probas = probas / torch.Tensor(class_prob_in_train).to(probas.device)
-        return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
+        return balance_probas_by_class_counts(probas, self.class_counts_)
+
+    def logits_to_probabilities(
+        self,
+        raw_logits: np.ndarray | torch.Tensor,
+        *,
+        softmax_temperature: float | None = None,
+        average_before_softmax: bool | None = None,
+        balance_probabilities: bool | None = None,
+    ) -> torch.Tensor:
+        """Convert logits to probabilities using the classifier's post-processing.
+
+        Args:
+            raw_logits: Logits with shape (n_estimators, n_samples, n_classes) or
+                (n_samples, n_classes). If the logits have three dimensions, they are
+                averaged across the estimator dimension (dim=0).
+            softmax_temperature: Optional override for temperature scaling.
+            average_before_softmax: Optional override for averaging order.
+            balance_probabilities: Optional override for probability balancing.
+
+        Returns:
+            Probabilities with shape (n_samples, n_classes).
+        """
+        raw_logits = (
+            raw_logits
+            if isinstance(raw_logits, torch.Tensor)
+            else torch.from_numpy(np.asarray(raw_logits))
+        )
+        used_temperature = (
+            softmax_temperature
+            if softmax_temperature is not None
+            else getattr(self, "softmax_temperature_", self.softmax_temperature)
+        )
+        use_average_before_softmax = (
+            self.average_before_softmax
+            if average_before_softmax is None
+            else average_before_softmax
+        )
+        use_balance = (
+            self.balance_probabilities
+            if balance_probabilities is None
+            else balance_probabilities
+        )
+
+        steps: list[Callable[[torch.Tensor], torch.Tensor]] = []
+
+        if used_temperature != 1.0:
+
+            def apply_temp(t: torch.Tensor) -> torch.Tensor:
+                return t / used_temperature
+
+            steps.append(apply_temp)
+
+        if raw_logits.ndim >= 3:
+            if use_average_before_softmax:
+                steps.append(self._average_across_estimators)
+                steps.append(self._apply_softmax)
+            else:
+                steps.append(self._apply_softmax)
+                steps.append(self._average_across_estimators)
+        elif raw_logits.ndim == 2:
+            steps.append(self._apply_softmax)
+        else:
+            raise ValueError(
+                f"Expected logits with 2 or more dims, got {raw_logits.ndim}"
+            )
+
+        if use_balance:
+            steps.append(self._apply_balancing)
+
+        output = raw_logits
+        for fn in steps:
+            output = fn(output)
+
+        return output
 
     def forward(  # noqa: C901, PLR0912
         self,
@@ -992,37 +1372,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             outputs.append(torch.stack(output_batch, dim=1))
 
-        # --- Post-processing Pipeline ---
-        # 'outputs' contains the raw, unscaled logits from each estimator.
+        # --- Post-processing ---
         stacked_outputs = torch.stack(outputs)
 
-        # --- Build the processing pipeline by composing the steps in order ---
-        pipeline = []
-
         if return_logits:
-            # For logits, we just average the temperature-scaled logits.
-            pipeline.extend([self._apply_temperature, self._average_across_estimators])
+            temp_scaled = self._apply_temperature(stacked_outputs)
+            output = self._average_across_estimators(temp_scaled)
         elif return_raw_logits:
-            pass  # no post-processing
+            output = stacked_outputs
         else:
-            pipeline.append(self._apply_temperature)
-
-            # For probabilities, the order of averaging and softmax is crucial.
-            if self.average_before_softmax:
-                pipeline.extend([self._average_across_estimators, self._apply_softmax])
-            else:  # Average after softmax
-                pipeline.extend([self._apply_softmax, self._average_across_estimators])
-
-            # Balancing is the final optional step for probabilities.
-            if self.balance_probabilities:
-                pipeline.append(self._apply_balancing)
-
-        # --- Execute the pipeline ---
-        # Start with the initial raw logits
-        output = stacked_outputs
-        # Sequentially apply each function in the pipeline
-        for step_function in pipeline:
-            output = step_function(output)
+            output = self.logits_to_probabilities(stacked_outputs)
 
         # --- Final output shaping ---
         if output.ndim > 2 and use_inference_mode:
@@ -1073,3 +1432,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
+
+
+def _validate_eval_metric(
+    eval_metric: str | ClassifierEvalMetrics | None,
+) -> ClassifierEvalMetrics:
+    if eval_metric is None:
+        return DEFAULT_CLASSIFICATION_EVAL_METRIC
+    if isinstance(eval_metric, ClassifierEvalMetrics):
+        return eval_metric
+    try:
+        return ClassifierEvalMetrics(eval_metric)  # Convert string to Enum
+    except ValueError as err:
+        valid_values = [e.value for e in ClassifierEvalMetrics]
+        raise ValueError(
+            f"Invalid eval_metric: `{eval_metric}`. Must be one of {valid_values}"
+        ) from err

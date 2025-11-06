@@ -40,6 +40,8 @@ if TYPE_CHECKING:
     from sklearn.base import BaseEstimator
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
+
+if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.constants import ModelPath
 
@@ -47,6 +49,9 @@ logger = logging.getLogger(__name__)
 
 # Public fallback base URL for model downloads
 FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/05152025"
+
+# Special string used to identify v2.5 models in model paths.
+V_2_5_IDENTIFIER = "v2.5"
 
 
 class ModelType(str, Enum):  # noqa: D101
@@ -76,6 +81,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
             "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
             "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
+            "tabpfn-v2-classifier-v2_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
@@ -90,10 +96,47 @@ class ModelSource:  # noqa: D101
             "tabpfn-v2-regressor-09gpqh39.ckpt",
             "tabpfn-v2-regressor-2noar4o2.ckpt",
             "tabpfn-v2-regressor-wyl4o83o.ckpt",
+            "tabpfn-v2-regressor-v2_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-reg",
             default_filename="tabpfn-v2-regressor.ckpt",
+            filenames=filenames,
+        )
+
+    @classmethod
+    def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_default-2.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_large-samples.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real-large-features.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real-large-samples-and-features.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_real.ckpt",
+            "tabpfn-v2.5-classifier-v2.5_variant.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_2_5",
+            default_filename="tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            filenames=filenames,
+        )
+
+    @classmethod
+    def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v2.5-regressor-v2.5_default.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_low-skew.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_quantiles.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_real-variant.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_real.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_small-samples.ckpt",
+            "tabpfn-v2.5-regressor-v2.5_variant.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_2_5",
+            default_filename="tabpfn-v2.5-regressor-v2.5_default.ckpt",
             filenames=filenames,
         )
 
@@ -104,6 +147,11 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
             return ModelSource.get_classifier_v2()
         if model_type == ModelType.REGRESSOR:
             return ModelSource.get_regressor_v2()
+    elif version == ModelVersion.V2_5:
+        if model_type == ModelType.CLASSIFIER:
+            return ModelSource.get_classifier_v2_5()
+        if model_type == ModelType.REGRESSOR:
+            return ModelSource.get_regressor_v2_5()
 
     raise ValueError(
         f"Unsupported version/model combination: {version.value}/{model_type.value}",
@@ -128,6 +176,12 @@ def _try_huggingface_downloads(
     """Try to download models and config using the HuggingFace Hub API."""
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        # Import specific exceptions for better error handling
+        from huggingface_hub.utils import (  # noqa: PLC0415
+            GatedRepoError,
+            HfHubHTTPError,
+        )
     except ImportError as e:
         raise ImportError(
             "Please install huggingface_hub: pip install huggingface-hub",
@@ -169,6 +223,8 @@ def _try_huggingface_downloads(
 
             # Download config.json only to increment the download counter. We do not
             # actually use this file so it is removed immediately after download.
+            # Note that we also handle model caching ourselves, so we don't double
+            # count, even with removing the config.json afterwards.
             try:
                 config_local_path = hf_hub_download(
                     repo_id=source.repo_id,
@@ -181,8 +237,31 @@ def _try_huggingface_downloads(
                 # Continue even if config.json download fails
 
             logger.info(f"Successfully downloaded to {base_path}")
-        except Exception as e:
-            raise Exception("HuggingFace download failed!") from e
+
+        except (GatedRepoError, HfHubHTTPError) as e:
+            # Check if this is an authentication/gating error
+            is_auth_error = False
+            if isinstance(e, GatedRepoError) or (
+                isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
+            ):
+                is_auth_error = True
+
+            if is_auth_error:
+                auth_message = (
+                    f"Authentication error downloading from '{source.repo_id}'.\n"
+                    "This model is gated and requires you to accept its terms.\n\n"
+                    "Please follow these steps:\n"
+                    f"1. Visit https://huggingface.co/{source.repo_id} in your "
+                    f"browser and"
+                    f" accept the terms of use.\n"
+                    "2. Log in to your Hugging Face account via"
+                    " the command line by running:\n"
+                    "   hf auth login\n"
+                    "(Alternatively, you can set the HF_TOKEN environment variable"
+                    " with a read token)."
+                )
+                raise RuntimeError(auth_message)  # noqa: B904
+            raise e
 
 
 def _try_direct_downloads(
@@ -243,7 +322,7 @@ def _try_direct_downloads(
 def download_model(
     to: Path,
     *,
-    version: Literal["v2"],
+    version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
 ) -> Literal["ok"] | list[Exception]:
@@ -262,7 +341,7 @@ def download_model(
     errors: list[Exception] = []
 
     try:
-        model_source = _get_model_source(ModelVersion(version), ModelType(which))
+        model_source = _get_model_source(version, ModelType(which))
     except ValueError as e:
         return [e]
 
@@ -270,42 +349,58 @@ def download_model(
         _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
         return "ok"
     except Exception as e:  # noqa: BLE001
-        logger.warning(f"HuggingFace downloads failed: {e!s}")
+        logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    try:
-        _try_direct_downloads(to, model_source, model_name)
-        return "ok"
-    except Exception as e:  # noqa: BLE001
-        logger.warning(f"Direct URL downloads failed: {e!s}")
-        errors.append(e)
+    # For Version 2.5 we require gating, which we don't have in place for direct
+    # downloads.
+    if version == ModelVersion.V2:
+        try:
+            _try_direct_downloads(to, model_source, model_name)
+            return "ok"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Direct URL downloads failed: {e!s}")
+            errors.append(e)
+    else:
+        logger.warning(
+            "For commercial usage, we provide alternative download options for v2.5, "
+            "please reach out to us at sales@priorlabs.ai."
+        )
 
     return errors
 
 
 def download_all_models(to: Path) -> None:
-    """Download all v2 classifier and regressor models into a local directory."""
+    """Download all available classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
-    for model_source, model_type in [
-        (ModelSource.get_classifier_v2(), "classifier"),
-        (ModelSource.get_regressor_v2(), "regressor"),
+    for model_version, model_source, model_type in [
+        (ModelVersion.V2, ModelSource.get_classifier_v2(), "classifier"),
+        (ModelVersion.V2, ModelSource.get_regressor_v2(), "regressor"),
+        (ModelVersion.V2_5, ModelSource.get_classifier_v2_5(), "classifier"),
+        (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
             download_model(
                 to=to / ckpt_name,
-                version="v2",
+                version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
 
 
-def _user_cache_dir(platform: str, appname: str = "tabpfn") -> Path:
+def get_cache_dir() -> Path:  # noqa: PLR0911
+    """Get the cache directory for TabPFN models, as appropriate for the platform."""
+    if settings.tabpfn.model_cache_dir is not None:
+        return settings.tabpfn.model_cache_dir
+
+    platform = sys.platform
+    appname = "tabpfn"
     use_instead_path = (Path.cwd() / ".tabpfn_models").resolve()
 
-    # https://docs.python.org/3/library/sys.html#sys.platform
     if platform == "win32":
-        # Honestly, I don't want to do what `platformdirs` does:
+        # Do something similar to platformdirs, but very simplified:
         # https://github.com/tox-dev/platformdirs/blob/b769439b2a3b70769a93905944a71b3e63ef4823/src/platformdirs/windows.py#L252-L265
+        # Unclear how well this works.
         APPDATA_PATH = os.environ.get("APPDATA", "")
         if APPDATA_PATH.strip() != "":
             return Path(APPDATA_PATH) / appname
@@ -353,7 +448,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -370,7 +465,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2"],
+    version: Literal["v2", "v2.5"],
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -387,7 +482,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -417,11 +512,12 @@ def load_model_criterion_config(
         list of models, the criterion, list of architecture configs, the inference
         config
     """
+    model_version = ModelVersion(version)
     (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
         resolve_model_path(
             model_path=model_path,
             which=which,
-            version=version,
+            version=model_version.value,
         )
     )
 
@@ -444,18 +540,14 @@ def load_model_criterion_config(
             logger.info(f"Downloading model to {path}.")
             res = download_model(
                 path,
-                version=version,
+                version=model_version,
                 which=cast("Literal['classifier', 'regressor']", which),
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                repo_type = "clf" if which == "classifier" else "reg"
-                raise RuntimeError(
-                    f"Failed to download model to {path}!\n\n"
-                    f"For offline usage, please download the model manually from:\n"
-                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
-                    f"Then place it at: {path}",
-                ) from res[0]
+                # Later: Add improved error handling here, reenabling
+                #  the old offline download (only raise when Gating)
+                raise res[0]
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
@@ -497,10 +589,32 @@ def load_model_criterion_config(
     return loaded_models, first_criterion, architecture_configs, first_inference_config
 
 
+def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
+    if model_path is None:
+        return settings.tabpfn.model_version
+    if V_2_5_IDENTIFIER in Path(model_path).name:
+        return ModelVersion.V2_5
+    return ModelVersion.V2
+
+
+def resolve_model_version(
+    model_path: ModelPath | list[ModelPath] | None,
+) -> ModelVersion:
+    """Resolve the model version from the model path."""
+    if isinstance(model_path, list):
+        if len(model_path) == 0:
+            return _resolve_model_version(None)
+        resolved_model_versions = [_resolve_model_version(p) for p in model_path]
+        if len(set(resolved_model_versions)) > 1:
+            raise ValueError("All model paths must have the same version.")
+        return resolved_model_versions[0]
+    return _resolve_model_version(model_path)
+
+
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2"] = "v2",
+    version: Literal["v2", "v2.5"] = "v2.5",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -526,12 +640,7 @@ def resolve_model_path(
         resolved_model_names = [model_source.default_filename]
 
         # Determine the cache directory for storing models.
-        if settings.tabpfn.model_cache_dir is not None:
-            resolved_model_dirs = [settings.tabpfn.model_cache_dir]
-        else:
-            resolved_model_dirs = [
-                _user_cache_dir(platform=sys.platform, appname="tabpfn")
-            ]
+        resolved_model_dirs = [get_cache_dir()]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
     elif isinstance(model_path, (str, Path)):
         resolved_model_paths = [Path(model_path)]
@@ -644,16 +753,16 @@ def _get_inference_config_from_checkpoint(
     release. Thus, if there is no config in the checkpoint, try to guess between v2 and
     v2.5 and get the correct config.
     """
-    if "inference_config" in checkpoint:
-        return InferenceConfig(**checkpoint["inference_config"])
-
-    # "architecture_name" was added to the checkpoint after the v2 release, so if this
-    # isn't present we assume it's v2.
-    # TODO: Add check for v2.5
+    # This is how we tell the checkpoints apart:
+    #     v2: "architecture_name" not present, as added after the v2 release
+    #   v2.5: "architecture_name" present, but "inference_config" not present
+    #  >v2.5: "inference_config" present, so don't need to guess a default config
+    if inference_config := checkpoint.get("inference_config"):
+        return InferenceConfig(**inference_config)
     if "architecture_name" not in checkpoint:
         model_version = ModelVersion.V2
     else:
-        model_version = "latest"
+        model_version = ModelVersion.V2_5
 
     if isinstance(criterion, FullSupportBarDistribution):
         task_type = "regression"
@@ -807,6 +916,13 @@ def load_fitted_tabpfn_model(
     path: Path | str, *, device: str | torch.device = "cpu"
 ) -> BaseEstimator:
     """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
+    # This is safe because torch.device(torch.device(...)) is a noop.
+    device = torch.device(device)
+    # In older versions of PyTorch, some torch.cuda functions fail if the device has no
+    # index. 0 is implicit if no index is specified, so add it.
+    if device == torch.device("cuda"):
+        device = torch.device("cuda:0")
+
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)

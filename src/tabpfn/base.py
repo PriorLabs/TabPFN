@@ -28,7 +28,7 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineOnDemand,
 )
-from tabpfn.model_loading import load_model_criterion_config
+from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
 from tabpfn.preprocessing import (
     BaseDatasetConfig,
     ClassifierDatasetConfig,
@@ -171,9 +171,6 @@ def initialize_tabpfn_model(
         or model_path == "auto"
         or isinstance(model_path, (str, pathlib.Path, list))  # pyright: ignore[reportArgumentType]
     ):
-        if isinstance(model_path, str) and model_path == "auto":
-            model_path = None  # type: ignore
-
         if isinstance(model_path, list) and len(model_path) == 0:
             raise ValueError(
                 "You provided a list of model paths with no entries. "
@@ -181,6 +178,10 @@ def initialize_tabpfn_model(
                 "the default model."
             )
 
+        if isinstance(model_path, str) and model_path == "auto":
+            model_path = None  # type: ignore
+
+        version = resolve_model_version(model_path)  # type: ignore
         download_if_not_exists = True
 
         if which == "classifier":
@@ -191,7 +192,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="classifier",
-                    version="v2",
+                    version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
             )
@@ -204,7 +205,7 @@ def initialize_tabpfn_model(
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
                     which="regressor",
-                    version="v2",
+                    version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
             )

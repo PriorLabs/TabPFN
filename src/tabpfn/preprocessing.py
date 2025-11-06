@@ -113,11 +113,18 @@ class PreprocessorConfig:
         categorical_name:
             Name of the categorical encoding method.
             Options: "none", "numeric", "onehot", "ordinal", "ordinal_shuffled", "none".
-        append_to_original: If True, the transformed features are appended
-            to the original features. If set to "auto", this is dynamically set to
+        append_to_original: If set to "auto", this is dynamically set to
             True if the number of features is less than 500, and False otherwise.
-            Defaults to False.
-        subsample_features: Fraction of features to subsample. -1 means no subsampling.
+            Note that if set to "auto" and `max_features_per_estimator` is set as well,
+            this flag will become False if the number of features is larger than
+            `max_features_per_estimator / 2`. If True, the transformed features are
+            appended to the original features, however both are capped at the
+            max_features_per_estimator threshold, this should be used with caution as a
+            given model might not be configured for it.
+        max_features_per_estimator: Maximum number of features per estimator. In case
+            the dataset has more features than this, the features are subsampled for
+            each estimator independently. If append to original is set to True we can
+            still have more features.
         global_transformer_name: Name of the global transformer to use.
     """
 
@@ -133,6 +140,8 @@ class PreprocessorConfig:
         "quantile_norm",
         "quantile_uni_fine",
         "quantile_norm_fine",
+        "squashing_scaler_default",
+        "squashing_scaler_max10",
         "robust",  # a standard sklearn robust scaler
         "kdi",
         "none",  # no transformation (only standardization in transformer)
@@ -178,8 +187,15 @@ class PreprocessorConfig:
         "ordinal_very_common_categories_shuffled",
     ] = "none"
     append_original: bool | Literal["auto"] = False
-    subsample_features: float = -1
-    global_transformer_name: str | None = None
+    max_features_per_estimator: int = 500
+    global_transformer_name: (
+        Literal[
+            "scaler",
+            "svd",
+            "svd_quarter_components",
+        ]
+        | None
+    ) = None
     differentiable: bool = False
 
     @override
@@ -187,11 +203,7 @@ class PreprocessorConfig:
         return (
             f"{self.name}_cat:{self.categorical_name}"
             + ("_and_none" if self.append_original else "")
-            + (
-                f"_subsample_feats_{self.subsample_features}"
-                if self.subsample_features > 0
-                else ""
-            )
+            + (f"_max_feats_per_est_{self.max_features_per_estimator}")
             + (
                 f"_global_transformer_{self.global_transformer_name}"
                 if self.global_transformer_name is not None
@@ -206,21 +218,21 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
     These are the defaults used when training new models, which will then be stored in
     the model checkpoint.
 
-    See `v2_classifier_preprocessor_configs()` for the preprocessing used in v2 of the
-    model.
+    See `v2_classifier_preprocessor_configs()`, `v2_5_classifier_preprocessor_configs()`
+    for the preprocessing used earlier versions of the model.
     """
     return [
         PreprocessorConfig(
-            "quantile_uni_coarse",
-            append_original="auto",
+            name="squashing_scaler_default",
+            append_original=False,
             categorical_name="ordinal_very_common_categories_shuffled",
-            global_transformer_name="svd",
-            subsample_features=-1,
+            global_transformer_name="svd_quarter_components",
+            max_features_per_estimator=500,
         ),
         PreprocessorConfig(
-            "none",
+            name="none",
             categorical_name="numeric",
-            subsample_features=-1,
+            max_features_per_estimator=500,
         ),
     ]
 
@@ -231,18 +243,30 @@ def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     These are the defaults used when training new models, which will then be stored in
     the model checkpoint.
 
-    See `v2_regressor_preprocessor_configs()` for the preprocessing used in v2 of the
-    model.
+    See `v2_regressor_preprocessor_configs()`, `v2_5_regressor_preprocessor_configs()`
+    for the preprocessing used earlier versions of the model.
     """
     return [
         PreprocessorConfig(
-            "quantile_uni",
+            name="quantile_uni_coarse",
             append_original="auto",
-            categorical_name="ordinal_very_common_categories_shuffled",
-            global_transformer_name="svd",
+            categorical_name="numeric",
+            global_transformer_name=None,
+            max_features_per_estimator=500,
         ),
-        PreprocessorConfig("safepower", categorical_name="onehot"),
+        PreprocessorConfig(
+            name="squashing_scaler_default",
+            append_original=False,
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd_quarter_components",
+            max_features_per_estimator=500,
+        ),
     ]
+
+
+# Feature subsampling was disabled in v2, so choose a threshold that will never be
+# reached.
+_V2_FEATURE_SUBSAMPLING_THRESHOLD = 1_000_000
 
 
 def v2_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
@@ -253,12 +277,12 @@ def v2_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
             append_original="auto",
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
-            subsample_features=-1,
+            max_features_per_estimator=_V2_FEATURE_SUBSAMPLING_THRESHOLD,
         ),
         PreprocessorConfig(
             "none",
             categorical_name="numeric",
-            subsample_features=-1,
+            max_features_per_estimator=_V2_FEATURE_SUBSAMPLING_THRESHOLD,
         ),
     ]
 
@@ -268,11 +292,49 @@ def v2_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     return [
         PreprocessorConfig(
             "quantile_uni",
-            append_original="auto",
+            append_original=True,
             categorical_name="ordinal_very_common_categories_shuffled",
             global_transformer_name="svd",
         ),
         PreprocessorConfig("safepower", categorical_name="onehot"),
+    ]
+
+
+def v2_5_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
+    """Get the preprocessor configuration for classification in v2.5 of the model."""
+    return [
+        PreprocessorConfig(
+            name="squashing_scaler_default",
+            append_original=False,
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd_quarter_components",
+            max_features_per_estimator=500,
+        ),
+        PreprocessorConfig(
+            name="none",
+            categorical_name="numeric",
+            max_features_per_estimator=500,
+        ),
+    ]
+
+
+def v2_5_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
+    """Get the preprocessor configuration for regression in v2.5 of the model."""
+    return [
+        PreprocessorConfig(
+            name="quantile_uni_coarse",
+            append_original="auto",
+            categorical_name="numeric",
+            global_transformer_name=None,
+            max_features_per_estimator=500,
+        ),
+        PreprocessorConfig(
+            name="squashing_scaler_default",
+            append_original=False,
+            categorical_name="ordinal_very_common_categories_shuffled",
+            global_transformer_name="svd_quarter_components",
+            max_features_per_estimator=500,
+        ),
     ]
 
 
@@ -594,7 +656,7 @@ class EnsembleConfig:
                     ReshapeFeatureDistributionsStep(
                         transform_name=self.preprocess_config.name,
                         append_to_original=self.preprocess_config.append_original,
-                        subsample_features=self.preprocess_config.subsample_features,
+                        max_features_per_estimator=self.preprocess_config.max_features_per_estimator,
                         global_transformer_name=self.preprocess_config.global_transformer_name,
                         apply_to_categorical=(
                             self.preprocess_config.categorical_name == "numeric"

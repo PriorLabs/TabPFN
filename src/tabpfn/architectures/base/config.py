@@ -39,6 +39,14 @@ class ModelConfig(ArchitectureConfig):
     # --- Constant across all configs and used
     dropout: float = 0.0
     encoder_use_bias: bool = False
+    encoder_type: Literal["linear", "mlp"] = "linear"
+    """Type of input encoder to use. Either "linear" for a simple linear layer or "mlp"
+    for a multi-layer perceptron."""
+    encoder_mlp_hidden_dim: int | None = 1024
+    """Hidden dimension for MLP encoder. If None, defaults to emsize. Only used when
+    encoder_type="mlp"."""
+    encoder_mlp_num_layers: int = 2
+    """Number of layers in the MLP encoder. Only used when encoder_type="mlp"."""
     feature_positional_embedding: FeaturePositionalEmbedding = "subspace"
     multiquery_item_attention: Literal[False] = False
     """When True, uses multiquery for attention between items."""
@@ -60,14 +68,16 @@ class ModelConfig(ArchitectureConfig):
     recompute_layer: bool = True
     """If True, enables activation checkpointing for each PerFeatureEncoderLayer in the
     encoder. This saves memory. recompute_attn is a related flag which checkpoints the
-    attention and mlp layers individually."""
+    attention and mlp layers individually. Note that the forward pass takes an argument
+    `force_recompute_layer` which can be used to force recomputation of the layer."""
     remove_empty_features: Literal[True] = True
     remove_outliers: Literal[False] = False
     use_separate_decoder: Literal[False] = False
     """If True, the decoder will be separate from the encoder."""
 
-    multiquery_item_attention_for_test_set: Literal[True] = True
-    """If true, uses multiquery attention on the test set."""
+    multiquery_item_attention_for_test_set: bool = True
+    """If True, uses multiquery attention on the test set.
+    For now, this must be False for bridge attention and True otherwise."""
 
     attention_init_gain: float = 1.0
     """The gain when initializing the attention parameters. If None, then 1.0 is
@@ -83,6 +93,11 @@ class ModelConfig(ArchitectureConfig):
     the default random_state of 0 in the TabPFN estimator,
     which was used to set this seed before
     (though I'm not sure it makes a difference for a trained model).
+    """
+
+    num_thinking_rows: int = 0
+    """If >0, then this number of "thinking rows" will be prepended to each dataset.
+    See tabpfn.architectures.base.AddThinkingTokens for an explanation.
     """
 
     @classmethod
