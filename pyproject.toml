@@ -21,7 +21,7 @@ dependencies = [
   # Once Python 3.10 is the minimum version, this can be removed.
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
-  "tabpfn-common-utils[telemetry-interactive]>=0.2.6",
+  "tabpfn-common-utils[telemetry-interactive]>=0.2.7",
   # pyobjc-framework-Metal is required to determine the available memory for MPS
   # devices for PyTorch <2.5, so we only need it on MacOS.
   # Once the minimum PyTorch >= 2.5, this can be removed.
