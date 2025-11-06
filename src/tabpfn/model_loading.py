@@ -888,6 +888,13 @@ def load_fitted_tabpfn_model(
     path: Path | str, *, device: str | torch.device = "cpu"
 ) -> BaseEstimator:
     """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
+    # This is safe because torch.device(torch.device(...)) is a noop.
+    device = torch.device(device)
+    # In older versions of PyTorch, some torch.cuda functions fail if the device has no
+    # index. 0 is implicit if no index is specified, so add it.
+    if device == torch.device("cuda"):
+        device = torch.device("cuda:0")
+
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
