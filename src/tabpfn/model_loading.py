@@ -177,6 +177,12 @@ def _try_huggingface_downloads(
     """Try to download models and config using the HuggingFace Hub API."""
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
+
+        # Import specific exceptions for better error handling
+        from huggingface_hub.utils import (  # noqa: PLC0415
+            GatedRepoError,
+            HfHubHTTPError,
+        )
     except ImportError as e:
         raise ImportError(
             "Please install huggingface_hub: pip install huggingface-hub",
@@ -206,31 +212,57 @@ def _try_huggingface_downloads(
         if suppress_warnings:
             warnings.filterwarnings("ignore")
 
-        # Download model checkpoint
-        local_path = hf_hub_download(
-            repo_id=source.repo_id,
-            filename=filename,
-            local_dir=base_path.parent,
-        )
-        # Move model file to desired location
-        Path(local_path).rename(base_path)
-
-        # Download config.json only to increment the download counter. We do not
-        # actually use this file so it is removed immediately after download.
-        # Note that we also handle model caching ourselves, so we don't double
-        # count, even with removing the config.json afterwards.
         try:
-            config_local_path = hf_hub_download(
+            # Download model checkpoint
+            local_path = hf_hub_download(
                 repo_id=source.repo_id,
-                filename="config.json",
+                filename=filename,
                 local_dir=base_path.parent,
             )
-            Path(config_local_path).unlink(missing_ok=True)
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Failed to download config.json: {e!s}")
-            # Continue even if config.json download fails
+            # Move model file to desired location
+            Path(local_path).rename(base_path)
 
-        logger.info(f"Successfully downloaded to {base_path}")
+            # Download config.json only to increment the download counter. We do not
+            # actually use this file so it is removed immediately after download.
+            # Note that we also handle model caching ourselves, so we don't double
+            # count, even with removing the config.json afterwards.
+            try:
+                config_local_path = hf_hub_download(
+                    repo_id=source.repo_id,
+                    filename="config.json",
+                    local_dir=base_path.parent,
+                )
+                Path(config_local_path).unlink(missing_ok=True)
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"Failed to download config.json: {e!s}")
+                # Continue even if config.json download fails
+
+            logger.info(f"Successfully downloaded to {base_path}")
+
+        except (GatedRepoError, HfHubHTTPError) as e:
+            # Check if this is an authentication/gating error
+            is_auth_error = False
+            if isinstance(e, GatedRepoError) or (
+                isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
+            ):
+                is_auth_error = True
+
+            if is_auth_error:
+                auth_message = (
+                    f"Authentication error downloading from '{source.repo_id}'.\n"
+                    "This model is gated and requires you to accept its terms.\n\n"
+                    "Please follow these steps:\n"
+                    f"1. Visit https://huggingface.co/{source.repo_id} in your "
+                    f"browser and"
+                    f" accept the terms of use.\n"
+                    "2. Log in to your Hugging Face account via"
+                    " the command line by running:\n"
+                    "   huggingface-cli login\n"
+                    "(Alternatively, you can set the HF_TOKEN environment variable"
+                    " with a read token)."
+                )
+                raise RuntimeError(auth_message)  # noqa: B904
+            raise e
 
 
 def _try_direct_downloads(
@@ -514,16 +546,10 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                if isinstance(res[0], GatedRepoError):
-                    raise _get_gated_repo_exception() from res[0]
-                repo_type = "clf" if which == "classifier" else "reg"
-                raise RuntimeError(
-                    f"Failed to download model to {path}!\n\n"
-                    f"For offline usage, please download the model manually from:\n"
-                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
-                    f"Then place it at: {path}",
-                ) from res[0]
-
+                # Later: Add improved error handling here, reenabling
+                #  the old offline download (only raise when Gating)
+                raise res[0]
+                
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
