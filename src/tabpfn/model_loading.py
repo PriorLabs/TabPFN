@@ -596,6 +596,8 @@ def _log_model_config(
     # Check to avoid that we pass in arbitrary paths containing e.g. PII
     if path.name in model_source.filenames:
         set_model_config(path.name, version.value)
+    else:
+        set_model_config("OTHER", version.value)
 
 
 def resolve_model_version(
