@@ -495,15 +495,6 @@ def test_sklearn_compatible_estimator(
     if any(device.type == "mps" for device in _auto_devices):
         pytest.skip("MPS does not support float64, which is required for this check.")
 
-    if (
-        check.func.__name__ == "check_classifiers_train"  # type: ignore
-        and _auto_devices[0].type == "cpu"
-    ):
-        pytest.skip(
-            "We currently skip this check on CPU because CPU inference with "
-            "float64 is brokwn for datasets with small number of features."
-        )
-
     if check.func.__name__ in (  # type: ignore
         "check_methods_subset_invariance",
         "check_methods_sample_order_invariance",
