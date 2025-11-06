@@ -582,8 +582,7 @@ def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
 
 
 def _get_model_filenames(
-    which: Literal["classifier", "regressor"],
-    version: Literal["v2", "v2.5"]
+    which: Literal["classifier", "regressor"], version: Literal["v2", "v2.5"]
 ) -> list[str]:
     """Get all available model filenames for a given type and version.
 
