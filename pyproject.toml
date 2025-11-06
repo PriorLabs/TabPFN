@@ -117,6 +117,9 @@ ci = [
   "pytest>=8.4.2",
 ]
 
+[tool.setuptools.package-data]
+"tabpfn.architectures.base" = ["tabpfn_col_embedding.pt"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # Where the tests are located
 minversion = "8.0"
