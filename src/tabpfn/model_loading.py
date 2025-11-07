@@ -259,7 +259,9 @@ def _try_huggingface_downloads(
                     " the command line by running:\n"
                     "   hf auth login\n"
                     "(Alternatively, you can set the HF_TOKEN environment variable"
-                    " with a read token)."
+                    " with a read token).\n\n"
+                    "For detailed instructions, see "
+                    "https://docs.priorlabs.ai/how-to-access-gated-models"
                 )
                 raise RuntimeError(auth_message)  # noqa: B904
             raise e
