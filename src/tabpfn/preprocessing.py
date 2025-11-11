@@ -387,8 +387,7 @@ def get_subsample_indices_for_estimators(
         subsample_samples: Number of samples to subsample. If int, subsample that many
             samples. If float, subsample that fraction of samples. If a
             list of lists of indices, subsample the indices for each estimator.
-            The length of the list of lists of indices must be equal to
-            num_estimators. If `None`, no subsampling is done.
+            If `None`, no subsampling is done.
         num_estimators: Number of estimators to generate subsample indices for.
         max_index: Maximum index to generate for.
         static_seed: Static seed to use for the random number generator.
@@ -473,8 +472,7 @@ class EnsembleConfig:
                 Number of samples to subsample. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If a
                 list of lists of indices, subsample the indices for each estimator.
-                The length of the list of lists of indices must be equal to
-                num_estimators. If `None`, no subsampling is done.
+                If `None`, no subsampling is done.
             max_index: Maximum index to generate for.
             add_fingerprint_feature: Whether to add fingerprint features.
             polynomial_features: Maximum number of polynomial features to add, if any.
@@ -590,8 +588,7 @@ class EnsembleConfig:
                 Number of samples to subsample. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If a
                 list of lists of indices, subsample the indices for each estimator.
-                The length of the list of lists of indices must be equal to
-                num_estimators. If `None`, no subsampling is done.
+                If `None`, no subsampling is done.
             max_index: Maximum index to generate for.
             add_fingerprint_feature: Whether to add fingerprint features.
             polynomial_features: Maximum number of polynomial features to add, if any.
