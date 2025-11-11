@@ -225,7 +225,7 @@ def _try_huggingface_downloads(
             # Download config.json to increment the download counter, see
             # https://huggingface.co/docs/hub/en/models-download-stats
             try:
-                config_local_path = hf_hub_download(
+                hf_hub_download(
                     repo_id=source.repo_id,
                     filename="config.json",
                     local_dir=base_path.parent,
