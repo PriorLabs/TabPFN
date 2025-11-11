@@ -134,7 +134,7 @@ def test__infer_devices__auto__cuda_and_mps_available_but_excluded__selects_cpu(
     assert infer_devices(devices="auto") == (torch.device("cpu"),)
 
 
-def test__infer_devices__auto__mps_availble_but_torch_too_old__selects_cpu(
+def test__infer_devices__auto__mps_available_but_torch_too_old__selects_cpu(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(torch, "__version__", "2.4.0")
@@ -175,7 +175,7 @@ def test__infer_devices__device_specified_twice__raises() -> None:
         infer_devices(devices=["cpu", "cpu"])
 
 
-def test__infer_devices__mpos_specified_but_torch_too_old__raises(
+def test__infer_devices__mps_specified_but_torch_too_old__raises(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(torch, "__version__", "2.4.0")
