@@ -36,7 +36,7 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          - os: macos-13 # macos-latest doesn't work with python 3.10
+          - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
             # https://github.com/actions/setup-python/issues/855
             python-version: "3.9"
             dependency-set: lowest-direct
