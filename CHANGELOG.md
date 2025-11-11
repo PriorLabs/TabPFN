@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Don't select MPS devices below PyTorch 2.5 and raise an error if selected, due to poor performance
+- Don't select MPS devices below PyTorch 2.5 and raise an error if selected, due to poor performance [#619](https://github.com/PriorLabs/TabPFN/pull/619)
 
 ## [6.0.6] - 2025-11-10
 
