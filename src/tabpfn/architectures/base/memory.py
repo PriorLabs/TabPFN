@@ -17,18 +17,6 @@ if TYPE_CHECKING:
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 SAVE_PEAK_MEM_FACTOR = 8
 
-# TODO(eddiebergman): pulled from `def _estimate_model_usage()`
-CONSTANT_MEMORY_OVERHEAD = 100_000_000
-MEMORY_FACTOR_SAVE_PEAK_MEM_ACTIVE = 2.5
-DEFAULT_CPU_MEMORY_GB_IF_NOT_CUDA = 8
-
-# TODO(eddiebergman): pulled from `def _estimate_model_usage()`
-# Had it's own todo of "check if correct"
-NUM_SAMPLES_FACTOR = 4
-NUM_SAMPLES_PLUS_FEATURES = 6.5
-CELLS_FACTOR = 0.25
-CELLS_SQUARED_FACTOR = 1.3e-7
-
 
 def support_save_peak_mem_factor(method: MethodType) -> Callable:
     """Can be applied to a method acting on a tensor 'x' whose first dimension is a
