@@ -843,17 +843,3 @@ def get_bucket_limits(
         ), f"{full_range[-1]} != {bucket_limits[-1]}"  # type: ignore
 
     return bucket_limits
-
-
-def get_custom_bar_dist(borders: torch.Tensor, criterion: BarDistribution) -> nn.Module:
-    # Tested that a bar_dist with borders 0.54 (-> softplus 1.0) yields the same
-    # bar distribution as the passed one.
-    borders_ = torch.nn.functional.softplus(borders) + 0.001
-    borders_ = torch.cumsum(
-        torch.cat([criterion.borders[0:1], criterion.bucket_widths]) * borders_,
-        0,
-    )
-    return criterion.__class__(
-        borders=borders_,
-        ignore_nan_targets=criterion.ignore_nan_targets,
-    )
