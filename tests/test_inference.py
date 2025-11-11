@@ -189,7 +189,7 @@ def _create_test_ensemble_configs(
     ]
     return EnsembleConfig.generate_for_classification(
         num_estimators=n_configs,
-        subsample_size=None,
+        subsample_samples=None,
         max_index=n_classes - 1,
         add_fingerprint_feature=True,
         polynomial_features="all",
