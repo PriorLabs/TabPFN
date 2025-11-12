@@ -678,7 +678,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         ensemble_configs = EnsembleConfig.generate_for_classification(
             num_estimators=self.n_estimators,
-            subsample_size=self.inference_config_.SUBSAMPLE_SAMPLES,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
