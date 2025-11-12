@@ -376,7 +376,7 @@ def generate_index_permutations(
 
 
 def get_subsample_indices_for_estimators(
-    subsample_samples: int | float | list[list[int]] | None,
+    subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
     max_index: int,
     static_seed: int | np.random.Generator | None,
@@ -463,7 +463,7 @@ class EnsembleConfig:
         cls,
         *,
         num_estimators: int,
-        subsample_samples: int | float | list[list[int]] | None,
+        subsample_samples: int | float | list[np.ndarray] | None,
         max_index: int,
         add_fingerprint_feature: bool,
         polynomial_features: Literal["no", "all"] | int,
@@ -579,7 +579,7 @@ class EnsembleConfig:
         cls,
         *,
         num_estimators: int,
-        subsample_samples: int | float | list[list[int]] | None,
+        subsample_samples: int | float | list[np.ndarray] | None,
         max_index: int,
         add_fingerprint_feature: bool,
         polynomial_features: Literal["no", "all"] | int,
