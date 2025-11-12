@@ -19,12 +19,18 @@ Here's the full list:
 ### Events
 - `ping` – sent when models initialize, used to check liveness  
 - `fit_called` – sent when you call `fit`  
-- `predict_called` – sent when you call `predict`  
+- `predict_called` – sent when you call `predict`
+- `session` - sent whenever a user initializes a TabPFN estimator.
 
 ### Metadata (all events)
-- `python_version` – version of Python you're running  
-- `tabpfn_version` – TabPFN package version  
-- `timestamp` – time of the event  
+- `python_version` – version of Python you're running
+- `tabpfn_version` – TabPFN package version
+- `timestamp` – time of the event
+- `numpy_vesion` - local Numpy version
+- `pandas_version` - local Pandas version
+- `gpu_type` - type of GPU TabPFN is running on.
+- `install_date` - `year-month-day` when TabPFN was used for the first time
+- `install_id` - unique, random and anonymous installation ID.
 
 ### Extra metadata (`fit` / `predict` only)
 - `task` – whether the call was for **classification** or **regression**  
