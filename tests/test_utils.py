@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import torch
 from sklearn.preprocessing import LabelEncoder
+from torch.torch_version import TorchVersion
 
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
@@ -137,7 +138,7 @@ def test__infer_devices__auto__cuda_and_mps_available_but_excluded__selects_cpu(
 def test__infer_devices__auto__mps_available_but_torch_too_old__selects_cpu(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(torch, "__version__", "2.4.0")
+    monkeypatch.setattr(torch, "__version__", TorchVersion("2.4.0"))
     mocker.patch("torch.cuda").is_available.return_value = False
     mocker.patch("torch.backends.mps").is_available.return_value = True
     assert infer_devices(devices="auto") == (torch.device("cpu"),)
@@ -178,7 +179,7 @@ def test__infer_devices__device_specified_twice__raises() -> None:
 def test__infer_devices__mps_specified_but_torch_too_old__raises(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(torch, "__version__", "2.4.0")
+    monkeypatch.setattr(torch, "__version__", TorchVersion("2.4.0"))
     mocker.patch("torch.backends.mps").is_available.return_value = True
     with pytest.raises(ValueError, match="The MPS device was selected"):
         infer_devices(devices="mps")
