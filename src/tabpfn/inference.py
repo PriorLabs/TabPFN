@@ -266,7 +266,8 @@ class InferenceEngineOnDemand(InferenceEngine):
         for (config, _, _, _, _), output in zip(ensemble_configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
-        [model.to_cpu() for model in self.model_caches]
+        for model_cache in self.model_caches:
+            model_cache.to_cpu()
 
     def _call_model(
         self,
@@ -553,7 +554,8 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             yield _move_and_squeeze_output(output, devices[0]), self.ensemble_configs[i]
 
         if self.inference_mode:
-            [model_cache.to_cpu() for model_cache in self.model_caches]
+            for model_cache in self.model_caches:
+                model_cache.to_cpu()
 
     def _call_model(
         self,
