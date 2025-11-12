@@ -118,19 +118,36 @@ class InferenceEngine(ABC):
     def save_state_except_model_weights(self, path: str | Path) -> None:
         """Persist the executor state to ``path`` without the model weights.
 
-        The state is first moved to CPU so the resulting file can be loaded
-        on machines without a GPU. The large model weights are explicitly
-        excluded to keep the file small and efficient.
+        This does not support the KV cache, and will raise an error if this is an
+        InferenceEngineCacheKV.
         """
+        _raise_if_kv_cache_enabled(self)
+
         state_copy = deepcopy(self)
         state_copy.models = None  # type: ignore
-
         joblib.dump(state_copy, path)
 
     @staticmethod
-    def load_state(path: str | Path) -> InferenceEngine:
-        """Load an executor saved with :meth:`save_state`."""
-        return joblib.load(Path(path))
+    def load_state(path: str | Path, models: list[Architecture]) -> InferenceEngine:
+        """Load an executor saved to disk with save_state_except_model_weights().
+
+        The state on disk does not include the models, so these must be provided as the
+        `models` parameter.
+        """
+        engine: InferenceEngine = joblib.load(Path(path))
+
+        _raise_if_kv_cache_enabled(engine)
+
+        engine.models = list(models)
+        return engine
+
+
+def _raise_if_kv_cache_enabled(engine: InferenceEngine) -> None:
+    if isinstance(engine, InferenceEngineCacheKV):
+        raise NotImplementedError(
+            "Saving and loading fitted models that use "
+            '`fit_mode="fit_with_cache"` is not currently supported.'
+        )
 
 
 @dataclass
