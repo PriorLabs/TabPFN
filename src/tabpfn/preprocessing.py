@@ -381,19 +381,20 @@ def get_subsample_indices_for_estimators(
     max_index: int,
     static_seed: int | np.random.Generator | None,
 ) -> list[None] | list[np.ndarray]:
-    """Get the subsample indices for the ensemble member.
+    """Get the indices of the rows to subsample for each estimator.
 
     Args:
-        subsample_samples: Number of samples to subsample. If int, subsample that many
+        subsample_samples: Method to subsample rows. If int, subsample that many
             samples. If float, subsample that fraction of samples. If a
             list of lists of indices, subsample the indices for each estimator.
             If `None`, no subsampling is done.
         num_estimators: Number of estimators to generate subsample indices for.
-        max_index: Maximum index to generate for.
+        max_index: Maximum index to generate for. Only used if subsample_samples is an
+            int or float.
         static_seed: Static seed to use for the random number generator.
 
     Returns:
-        List of subsample indices for each estimator.
+        List of list of indices to subsample for each estimator.
     """
     if isinstance(subsample_samples, (int, float)):
         subsample_indices = generate_index_permutations(
@@ -403,6 +404,15 @@ def get_subsample_indices_for_estimators(
             random_state=static_seed,
         )
     elif isinstance(subsample_samples, list):
+        if len(subsample_samples) > num_estimators:
+            warnings.warn(
+                f"Your list of subsample indices has more elements "
+                f"(={len(subsample_samples)}) than the number of estimators "
+                f"(={num_estimators}). The extra indices will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+            subsample_samples = subsample_samples[:num_estimators]
         for subsample in subsample_samples:
             assert len(subsample) > 0, (
                 "Length of subsampled indices must be larger than 0"
@@ -414,7 +424,7 @@ def get_subsample_indices_for_estimators(
             subsample_indices += subsample_samples[:leftover]
         subsample_indices = [np.array(subsample) for subsample in subsample_indices]
     elif subsample_samples is None:
-        subsample_indices = [None] * num_estimators  # type: ignore
+        subsample_indices = [None] * num_estimators
     else:
         raise ValueError(
             f"Invalid subsample_samples: {subsample_samples}",
@@ -468,8 +478,7 @@ class EnsembleConfig:
 
         Args:
             num_estimators: Number of ensemble configurations to generate.
-            subsample_samples:
-                Number of samples to subsample. If int, subsample that many
+            subsample_samples: Method to subsample rows. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If a
                 list of lists of indices, subsample the indices for each estimator.
                 If `None`, no subsampling is done.
@@ -584,8 +593,7 @@ class EnsembleConfig:
 
         Args:
             num_estimators: Number of ensemble configurations to generate.
-            subsample_samples:
-                Number of samples to subsample. If int, subsample that many
+            subsample_samples: Method to subsample rows. If int, subsample that many
                 samples. If float, subsample that fraction of samples. If a
                 list of lists of indices, subsample the indices for each estimator.
                 If `None`, no subsampling is done.
