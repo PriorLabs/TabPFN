@@ -36,7 +36,6 @@ from sklearn.base import (
     check_is_fitted,
 )
 from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -46,6 +45,7 @@ from tabpfn.base import (
     determine_precision,
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
+    initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
@@ -463,9 +463,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
-
-        # Ping the usage service if telemetry enabled
-        ping()
+        initialize_telemetry()
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:

@@ -32,7 +32,6 @@ from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
 from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -41,6 +40,7 @@ from tabpfn.base import (
     determine_precision,
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
+    initialize_telemetry,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -477,9 +477,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
-
-        # Ping the usage service if telemetry enabled
-        ping()
+        initialize_telemetry()
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
