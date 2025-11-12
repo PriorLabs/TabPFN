@@ -218,7 +218,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
         if "cuda" not in exclude_devices and torch.cuda.is_available():
             return (torch.device("cuda:0"),)
 
-        if torch.backends.mps.is_available() and "mps" not in exclude_devices:
+        if _is_mps_supported() and "mps" not in exclude_devices:
             return (torch.device("mps"),)
 
         return (torch.device("cpu"),)
@@ -232,6 +232,13 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
         raise ValueError(
             "The list of devices for inference cannot contain the same device more "
             f"than once. It contained: {devices}"
+        )
+
+    if not _is_mps_supported() and any(d.type == "mps" for d in devices):
+        raise ValueError(
+            "The MPS device was selected, "
+            "but this is not supported by TabPFN before PyTorch 2.5. "
+            'Set `device="cpu"` instead.'
         )
 
     return devices
@@ -249,6 +256,15 @@ def _parse_device(device: str | torch.device) -> torch.device:
         device = torch.device("cuda:0")
 
     return device
+
+
+def _is_mps_supported() -> bool:
+    """Return True if the MPS device is supported, otherwise False.
+
+    We have found that using MPS can lead to poor accuracy on PyTorch <2.5. See
+    https://github.com/PriorLabs/TabPFN/pull/619
+    """
+    return torch.__version__ >= "2.5" and torch.backends.mps.is_available()
 
 
 def is_autocast_available(device_type: str) -> bool:
