@@ -579,7 +579,7 @@ class EnsembleConfig:
         cls,
         *,
         num_estimators: int,
-        subsample_samples: int | float | None,
+        subsample_samples: int | float | list[list[int]] | None,
         max_index: int,
         add_fingerprint_feature: bool,
         polynomial_features: Literal["no", "all"] | int,
