@@ -32,7 +32,7 @@ from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
 from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
+from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -478,8 +478,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
 
-        # Ping the usage service if telemetry enabled
+        self._init_telemetry()
+
+    def _init_telemetry(self) -> None:
+        """Initialize telemetry and acknowledge anonymous session.
+
+        If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
+        no action is taken.
+        """
         ping()
+        capture_session()
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:

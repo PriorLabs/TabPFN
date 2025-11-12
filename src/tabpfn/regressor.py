@@ -36,7 +36,7 @@ from sklearn.base import (
     check_is_fitted,
 )
 from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
+from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -463,9 +463,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self._init_telemetry()
 
-        # Ping the usage service if telemetry enabled
+    def _init_telemetry(self) -> None:
+        """Initialize telemetry and acknowledge anonymous session.
+
+        If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
+        no action is taken.
+        """
         ping()
+        capture_session()
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
