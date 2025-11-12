@@ -262,7 +262,7 @@ def _is_mps_supported() -> bool:
     """Return True if the MPS device is supported, otherwise False.
 
     We have found that using MPS can lead to poor accuracy on PyTorch <2.5. See
-    https://linear.app/priorlabs/issue/RES-845/bad-accuracy-when-using-mps-and-older-pytorch
+    https://github.com/PriorLabs/TabPFN/pull/619
     """
     return torch.__version__ >= "2.5" and torch.backends.mps.is_available()
 
