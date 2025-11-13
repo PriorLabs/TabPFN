@@ -121,7 +121,7 @@ class InferenceEngine(ABC):
         This does not support the KV cache, and will raise an error if this is an
         InferenceEngineCacheKV.
         """
-        _raise_if_kv_cache_enabled(self)
+        _raise_if_kv_cache_enabled_on_save_or_load(self)
 
         state_copy = deepcopy(self)
         state_copy.models = None  # type: ignore
@@ -136,13 +136,13 @@ class InferenceEngine(ABC):
         """
         engine: InferenceEngine = joblib.load(Path(path))
 
-        _raise_if_kv_cache_enabled(engine)
+        _raise_if_kv_cache_enabled_on_save_or_load(engine)
 
         engine.models = list(models)
         return engine
 
 
-def _raise_if_kv_cache_enabled(engine: InferenceEngine) -> None:
+def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
     if isinstance(engine, InferenceEngineCacheKV):
         raise NotImplementedError(
             "Saving and loading fitted models that use "
