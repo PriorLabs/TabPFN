@@ -848,12 +848,15 @@ class _PerDeviceModelCache:
             for model in self._on_device_cache.values():
                 model.type(dtype)
 
-    def __deepcopy__(self, memo: dict) -> _PerDeviceModelCache:
-        # This class needs to support deecopy because the InferenceEngine, which
-        # contains it, is deepcopied when the model is saved.
-        new_instance = _PerDeviceModelCache.__new__(_PerDeviceModelCache)
-        new_instance._model = deepcopy(self._model, memo)
-        new_instance._on_device_cache = deepcopy(self._on_device_cache, memo)
-        # The lock can't be copied, so we create a new one.
-        new_instance._on_device_cache_lock = Lock()
-        return new_instance
+    def __getstate__(self) -> dict:
+        state = self.__dict__.copy()
+        # scikit-learn estimators have to be picklable, but the lock is not picklable,
+        # so we manually delete + recreate it.
+        del state["_on_device_cache_lock"]
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        # scikit-learn estimators have to be picklable, but the lock is not picklable,
+        # so we manually delete + recreate it.
+        self._on_device_cache_lock = Lock()
