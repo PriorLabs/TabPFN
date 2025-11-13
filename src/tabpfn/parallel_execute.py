@@ -5,7 +5,7 @@ from __future__ import annotations
 import queue
 from collections.abc import Generator, Iterable, Sequence
 from multiprocessing.pool import ThreadPool
-from typing import Generic, Protocol, TypeVar
+from typing import Callable, Generic, Protocol, TypeVar
 
 import torch
 
@@ -17,9 +17,6 @@ class ParallelFunction(Protocol, Generic[R_co]):
 
     def __call__(self, *, device: torch.device, is_parallel: bool) -> R_co:
         """Execute the function.
-
-        If using CUDA, `parallel_execute()` will set the current stream, and this
-        function should not change it.
 
         Args:
             device: PyTorch device that all computation should be performed on.
@@ -84,31 +81,38 @@ def _execute_with_multithreading(
             for func in functions
         ]
         for async_result in async_results:
-            yield async_result.get()
+            sync_and_get_output = async_result.get()
+            yield sync_and_get_output()
 
 
 def _execute_function_in_thread(
     all_devices: Sequence[torch.device],
     free_devices: queue.Queue[int],
     function: ParallelFunction[R_co],
-) -> R_co:
+) -> Callable[[], R_co]:
     device_index = free_devices.get(block=True)
     try:
         device = all_devices[device_index]
         if device.type == "cuda":
-            # We use a separate stream per thread so that threads can execute kernels in
-            # parallel.
-            stream = torch.cuda.Stream(device)
-            with torch.cuda.stream(stream), torch.cuda.device(device):
+            with torch.cuda.device(device):
                 output = function(device=device, is_parallel=True)
-                # The returned output will be consumed on a different CUDA stream, hence
-                # we synchronize before returning so that the output is ready for the
-                # consumer. It would be more efficient for the consumer to wait, so this
-                # thread can start with the next function, but this approach is simpler.
-                stream.synchronize()
-                return output
+
+                # The output will be consumed on a different cuda stream, which needs to
+                # wait for the computation on this stream to be complete. Thus we insert
+                # "ready" event after the model evaluation, and return a function to the
+                # consumer that waits on this event.
+                output_ready_event = torch.cuda.Event()
+                output_ready_event.record()
+
+                def sync_stream_and_get_output() -> R_co:
+                    output_ready_event.synchronize()
+                    return output
+
+                return sync_stream_and_get_output
+
         # Theoretically it is possible to parallelise over classes of device other than
         # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
-        return function(device=device, is_parallel=True)
+        output = function(device=device, is_parallel=True)
+        return lambda: output
     finally:
         free_devices.put(device_index)
