@@ -834,10 +834,10 @@ class _PerDeviceModelCache:
     def to_cpu(self) -> None:
         """Remove the models from the target devices, keeping one copy on the CPU."""
         with self._on_device_cache_lock:
-            # If .get() was called with is_parallel=True, then ._model will remain on
-            # the CPU and only the cached models will be moved to the target devices. If
-            # is_parallel=False, then ._model will be moved to the target device. Thus,
-            # cover both cases by emptying the cache and moving _model.
+            # If .get() was called with multiple_devices=True, then ._model will remain
+            # on the CPU and only the cached models will be moved to the target devices.
+            # If multiple_devices=False, then ._model will be moved to the target
+            # device. Thus, cover both cases by emptying the cache and moving _model.
             self._on_device_cache.clear()
             self._model.cpu()
 
