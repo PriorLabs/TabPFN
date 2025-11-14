@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,12 @@ try:
 
     # This import fails on some systems, due to problems with numba
 except ImportError:
+    warnings.warn(
+        "Cannot use KDITransformer because kditransform is not installed. "
+        "Using PowerTransformer as fallback.",
+        UserWarning,
+        stacklevel=1,
+    )
     KDITransformer = PowerTransformer  # fallback to avoid error
 
 
