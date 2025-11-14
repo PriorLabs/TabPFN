@@ -20,7 +20,7 @@ except ImportError:
         "Cannot use KDITransformer because kditransform is not installed. "
         "Using PowerTransformer as fallback.",
         UserWarning,
-        stacklevel=1,
+        stacklevel=2,
     )
     KDITransformer = PowerTransformer  # fallback to avoid error
 
