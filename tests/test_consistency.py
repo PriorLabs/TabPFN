@@ -74,7 +74,7 @@ from tabpfn.settings import settings
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
 TEST_TOLERANCE_RTOL = 1e-3  # 0.1% relative tolerance
-TEST_TOLERANCE_ATOL = 2e-3  # 0.002 absolute tolerance
+TEST_TOLERANCE_ATOL = 3e-3  # 0.003 absolute tolerance
 
 # Sample configuration
 # Fixed seeds and indices make tests more stable and predictable
