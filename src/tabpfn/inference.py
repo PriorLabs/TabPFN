@@ -807,6 +807,8 @@ class _PerDeviceModelCache:
         Return the model from the cache, if present, otherwise copy the model to the
         device.
 
+        This class assumes that each device will be used by a single thread at a time.
+
         Args:
             device: The device to get the model for.
             multiple_devices:
