@@ -16,12 +16,6 @@ try:
 
     # This import fails on some systems, due to problems with numba
 except ImportError:
-    warnings.warn(
-        "Cannot use KDITransformer because kditransform is not installed. "
-        "Using PowerTransformer as fallback.",
-        UserWarning,
-        stacklevel=2,
-    )
     KDITransformer = PowerTransformer  # fallback to avoid error
 
 
@@ -50,6 +44,16 @@ class KDITransformerWithNaN(KDITransformer):
     """KDI transformer that can handle NaN values. It performs KDI with NaNs replaced by
     mean values and then fills the NaN values with NaNs after the transformation.
     """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if KDITransformer is PowerTransformer:
+            warnings.warn(
+                "Cannot use KDITransformer because `kditransform` is not installed. "
+                "Using `PowerTransformer` as fallback.",
+                UserWarning,
+                stacklevel=2,
+            )
+        super().__init__(*args, **kwargs)
 
     def _more_tags(self) -> dict:
         return {"allow_nan": True}
