@@ -7,15 +7,14 @@ from typing import Any
 
 import numpy as np
 import torch
-
-from tabpfn.preprocessors import SafePowerTransformer
+from sklearn.preprocessing import PowerTransformer
 
 try:
     from kditransform import KDITransformer
 
     # This import fails on some systems, due to problems with numba
 except ImportError:
-    KDITransformer = SafePowerTransformer  # fallback to avoid error
+    KDITransformer = PowerTransformer  # fallback to avoid error
 
 
 ALPHAS = (
@@ -45,7 +44,7 @@ class KDITransformerWithNaN(KDITransformer):
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if KDITransformer is SafePowerTransformer:
+        if KDITransformer is PowerTransformer:
             warnings.warn(
                 "Cannot use KDITransformer because `kditransform` is not installed. "
                 "Using `PowerTransformer` as fallback.",
