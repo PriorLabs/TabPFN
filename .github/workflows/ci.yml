@@ -1,4 +1,4 @@
-name: Run tests
+name: CI
 on:
   pull_request:
   push:
@@ -73,7 +73,7 @@ jobs:
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
           licensecheck \
@@ -126,7 +126,7 @@ jobs:
         run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
           licensecheck \

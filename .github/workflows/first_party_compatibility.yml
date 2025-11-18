@@ -1,0 +1,47 @@
+# Checks that our first-party packages that depend on TabPFN work correctly.
+name: First Party Compatibility
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test_first_party_packages:
+    name: Test ${{ matrix.repo-name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        repo-name:
+          - tabpfn-extensions
+          - tabpfn-time-series
+
+    steps:
+      - name: Checkout TabPFN (main)
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          path: TabPFN-main
+
+      - name: Checkout ${{ matrix.repo-name }}
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          repository: PriorLabs/${{ matrix.repo-name }}
+          path: ${{ matrix.repo-name }}
+
+      - name: Set up Python
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@5a2c0c7dc3bbed226b1dc37a0058c5f3b93cac5b # v5.1.1
+
+      - name: Install dependencies and run tests
+        run: |
+          cd ${{ matrix.repo-name }}
+          uv run --with ../TabPFN-main pytest
