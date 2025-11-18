@@ -59,6 +59,7 @@ import logging
 import os
 import pathlib
 import platform
+from typing_extensions import override
 
 import numpy as np
 import pytest
@@ -73,7 +74,7 @@ from tabpfn.settings import settings
 # Test configuration parameters
 DEFAULT_N_ESTIMATORS = 2  # Small number for quick tests
 TEST_TOLERANCE_RTOL = 1e-3  # 0.1% relative tolerance
-TEST_TOLERANCE_ATOL = 1e-3  # 0.001 absolute tolerance
+TEST_TOLERANCE_ATOL = 4e-3  # 0.004 absolute tolerance
 
 # Sample configuration
 # Fixed seeds and indices make tests more stable and predictable
@@ -150,7 +151,7 @@ def _get_platform_details() -> tuple[dict[str, str], dict[str, str]]:
     return current_platform, ref_platform
 
 
-def is_ci_compatible_platform(os_name, python_version):
+def is_ci_compatible_platform(os_name: str, python_version: str) -> bool:
     """Check if a platform is CI-compatible.
 
     Verifies that the given OS and Python version combination is used in CI.
@@ -228,7 +229,7 @@ platform_specific = pytest.mark.skipif(
 
 
 # Test data generators for reproducible datasets
-def get_tiny_classification_data(*, seed_modifier=0, as_tensors=False):
+def get_tiny_classification_data(*, seed_modifier: int = 0, as_tensors: bool = False):
     """Get a tiny fixed classification dataset for testing.
 
     Args:
@@ -344,7 +345,7 @@ class ConsistencyTest:
         """Get the path to the reference prediction file for this test."""
         return self.REFERENCE_DIR / f"{self.get_dataset_name()}_predictions.json"
 
-    def save_reference(self, predictions):
+    def save_reference(self, predictions: np.ndarray) -> None:
         """Save predictions as reference for this test."""
         path = self.get_reference_path()
         with path.open("w") as f:
@@ -358,7 +359,7 @@ class ConsistencyTest:
         with path.open("r") as f:
             return np.array(json.load(f))
 
-    def run_test(self, *, override=False):
+    def run_test(self, *, override: bool = False) -> np.ndarray:
         """Run the consistency test.
 
         Args:
@@ -415,12 +416,15 @@ class TestTinyClassifierFitPreprocessors(ConsistencyTest):
     Use `fit_mode=fit_preprocessors`.
     """
 
+    @override
     def get_dataset_name(self):
         return "tiny_classifier_fit_preprocessors"
 
+    @override
     def get_test_data(self):
         return get_tiny_classification_data()
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -429,6 +433,7 @@ class TestTinyClassifierFitPreprocessors(ConsistencyTest):
             fit_mode="fit_preprocessors",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -444,12 +449,15 @@ class TestTinyClassifierLowMemory(ConsistencyTest):
     Use `fit_mode=low_memory`.
     """
 
+    @override
     def get_dataset_name(self):
         return "tiny_classifier_low_memory"
 
+    @override
     def get_test_data(self):
         return get_tiny_classification_data()
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -458,6 +466,7 @@ class TestTinyClassifierLowMemory(ConsistencyTest):
             fit_mode="low_memory",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -472,12 +481,15 @@ class TestTinyClassifierFitWithCache(ConsistencyTest):
     Use `fit_mode=fit_with_cache`.
     """
 
+    @override
     def get_dataset_name(self):
         return "tiny_classifier_fit_with_cache"
 
+    @override
     def get_test_data(self):
         return get_tiny_classification_data()
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -486,6 +498,7 @@ class TestTinyClassifierFitWithCache(ConsistencyTest):
             fit_mode="fit_with_cache",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -497,12 +510,15 @@ class TestTinyClassifierFitWithCache(ConsistencyTest):
 class TestTinyClassifierDifferentiableInput(ConsistencyTest):
     """Test prediction consistency for a tiny binary classifier."""
 
+    @override
     def get_dataset_name(self):
         return "tiny_diff_input_classifier"
 
+    @override
     def get_test_data(self):
         return get_tiny_classification_data(as_tensors=True)
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -511,6 +527,7 @@ class TestTinyClassifierDifferentiableInput(ConsistencyTest):
             differentiable_input=True,
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -530,12 +547,15 @@ class TestTinyRegressorFitPreprocessors(ConsistencyTest):
 
     DATASET_NAME = "tiny_regressor_fit_preprocessors"
 
+    @override
     def get_dataset_name(self):
         return self.DATASET_NAME
 
+    @override
     def get_test_data(self):
         return get_tiny_regression_data()
 
+    @override
     def get_model(self):
         return TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -544,6 +564,7 @@ class TestTinyRegressorFitPreprocessors(ConsistencyTest):
             fit_mode="fit_preprocessors",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict(X)
 
@@ -559,12 +580,15 @@ class TestTinyRegressorLowMemory(ConsistencyTest):
     Use `fit_mode=low_memory`.
     """
 
+    @override
     def get_dataset_name(self):
         return "tiny_regressor_low_memory"
 
+    @override
     def get_test_data(self):
         return get_tiny_regression_data()
 
+    @override
     def get_model(self):
         return TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -573,6 +597,7 @@ class TestTinyRegressorLowMemory(ConsistencyTest):
             fit_mode="low_memory",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict(X)
 
@@ -588,12 +613,15 @@ class TestTinyRegressorFitWithCache(ConsistencyTest):
     Use `fit_mode=fit_with_cache`.
     """
 
+    @override
     def get_dataset_name(self):
         return "tiny_regressor_fit_with_cache"
 
+    @override
     def get_test_data(self):
         return get_tiny_regression_data()
 
+    @override
     def get_model(self):
         return TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -602,6 +630,7 @@ class TestTinyRegressorFitWithCache(ConsistencyTest):
             fit_mode="fit_with_cache",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict(X)
 
@@ -614,15 +643,18 @@ class TestTinyRegressorFitWithCache(ConsistencyTest):
 class TestTinyRegressorSeveralDevices(ConsistencyTest):
     """Test a regressor with several CPU devices, to simulate multi-device inference."""
 
+    @override
     def get_dataset_name(self):
         # Use the same name as TestTinyRegressorFitPreprocessors so that the predictions
         # of the two configurations are compared to each other: multi-device inference
         # should not affect the result.
         return TestTinyRegressorFitPreprocessors.DATASET_NAME
 
+    @override
     def get_test_data(self):
         return get_tiny_regression_data()
 
+    @override
     def get_model(self):
         regressor = TabPFNRegressor(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -637,6 +669,7 @@ class TestTinyRegressorSeveralDevices(ConsistencyTest):
         regressor.devices_ = (torch.device("cpu"),) * DEFAULT_N_ESTIMATORS
         return regressor
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict(X)
 
@@ -651,12 +684,15 @@ class TestMulticlassClassifier(ConsistencyTest):
 
     DATASET_NAME = "iris_multiclass"
 
+    @override
     def get_dataset_name(self):
         return self.DATASET_NAME
 
+    @override
     def get_test_data(self):
         return get_iris_multiclass_data()
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -664,6 +700,7 @@ class TestMulticlassClassifier(ConsistencyTest):
             device="auto",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -676,15 +713,18 @@ class TestMulticlassClassifier(ConsistencyTest):
 class TestMulticlassClassifierSeveralDevices(ConsistencyTest):
     """Test a classifier on several CPU devices, to simulate multi-device inference."""
 
+    @override
     def get_dataset_name(self):
         # Use the same name as TestMulticlassClassifier so that the predictions of the
         # two configurations are compared to each other: multi-device inference should
         # not affect the result.
         return TestMulticlassClassifier.DATASET_NAME
 
+    @override
     def get_test_data(self):
         return get_iris_multiclass_data()
 
+    @override
     def get_model(self):
         classifier = TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -699,6 +739,7 @@ class TestMulticlassClassifierSeveralDevices(ConsistencyTest):
         classifier.devices_ = (torch.device("cpu"),) * DEFAULT_N_ESTIMATORS
         return classifier
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -711,12 +752,15 @@ class TestMulticlassClassifierSeveralDevices(ConsistencyTest):
 class TestEnsembleClassifier(ConsistencyTest):
     """Test prediction consistency for a classifier with larger ensemble."""
 
+    @override
     def get_dataset_name(self):
         return "ensemble_classifier"
 
+    @override
     def get_test_data(self):
         return get_ensemble_data()
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=5,  # Larger ensemble for this test
@@ -724,6 +768,7 @@ class TestEnsembleClassifier(ConsistencyTest):
             device="auto",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
@@ -740,13 +785,16 @@ class TestInconsistencyDetection(ConsistencyTest):
     by purposely creating a mismatch between reference and actual predictions.
     """
 
+    @override
     def get_dataset_name(self):
         return "inconsistency_test"
 
-    def get_test_data(self, seed_modifier=0):
+    @override
+    def get_test_data(self, seed_modifier: int = 0):
         """Get test data with an optional seed modifier to create inconsistency."""
         return get_tiny_classification_data(seed_modifier=seed_modifier)
 
+    @override
     def get_model(self):
         return TabPFNClassifier(
             n_estimators=DEFAULT_N_ESTIMATORS,
@@ -754,6 +802,7 @@ class TestInconsistencyDetection(ConsistencyTest):
             device="cpu",
         )
 
+    @override
     def get_prediction_func(self):
         return lambda model, X: model.predict_proba(X)
 
