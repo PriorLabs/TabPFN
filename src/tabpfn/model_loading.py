@@ -390,7 +390,7 @@ def download_all_models(to: Path) -> None:
             )
 
 
-def _get_cache_dir() -> Path:  # noqa: PLR0911
+def get_cache_dir() -> Path:  # noqa: PLR0911
     """Get the cache directory for TabPFN models, as appropriate for the platform."""
     if settings.tabpfn.model_cache_dir is not None:
         return settings.tabpfn.model_cache_dir
@@ -452,7 +452,7 @@ def prepend_cache_path(model_path: P) -> P:
 
     The cache directory is selected appropriately for the platform.
     """
-    cache_dir = _get_cache_dir()
+    cache_dir = get_cache_dir()
     if isinstance(model_path, list):
         return [str(cache_dir / path) for path in model_path]
     return str(cache_dir / model_path)
@@ -687,7 +687,7 @@ def resolve_model_path(
         resolved_model_names = [model_source.default_filename]
 
         # Determine the cache directory for storing models.
-        resolved_model_dirs = [_get_cache_dir()]
+        resolved_model_dirs = [get_cache_dir()]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
     elif isinstance(model_path, (str, Path)):
         resolved_model_paths = [Path(model_path)]
