@@ -60,8 +60,8 @@ from tabpfn.inference_tuning import (
 )
 from tabpfn.model_loading import (
     ModelSource,
-    get_cache_dir,
     load_fitted_tabpfn_model,
+    prepend_cache_path,
     save_fitted_tabpfn_model,
 )
 from tabpfn.preprocessing import (
@@ -490,16 +490,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         if version == ModelVersion.V2:
             options = {
-                "model_path": str(
-                    get_cache_dir() / ModelSource.get_classifier_v2().default_filename
+                "model_path": prepend_cache_path(
+                    ModelSource.get_classifier_v2().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
-                "model_path": str(
-                    get_cache_dir() / ModelSource.get_classifier_v2_5().default_filename
+                "model_path": prepend_cache_path(
+                    ModelSource.get_classifier_v2_5().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
