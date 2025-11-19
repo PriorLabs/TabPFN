@@ -32,6 +32,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu-latest 3.13 highest is not included here because it is executed
+        # as a separate workflow below. This is because we wish to gate the GPU
+        # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
+        # separate workflow.
         include:
           - os: ubuntu-latest
             python-version: "3.9"
@@ -43,10 +47,6 @@ jobs:
           - os: windows-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          # ubuntu-latest 3.13 maximum is not included here because it is executed
-          # as a separate workflow below. This is because we wish to gate the GPU
-          # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
-          # separate workflow.
           - os: macos-latest
             python-version: "3.13"
             dependency-set: highest
@@ -73,7 +73,7 @@ jobs:
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
           licensecheck \
@@ -84,21 +84,34 @@ jobs:
       - name: Initialize submodules
         run: git submodule update --init --recursive
 
-      - name: Run Tests (including MPS)
+      - name: Run Tests (all tests)
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        if: ${{ matrix.dependency-set != 'lowest-direct' }}
         run: pytest tests/
 
-      - name: Run Tests (without MPS)
-        if: ${{ matrix.dependency-set == 'lowest-direct' }}
+      - name: Run Tests (CI tests only)
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # The MPS tests are flakey on the CI for PyTorch < 2.3, possibly due to this
-          # https://github.com/pytorch/pytorch/issues/105839#issuecomment-1779116758,
-          # so disable the MPS device for these tests.
+        run: pytest -m "not non_ci" tests/
+
+      # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
+      # disable MPS for the lowest-direct dependency set.
+
+      - name: Run Tests (all tests, MPS disabled)
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
         run: pytest tests/
+
+      - name: Run Tests (CI tests only, MPS disabled)
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_EXCLUDE_DEVICES: mps
+        run: pytest -m "not non_ci" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
@@ -126,7 +139,7 @@ jobs:
         run: uv pip install --system --resolution highest ".[ci]"
         shell: bash
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
           licensecheck \

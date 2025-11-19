@@ -96,16 +96,18 @@ def test_infer_categorical_with_dict_raises_error():
 
 
 def test__infer_devices__auto__cuda_and_mps_not_available__selects_cpu(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mocker.patch("torch.cuda").is_available.return_value = False
     mocker.patch("torch.backends.mps").is_available.return_value = False
     assert infer_devices(devices="auto") == (torch.device("cpu"),)
 
 
 def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
     mock_cuda.device_count.return_value = 1
@@ -114,8 +116,9 @@ def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
 
 
 def test__infer_devices__auto__multiple_cuda_gpus_available__selects_first(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
     mock_cuda.device_count.return_value = 3

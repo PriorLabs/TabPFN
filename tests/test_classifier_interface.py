@@ -34,7 +34,11 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .utils import get_pytest_devices, is_cpu_float16_supported
+from .utils import (
+    get_pytest_devices,
+    is_cpu_float16_supported,
+    mark_mps_configs_as_non_ci,
+)
 
 exclude_devices = {
     d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
@@ -61,17 +65,19 @@ fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 
 
 @pytest.mark.parametrize(
-    ("n_estimators", "device", "fit_mode", "inference_precision"),
-    itertools.product(
-        [1, 2],  # n_estimators
-        devices,
-        fit_modes,
-        ["auto", "autocast", torch.float64, torch.float16],  # inference_precision
+    ("device", "n_estimators", "fit_mode", "inference_precision"),
+    mark_mps_configs_as_non_ci(
+        itertools.product(
+            devices,
+            [1, 2],  # n_estimators
+            fit_modes,
+            ["auto", "autocast", torch.float64, torch.float16],  # inference_precision
+        )
     ),
 )
 def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
-    n_estimators: int,
     device: str,
+    n_estimators: int,
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     X_y: tuple[np.ndarray, np.ndarray],
@@ -108,6 +114,22 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     assert model.predict(X).shape == (X.shape[0],)
 
 
+@pytest.mark.parametrize("device", [d for d in devices if d == "mps"])
+def test__fit_predict__mps_smoke_test__outputs_correct_shape(
+    device: str, X_y: tuple[np.ndarray, np.ndarray]
+) -> None:
+    """Basic test of fit+predict on MPS.
+
+    The other MPS tests in this file are disabled in PRs because they are slow, so this
+    test provides some coverage.
+    """
+    model = TabPFNClassifier(n_estimators=2, device=device, random_state=42)
+    X, y = X_y
+    model.fit(X, y)
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
+
+
 non_default_model_paths = list(
     itertools.chain.from_iterable(
         (
@@ -121,7 +143,8 @@ non_default_model_paths = list(
 
 
 @pytest.mark.parametrize(
-    ("device", "model_path"), itertools.product(devices, non_default_model_paths)
+    ("device", "model_path"),
+    mark_mps_configs_as_non_ci(itertools.product(devices, non_default_model_paths)),
 )
 def test__fit_predict__alternative_model_paths__outputs_correct_shape(
     device: str,
@@ -145,7 +168,10 @@ def test__fit_predict__alternative_model_paths__outputs_correct_shape(
     assert model.predict(X).shape == (X.shape[0],)
 
 
-@pytest.mark.parametrize(("device", "fit_mode"), itertools.product(devices, fit_modes))
+@pytest.mark.parametrize(
+    ("device", "fit_mode"),
+    mark_mps_configs_as_non_ci(itertools.product(devices, fit_modes)),
+)
 def test__fit_predict__multiple_model_paths__outputs_correct_shape(
     device: str,
     fit_mode: str,
@@ -171,13 +197,15 @@ def test__fit_predict__multiple_model_paths__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     ("device", "feature_shift_decoder", "multiclass_decoder", "remove_outliers_std"),
-    itertools.chain.from_iterable(
-        [
-            (device, "shuffle", "rotate", None),
-            (device, "rotate", "shuffle", 12),
-            (device, "shuffle", "rotate", 12),
-        ]
-        for device in devices
+    mark_mps_configs_as_non_ci(
+        itertools.chain.from_iterable(
+            [
+                (device, "shuffle", "rotate", None),
+                (device, "rotate", "shuffle", 12),
+                (device, "shuffle", "rotate", 12),
+            ]
+            for device in devices
+        )
     ),
 )
 def test__fit_predict__specify_inference_config__outputs_correct_shape(
@@ -210,21 +238,23 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     (
-        "n_estimators",
         "device",
+        "n_estimators",
         "softmax_temperature",
         "average_before_softmax",
     ),
-    product(
-        [1, 2],  # n_estimators
-        devices,  # device
-        [0.5, 1.0, 1.5],  # softmax_temperature
-        [False, True],  # average_before_softmax
+    mark_mps_configs_as_non_ci(
+        product(
+            devices,  # device
+            [1, 2],  # n_estimators
+            [0.5, 1.0, 1.5],  # softmax_temperature
+            [False, True],  # average_before_softmax
+        )
     ),
 )
 def test__predict_logits__output_has_correct_properties_and_consistent_with_proba(
-    n_estimators: int,
     device: str,
+    n_estimators: int,
     softmax_temperature: float,
     average_before_softmax: bool,
 ) -> None:
