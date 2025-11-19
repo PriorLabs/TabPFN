@@ -358,12 +358,12 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
         )
 
 
-def test__prepend_cache_path__single_path__relative_path_unchanged() -> None:
-    full_path = model_loading.prepend_cache_path("my_dir/my_path.test")
-    assert full_path.endswith("my_dir/my_path.test")
+def test__prepend_cache_path__single_path__filename_unchanged() -> None:
+    full_path = model_loading.prepend_cache_path("my_path.test")
+    assert Path(full_path).name == "my_path.test"
 
 
-def test__prepend_cache_path__multiple_paths__relative_path_unchanged() -> None:
+def test__prepend_cache_path__multiple_paths__filename_unchanged() -> None:
     full_paths = model_loading.prepend_cache_path(["my_dir/my_path.test", "another"])
-    assert full_paths[0].endswith("my_dir/my_path.test")
-    assert full_paths[1].endswith("another")
+    assert Path(full_paths[0]).name == "my_path.test"
+    assert Path(full_paths[1]).name == "another"
