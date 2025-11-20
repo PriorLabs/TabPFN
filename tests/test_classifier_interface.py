@@ -29,7 +29,7 @@ from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
 )
-from tabpfn.model_loading import ModelSource
+from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
@@ -172,7 +172,7 @@ def test_fit(
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
-        model_path=model_path,
+        model_path=prepend_cache_path(model_path),
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
@@ -350,7 +350,7 @@ def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndar
         classifier = TabPFNClassifier(
             n_estimators=2,
             random_state=42,
-            model_path=model_paths,
+            model_path=prepend_cache_path(model_paths),
         )
         classifier.fit(X, y)
         # shape: E=estimators, R=rows, C=columns

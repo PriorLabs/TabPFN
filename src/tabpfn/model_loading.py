@@ -18,7 +18,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
 from urllib.error import URLError
 
 import joblib
@@ -442,6 +442,20 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
         stacklevel=2,
     )
     return use_instead_path
+
+
+P = TypeVar("P", bound=Union[str, list[str]])
+
+
+def prepend_cache_path(model_path: P) -> P:
+    """Prepends the TabPFN cache directory to the given path or paths.
+
+    The cache directory is selected appropriately for the platform.
+    """
+    cache_dir = get_cache_dir()
+    if isinstance(model_path, list):
+        return [str(cache_dir / path) for path in model_path]
+    return str(cache_dir / model_path)
 
 
 @overload
