@@ -105,6 +105,7 @@ ci = [
   "psutil>=7.1.0",
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
+  "pytest-xdist>=3.8.0",
 ]
 
 [tool.setuptools.package-data]
