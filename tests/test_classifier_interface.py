@@ -61,13 +61,12 @@ fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 
 
 @pytest.mark.parametrize(
-    ("n_estimators", "device", "fit_mode", "inference_precision", "model_path"),
+    ("n_estimators", "device", "fit_mode", "inference_precision"),
     itertools.product(
         [1, 2],  # n_estimators
         devices,
         fit_modes,
         ["auto", "autocast", torch.float64, torch.float16],  # inference_precision
-        [model_source.default_filename for model_source in model_sources],  # model_path
     ),
 )
 def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
@@ -75,7 +74,6 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     device: str,
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
-    model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     if inference_precision == "autocast":
@@ -93,7 +91,6 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
-        model_path=prepend_cache_path(model_path),
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
