@@ -118,6 +118,9 @@ log_cli = false
 log_level = "DEBUG"
 xfail_strict = true
 addopts = "--durations=10 -vv"
+markers = [
+    "not_in_prs: slow tests that are also safe only to run on merge, rather than in PRs"
+]
 
 # https://github.com/charliermarsh/ruff
 [tool.ruff]

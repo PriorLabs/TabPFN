@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import functools
 import os
+from collections.abc import Generator, Iterable
 
+import pytest
 import torch
 
 
@@ -40,3 +42,27 @@ def is_cpu_float16_supported() -> bool:
         if "addmm_impl_cpu_" in str(e) or "not implemented for 'Half'" in str(e):
             return False
         raise e
+
+
+def mark_mps_configs_as_not_in_prs(configs: Iterable[tuple]) -> Generator[tuple]:
+    """Add a pytest "not_in_prs" mark to any configurations that run on MPS.
+
+    This is useful to disable MPS tests in PRs, which we have found can be very slow.
+    It assumes that the device is given by the first element of the config tuple.
+
+    Use it like follows:
+    ```
+    @pytest.mark.parametrize(
+        ("device", "config_option"),
+        mark_mps_configs_as_not_in_prs(
+            itertools.product(get_pytest_devices(), ["value_a", "value_b"])
+        )
+    )
+    def test___my_function(device: str, config_option: str) -> None: ...
+    ```
+    """
+    for config in configs:
+        if config[0] == "mps":
+            yield pytest.param(*config, marks=pytest.mark.not_in_prs)
+        else:
+            yield config
