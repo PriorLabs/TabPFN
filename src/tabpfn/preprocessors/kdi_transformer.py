@@ -65,7 +65,7 @@ class KDITransformerWithNaN(KDITransformer):
             warnings.warn(
                 "Cannot use KDITransformer because `kditransform` is not installed. "
                 "Using `PowerTransformer` as fallback. This warning is only shown "
-                "once per session.",
+                "once per Python interpreter instance.",
                 UserWarning,
                 stacklevel=2,
             )
