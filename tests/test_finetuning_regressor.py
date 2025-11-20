@@ -21,7 +21,7 @@ from tabpfn.architectures.base.bar_distribution import (
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.utils import meta_dataset_collator
 
-from .utils import get_pytest_devices, mark_mps_configs_as_non_ci
+from .utils import get_pytest_devices, mark_mps_configs_as_not_in_prs
 
 rng = np.random.default_rng(42)
 
@@ -189,7 +189,7 @@ def test_regressor_dataset_and_collator_batches_type(
         break
 
 
-@pytest.mark.parametrize(param_order, mark_mps_configs_as_non_ci(combinations))
+@pytest.mark.parametrize(param_order, mark_mps_configs_as_not_in_prs(combinations))
 def test_tabpfn_regressor_finetuning_loop(
     device,
     n_estimators,

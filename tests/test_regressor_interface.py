@@ -28,7 +28,7 @@ from tabpfn.utils import infer_devices
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
-    mark_mps_configs_as_non_ci,
+    mark_mps_configs_as_not_in_prs,
 )
 
 devices = get_pytest_devices()
@@ -48,7 +48,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 
 @pytest.mark.parametrize(
     ("device", "n_estimators", "fit_mode", "inference_precision"),
-    mark_mps_configs_as_non_ci(
+    mark_mps_configs_as_not_in_prs(
         itertools.product(
             devices,
             [1, 2],  # n_estimators
@@ -136,7 +136,7 @@ non_default_model_paths = list(
 
 @pytest.mark.parametrize(
     ("device", "model_path"),
-    mark_mps_configs_as_non_ci(itertools.product(devices, non_default_model_paths)),
+    mark_mps_configs_as_not_in_prs(itertools.product(devices, non_default_model_paths)),
 )
 def test__fit_predict__alternative_model_paths__outputs_correct_shape(
     device: str,
@@ -161,7 +161,7 @@ def test__fit_predict__alternative_model_paths__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     ("device", "fit_mode"),
-    mark_mps_configs_as_non_ci(itertools.product(devices, fit_modes)),
+    mark_mps_configs_as_not_in_prs(itertools.product(devices, fit_modes)),
 )
 def test__fit_predict__multiple_model_paths__outputs_correct_shape(
     device: str,
@@ -187,7 +187,7 @@ def test__fit_predict__multiple_model_paths__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     ("device", "feature_shift_decoder", "remove_outliers_std"),
-    mark_mps_configs_as_non_ci(
+    mark_mps_configs_as_not_in_prs(
         itertools.chain.from_iterable(
             [
                 (device, "shuffle", None),

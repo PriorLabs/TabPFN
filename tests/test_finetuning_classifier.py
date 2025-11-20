@@ -20,7 +20,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.utils import meta_dataset_collator
 
-from .utils import get_pytest_devices, mark_mps_configs_as_non_ci
+from .utils import get_pytest_devices, mark_mps_configs_as_not_in_prs
 
 rng = np.random.default_rng(42)
 
@@ -165,7 +165,7 @@ def variable_synthetic_dataset_collection():
     return datasets
 
 
-@pytest.mark.parametrize(param_order, mark_mps_configs_as_non_ci(combinations))
+@pytest.mark.parametrize(param_order, mark_mps_configs_as_not_in_prs(combinations))
 def test_tabpfn_classifier_finetuning_loop(
     device,
     n_estimators,
