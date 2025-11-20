@@ -25,12 +25,10 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .utils import check_cpu_float16_support, get_pytest_devices
+from .utils import get_pytest_devices, is_cpu_float16_supported
 
 devices = get_pytest_devices()
 
-# --- Environment-Aware Check for CPU Float16 Support ---
-is_cpu_float16_supported = check_cpu_float16_support()
 
 # --- Define parameter combinations ---
 # These are the parameters we want to test in our grid search
@@ -116,7 +114,7 @@ def test_regressor(
     if (
         torch.device(device).type == "cpu"
         and inference_precision == torch.float16
-        and not is_cpu_float16_supported
+        and not is_cpu_float16_supported()
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
     if torch.device(device).type == "mps" and inference_precision == torch.float64:
