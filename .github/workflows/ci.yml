@@ -90,7 +90,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: pytest tests/
 
-      - name: Run Tests (CI tests only)
+      - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -106,7 +106,7 @@ jobs:
           TABPFN_EXCLUDE_DEVICES: mps
         run: pytest tests/
 
-      - name: Run Tests (CI tests only, MPS disabled)
+      - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
