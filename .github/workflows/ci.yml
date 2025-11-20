@@ -84,17 +84,20 @@ jobs:
       - name: Initialize submodules
         run: git submodule update --init --recursive
 
+      - name: Download models
+        run: python scripts/download_all_models.py
+
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n auto --dist worksteal tests/
+        run: pytest -n 4 --dist worksteal tests/
 
       - name: Run Tests (CI tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n auto --dist worksteal -m "not non_ci" tests/
+        run: pytest -n 4 --dist worksteal -m "not non_ci" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
@@ -104,14 +107,14 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -n auto --dist worksteal tests/
+        run: pytest -n 4 --dist worksteal tests/
 
       - name: Run Tests (CI tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -n auto --dist worksteal -m "not non_ci" tests/
+        run: pytest -n 4 --dist worksteal -m "not non_ci" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
@@ -153,7 +156,7 @@ jobs:
       - name: Run Tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n auto --dist worksteal tests/
+        run: pytest -n 4 --dist worksteal tests/
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -202,4 +205,4 @@ jobs:
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
-        run: pytest -n auto --dist worksteal tests/
+        run: pytest worksteal tests/
