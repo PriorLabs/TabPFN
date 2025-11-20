@@ -81,9 +81,6 @@ jobs:
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
       - name: Download models
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -93,13 +90,13 @@ jobs:
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n 2  tests/
+        run: pytest tests/
 
       - name: Run Tests (CI tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n 2  -m "not non_ci" tests/
+        run: pytest -m "not non_ci" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
@@ -109,14 +106,14 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -n 2  tests/
+        run: pytest tests/
 
       - name: Run Tests (CI tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -n 2  -m "not non_ci" tests/
+        run: pytest -m "not non_ci" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
@@ -152,13 +149,15 @@ jobs:
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
+      - name: Download models
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: python scripts/download_all_models.py
 
       - name: Run Tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -n 2 tests/
+        run: pytest tests/
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -197,13 +196,6 @@ jobs:
       - name: Install dependencies
         run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
         shell: bash
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-      - name: Download models
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: python scripts/download_all_models.py
 
       - name: Run GPU Test Suite
         env:
