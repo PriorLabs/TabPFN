@@ -94,7 +94,7 @@ jobs:
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -m "not non_ci" tests/
+        run: pytest -m "not not_in_prs" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
@@ -111,7 +111,7 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -m "not non_ci" tests/
+        run: pytest -m "not not_in_prs" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
