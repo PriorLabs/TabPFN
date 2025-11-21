@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import pathlib
-import sys
+import platform
 from dataclasses import dataclass
 from functools import partial
 from typing import Callable, Union
@@ -107,7 +107,7 @@ DEFAULT_CONFIG = {"n_estimators": 2, "random_state": 42, "device": "cpu"}
 
 TEST_CASES = {
     **{
-        f"classifier_tiny_dataset_{version}_{fit_mode}": _ConsistencyCase(
+        f"classifier_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
             data=_get_tiny_classification_data,
             model=partial(
                 TabPFNClassifier.create_default_for_version,
@@ -122,7 +122,7 @@ TEST_CASES = {
         if version == ModelVersion.V2_5 or fit_mode == "fit_preprocessors"
     },
     **{
-        f"regressor_tiny_dataset_{version}_{fit_mode}": _ConsistencyCase(
+        f"regressor_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
             data=_get_tiny_regression_data,
             model=partial(
                 TabPFNRegressor.create_default_for_version,
@@ -159,7 +159,7 @@ TEST_CASES = {
 }
 
 
-ENABLED_PLATFORMS = ["darwin"]
+ENABLED_PLATFORMS = ["darwin_arm64"]
 """The tests are enabled if _get_current_platform() returns a string in this set."""
 
 
@@ -170,7 +170,9 @@ def _get_current_platform_string() -> str:
     consistent predictions. But, this could also be used to e.g. include the device
     string.
     """
-    return sys.platform
+    if platform.system() == "Darwin" and platform.machine() == "arm64":
+        return "darwin_arm64"
+    return "unknown"
 
 
 HOW_TO_FIX_MESSAGE = (
@@ -187,7 +189,9 @@ REFERENCE_DIR = pathlib.Path(__file__).parent / "reference_predictions"
 )
 @pytest.mark.skipif("cpu" not in get_pytest_devices(), reason="Only runs on the CPU")
 @pytest.mark.parametrize(("test_case_name", "test_case"), TEST_CASES.items())
-def test_consistency(test_case_name: str, test_case: _ConsistencyCase) -> None:
+def test__fit_predict__predictions_match_reference(
+    test_case_name: str, test_case: _ConsistencyCase
+) -> None:
     reference_predictions = _load_reference_predictions_or_fail(test_case_name)
     predictions = _predict(test_case)
 
@@ -213,8 +217,7 @@ def _predict(test_case: _ConsistencyCase) -> np.ndarray:
 def _get_platform_dir() -> pathlib.Path:
     """Return a string that identifies the current platform.
 
-    If two platforms return the same string, then their predictions should match. For
-    now, we only run the tests on MacOS, so just checking for this is enough.
+    If two platforms return the same string, then their predictions should match.
     """
     return REFERENCE_DIR / _get_current_platform_string()
 
