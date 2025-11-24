@@ -70,13 +70,12 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
-        shell: bash
+        run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
 
       - name: "Check for forbidden licenses"
         shell: bash
         run: |
-          licensecheck \
+          uv run --no-sync licensecheck \
             --requirements-paths pyproject.toml \
             --show-only-failing \
             -0
@@ -88,13 +87,13 @@ jobs:
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest -m "not slow" tests/
+        run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
@@ -104,14 +103,14 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest -m "not slow" tests/
+        run: uv run --no-sync pytest -m "not slow" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
@@ -136,13 +135,13 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution highest ".[ci]"
+        run: uv sync --group ci --resolution highest
         shell: bash
 
       - name: "Check for forbidden licenses"
         shell: bash
         run: |
-          licensecheck \
+          uv run --no-sync licensecheck \
             --requirements-paths pyproject.toml \
             --show-only-failing \
             -0
@@ -153,7 +152,7 @@ jobs:
       - name: Run Tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -190,8 +189,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
-        shell: bash
+        run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
 
       - name: Initialize submodules
         run: git submodule update --init --recursive
@@ -202,4 +200,4 @@ jobs:
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
