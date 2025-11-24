@@ -37,7 +37,7 @@ from tabpfn.utils import infer_devices
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
-    mark_mps_configs_as_not_in_prs,
+    mark_mps_configs_as_slow,
 )
 
 exclude_devices = {
@@ -66,7 +66,7 @@ fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 
 @pytest.mark.parametrize(
     ("device", "n_estimators", "fit_mode", "inference_precision"),
-    mark_mps_configs_as_not_in_prs(
+    mark_mps_configs_as_slow(
         itertools.product(
             devices,
             [1, 2],  # n_estimators
@@ -144,7 +144,7 @@ non_default_model_paths = list(
 
 @pytest.mark.parametrize(
     ("device", "model_path"),
-    mark_mps_configs_as_not_in_prs(itertools.product(devices, non_default_model_paths)),
+    mark_mps_configs_as_slow(itertools.product(devices, non_default_model_paths)),
 )
 def test__fit_predict__alternative_model_paths__outputs_correct_shape(
     device: str,
@@ -170,7 +170,7 @@ def test__fit_predict__alternative_model_paths__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     ("device", "fit_mode"),
-    mark_mps_configs_as_not_in_prs(itertools.product(devices, fit_modes)),
+    mark_mps_configs_as_slow(itertools.product(devices, fit_modes)),
 )
 def test__fit_predict__multiple_model_paths__outputs_correct_shape(
     device: str,
@@ -197,7 +197,7 @@ def test__fit_predict__multiple_model_paths__outputs_correct_shape(
 
 @pytest.mark.parametrize(
     ("device", "feature_shift_decoder", "multiclass_decoder", "remove_outliers_std"),
-    mark_mps_configs_as_not_in_prs(
+    mark_mps_configs_as_slow(
         itertools.chain.from_iterable(
             [
                 (device, "shuffle", "rotate", None),
@@ -243,7 +243,7 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
         "softmax_temperature",
         "average_before_softmax",
     ),
-    mark_mps_configs_as_not_in_prs(
+    mark_mps_configs_as_slow(
         product(
             devices,  # device
             [1, 2],  # n_estimators
