@@ -44,4 +44,4 @@ jobs:
       - name: Install dependencies and run tests
         run: |
           cd ${{ matrix.repo-name }}
-          uv run --with ../TabPFN pytest
+          uv run --with ../TabPFN pytest -m "not uses_tabpfn_client"
