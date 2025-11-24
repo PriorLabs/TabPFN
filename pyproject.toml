@@ -71,18 +71,15 @@ license = { file = "LICENSE" }
 documentation = "https://priorlabs.ai/docs"
 source = "https://github.com/priorlabs/tabpfn"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
+  {include-group = "ci"},
   # Lint/format
   "pre-commit>=4.3.0",
   "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
   "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
   # Test
-  "pytest>=8.4.2",
   "pytest-xdist>=3.8.0",
-  "pytest-mock>=3.14.1",
-  "onnx>=1.19.0", # required for onnx export tests
-  "psutil>=7.1.0", # required for testing internal memory tool on windows
   # Docs
   "mkdocs>=1.6.1",
   "mkdocs-material>=9.6.21",
@@ -101,8 +98,7 @@ dev = [
 # The idea is to be as close to the deployment environment as possible.
 ci = [
   "licensecheck>=2025.1.0",
-  "onnx>=1.19.0",
-  "psutil>=7.1.0",
+  "onnx>=1.19.0",  # We run onnx export in the tests, but not in the production package.
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
 ]

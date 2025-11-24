@@ -32,11 +32,11 @@ OR installation from source
 ```bash
 pip install "tabpfn @ git+https://github.com/PriorLabs/TabPFN.git"
 ```
-OR local development installation
+OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation), which we use for development, then run
 ```bash
-
 git clone https://github.com/PriorLabs/TabPFN.git --depth 1
-pip install -e "TabPFN[dev]"
+cd TabPFN
+uv sync
 ```
 
 ### Basic Usage
@@ -447,22 +447,22 @@ Not effective:
 
 ## Development
 
-1. Setup environment:
+1. Install [uv](https://docs.astral.sh/uv/)
+2. Setup environment:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
 git clone https://github.com/PriorLabs/TabPFN.git
 cd TabPFN
-pip install -e ".[dev]"
+uv sync
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pre-commit install
 ```
 
-2. Before committing:
+3. Before committing:
 ```bash
 pre-commit run --all-files
 ```
 
-3. Run tests:
+4. Run tests:
 ```bash
 pytest tests/
 ```
