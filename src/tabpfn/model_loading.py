@@ -50,7 +50,8 @@ logger = logging.getLogger(__name__)
 # Public fallback base URL for model downloads
 FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/05152025"
 
-# Special string used to identify v2.5 models in model paths.
+# Special string used to identify models in model paths.
+V_2_IDENTIFIER = "v2"
 V_2_5_IDENTIFIER = "v2.5"
 
 
@@ -58,6 +59,66 @@ class ModelType(str, Enum):  # noqa: D101
     # TODO: Merge with TaskType in tabpfn.constants.
     CLASSIFIER = "classifier"
     REGRESSOR = "regressor"
+
+
+class ClassifierModelName(str, Enum):
+    V2_CLASSIFIER = "tabpfn-v2-classifier"
+    V2_CLASSIFIER_GN2P4BPT = "tabpfn-v2-classifier-gn2p4bpt"
+    V2_CLASSIFIER_LLDERLII = "tabpfn-v2-classifier-llderlii"
+    V2_CLASSIFIER_OD3J1G5M = "tabpfn-v2-classifier-od3j1g5m"
+    V2_CLASSIFIER_VUTQQ28W = "tabpfn-v2-classifier-vutqq28w"
+    V2_CLASSIFIER_ZNSKZXI4 = "tabpfn-v2-classifier-znskzxi4"
+    V2_CLASSIFIER_FINETUNED_ZK73SKHH = "tabpfn-v2-classifier-finetuned-zk73skhh"
+    V2_CLASSIFIER_FINETUNED_ZNSKZXI4_TVVSS6BP = (
+        "tabpfn-v2-classifier-finetuned-znskzxi4-tvvss6bp"
+    )
+    V2_CLASSIFIER_FINETUNED_VUTQQ28W_BOEXHU6H = (
+        "tabpfn-v2-classifier-finetuned-vutqq28w-boexhu6h"
+    )
+    V2_CLASSIFIER_FINETUNED_OD3J1G5M_4SVEPUY5 = (
+        "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5"
+    )
+    V2_CLASSIFIER_FINETUNED_LLDERLII_OYD7UL21 = (
+        "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21"
+    )
+    V2_CLASSIFIER_FINETUNED_GN2P4BPT_XP6F0IQB = (
+        "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb"
+    )
+    V2_CLASSIFIER_V2_DEFAULT = "tabpfn-v2-classifier-v2_default"
+    # v2.5
+    V2_5_CLASSIFIER_V2_5_DEFAULT = "tabpfn-v2.5-classifier-v2.5_default"
+    V2_5_CLASSIFIER_V2_5_DEFAULT_2 = "tabpfn-v2.5-classifier-v2.5_default-2"
+    V2_5_CLASSIFIER_V2_5_LARGE_FEATURES_L = (
+        "tabpfn-v2.5-classifier-v2.5_large-features-L"
+    )
+    V2_5_CLASSIFIER_V2_5_LARGE_FEATURES_XL = (
+        "tabpfn-v2.5-classifier-v2.5_large-features-XL"
+    )
+    V2_5_CLASSIFIER_V2_5_LARGE_SAMPLES = "tabpfn-v2.5-classifier-v2.5_large-samples"
+    V2_5_CLASSIFIER_V2_5_REAL_LARGE_FEATURES = (
+        "tabpfn-v2.5-classifier-v2.5_real-large-features"
+    )
+    V2_5_CLASSIFIER_V2_5_REAL_LARGE_SAMPLES_AND_FEATURES = (
+        "tabpfn-v2.5-classifier-v2.5_real-large-samples-and-features"
+    )
+    V2_5_CLASSIFIER_V2_5_REAL = "tabpfn-v2.5-classifier-v2.5_real"
+    V2_5_CLASSIFIER_V2_5_VARIANT = "tabpfn-v2.5-classifier-v2.5_variant"
+
+
+class RegressorModelName(str, Enum):
+    V2_REGRESSOR = "tabpfn-v2-regressor"
+    V2_REGRESSOR_09GPQH39 = "tabpfn-v2-regressor-09gpqh39"
+    V2_REGRESSOR_2NOAR4O2 = "tabpfn-v2-regressor-2noar4o2"
+    V2_REGRESSOR_WYL4O83O = "tabpfn-v2-regressor-wyl4o83o"
+    V2_REGRESSOR_V2_DEFAULT = "tabpfn-v2-regressor-v2_default"
+    # v2.5
+    V2_5_REGRESSOR_V2_5_DEFAULT = "tabpfn-v2.5-regressor-v2.5_default"
+    V2_5_REGRESSOR_V2_5_LOW_SKEW = "tabpfn-v2.5-regressor-v2.5_low-skew"
+    V2_5_REGRESSOR_V2_5_QUANTILES = "tabpfn-v2.5-regressor-v2.5_quantiles"
+    V2_5_REGRESSOR_V2_5_REAL_VARIANT = "tabpfn-v2.5-regressor-v2.5_real-variant"
+    V2_5_REGRESSOR_V2_5_REAL = "tabpfn-v2.5-regressor-v2.5_real"
+    V2_5_REGRESSOR_V2_5_SMALL_SAMPLES = "tabpfn-v2.5-regressor-v2.5_small-samples"
+    V2_5_REGRESSOR_V2_5_VARIANT = "tabpfn-v2.5-regressor-v2.5_variant"
 
 
 @dataclass
@@ -69,74 +130,52 @@ class ModelSource:  # noqa: D101
     @classmethod
     def get_classifier_v2(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v2-classifier.ckpt",
-            "tabpfn-v2-classifier-gn2p4bpt.ckpt",
-            "tabpfn-v2-classifier-llderlii.ckpt",
-            "tabpfn-v2-classifier-od3j1g5m.ckpt",
-            "tabpfn-v2-classifier-vutqq28w.ckpt",
-            "tabpfn-v2-classifier-znskzxi4.ckpt",
-            "tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
-            "tabpfn-v2-classifier-finetuned-znskzxi4-tvvss6bp.ckpt",
-            "tabpfn-v2-classifier-finetuned-vutqq28w-boexhu6h.ckpt",
-            "tabpfn-v2-classifier-finetuned-od3j1g5m-4svepuy5.ckpt",
-            "tabpfn-v2-classifier-finetuned-llderlii-oyd7ul21.ckpt",
-            "tabpfn-v2-classifier-finetuned-gn2p4bpt-xp6f0iqb.ckpt",
-            "tabpfn-v2-classifier-v2_default.ckpt",
+            f"{m}.ckpt"
+            for m in ClassifierModelName
+            if m.startswith(f"-{V_2_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
-            default_filename="tabpfn-v2-classifier-finetuned-zk73skhh.ckpt",
+            default_filename=f"{ClassifierModelName.V2_CLASSIFIER_FINETUNED_ZK73SKHH}.ckpt",
             filenames=filenames,
         )
 
     @classmethod
     def get_regressor_v2(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v2-regressor.ckpt",
-            "tabpfn-v2-regressor-09gpqh39.ckpt",
-            "tabpfn-v2-regressor-2noar4o2.ckpt",
-            "tabpfn-v2-regressor-wyl4o83o.ckpt",
-            "tabpfn-v2-regressor-v2_default.ckpt",
+            f"{m}.ckpt"
+            for m in RegressorModelName
+            if m.startswith(f"tabpfn-{V_2_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-reg",
-            default_filename="tabpfn-v2-regressor.ckpt",
+            default_filename=f"{RegressorModelName.V2_REGRESSOR}.ckpt",
             filenames=filenames,
         )
 
     @classmethod
     def get_classifier_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v2.5-classifier-v2.5_default.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_default-2.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_large-samples.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_real-large-features.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_real-large-samples-and-features.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_real.ckpt",
-            "tabpfn-v2.5-classifier-v2.5_variant.ckpt",
+            f"{m}.ckpt"
+            for m in ClassifierModelName
+            if m.startswith(f"tabpfn-{V_2_5_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
-            default_filename="tabpfn-v2.5-classifier-v2.5_default.ckpt",
+            default_filename=f"{ClassifierModelName.V2_5_CLASSIFIER_V2_5_DEFAULT}.ckpt",
             filenames=filenames,
         )
 
     @classmethod
     def get_regressor_v2_5(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v2.5-regressor-v2.5_default.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_low-skew.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_quantiles.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_real-variant.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_real.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_small-samples.ckpt",
-            "tabpfn-v2.5-regressor-v2.5_variant.ckpt",
+            f"{m}.ckpt"
+            for m in RegressorModelName
+            if m.startswith(f"-{V_2_5_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
-            default_filename="tabpfn-v2.5-regressor-v2.5_default.ckpt",
+            default_filename=f"{RegressorModelName.V2_5_REGRESSOR_V2_5_DEFAULT}.ckpt",
             filenames=filenames,
         )
 
