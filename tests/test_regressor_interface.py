@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import io
+import itertools
 import os
 import typing
-from itertools import product
 from typing import Callable, Literal
 from unittest import mock
 
@@ -21,89 +21,47 @@ from torch import nn
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
-from tabpfn.model_loading import ModelSource
+from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .utils import check_cpu_float16_support, get_pytest_devices
+from .utils import (
+    get_pytest_devices,
+    is_cpu_float16_supported,
+    mark_mps_configs_as_slow,
+)
 
 devices = get_pytest_devices()
 
-# --- Environment-Aware Check for CPU Float16 Support ---
-is_cpu_float16_supported = check_cpu_float16_support()
 
-# --- Define parameter combinations ---
-# These are the parameters we want to test in our grid search
-feature_shift_decoders = ["shuffle", "rotate"]
-fit_modes = [
-    "low_memory",
-    "fit_preprocessors",
-    "fit_with_cache",
-]
-inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
-remove_outliers_stds = [None, 12]
-estimators = [1, 2]
-
-model_paths = ModelSource.get_regressor_v2().filenames
-primary_model = ModelSource.get_regressor_v2().default_filename
-other_models = [model_path for model_path in model_paths if model_path != primary_model]
-
-# --- Build parameter combinations ---
-# Full grid for the first (primary) model path
-_full_grid = product(
-    estimators,
-    devices,  # device
-    feature_shift_decoders,
-    fit_modes,
-    inference_precision_methods,
-    remove_outliers_stds,
-    [primary_model],  # only the first entry
-)
-
-# Minimal "smoke" grid for all remaining model paths (one combo per path)
-_smoke_grid = product(
-    [1],  # n_estimators
-    ["cpu"],  # device (fast & universally available)
-    ["shuffle"],  # feature_shift_decoder
-    ["fit_preprocessors"],  # fit_mode
-    ["auto"],  # inference_precision
-    [remove_outliers_stds[0]],  # remove_outliers_std
-    # every non-first model path and multiple models test
-    [*other_models, [primary_model, other_models[0]]],
-)
-
-all_combinations = list(_full_grid) + list(_smoke_grid)
+model_sources = [ModelSource.get_regressor_v2(), ModelSource.get_regressor_v2_5()]
+fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 
 
-# Wrap in fixture so it's only loaded in if a test using it is run
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     X, y, _ = sklearn.datasets.make_regression(
-        n_samples=30, n_features=4, random_state=0, coef=True
+        n_samples=9, n_features=3, random_state=0, coef=True
     )
     return X, y
 
 
 @pytest.mark.parametrize(
-    (
-        "n_estimators",
-        "device",
-        "feature_shift_decoder",
-        "fit_mode",
-        "inference_precision",
-        "remove_outliers_std",
-        "model_path",
+    ("device", "n_estimators", "fit_mode", "inference_precision"),
+    mark_mps_configs_as_slow(
+        itertools.product(
+            devices,
+            [1, 2],  # n_estimators
+            fit_modes,
+            ["auto", "autocast", torch.float64, torch.float16],  # inference_precision
+        )
     ),
-    all_combinations,
 )
-def test_regressor(
+def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
+    device: str,
     n_estimators: int,
-    device: Literal["cuda", "mps", "cpu"],
-    feature_shift_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
-    remove_outliers_std: int | None,
-    model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     if inference_precision == "autocast":
@@ -111,27 +69,21 @@ def test_regressor(
             pytest.skip("CPU device does not support 'autocast' inference.")
         if torch.device(device).type == "mps" and torch.__version__ < "2.5":
             pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
-
-    # Use the environment-aware check to skip only if necessary
     if (
         torch.device(device).type == "cpu"
         and inference_precision == torch.float16
-        and not is_cpu_float16_supported
+        and not is_cpu_float16_supported()
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
     if torch.device(device).type == "mps" and inference_precision == torch.float64:
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNRegressor(
-        model_path=model_path,
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
         inference_precision=inference_precision,
-        inference_config={
-            "OUTLIER_REMOVAL_STD": remove_outliers_std,
-            "FEATURE_SHIFT_METHOD": feature_shift_decoder,
-        },
+        random_state=42,
     )
 
     X, y = X_y
@@ -153,6 +105,122 @@ def test_regressor(
     assert isinstance(quantiles, list)
     assert len(quantiles) == 2
     assert quantiles[0].shape == (X.shape[0],), "Predictions shape is incorrect"
+
+
+@pytest.mark.parametrize("device", [d for d in devices if d == "mps"])
+def test__fit_predict__mps_smoke_test__outputs_correct_shape(
+    device: str, X_y: tuple[np.ndarray, np.ndarray]
+) -> None:
+    """Basic test of fit+predict on MPS.
+
+    The other MPS tests in this file are disabled in PRs because they are slow, so this
+    test provides some coverage.
+    """
+    model = TabPFNRegressor(n_estimators=2, device=device, random_state=42)
+    X, y = X_y
+    model.fit(X, y)
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+non_default_model_paths = list(
+    itertools.chain.from_iterable(
+        (
+            model_path
+            for model_path in model_source.filenames
+            if model_path != model_source.default_filename
+        )
+        for model_source in model_sources
+    )
+)
+
+
+@pytest.mark.parametrize(
+    ("device", "model_path"),
+    mark_mps_configs_as_slow(itertools.product(devices, non_default_model_paths)),
+)
+def test__fit_predict__alternative_model_paths__outputs_correct_shape(
+    device: str,
+    model_path: str | list[str],
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNRegressor(
+        model_path=prepend_cache_path(model_path),
+        n_estimators=1,
+        device=device,
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+@pytest.mark.parametrize(
+    ("device", "fit_mode"),
+    mark_mps_configs_as_slow(itertools.product(devices, fit_modes)),
+)
+def test__fit_predict__multiple_model_paths__outputs_correct_shape(
+    device: str,
+    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNRegressor(
+        model_path=prepend_cache_path(model_sources[0].filenames[:2]),
+        n_estimators=1,
+        device=device,
+        fit_mode=fit_mode,
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+@pytest.mark.parametrize(
+    ("device", "feature_shift_decoder", "remove_outliers_std"),
+    mark_mps_configs_as_slow(
+        itertools.chain.from_iterable(
+            [
+                (device, "shuffle", None),
+                (device, "rotate", 12),
+                (device, "shuffle", 12),
+            ]
+            for device in devices
+        )
+    ),
+)
+def test__fit_predict__specify_inference_config__outputs_correct_shape(
+    device: str,
+    feature_shift_decoder: Literal["shuffle", "rotate"],
+    remove_outliers_std: int | None,
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNRegressor(
+        n_estimators=1,
+        device=device,
+        inference_config={
+            "OUTLIER_REMOVAL_STD": remove_outliers_std,
+            "FEATURE_SHIFT_METHOD": feature_shift_decoder,
+        },
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict(X).shape == (X.shape[0],)
 
 
 # The different fitting modes manage the random state differently.
@@ -187,28 +255,28 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
 def test_multiple_models_predict_different_results(
     X_y: tuple[np.ndarray, np.ndarray],
 ):
-    """Tests the predict_raw_logits method."""
     X, y = X_y
 
-    single_model = primary_model
-    two_identical_models = [primary_model, primary_model]
-    two_different_models = [primary_model, other_models[0]]
+    model_a = model_sources[0].filenames[0]
+    model_b = model_sources[0].filenames[1]
+    two_identical_models = [model_a, model_a]
+    two_different_models = [model_a, model_b]
 
     def get_prediction(model_paths: list[str]) -> np.ndarray:
         regressor = TabPFNRegressor(
             n_estimators=2,
             random_state=42,
-            model_path=model_paths,
+            model_path=prepend_cache_path(model_paths),
         )
         regressor.fit(X, y)
         return regressor.predict(X)
 
-    single_model_pred = get_prediction(model_paths=[single_model])
+    single_model_pred = get_prediction(model_paths=[model_a])
     two_identical_models_pred = get_prediction(model_paths=two_identical_models)
     two_different_models_pred = get_prediction(model_paths=two_different_models)
 
     assert not np.all(single_model_pred == single_model_pred[0:1]), (
-        "Logits are identical across classes for all samples, indicating trivial output"
+        "Predictions are identical for all samples, indicating trivial output"
     )
     assert np.all(single_model_pred == two_identical_models_pred)
     assert not np.all(single_model_pred == two_different_models_pred)
@@ -411,7 +479,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
 
 @pytest.mark.parametrize("data_source", ["train", "test"])
-def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) -> None:
+def test_get_embeddings(
+    X_y: tuple[np.ndarray, np.ndarray], data_source: Literal["train", "test"]
+) -> None:
     """Test that get_embeddings returns valid embeddings for a fitted model."""
     X, y = X_y
     n_estimators = 3
@@ -419,13 +489,11 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNRegressor(n_estimators=n_estimators)
     model.fit(X, y)
 
-    # Cast to Literal type for mypy
-    valid_data_source = typing.cast(Literal["train", "test"], data_source)
-    embeddings = model.get_embeddings(X, valid_data_source)
+    embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instances = typing.cast(typing.Any, model.executor_).models
-    hidden_size = model_instances[0].ninp
+    model_instance = model.executor_.model_caches[0]._model
+    hidden_size = model_instance.ninp
 
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators

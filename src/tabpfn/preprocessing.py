@@ -375,6 +375,64 @@ def generate_index_permutations(
     raise ValueError(f"{subsample=} must be int or float.")
 
 
+def get_subsample_indices_for_estimators(
+    subsample_samples: int | float | list[np.ndarray] | None,
+    num_estimators: int,
+    max_index: int,
+    static_seed: int | np.random.Generator | None,
+) -> list[None] | list[np.ndarray]:
+    """Get the indices of the rows to subsample for each estimator.
+
+    Args:
+        subsample_samples: Method to subsample rows. If int, subsample that many
+            samples. If float, subsample that fraction of samples. If a
+            list of lists of indices, subsample the indices for each estimator.
+            If `None`, no subsampling is done.
+        num_estimators: Number of estimators to generate subsample indices for.
+        max_index: Maximum index to generate for. Only used if subsample_samples is an
+            int or float.
+        static_seed: Static seed to use for the random number generator.
+
+    Returns:
+        List of list of indices to subsample for each estimator.
+    """
+    if isinstance(subsample_samples, (int, float)):
+        subsample_indices = generate_index_permutations(
+            n=num_estimators,
+            max_index=max_index,
+            subsample=subsample_samples,
+            random_state=static_seed,
+        )
+    elif isinstance(subsample_samples, list):
+        if len(subsample_samples) > num_estimators:
+            warnings.warn(
+                f"Your list of subsample indices has more elements "
+                f"(={len(subsample_samples)}) than the number of estimators "
+                f"(={num_estimators}). The extra indices will be ignored.",
+                UserWarning,
+                stacklevel=2,
+            )
+            subsample_samples = subsample_samples[:num_estimators]
+        for subsample in subsample_samples:
+            assert len(subsample) > 0, (
+                "Length of subsampled indices must be larger than 0"
+            )
+        balance_count = num_estimators // len(subsample_samples)
+        subsample_indices = balance(subsample_samples, balance_count)
+        leftover = num_estimators % len(subsample_samples)
+        if leftover > 0:
+            subsample_indices += subsample_samples[:leftover]
+        subsample_indices = [np.array(subsample) for subsample in subsample_indices]
+    elif subsample_samples is None:
+        subsample_indices = [None] * num_estimators
+    else:
+        raise ValueError(
+            f"Invalid subsample_samples: {subsample_samples}",
+        )
+
+    return subsample_indices
+
+
 # TODO: (Klemens)
 # Make this frozen (frozen=True)
 @dataclass
@@ -405,7 +463,7 @@ class EnsembleConfig:
         cls,
         *,
         num_estimators: int,
-        subsample_size: int | float | None,
+        subsample_samples: int | float | list[np.ndarray] | None,
         max_index: int,
         add_fingerprint_feature: bool,
         polynomial_features: Literal["no", "all"] | int,
@@ -420,10 +478,10 @@ class EnsembleConfig:
 
         Args:
             num_estimators: Number of ensemble configurations to generate.
-            subsample_size:
-                Number of samples to subsample. If int, subsample that many
-                samples. If float, subsample that fraction of samples. If `None`, no
-                subsampling is done.
+            subsample_samples: Method to subsample rows. If int, subsample that many
+                samples. If float, subsample that fraction of samples. If a
+                list of lists of indices, subsample the indices for each estimator.
+                If `None`, no subsampling is done.
             max_index: Maximum index to generate for.
             add_fingerprint_feature: Whether to add fingerprint features.
             polynomial_features: Maximum number of polynomial features to add, if any.
@@ -467,20 +525,14 @@ class EnsembleConfig:
         else:
             raise ValueError(f"Unknown {class_shift_method=}")
 
-        subsamples: list[None] | list[np.ndarray]
-        if isinstance(subsample_size, (int, float)):
-            subsamples = generate_index_permutations(
-                n=num_estimators,
+        subsample_indices: list[None] | list[np.ndarray] = (
+            get_subsample_indices_for_estimators(
+                subsample_samples=subsample_samples,
+                num_estimators=num_estimators,
                 max_index=max_index,
-                subsample=subsample_size,
-                random_state=static_seed,
+                static_seed=static_seed,
             )
-        elif subsample_size is None:
-            subsamples = [None] * num_estimators  # type: ignore
-        else:
-            raise ValueError(
-                f"Invalid subsample_samples: {subsample_size}",
-            )
+        )
 
         balance_count = num_estimators // len(preprocessor_configs)
 
@@ -516,7 +568,7 @@ class EnsembleConfig:
             ) in zip(
                 featshifts,
                 configs_,
-                subsamples,
+                subsample_indices,
                 class_permutations,
                 model_indices,
             )
@@ -527,7 +579,7 @@ class EnsembleConfig:
         cls,
         *,
         num_estimators: int,
-        subsample_size: int | float | None,
+        subsample_samples: int | float | list[np.ndarray] | None,
         max_index: int,
         add_fingerprint_feature: bool,
         polynomial_features: Literal["no", "all"] | int,
@@ -541,10 +593,10 @@ class EnsembleConfig:
 
         Args:
             num_estimators: Number of ensemble configurations to generate.
-            subsample_size:
-                Number of samples to subsample. If int, subsample that many
-                samples. If float, subsample that fraction of samples. If `None`, no
-                subsampling is done.
+            subsample_samples: Method to subsample rows. If int, subsample that many
+                samples. If float, subsample that fraction of samples. If a
+                list of lists of indices, subsample the indices for each estimator.
+                If `None`, no subsampling is done.
             max_index: Maximum index to generate for.
             add_fingerprint_feature: Whether to add fingerprint features.
             polynomial_features: Maximum number of polynomial features to add, if any.
@@ -562,20 +614,14 @@ class EnsembleConfig:
         featshifts = np.arange(start, start + num_estimators)
         featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore
 
-        subsamples: list[None] | list[np.ndarray]
-        if isinstance(subsample_size, (int, float)):
-            subsamples = generate_index_permutations(
-                n=num_estimators,
+        subsample_indices: list[None] | list[np.ndarray] = (
+            get_subsample_indices_for_estimators(
+                subsample_samples=subsample_samples,
+                num_estimators=num_estimators,
                 max_index=max_index,
-                subsample=subsample_size,
-                random_state=static_seed,
+                static_seed=static_seed,
             )
-        elif subsample_size is None:
-            subsamples = [None] * num_estimators
-        else:
-            raise ValueError(
-                f"Invalid subsample_samples: {subsample_size}",
-            )
+        )
 
         # Get equal representation of all preprocessor configs
         combos = list(product(preprocessor_configs, target_transforms))
@@ -609,7 +655,7 @@ class EnsembleConfig:
                 target_transform,
             ), model_index in zip(
                 featshifts,
-                subsamples,
+                subsample_indices,
                 configs_,
                 model_indices,
             )

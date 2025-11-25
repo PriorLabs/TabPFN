@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
 import torch
-from sklearn.preprocessing import (
-    PowerTransformer,
-)
+from sklearn.preprocessing import PowerTransformer
 
 try:
     from kditransform import KDITransformer
@@ -17,6 +16,8 @@ try:
 except ImportError:
     KDITransformer = PowerTransformer  # fallback to avoid error
 
+# Track whether we've warned the user about missing kditransform
+_warned_about_missing_kditransform = False
 
 ALPHAS = (
     0.05,
@@ -44,6 +45,9 @@ class KDITransformerWithNaN(KDITransformer):
     mean values and then fills the NaN values with NaNs after the transformation.
     """
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+
     def _more_tags(self) -> dict:
         return {"allow_nan": True}
 
@@ -53,6 +57,20 @@ class KDITransformerWithNaN(KDITransformer):
         y: Any | None = None,
     ) -> KDITransformerWithNaN:
         """Fit the transformer."""
+        global _warned_about_missing_kditransform  # noqa: PLW0603
+        if (
+            KDITransformer is PowerTransformer
+            and not _warned_about_missing_kditransform
+        ):
+            warnings.warn(
+                "Cannot use KDITransformer because `kditransform` is not installed. "
+                "Using `PowerTransformer` as fallback. This warning is only shown "
+                "once per Python interpreter instance.",
+                UserWarning,
+                stacklevel=2,
+            )
+            _warned_about_missing_kditransform = True
+
         if isinstance(X, torch.Tensor):
             X = X.cpu().numpy()
 

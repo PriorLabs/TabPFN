@@ -36,7 +36,6 @@ from sklearn.base import (
     check_is_fitted,
 )
 from tabpfn_common_utils.telemetry import track_model_call
-from tabpfn_common_utils.telemetry.interactive import ping
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -46,13 +45,14 @@ from tabpfn.base import (
     determine_precision,
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
+    initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
-    get_cache_dir,
     load_fitted_tabpfn_model,
+    prepend_cache_path,
     save_fitted_tabpfn_model,
 )
 from tabpfn.preprocessing import (
@@ -463,9 +463,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
-
-        # Ping the usage service if telemetry enabled
-        ping()
+        initialize_telemetry()
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -478,16 +476,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         if version == ModelVersion.V2:
             options = {
-                "model_path": str(
-                    get_cache_dir() / ModelSource.get_regressor_v2().default_filename
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v2().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
-                "model_path": str(
-                    get_cache_dir() / ModelSource.get_regressor_v2_5().default_filename
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v2_5().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
@@ -691,7 +689,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_configs = EnsembleConfig.generate_for_regression(
             num_estimators=self.n_estimators,
-            subsample_size=self.inference_config_.SUBSAMPLE_SAMPLES,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,

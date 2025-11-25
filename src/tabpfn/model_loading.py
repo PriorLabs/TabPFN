@@ -14,12 +14,11 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
-from copy import deepcopy
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
 from urllib.error import URLError
 
 import joblib
@@ -33,7 +32,7 @@ from tabpfn.architectures.base.bar_distribution import (
     FullSupportBarDistribution,
 )
 from tabpfn.constants import ModelVersion
-from tabpfn.inference import InferenceEngine, InferenceEngineCacheKV
+from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.settings import settings
 
@@ -440,6 +439,20 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
         stacklevel=2,
     )
     return use_instead_path
+
+
+P = TypeVar("P", bound=Union[str, list[str]])
+
+
+def prepend_cache_path(model_path: P) -> P:
+    """Prepends the TabPFN cache directory to the given path or paths.
+
+    The cache directory is selected appropriately for the platform.
+    """
+    cache_dir = get_cache_dir()
+    if isinstance(model_path, list):
+        return [str(cache_dir / path) for path in model_path]
+    return str(cache_dir / model_path)
 
 
 @overload
@@ -877,14 +890,14 @@ def save_tabpfn_model(
         torch.save(checkpoint, path)
 
 
-def save_fitted_tabpfn_model(
-    estimator: BaseEstimator,
-    path: Path | str,
-) -> None:
+def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None:
     """Persist a fitted TabPFN estimator to ``path``.
 
     This stores the initialization parameters and the fitted state, but crucially
     omits the large foundation model weights for efficiency.
+
+    This does not support estimators using `fit_mode="fit_with_cache"`, and will raise
+    NotImplementedError in this case.
     """
     if not hasattr(estimator, "executor_"):
         raise RuntimeError("Estimator must be fitted before saving.")
@@ -958,10 +971,9 @@ def load_fitted_tabpfn_model(
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Extract the archive to a temporary directory
         _extract_archive(path, tmp)
 
-        # 1. Load init params and create a fresh estimator instance
+        # Load init params and create a fresh estimator instance
         with (tmp / "init_params.json").open() as f:
             params = json.load(f)
 
@@ -984,28 +996,16 @@ def load_fitted_tabpfn_model(
         # This is critical: it loads the base model weights into `est.models_`
         est._initialize_model_variables()
 
-        # 2. Restore all other fitted attributes
+        # Restore all other fitted attributes
         fitted_attrs = joblib.load(tmp / "fitted_attrs.joblib")
         for key, value in fitted_attrs.items():
             setattr(est, key, value)
 
-        # 3. Load the InferenceEngine state
-        est.executor_ = InferenceEngine.load_state(tmp / "executor_state.joblib")
+        est.executor_ = InferenceEngine.load_state(
+            tmp / "executor_state.joblib", est.models_
+        )
 
-        # 4. Re-link the foundation model with the loaded engine
-        if est.executor_.models is None:
-            if isinstance(est.executor_, InferenceEngineCacheKV):  # type: ignore
-                est.executor_.models = [
-                    deepcopy(est.models_[config._model_index])
-                    for config in est.executor_.ensemble_configs  # type: ignore
-                ]
-            else:
-                est.executor_.models = [deepcopy(model) for model in est.models_]
-
-        # 5. Move all torch components to the target device
         est.devices_ = (torch.device(device),)
-        if hasattr(est.executor_, "models"):
-            est.executor_.models = [m.to(device) for m in est.executor_.models]
 
         # Restore other potential torch objects from fitted_attrs
         for key, value in vars(est).items():

@@ -20,7 +20,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.utils import meta_dataset_collator
 
-from .utils import get_pytest_devices
+from .utils import get_pytest_devices, mark_mps_configs_as_slow
 
 rng = np.random.default_rng(42)
 
@@ -38,8 +38,8 @@ inference_precision_methods: list[torch.types._dtype | Literal["autocast", "auto
 estimators = [1, 2]
 
 param_order = [
-    "n_estimators",
     "device",
+    "n_estimators",
     "fit_mode",
     "inference_precision",
 ]
@@ -165,10 +165,10 @@ def variable_synthetic_dataset_collection():
     return datasets
 
 
-@pytest.mark.parametrize(param_order, combinations)
+@pytest.mark.parametrize(param_order, mark_mps_configs_as_slow(combinations))
 def test_tabpfn_classifier_finetuning_loop(
-    n_estimators,
     device,
+    n_estimators,
     fit_mode,
     inference_precision,
     synthetic_data,

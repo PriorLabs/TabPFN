@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 import torch
 from sklearn.preprocessing import LabelEncoder
+from torch.torch_version import TorchVersion
 
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
@@ -95,16 +96,18 @@ def test_infer_categorical_with_dict_raises_error():
 
 
 def test__infer_devices__auto__cuda_and_mps_not_available__selects_cpu(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mocker.patch("torch.cuda").is_available.return_value = False
     mocker.patch("torch.backends.mps").is_available.return_value = False
     assert infer_devices(devices="auto") == (torch.device("cpu"),)
 
 
 def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
     mock_cuda.device_count.return_value = 1
@@ -113,8 +116,9 @@ def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
 
 
 def test__infer_devices__auto__multiple_cuda_gpus_available__selects_first(
-    mocker: MagicMock,
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
     mock_cuda.device_count.return_value = 3
@@ -130,6 +134,15 @@ def test__infer_devices__auto__cuda_and_mps_available_but_excluded__selects_cpu(
     mock_cuda = mocker.patch("torch.cuda")
     mock_cuda.is_available.return_value = True
     mock_cuda.device_count.return_value = 1
+    mocker.patch("torch.backends.mps").is_available.return_value = True
+    assert infer_devices(devices="auto") == (torch.device("cpu"),)
+
+
+def test__infer_devices__auto__mps_available_but_torch_too_old__selects_cpu(
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(torch, "__version__", TorchVersion("2.4.0"))
+    mocker.patch("torch.cuda").is_available.return_value = False
     mocker.patch("torch.backends.mps").is_available.return_value = True
     assert infer_devices(devices="auto") == (torch.device("cpu"),)
 
@@ -158,12 +171,21 @@ def test__infer_devices__multiple_devices_specified___selects_them(
     assert inferred == expected
 
 
-def test__infer_devices__device_selected_twice__raises() -> None:
+def test__infer_devices__device_specified_twice__raises() -> None:
     with pytest.raises(
         ValueError,
         match="The list of devices for inference cannot contain the same device more ",
     ):
         infer_devices(devices=["cpu", "cpu"])
+
+
+def test__infer_devices__mps_specified_but_torch_too_old__raises(
+    mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(torch, "__version__", TorchVersion("2.4.0"))
+    mocker.patch("torch.backends.mps").is_available.return_value = True
+    with pytest.raises(ValueError, match="The MPS device was selected"):
+        infer_devices(devices="mps")
 
 
 # --- Test Data for the "test_process_text_na_dataframe" test ---

@@ -356,3 +356,14 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
             version="v2",
             download_if_not_exists=False,
         )
+
+
+def test__prepend_cache_path__single_path__filename_unchanged() -> None:
+    full_path = model_loading.prepend_cache_path("my_path.test")
+    assert Path(full_path).name == "my_path.test"
+
+
+def test__prepend_cache_path__multiple_paths__filename_unchanged() -> None:
+    full_paths = model_loading.prepend_cache_path(["my_dir/my_path.test", "another"])
+    assert Path(full_paths[0]).name == "my_path.test"
+    assert Path(full_paths[1]).name == "another"

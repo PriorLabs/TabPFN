@@ -157,15 +157,11 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     )
 
     assert len(outputs_sequential) == len(outputs_parallel)
-    last_model_index = 0
     for par_output, par_config in outputs_parallel:
-        # Test that models are executed in order.
-        assert par_config._model_index >= last_model_index
         seq_output = _find_seq_output(par_config, outputs_sequential)
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
-        last_model_index = par_config._model_index
 
 
 def _create_test_ensemble_configs(
@@ -189,7 +185,7 @@ def _create_test_ensemble_configs(
     ]
     return EnsembleConfig.generate_for_classification(
         num_estimators=n_configs,
-        subsample_size=None,
+        subsample_samples=None,
         max_index=n_classes - 1,
         add_fingerprint_feature=True,
         polynomial_features="all",

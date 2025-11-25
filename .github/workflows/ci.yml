@@ -32,21 +32,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # ubuntu-latest 3.13 highest is not included here because it is executed
+        # as a separate workflow below. This is because we wish to gate the GPU
+        # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
+        # separate workflow.
         include:
           - os: ubuntu-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          - os: macos-13 # macos-latest doesn't work with python 3.10
+          - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
             # https://github.com/actions/setup-python/issues/855
             python-version: "3.9"
             dependency-set: lowest-direct
           - os: windows-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          # ubuntu-latest 3.13 maximum is not included here because it is executed
-          # as a separate workflow below. This is because we wish to gate the GPU
-          # workflow on ubuntu-latest 3.13 maximum, which requires it to be a
-          # separate workflow.
           - os: macos-latest
             python-version: "3.13"
             dependency-set: highest
@@ -65,40 +65,49 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
+        uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
-        shell: bash
+        run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
-          licensecheck \
+          uv run --no-sync licensecheck \
             --requirements-paths pyproject.toml \
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
-      - name: Run Tests (including MPS)
+      - name: Run Tests (all tests)
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        if: ${{ matrix.dependency-set != 'lowest-direct' }}
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
 
-      - name: Run Tests (without MPS)
-        if: ${{ matrix.dependency-set == 'lowest-direct' }}
+      - name: Run Tests (PR tests only)
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          # The MPS tests are flakey on the CI for PyTorch < 2.3, possibly due to this
-          # https://github.com/pytorch/pytorch/issues/105839#issuecomment-1779116758,
-          # so disable the MPS device for these tests.
+        run: uv run --no-sync pytest -m "not slow" tests/
+
+      # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
+      # disable MPS for the lowest-direct dependency set.
+
+      - name: Run Tests (all tests, MPS disabled)
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           TABPFN_EXCLUDE_DEVICES: mps
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
+
+      - name: Run Tests (PR tests only, MPS disabled)
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          TABPFN_EXCLUDE_DEVICES: mps
+        run: uv run --no-sync pytest -m "not slow" tests/
 
   # -------------------------------------------------------------------
   # Single Ubuntu-latest + Python 3.13 test (the gate for GPU)
@@ -118,29 +127,26 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
+        uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution highest ".[ci]"
+        run: uv sync --group ci --resolution highest
         shell: bash
 
-      - name: 'Check for forbidden licenses'
+      - name: "Check for forbidden licenses"
         shell: bash
         run: |
-          licensecheck \
+          uv run --no-sync licensecheck \
             --requirements-paths pyproject.toml \
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
       - name: Run Tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -172,16 +178,12 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@85856786d1ce8acfbcc2f13a5f3fbd6b938f9f41 # v7.1.2
+        uses: astral-sh/setup-uv@1e862dfacbd1d6d858c55d9b792c756523627244 # v7.1.4
         with:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system --resolution ${{ matrix.dependency-set }} ".[ci]"
-        shell: bash
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
+        run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
 
       - name: Run GPU Test Suite
         env:
@@ -189,4 +191,4 @@ jobs:
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
-        run: pytest tests/
+        run: uv run --no-sync pytest tests/

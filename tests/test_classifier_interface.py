@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import io
+import itertools
 import os
-import typing
 from itertools import product
 from typing import Callable, Literal
 
@@ -30,11 +30,15 @@ from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
 )
-from tabpfn.model_loading import ModelSource
+from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .utils import check_cpu_float16_support, get_pytest_devices
+from .utils import (
+    get_pytest_devices,
+    is_cpu_float16_supported,
+    mark_mps_configs_as_slow,
+)
 
 exclude_devices = {
     d.strip() for d in os.getenv("TABPFN_EXCLUDE_DEVICES", "").split(",") if d.strip()
@@ -42,118 +46,40 @@ exclude_devices = {
 
 devices = get_pytest_devices()
 
-is_cpu_float16_supported = check_cpu_float16_support()
-
-# --- Define parameter combinations ---
-# These are the parameters we want to test in our grid search
-# TODO: test "batched" mode
-feature_shift_decoders = ["shuffle", "rotate"]
-multiclass_decoders = ["shuffle", "rotate"]
-fit_modes = [
-    "low_memory",
-    "fit_preprocessors",
-    "fit_with_cache",
-]
-inference_precision_methods = ["auto", "autocast", torch.float64, torch.float16]
-remove_outliers_stds = [None, 12]
-estimators = [1, 2]
-
-model_paths = ModelSource.get_classifier_v2().filenames
-primary_model = ModelSource.get_classifier_v2().default_filename
-other_models = [model_path for model_path in model_paths if model_path != primary_model]
-
-# --- Build parameter combinations ---
-# Full grid for the first (primary) model path
-_full_grid = product(
-    estimators,
-    devices,  # device
-    feature_shift_decoders,
-    multiclass_decoders,
-    fit_modes,
-    inference_precision_methods,
-    remove_outliers_stds,
-    [primary_model],  # only the first entry
-)
-
-# Minimal "smoke" grid for all remaining model paths (one combo per path)
-_smoke_grid = product(
-    [1],  # n_estimators
-    ["cpu"],  # device (fast & universally available)
-    ["shuffle"],  # feature_shift_decoder
-    ["shuffle"],  # multiclass_decoder
-    ["fit_preprocessors"],  # fit_mode
-    ["auto"],  # inference_precision
-    [None],  # remove_outliers_std
-    # every non-first model path and multiple models test
-    [*other_models, [primary_model, other_models[0]]],
-)
-
-all_combinations = list(_full_grid) + list(_smoke_grid)
-
 
 @pytest.fixture(scope="module")
 def X_y() -> tuple[np.ndarray, np.ndarray]:
     n_classes = 3
     return sklearn.datasets.make_classification(
-        n_samples=20 * n_classes,
+        n_samples=3 * n_classes,
         n_classes=n_classes,
-        n_features=5,
-        n_informative=5,
+        n_features=3,
+        n_informative=3,
         n_redundant=0,
         random_state=0,
     )
 
 
-def _create_dummy_classifier_model_specs(
-    max_num_classes: int = 10,
-) -> ClassifierModelSpecs:
-    minimal_config = ModelConfig(
-        emsize=8,
-        features_per_group=1,
-        max_num_classes=max_num_classes,
-        nhead=2,
-        nlayers=2,
-        remove_duplicate_features=True,
-        num_buckets=100,
-    )
-    model = base.get_architecture(
-        config=minimal_config,
-        n_out=max_num_classes,
-        cache_trainset_representation=False,
-    )
-    inference_config = InferenceConfig.get_default(
-        task_type="multiclass",
-        model_version=ModelVersion.V2_5,
-    )
-    return ClassifierModelSpecs(
-        model=model,
-        architecture_config=minimal_config,
-        inference_config=inference_config,
-    )
+model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_5()]
+fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 
 
 @pytest.mark.parametrize(
-    (
-        "n_estimators",
-        "device",
-        "feature_shift_decoder",
-        "multiclass_decoder",
-        "fit_mode",
-        "inference_precision",
-        "remove_outliers_std",
-        "model_path",
+    ("device", "n_estimators", "fit_mode", "inference_precision"),
+    mark_mps_configs_as_slow(
+        itertools.product(
+            devices,
+            [1, 2],  # n_estimators
+            fit_modes,
+            ["auto", "autocast", torch.float64, torch.float16],  # inference_precision
+        )
     ),
-    all_combinations,
 )
-def test_fit(
+def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
+    device: str,
     n_estimators: int,
-    device: Literal["cuda", "mps", "cpu"],
-    feature_shift_decoder: Literal["shuffle", "rotate"],
-    multiclass_decoder: Literal["shuffle", "rotate"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
-    remove_outliers_std: int | None,
-    model_path: str,
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     if inference_precision == "autocast":
@@ -161,29 +87,21 @@ def test_fit(
             pytest.skip("CPU device does not support 'autocast' inference.")
         if torch.device(device).type == "mps" and torch.__version__ < "2.5":
             pytest.skip("MPS does not support mixed precision before PyTorch 2.5")
-
-    # Use the environment-aware check to skip only if necessary
     if (
         torch.device(device).type == "cpu"
         and inference_precision == torch.float16
-        and not is_cpu_float16_supported
+        and not is_cpu_float16_supported()
     ):
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
     if torch.device(device).type == "mps" and inference_precision == torch.float64:
         pytest.skip("MPS does not support float64, which is required for this check.")
 
     model = TabPFNClassifier(
-        model_path=model_path,
         n_estimators=n_estimators,
         device=device,
         fit_mode=fit_mode,
         inference_precision=inference_precision,
-        inference_config={
-            "OUTLIER_REMOVAL_STD": remove_outliers_std,
-            "CLASS_SHIFT_METHOD": multiclass_decoder,
-            "FEATURE_SHIFT_METHOD": feature_shift_decoder,
-        },
-        random_state=42,  # Added for consistency and reproducibility
+        random_state=42,
     )
 
     X, y = X_y
@@ -192,44 +110,160 @@ def test_fit(
     assert returned_model is model, "Returned model is not the same as the model"
     check_is_fitted(returned_model)
 
-    probabilities = model.predict_proba(X)
-    assert probabilities.shape == (
-        X.shape[0],
-        len(np.unique(y)),
-    ), "Probabilities shape is incorrect"
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
 
-    predictions = model.predict(X)
-    assert predictions.shape == (X.shape[0],), "Predictions shape is incorrect!"
+
+@pytest.mark.parametrize("device", [d for d in devices if d == "mps"])
+def test__fit_predict__mps_smoke_test__outputs_correct_shape(
+    device: str, X_y: tuple[np.ndarray, np.ndarray]
+) -> None:
+    """Basic test of fit+predict on MPS.
+
+    The other MPS tests in this file are disabled in PRs because they are slow, so this
+    test provides some coverage.
+    """
+    model = TabPFNClassifier(n_estimators=2, device=device, random_state=42)
+    X, y = X_y
+    model.fit(X, y)
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+non_default_model_paths = list(
+    itertools.chain.from_iterable(
+        (
+            model_path
+            for model_path in model_source.filenames
+            if model_path != model_source.default_filename
+        )
+        for model_source in model_sources
+    )
+)
+
+
+@pytest.mark.parametrize(
+    ("device", "model_path"),
+    mark_mps_configs_as_slow(itertools.product(devices, non_default_model_paths)),
+)
+def test__fit_predict__alternative_model_paths__outputs_correct_shape(
+    device: str,
+    model_path: str | list[str],
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNClassifier(
+        model_path=prepend_cache_path(model_path),
+        n_estimators=1,
+        device=device,
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+@pytest.mark.parametrize(
+    ("device", "fit_mode"),
+    mark_mps_configs_as_slow(itertools.product(devices, fit_modes)),
+)
+def test__fit_predict__multiple_model_paths__outputs_correct_shape(
+    device: str,
+    fit_mode: str,
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNClassifier(
+        model_path=prepend_cache_path(model_sources[0].filenames[:2]),
+        n_estimators=1,
+        device=device,
+        fit_mode=fit_mode,
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
+
+
+@pytest.mark.parametrize(
+    ("device", "feature_shift_decoder", "multiclass_decoder", "remove_outliers_std"),
+    mark_mps_configs_as_slow(
+        itertools.chain.from_iterable(
+            [
+                (device, "shuffle", "rotate", None),
+                (device, "rotate", "shuffle", 12),
+                (device, "shuffle", "rotate", 12),
+            ]
+            for device in devices
+        )
+    ),
+)
+def test__fit_predict__specify_inference_config__outputs_correct_shape(
+    device: str,
+    feature_shift_decoder: Literal["shuffle", "rotate"],
+    multiclass_decoder: Literal["shuffle", "rotate"],
+    remove_outliers_std: int | None,
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device=device,
+        inference_config={
+            "OUTLIER_REMOVAL_STD": remove_outliers_std,
+            "CLASS_SHIFT_METHOD": multiclass_decoder,
+            "FEATURE_SHIFT_METHOD": feature_shift_decoder,
+        },
+        random_state=42,
+    )
+
+    X, y = X_y
+
+    returned_model = model.fit(X, y)
+    assert returned_model is model, "Returned model is not the same as the model"
+    check_is_fitted(returned_model)
+
+    assert model.predict_proba(X).shape == (X.shape[0], len(np.unique(y)))
+    assert model.predict(X).shape == (X.shape[0],)
 
 
 @pytest.mark.parametrize(
     (
-        "n_estimators",
         "device",
+        "n_estimators",
         "softmax_temperature",
         "average_before_softmax",
     ),
-    list(
+    mark_mps_configs_as_slow(
         product(
-            [1, 4],  # n_estimators
             devices,  # device
+            [1, 2],  # n_estimators
             [0.5, 1.0, 1.5],  # softmax_temperature
             [False, True],  # average_before_softmax
         )
     ),
 )
-def test_predict_logits_and_consistency(
-    n_estimators,
-    device,
-    softmax_temperature,
-    average_before_softmax,
-):
-    """Tests the new predict_logits method and its consistency with predict_proba
-    under various configuration permutations that affect the post-processing
-    pipeline.
+def test__predict_logits__output_has_correct_properties_and_consistent_with_proba(
+    device: str,
+    n_estimators: int,
+    softmax_temperature: float,
+    average_before_softmax: bool,
+) -> None:
+    """Test predict_logits() and its consistency with predict_proba().
+
+    Consider configuration permutations that affect the post-processing pipeline.
     """
     X, y = sklearn.datasets.make_classification(
-        n_samples=80,
+        n_samples=40,
         n_classes=3,
         n_features=3,
         n_informative=3,
@@ -340,9 +374,10 @@ def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndar
     """Tests the predict_raw_logits method."""
     X, y = X_y
 
-    single_model = primary_model
-    two_identical_models = [primary_model, primary_model]
-    two_different_models = [primary_model, other_models[0]]
+    model_a = model_sources[0].filenames[0]
+    model_b = model_sources[0].filenames[1]
+    two_identical_models = [model_a, model_a]
+    two_different_models = [model_a, model_b]
 
     # Ensure y is int64 for consistency with classification tasks
     y = y.astype(np.int64)
@@ -351,14 +386,14 @@ def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndar
         classifier = TabPFNClassifier(
             n_estimators=2,
             random_state=42,
-            model_path=model_paths,
+            model_path=prepend_cache_path(model_paths),
         )
         classifier.fit(X, y)
         # shape: E=estimators, R=rows, C=columns
         logits_ERC = classifier.predict_raw_logits(X)
         return logits_ERC.mean(axis=0)
 
-    single_model_logits = get_averaged_logits(model_paths=[single_model])
+    single_model_logits = get_averaged_logits(model_paths=[model_a])
     two_identical_models_logits = get_averaged_logits(model_paths=two_identical_models)
     two_different_models_logits = get_averaged_logits(model_paths=two_different_models)
 
@@ -410,13 +445,19 @@ def test_softmax_temperature_impact_on_logits_magnitude(
     )
 
 
-def test_balance_probabilities_alters_proba_output(
-    X_y: tuple[np.ndarray, np.ndarray],
-):
+def test_balance_probabilities_alters_proba_output() -> None:
     """Verifies that enabling `balance_probabilities` indeed changes the output
     probabilities (assuming non-uniform class counts).
     """
-    X_full, _y_full = X_y
+    n_classes = 5
+    X_full, _y_full = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=5,
+        n_informative=5,
+        n_redundant=0,
+        random_state=0,
+    )
 
     # Introduce artificial imbalance to ensure balancing has an effect
     y_imbalanced = np.array(
@@ -736,7 +777,9 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
 
 
 @pytest.mark.parametrize("data_source", ["train", "test"])
-def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) -> None:
+def test_get_embeddings(
+    X_y: tuple[np.ndarray, np.ndarray], data_source: Literal["train", "test"]
+) -> None:
     """Test that get_embeddings returns valid embeddings for a fitted model."""
     X, y = X_y
     n_estimators = 3
@@ -744,15 +787,13 @@ def test_get_embeddings(X_y: tuple[np.ndarray, np.ndarray], data_source: str) ->
     model = TabPFNClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)
 
-    # Cast to Literal type for mypy
-    valid_data_source = typing.cast(Literal["train", "test"], data_source)
-    embeddings = model.get_embeddings(X, valid_data_source)
+    embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instances = typing.cast(typing.Any, model.executor_).models
+    model_instance = model.executor_.model_caches[0]._model
     encoder_shape = next(
         m.out_features
-        for m in model_instances[0].encoder.modules()
+        for m in model_instance.encoder.modules()
         if isinstance(m, nn.Linear)
     )
 
@@ -1112,7 +1153,6 @@ def test__fit_with_f1_metric_without_tuning_config__warns(
 
 
 def test__fit_with_small_dataset_and_tuning__warns() -> None:
-    """Test that warning is issued when F1 metric used without tuning config."""
     default_rng = np.random.default_rng(seed=42)
     X = default_rng.random((MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1, 10))
     y = default_rng.integers(0, 2, MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1)
@@ -1135,11 +1175,17 @@ def test__fit_with_small_dataset_and_tuning__warns() -> None:
         clf.fit(X, y)
 
 
-def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
-    X_y: tuple[np.ndarray, np.ndarray],
-) -> None:
+def test__fit_with_roc_auc_metric_with_threshold_tuning__warns() -> None:
     """Test that warning is issued when ROC AUC metric used with threshold tuning."""
-    X, y = X_y
+    n_classes = 2
+    X, y = sklearn.datasets.make_classification(
+        n_samples=30 * n_classes,
+        n_classes=n_classes,
+        n_features=2,
+        n_informative=2,
+        n_redundant=0,
+        random_state=0,
+    )
 
     clf = TabPFNClassifier(
         eval_metric="roc_auc",
@@ -1165,6 +1211,34 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns(
         ),
     ):
         clf.fit(X, y)
+
+
+def _create_dummy_classifier_model_specs(
+    max_num_classes: int = 10,
+) -> ClassifierModelSpecs:
+    minimal_config = ModelConfig(
+        emsize=8,
+        features_per_group=1,
+        max_num_classes=max_num_classes,
+        nhead=2,
+        nlayers=2,
+        remove_duplicate_features=True,
+        num_buckets=100,
+    )
+    model = base.get_architecture(
+        config=minimal_config,
+        n_out=max_num_classes,
+        cache_trainset_representation=False,
+    )
+    inference_config = InferenceConfig.get_default(
+        task_type="multiclass",
+        model_version=ModelVersion.V2_5,
+    )
+    return ClassifierModelSpecs(
+        model=model,
+        architecture_config=minimal_config,
+        inference_config=inference_config,
+    )
 
 
 def test__create_default_for_version__v2__uses_correct_defaults() -> None:

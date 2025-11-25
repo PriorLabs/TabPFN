@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Callable, Literal, Union
 
 import torch
+from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 
@@ -567,3 +568,13 @@ def initialize_model_variables_helper(
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng
+
+
+def initialize_telemetry() -> None:
+    """Initialize telemetry and acknowledge anonymous session.
+
+    If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
+    no action is taken.
+    """
+    ping()
+    capture_session()

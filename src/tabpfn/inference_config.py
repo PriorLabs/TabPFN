@@ -116,15 +116,16 @@ class InferenceConfig:
         - If an int, determines the maximal number of polynomial features to add to the
          original data.
     """
-    SUBSAMPLE_SAMPLES: (
-        int | float | None  # (0,1) percentage, (1+) n samples
-    ) = None
+    SUBSAMPLE_SAMPLES: int | float | list | None = None
     """Subsample the input data sample/row-wise before performing any preprocessing
     and the TabPFN forward pass.
         - If None, no subsampling is done.
         - If an int, the number of samples to subsample (or oversample if
             `SUBSAMPLE_SAMPLES` is larger than the number of samples).
         - If a float, the percentage of samples to subsample.
+        - If a list arrays of indices, the indices to subsample for each estimator.
+            If the length of the outer list is less than the number of estimators, the
+            indices are repeated for the remaining estimators.
     """
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
