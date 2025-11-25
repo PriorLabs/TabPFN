@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: pr-${{ github.ref }}
+  group: compatibility-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
