@@ -203,6 +203,7 @@ def _try_huggingface_downloads(
     model_name: str | None = None,
     *,  # Force keyword-only arguments
     suppress_warnings: bool = True,
+    skip_config: bool = False,
 ) -> None:
     """Try to download models using the HuggingFace Hub.
 
@@ -260,20 +261,21 @@ def _try_huggingface_downloads(
             # Move model file to desired location
             Path(local_path).rename(base_path)
 
-            # Download config.json only to increment the download counter. We do not
-            # actually use this file so it is removed immediately after download.
-            # Note that we also handle model caching ourselves, so we don't double
-            # count, even with removing the config.json afterwards.
-            try:
-                config_local_path = hf_hub_download(
-                    repo_id=source.repo_id,
-                    filename="config.json",
-                    local_dir=base_path.parent,
-                )
-                Path(config_local_path).unlink(missing_ok=True)
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Failed to download config.json: {e!s}")
-                # Continue even if config.json download fails
+            if not skip_config:
+                # Download config.json only to increment the download counter. We do not
+                # actually use this file so it is removed immediately after download.
+                # Note that we also handle model caching ourselves, so we don't double
+                # count, even with removing the config.json afterwards.
+                try:
+                    config_local_path = hf_hub_download(
+                        repo_id=source.repo_id,
+                        filename="config.json",
+                        local_dir=base_path.parent,
+                    )
+                    Path(config_local_path).unlink(missing_ok=True)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning(f"Failed to download config.json: {e!s}")
+                    # Continue even if config.json download fails
 
             logger.info(f"Successfully downloaded to {base_path}")
 
@@ -366,6 +368,7 @@ def download_model(
     version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
+    skip_config: bool = False,
 ) -> Literal["ok"] | list[Exception]:
     """Download a TabPFN model, trying all available sources.
 
@@ -387,7 +390,13 @@ def download_model(
         return [e]
 
     try:
-        _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
+        _try_huggingface_downloads(
+            to,
+            model_source,
+            model_name,
+            suppress_warnings=True,
+            skip_config=skip_config,
+        )
         return "ok"
     except Exception as e:  # noqa: BLE001
         logger.warning("HuggingFace download failed.")
