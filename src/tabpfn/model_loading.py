@@ -132,7 +132,7 @@ class ModelSource:  # noqa: D101
         filenames = [
             f"{m}.ckpt"
             for m in ClassifierModelName
-            if m.startswith(f"-{V_2_IDENTIFIER}-")
+            if m.startswith(f"tabpfn-{V_2_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/TabPFN-v2-clf",
@@ -171,7 +171,7 @@ class ModelSource:  # noqa: D101
         filenames = [
             f"{m}.ckpt"
             for m in RegressorModelName
-            if m.startswith(f"-{V_2_5_IDENTIFIER}-")
+            if m.startswith(f"tabpfn-{V_2_5_IDENTIFIER}-")
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_2_5",
