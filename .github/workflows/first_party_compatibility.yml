@@ -47,4 +47,4 @@ jobs:
           FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
-          uv run --with ../TabPFN pytest -m "not uses_tabpfn_client"
+          uv run --with ../TabPFN pytest --all-extras -m "not uses_tabpfn_client"
