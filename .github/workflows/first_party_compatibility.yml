@@ -44,6 +44,7 @@ jobs:
       - name: Install dependencies and run tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
           uv run --with ../TabPFN pytest -m "not uses_tabpfn_client"
