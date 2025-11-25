@@ -62,6 +62,8 @@ class ModelType(str, Enum):  # noqa: D101
 
 
 class ClassifierModelName(str, Enum):
+    """Classifier model names for all versions."""
+
     V2_CLASSIFIER = "tabpfn-v2-classifier"
     V2_CLASSIFIER_GN2P4BPT = "tabpfn-v2-classifier-gn2p4bpt"
     V2_CLASSIFIER_LLDERLII = "tabpfn-v2-classifier-llderlii"
@@ -106,6 +108,8 @@ class ClassifierModelName(str, Enum):
 
 
 class RegressorModelName(str, Enum):
+    """Regressor model names for all versions."""
+
     V2_REGRESSOR = "tabpfn-v2-regressor"
     V2_REGRESSOR_09GPQH39 = "tabpfn-v2-regressor-09gpqh39"
     V2_REGRESSOR_2NOAR4O2 = "tabpfn-v2-regressor-2noar4o2"
