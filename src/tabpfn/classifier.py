@@ -31,7 +31,7 @@ import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from sklearn.preprocessing import LabelEncoder
-from tabpfn_common_utils.telemetry import track_model_call
+from tabpfn_common_utils.telemetry import track_model_call, set_init_params
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -478,6 +478,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
         initialize_telemetry()
+
+        # Only anonymously record `fit_mode` usage
+        set_init_params({"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:

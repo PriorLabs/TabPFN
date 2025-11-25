@@ -35,7 +35,7 @@ from sklearn.base import (
     TransformerMixin,
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry import track_model_call
+from tabpfn_common_utils.telemetry import track_model_call, set_init_params
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -464,6 +464,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
         initialize_telemetry()
+
+        # Only anonymously record `fit_mode` usage
+        set_init_params({"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
