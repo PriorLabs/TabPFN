@@ -80,9 +80,6 @@ jobs:
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
@@ -146,9 +143,6 @@ jobs:
             --show-only-failing \
             -0
 
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
-
       - name: Run Tests
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -190,9 +184,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
-
-      - name: Initialize submodules
-        run: git submodule update --init --recursive
 
       - name: Run GPU Test Suite
         env:
