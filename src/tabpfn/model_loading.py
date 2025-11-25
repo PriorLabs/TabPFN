@@ -212,6 +212,7 @@ def _try_huggingface_downloads(
         source: The source of the model.
         model_name: Optional specific model name to download.
         suppress_warnings: Whether to suppress HF token warnings.
+        skip_config: Whether to skip downloading the config.json file.
     """
     """Try to download models and config using the HuggingFace Hub API."""
     try:
@@ -377,6 +378,7 @@ def download_model(
         version: The version of the model to download.
         which: The type of model to download.
         model_name: Optional specific model name to download.
+        skip_config: Whether to skip downloading the config.json file.
 
     Returns:
         "ok" if the model was downloaded successfully, otherwise a list of
