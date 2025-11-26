@@ -12,7 +12,7 @@ import torch
 from tabpfn.settings import settings
 
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
-SAVE_PEAK_MEM_FACTOR = 8
+DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
 
 
 def support_save_peak_mem_factor(method: MethodType) -> Callable:
@@ -90,13 +90,6 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
 
 
 MemorySavingMode = Union[bool, Literal["auto"], float, int]
-
-
-def get_save_peak_memory_factor(*, enabled: bool) -> int | None:
-    """Get the default save peak memory factor, or None if disabled."""
-    if enabled:
-        return SAVE_PEAK_MEM_FACTOR
-    return None
 
 
 def should_save_peak_mem(
