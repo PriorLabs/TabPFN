@@ -304,6 +304,7 @@ force-wrap-aliases = true
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+ignore-decorators = ["typing.override", "typing_extensions.override", "typing.overload"]
 
 [tool.ruff.lint.pylint]
 max-args = 10 # Changed from default of 5
