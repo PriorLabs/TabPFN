@@ -248,7 +248,7 @@ class PerFeatureEncoderLayer(Module):
         state: Tensor,
         single_eval_pos: int,
         *,
-        save_peak_mem_factor: bool | None,
+        save_peak_mem_factor: int | None,
         cache_trainset_representation: bool = False,
         att_src: Tensor | None = None,
     ) -> Tensor:
