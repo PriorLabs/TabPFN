@@ -29,6 +29,7 @@ from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
     mark_mps_configs_as_slow,
+    patch_layernorm_no_affine,
 )
 
 devices = get_pytest_devices()
@@ -456,6 +457,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
+        patch_layernorm_no_affine(regressor.models_[0])
 
         # From 2.9 PyTorch changed the default export mode from TorchScript to
         # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
