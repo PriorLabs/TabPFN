@@ -212,6 +212,8 @@ def _try_huggingface_downloads(
             warnings.filterwarnings("ignore")
 
         try:
+            should_download_config = not base_path.exists()
+
             # Download model checkpoint
             local_path = hf_hub_download(
                 repo_id=source.repo_id,
@@ -226,12 +228,13 @@ def _try_huggingface_downloads(
             # Note that we also handle model caching ourselves, so we don't double
             # count, even with removing the config.json afterwards.
             try:
-                config_local_path = hf_hub_download(
-                    repo_id=source.repo_id,
-                    filename="config.json",
-                    local_dir=base_path.parent,
-                )
-                Path(config_local_path).unlink(missing_ok=True)
+                if should_download_config:
+                    config_local_path = hf_hub_download(
+                        repo_id=source.repo_id,
+                        filename="config.json",
+                        local_dir=base_path.parent,
+                    )
+                    Path(config_local_path).unlink(missing_ok=True)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Failed to download config.json: {e!s}")
                 # Continue even if config.json download fails
