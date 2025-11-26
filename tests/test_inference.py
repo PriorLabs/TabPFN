@@ -28,6 +28,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -38,6 +40,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> dict[str, Tensor]: ...
 
     @override
@@ -48,6 +52,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass, see doc string of `Architecture`."""
         assert isinstance(x, Tensor)

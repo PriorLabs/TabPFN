@@ -20,7 +20,7 @@ import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import (
-    set_save_peak_memory,
+    get_save_peak_memory_factor,
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
@@ -297,14 +297,15 @@ class InferenceEngineOnDemand(InferenceEngine):
         )
         batched_cat_ix = [cat_ix]
 
-        set_save_peak_memory(model, enabled=save_peak_mem)
-
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
             return model(
                 X_full,
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
+                save_peak_memory_factor=get_save_peak_memory_factor(
+                    enabled=save_peak_mem
+                ),
             )
 
 
@@ -580,8 +581,6 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         # uses a single device.
         model = self.model_caches[model_index].get(device, multiple_devices=is_parallel)
 
-        set_save_peak_memory(model, enabled=save_peak_mem)
-
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
@@ -596,6 +595,9 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
+                save_peak_memory_factor=get_save_peak_memory_factor(
+                    enabled=save_peak_mem
+                ),
             )
 
     @override
@@ -746,7 +748,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             # When the KV cache is enabled, we assume we are under memory pressure and
             # enable the saving mode.
             # TODO: Use the heuristic in this case also.
-            set_save_peak_memory(model, enabled=True)
+            save_peak_memory_factor = get_save_peak_memory_factor(enabled=True)
 
             if self.force_inference_dtype is not None:
                 model.type(self.force_inference_dtype)
@@ -760,6 +762,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                     y=None,
                     only_return_standard_out=only_return_standard_out,
                     categorical_inds=batched_cat_ix,
+                    save_peak_memory_factor=save_peak_memory_factor,
                 )
 
             model_cache.to_cpu()

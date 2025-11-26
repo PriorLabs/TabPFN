@@ -112,6 +112,8 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_mem_factor: int | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -123,6 +125,8 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_mem_factor: int | None = None,
     ) -> dict[str, Tensor]: ...
 
     @abstractmethod
@@ -134,6 +138,8 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass.
 
@@ -144,6 +150,7 @@ class Architecture(nn.Module, ABC):
                 - A dictionary containing at least `{"main": x}`, where `x` is the
                   Tensor above. The dictionary may also contain additional keys, which
                   are relevant for particular encoders.
+
             y: The target data. Either:
                 - A Tensor with shape `(train rows)`, `(train_rows, batch_size)`, or
                   shape `(train_rows, batch_size, 1)`.
@@ -152,8 +159,30 @@ class Architecture(nn.Module, ABC):
                   are relevant for particular encoders.
                 - `None`, if there are no training rows, as when making predictions
                   using the KV cache.
-            only_return_standard_out: Whether to only return the standard output.
+
+            only_return_standard_out: Configures the return value, see "Returns" section
+                below.
+
             categorical_inds: The indices of categorical features.
+
+            force_recompute_layer: If True, enable activation checkpointing for this
+                forward pass. If False, the model may use activation checkpointing as
+                determined by its config. This is useful, during training, to only
+                enable checkpointing for particularly large datasets, while usually
+                keeping it disabled.
+
+            save_peak_memory_factor:
+                If not None, enable batching internally in the model. This reduces the
+                peak memory usage by chunking the inputs to various layers (e.g.
+                attention, MLP, and layer norm) along the batch dimension, and
+                processing each chunk sequentially rather than as one larger tensor. The
+                value of this option determines how many chunks the input is divided
+                into; a higher value results in lower peak memory consumption.
+
+                This can only be used during inference. Some architectures do not
+                support it and will ignore this option.
+
+                If None, this feature is disabled.
 
         Returns:
             If `only_return_standard_out`, then a Tensor of shape
