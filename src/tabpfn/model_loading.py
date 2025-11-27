@@ -334,7 +334,7 @@ def download_model(
     """Download a TabPFN model, trying all available sources.
 
     Args:
-        to: The directory to download the model to.
+        to: The file path to download the model to.
         version: The version of the model to download.
         which: The type of model to download.
         model_name: Optional specific model name to download.
