@@ -250,6 +250,7 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
 
     tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)
+    preds = tabpfn.predict(X)
     np.testing.assert_array_almost_equal(preds, reference_preds, decimal=4)
 
 

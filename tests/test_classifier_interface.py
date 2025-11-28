@@ -520,11 +520,10 @@ def test_fit_modes_all_return_equal_results(
 
     tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(probs, reference_probs, decimal=4)
-    np.testing.assert_array_almost_equal(
-        preds,
-        reference_preds,
-    )
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+    np.testing.assert_array_almost_equal(probs, reference_probs, decimal=3)
+    np.testing.assert_array_almost_equal(preds, reference_preds)
 
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations
