@@ -1,0 +1,47 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run TabPFN Binary Classification Example",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/tabpfn_fit_modes.py",
+            "pythonPath": "/Users/buhler/Development/TabPFN/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+
+        /* ------------------  NEW EXPERIMENT CONFIGS ------------------ */
+
+        {
+            "name": "TabPFN Experiment — low_memory",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/tabpfn_fit_modes.py",
+            "args": ["--fit-mode", "low_memory"],
+            "pythonPath": "/Users/buhler/Development/TabPFN/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "TabPFN Experiment — fit_preprocessors",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/tabpfn_fit_modes.py",
+            "args": ["--fit-mode", "fit_preprocessors"],
+            "pythonPath": "/Users/buhler/Development/TabPFN/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "TabPFN Experiment — fit_with_cache",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/tabpfn_fit_modes.py",
+            "args": ["--fit-mode", "fit_with_cache"],
+            "pythonPath": "/Users/buhler/Development/TabPFN/.venv/bin/python",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        }
+    ]
+}

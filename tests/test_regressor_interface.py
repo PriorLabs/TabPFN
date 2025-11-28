@@ -244,9 +244,9 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
     np.testing.assert_array_almost_equal(preds, reference_preds)
 
     torch.random.manual_seed(0)
-    # ATTENTION!: Fit_with_cache will produce slightly difference results due to
-    # precision reasons in "torch.nn.functional.scaled_dot_product_attention()"
-    # with different batch_dimension lenghts in 'attention_between_features'
+    # Note: fit_with_cache may produce slightly different results due to
+    # precision differences in `torch.nn.functional.scaled_dot_product_attention`
+    # with different batch dimension lengths in 'attention_between_features'.
 
     tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)

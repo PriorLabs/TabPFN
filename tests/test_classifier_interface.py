@@ -498,7 +498,7 @@ def test_fit_modes_all_return_equal_results(
     kwargs = {"n_estimators": 2, "device": "auto", "random_state": 0}
     X, y = X_y
 
-    # We use low-memory as reference predicitons
+    # We use low-memory as reference predictions
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
     tabpfn.fit(X, y)
@@ -514,9 +514,9 @@ def test_fit_modes_all_return_equal_results(
     np.testing.assert_array_equal(preds, reference_preds)
 
     torch.random.manual_seed(0)
-    # ATTENTION!: Fit_with_cache will produce slightly difference results due to
-    # precision reasons in "torch.nn.functional.scaled_dot_product_attention()"
-    # with different batch_dimension lenghts in 'attention_between_features'
+    # Note: fit_with_cache may produce slightly different results due to
+    # precision differences in `torch.nn.functional.scaled_dot_product_attention`
+    # with different batch dimension lengths in 'attention_between_features'.
 
     tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)
