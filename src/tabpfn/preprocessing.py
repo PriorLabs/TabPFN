@@ -835,10 +835,10 @@ def fit_preprocessing(
     X_train: np.ndarray,
     y_train: np.ndarray,
     *,
-    random_state: int | np.random.Generator | None,
     cat_ix: list[int],
     n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
+    preprocessing_initialization_seeds: list[int],
 ) -> Iterator[
     tuple[
         EnsembleConfig,
@@ -854,7 +854,6 @@ def fit_preprocessing(
         configs: List of ensemble configurations.
         X_train: Training data.
         y_train: Training target.
-        random_state: Random number generator.
         cat_ix: Indices of categorical features.
         n_preprocessing_jobs: Number of worker processes to use.
             If `1`, then the preprocessing is performed in the current process. This
@@ -868,6 +867,8 @@ def fit_preprocessing(
             It is best to select this value by benchmarking.
         parallel_mode:
             Parallel mode to use.
+        preprocessing_initialization_seeds:
+            List of seeds to initialize the preprocessing.
 
             * `"block"`: Blocks until all workers are done. Returns in order.
             * `"as-ready"`: Returns results as they are ready. Any order.
@@ -879,8 +880,6 @@ def fit_preprocessing(
         preprocessing pipeline, the transformed training data, the transformed target,
         and the indices of categorical features.
     """
-    _, rng = infer_random_state(random_state)
-
     # Below we set batch_size to auto, but this could be further tuned.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
@@ -894,11 +893,10 @@ def fit_preprocessing(
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 
-    seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))
     yield from executor(  # type: ignore
         [
             worker_func(config, X_train, y_train, seed)
-            for config, seed in zip(configs, seeds)
+            for config, seed in zip(configs, preprocessing_initialization_seeds)
         ],
     )
 
