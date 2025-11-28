@@ -511,7 +511,7 @@ class PerFeatureTransformer(Architecture):
             )
         del embedded_y, embedded_x
 
-        # in case of prediction call when using kv_caching, we don't want to add 
+        # in case of prediction call when using kv_caching, we don't want to add
         # thinking tokens, as they were already added during fit call.
         is_kv_cache_inference = (
             single_eval_pos == 0
