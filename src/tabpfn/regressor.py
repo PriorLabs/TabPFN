@@ -154,8 +154,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The devices determined to be used.
 
     The devices are determined based on the `device` argument to the constructor, and
-    the devices available on the system. If multiple devices are listed, currently only
-    the first is used for inference.
+    the devices available on the system. See the constructor documentation for details.
     """
 
     feature_names_in_: npt.NDArray[Any]
@@ -296,6 +295,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
                 ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
                 larger datasets, by executing the estimators in parallel on the GPUs.
+                Multiple GPUs are only used when `fit_mode="fit_preprocessors"` or
+                `fit_mode="low_memory"`. In other cases, only the first GPU is used.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
