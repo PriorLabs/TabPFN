@@ -154,8 +154,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The devices determined to be used.
 
     The devices are determined based on the `device` argument to the constructor, and
-    the devices available on the system. If multiple devices are listed, currently only
-    the first is used for inference.
+    the devices available on the system. See the constructor documentation for details.
     """
 
     feature_names_in_: npt.NDArray[Any]
