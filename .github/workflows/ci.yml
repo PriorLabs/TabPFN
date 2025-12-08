@@ -82,13 +82,13 @@ jobs:
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
@@ -97,14 +97,14 @@ jobs:
       - name: Run Tests (all tests, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' }}
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
@@ -144,7 +144,7 @@ jobs:
 
       - name: Run Tests
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
         run: uv run --no-sync pytest tests/
 
   # -------------------------------------------------------------------
@@ -186,7 +186,7 @@ jobs:
 
       - name: Run GPU Test Suite
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+          HF_TOKEN: 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 # Token for v2.5 repo
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
