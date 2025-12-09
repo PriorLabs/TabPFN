@@ -165,7 +165,7 @@ def invoke_tabpfn(
     task: Literal["classification", "regression"],
     model_params: Optional[Dict[str, Any]] = None,
     predict_params: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """Invoke the TabPFN SageMaker endpoint with tabular data.
 
     This helper prepares the payload for a TabPFN 2.5 model, sends it to
@@ -182,8 +182,7 @@ def invoke_tabpfn(
             which predictions should be obtained.
         task:
             Task type for TabPFN. Supported values are typically
-            `"classification"` or `"regression"`. Defaults to
-            `"classification"`.
+            `"classification"` or `"regression"`.
         model_params:
             Optional TabPFN model initialization parameters. If `None`,
             the following default configuration is used:
