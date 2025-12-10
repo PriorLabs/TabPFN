@@ -224,10 +224,6 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
     assert model.predict(X).shape == (X.shape[0],)
 
 
-# The different fitting modes manage the random state differently.
-@pytest.mark.skip(
-    reason="The prediction is actually different depending on the fitting mode."
-)
 def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     kwargs = {
         "n_estimators": 10,
@@ -236,21 +232,25 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
         "random_state": 0,
     }
     X, y = X_y
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
+    tabpfn.fit(X, y)
+    reference_preds = tabpfn.predict(X)
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor(fit_mode="fit_preprocessors", **kwargs)
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
+    np.testing.assert_array_almost_equal(preds, reference_preds)
 
     torch.random.manual_seed(0)
+    # Note: fit_with_cache may produce slightly different results due to
+    # precision differences in `torch.nn.functional.scaled_dot_product_attention`
+    # with different batch dimension lengths in 'attention_between_features'.
     tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
-
-    torch.random.manual_seed(0)
-    tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
-    tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
+    preds = tabpfn.predict(X)
+    np.testing.assert_array_almost_equal(preds, reference_preds, decimal=3)
 
 
 def test_multiple_models_predict_different_results(

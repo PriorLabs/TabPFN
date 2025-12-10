@@ -84,13 +84,15 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
     X_test = rng.standard_normal(size=(2, n_features))
 
+    n_configs = 5
+    preprocessing_initialization_seeds = list(range(n_configs))
     engine = InferenceEngineCachePreprocessing.prepare(
         X_train,
         y_train,
         cat_ix=[] * n_train,
         models=[TestModel()],
         ensemble_configs=_create_test_ensemble_configs(
-            n_configs=5,
+            n_configs=n_configs,
             n_classes=n_classes,
             num_models=1,
         ),
@@ -98,7 +100,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
         n_preprocessing_jobs=5,
-        rng=rng,
+        preprocessing_initialization_seeds=preprocessing_initialization_seeds,
         dtype_byte_size=4,
         force_inference_dtype=None,
         save_peak_mem=True,
@@ -132,6 +134,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     X_test = rng.standard_normal(size=(2, n_features))
 
     num_models = 3
+    preprocessing_initialization_seeds = list(range(num_models))
     models = [TestModel() for _ in range(num_models)]
     engine = InferenceEngineOnDemand.prepare(
         X_train,
@@ -147,7 +150,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
         n_preprocessing_jobs=5,
-        rng=rng,
+        preprocessing_initialization_seeds=preprocessing_initialization_seeds,
         dtype_byte_size=4,
         force_inference_dtype=None,
         save_peak_mem=True,

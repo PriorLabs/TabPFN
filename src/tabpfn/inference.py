@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import joblib
-import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import (
@@ -28,6 +27,8 @@ from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessors import SequentialFeatureTransformer
@@ -163,7 +164,7 @@ class InferenceEngineOnDemand(InferenceEngine):
     X_train: np.ndarray
     y_train: np.ndarray
     cat_ix: list[int]
-    static_seed: int
+    preprocessing_initialization_seeds: list[int]
     n_preprocessing_jobs: int
     force_inference_dtype: torch.dtype | None
     ensemble_configs: list[EnsembleConfig]
@@ -177,7 +178,7 @@ class InferenceEngineOnDemand(InferenceEngine):
         cat_ix: list[int],
         models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
-        rng: np.random.Generator,
+        preprocessing_initialization_seeds: list[int],
         n_preprocessing_jobs: int,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
@@ -191,21 +192,19 @@ class InferenceEngineOnDemand(InferenceEngine):
             cat_ix: The categorical indices.
             models: The models to use.
             ensemble_configs: The ensemble configurations to use.
-            rng: The random number generator.
+            preprocessing_initialization_seeds: seeds to initialize preprocessing.
             n_preprocessing_jobs: The number of workers to use.
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
         """
-        # We save it as a static seed to be reproducible across predicts
-        static_seed = rng.integers(0, int(np.iinfo(np.int32).max))
         return cls(
             X_train=X_train,
             y_train=y_train,
             ensemble_configs=list(ensemble_configs),
             cat_ix=cat_ix,
             model_caches=[_PerDeviceModelCache(model) for model in models],
-            static_seed=static_seed,
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
             n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
@@ -221,16 +220,14 @@ class InferenceEngineOnDemand(InferenceEngine):
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        rng = np.random.default_rng(self.static_seed)
-
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.ensemble_configs,
             X_train=self.X_train,
             y_train=self.y_train,
-            random_state=rng,
             cat_ix=self.cat_ix,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="in-order",
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
         )
 
         save_peak_mem = should_save_peak_mem(
@@ -457,7 +454,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
         models: list[Architecture],
         ensemble_configs: Sequence[EnsembleConfig],
         n_preprocessing_jobs: int,
-        rng: np.random.Generator,
+        preprocessing_initialization_seeds: list[int],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
@@ -473,7 +470,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             models: The models to use.
             ensemble_configs: The ensemble configurations to use.
             n_preprocessing_jobs: The number of workers to use.
-            rng: The random number generator.
+            preprocessing_initialization_seeds: seeds to initialize preprocessing.
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
@@ -489,10 +486,10 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
             configs=ensemble_configs,
             X_train=X_train,
             y_train=y_train,
-            random_state=rng,
             cat_ix=cat_ix,
             n_preprocessing_jobs=n_preprocessing_jobs,
             parallel_mode="block",
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
         )
         configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
         return InferenceEngineCachePreprocessing(
@@ -636,7 +633,7 @@ class InferenceEngineCacheKV(InferenceEngine):
         n_preprocessing_jobs: int,
         models: list[Architecture],
         devices: Sequence[torch.device],
-        rng: np.random.Generator,
+        preprocessing_initialization_seeds: list[int],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: bool | Literal["auto"] | float | int,
@@ -653,7 +650,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             n_preprocessing_jobs: The number of workers to use.
             models: The models to use.
             devices: The devices to run the model on.
-            rng: The random number generator.
+            preprocessing_initialization_seeds: seeds to initialize preprocessing.
             dtype_byte_size: Size of the dtype in bytes.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
@@ -667,10 +664,10 @@ class InferenceEngineCacheKV(InferenceEngine):
             configs=ensemble_configs,
             X_train=X_train,
             y_train=y_train,
-            random_state=rng,
             cat_ix=cat_ix,
             n_preprocessing_jobs=n_preprocessing_jobs,
             parallel_mode="as-ready",
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
         )
         ens_models: list[Architecture] = []
         preprocessors: list[SequentialFeatureTransformer] = []

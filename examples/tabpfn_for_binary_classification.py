@@ -18,7 +18,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # Initialize a classifier
-clf = TabPFNClassifier()
+clf = TabPFNClassifier(fit_mode="fit_with_cache")
 clf.fit(X_train, y_train)
 
 # Predict probabilities

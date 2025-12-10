@@ -835,10 +835,10 @@ def fit_preprocessing(
     X_train: np.ndarray,
     y_train: np.ndarray,
     *,
-    random_state: int | np.random.Generator | None,
     cat_ix: list[int],
     n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
+    preprocessing_initialization_seeds: list[int],
 ) -> Iterator[
     tuple[
         EnsembleConfig,
@@ -873,14 +873,14 @@ def fit_preprocessing(
             * `"as-ready"`: Returns results as they are ready. Any order.
             * `"in-order"`: Returns results in order, blocking only in the order that
                 needs to be returned in.
+        preprocessing_initialization_seeds:
+            List of seeds to initialize the preprocessing.
 
     Returns:
         Iterator of tuples containing the ensemble configuration, the fitted
         preprocessing pipeline, the transformed training data, the transformed target,
         and the indices of categorical features.
     """
-    _, rng = infer_random_state(random_state)
-
     # Below we set batch_size to auto, but this could be further tuned.
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
@@ -894,11 +894,10 @@ def fit_preprocessing(
     func = partial(fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 
-    seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))
     yield from executor(  # type: ignore
         [
             worker_func(config, X_train, y_train, seed)
-            for config, seed in zip(configs, seeds)
+            for config, seed in zip(configs, preprocessing_initialization_seeds)
         ],
     )
 
@@ -969,6 +968,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
         self.split_fn = split_fn
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.preprocessing_initialization_seeds = [infer_random_state(self.rng)[0]]
 
     def __len__(self):
         return len(self.configs)
@@ -1087,7 +1087,8 @@ class DatasetCollectionWithPreprocessing(Dataset):
             configs=conf,
             X_train=x_train_raw,
             y_train=y_train,
-            random_state=self.rng,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds
+            * len(conf),
             cat_ix=cat_ix,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="block",

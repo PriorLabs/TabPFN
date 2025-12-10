@@ -322,13 +322,19 @@ def create_inference_engine(  # noqa: PLR0913
         | InferenceEngineCacheKV
         | InferenceEngineBatchedNoPreprocessing
     )
+
+    # We need a list of seeds to initialize the preprocessing modules. We generate them
+    # here, and pass them down such that these are the same seeds for all fit_modes.
+    preprocessing_initialization_seeds = [
+        int(x) for x in rng.integers(0, 1_000_000, len(ensemble_configs))
+    ]
     if fit_mode == "low_memory":
         engine = InferenceEngineOnDemand.prepare(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
-            rng=rng,
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
             models=models,
             n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=byte_size,
@@ -343,7 +349,7 @@ def create_inference_engine(  # noqa: PLR0913
             ensemble_configs=ensemble_configs,
             models=models,
             n_preprocessing_jobs=n_preprocessing_jobs,
-            rng=rng,
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
@@ -359,7 +365,7 @@ def create_inference_engine(  # noqa: PLR0913
             n_preprocessing_jobs=n_preprocessing_jobs,
             devices=devices_,
             dtype_byte_size=byte_size,
-            rng=rng,
+            preprocessing_initialization_seeds=preprocessing_initialization_seeds,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,

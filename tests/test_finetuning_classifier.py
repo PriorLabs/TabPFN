@@ -183,7 +183,7 @@ def test_tabpfn_classifier_finetuning_loop(
         device,
         fit_mode,
         inference_precision,
-        random_state=2,
+        random_state=42,
         differentiable_input=False,
     )
 

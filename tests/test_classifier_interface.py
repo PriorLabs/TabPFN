@@ -492,9 +492,6 @@ def test_balance_probabilities_alters_proba_output() -> None:
     )
 
 
-@pytest.mark.skip(
-    reason="The result is actually different depending on the fitting mode."
-)
 def test_fit_modes_all_return_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -502,22 +499,29 @@ def test_fit_modes_all_return_equal_results(
     X, y = X_y
 
     torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
+    tabpfn.fit(X, y)
+    reference_probs = tabpfn.predict_proba(X)
+    reference_preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier(fit_mode="fit_preprocessors", **kwargs)
     tabpfn.fit(X, y)
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
+    np.testing.assert_array_almost_equal(probs, reference_probs)
+    np.testing.assert_array_equal(preds, reference_preds)
 
     torch.random.manual_seed(0)
+    # Note: fit_with_cache may produce slightly different results due to
+    # precision differences in `torch.nn.functional.scaled_dot_product_attention`
+    # with different batch dimension lengths in 'attention_between_features'.
     tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
     tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
-    np.testing.assert_array_equal(preds, tabpfn.predict(X))
-
-    torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
-    tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
-    np.testing.assert_array_equal(preds, tabpfn.predict(X))
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+    np.testing.assert_array_almost_equal(probs, reference_probs, decimal=3)
+    np.testing.assert_array_almost_equal(preds, reference_preds)
 
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations

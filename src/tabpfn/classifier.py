@@ -735,7 +735,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-            rng = None
+            rng = infer_random_state(self.random_state)[1]
 
         # Create the inference engine
         self.executor_ = create_inference_engine(
