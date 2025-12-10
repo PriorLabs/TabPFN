@@ -55,6 +55,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -98,8 +99,6 @@ jobs:
       - &download-models
         name: Download models from Hugging Face
         if: github.event_name == 'pull_request'
-        env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
         run: uv run --no-sync python scripts/download_all_models.py
       - &save-model-cache
         name: Save model cache
@@ -142,6 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
@@ -174,8 +174,6 @@ jobs:
       - *save-model-cache
 
       - name: Run Tests
-        env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
         run: uv run --no-sync pytest tests/
 
   # -------------------------------------------------------------------
@@ -199,6 +197,7 @@ jobs:
     runs-on: ubuntu-22.04-4core-gpu
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
