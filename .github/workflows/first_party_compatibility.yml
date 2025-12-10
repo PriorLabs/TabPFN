@@ -45,6 +45,7 @@ jobs:
         with:
           path: ${{ github.workspace }}/model_cache
           key: model-cache-${{ hashFiles('model_cache/**') }}
+          crossOsArchive: true
           restore-keys: |
             model-cache-
 
@@ -55,6 +56,26 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@ed21f2f24f8dd64503750218de024bcf64c7250a # v7.1.5
+
+      - name: Restore model cache
+        id: restore-model-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/model_cache
+          key: model-cache-${{ hashFiles('model_cache/**') }}
+          restore-keys: |
+            model-cache-
+          enableCrossOsArchive: true
+        # We don't both to save the model cache for the compatibility workflow as this
+        # will be done by the main CI workflow.
+
+      - name: Download models from Hugging Face
+        env:
+          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+        run: |
+          cd TabPFN
+          uv run python scripts/download_all_models.py
+          cd ..
 
       - name: Install dependencies and run tests
         env:
