@@ -35,20 +35,6 @@ jobs:
           repository: PriorLabs/${{ matrix.repo-name }}
           path: ${{ matrix.repo-name }}
 
-      - name: Restore model cache
-        # We use the cache in PRs so that PRs from forks, which can't access the
-        # HF_TOKEN, have access to the model files, and also to speed them up.
-        # On merge to main we don't use the cache, to test downloading.
-        if: github.event_name == 'pull_request'
-        id: restore-model-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/model_cache
-          key: model-cache-${{ hashFiles('model_cache/**') }}
-          crossOsArchive: true
-          restore-keys: |
-            model-cache-
-
       - name: Set up Python
         uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
         with:
