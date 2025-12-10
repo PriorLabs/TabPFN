@@ -65,14 +65,7 @@ jobs:
 
       - name: Install dependencies and run tests
         env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
           FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
           uv run --with ../TabPFN --all-extras pytest -m "not uses_tabpfn_client"
-
-      - name: Save model cache
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ${{ github.workspace }}/model_cache
-          key: model-cache-${{ hashFiles('model_cache/**') }}
