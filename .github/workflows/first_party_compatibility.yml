@@ -22,6 +22,7 @@ jobs:
           - tabpfn-time-series
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
       - name: Checkout TabPFN at current ref
@@ -56,8 +57,6 @@ jobs:
         # doing it is enough.
 
       - name: Download models from Hugging Face
-        env:
-          HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
         run: |
           cd TabPFN
           uv run python scripts/download_all_models.py
