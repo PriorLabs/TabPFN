@@ -995,7 +995,7 @@ def load_fitted_tabpfn_model(
         ].startswith("torch."):
             dtype_name = params["inference_precision"].split(".")[1]
             params["inference_precision"] = getattr(torch, dtype_name)
-        params["device"] = device
+        params["device"] = str(device)
 
         if saved_cls_name == "TabPFNClassifier":
             cls = import_module("tabpfn.classifier").TabPFNClassifier
