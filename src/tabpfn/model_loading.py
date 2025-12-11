@@ -385,8 +385,14 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
+            path = to / ckpt_name
+            if path.exists():
+                logger.info(
+                    f"Skipping download of checkpoint that already exists: {path}"
+                )
+                continue
             download_model(
-                to=to / ckpt_name,
+                to=path,
                 version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
