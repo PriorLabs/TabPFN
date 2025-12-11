@@ -33,11 +33,12 @@ usage, import `invoke_tabpfn` and pass your own NumPy arrays.
 
 import json
 import os
-from typing import Any, Dict, Literal, Optional, Tuple
+from typing import Any, Literal, Optional
 
 import boto3
 import numpy as np
-
+from sklearn.datasets import load_breast_cancer
+from sklearn.model_selection import train_test_split
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -72,14 +73,15 @@ sagemaker_runtime = boto3.client("sagemaker-runtime")
 # Core helpers
 # ---------------------------------------------------------------------------
 
+
 def prepare_tabpfn_request(
     x_train: np.ndarray,
     y_train: np.ndarray,
     x_test: np.ndarray,
     task: Literal["classification", "regression"],
-    model_params: Dict[str, Any],
-    predict_params: Dict[str, Any],
-) -> Tuple[str, str]:
+    model_params: dict[str, Any],
+    predict_params: dict[str, Any],
+) -> tuple[str, str]:
     """Serialize TabPFN input data and parameters into a JSON request body.
 
     This utility converts NumPy arrays and configuration dictionaries into a
@@ -163,9 +165,9 @@ def invoke_tabpfn(
     y_train: np.ndarray,
     x_test: np.ndarray,
     task: Literal["classification", "regression"],
-    model_params: Optional[Dict[str, Any]] = None,
-    predict_params: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    model_params: Optional[dict[str, Any]] = None,
+    predict_params: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     """Invoke the TabPFN SageMaker endpoint with tabular data.
 
     This helper prepares the payload for a TabPFN 2.5 model, sends it to
@@ -337,7 +339,7 @@ def invoke_tabpfn(
     print(f"Response status code: {status_code}")
 
     try:
-        result: Dict[str, Any] = json.loads(response_body.decode("utf-8"))
+        result: dict[str, Any] = json.loads(response_body.decode("utf-8"))
         return result
     except json.JSONDecodeError as e:
         # For debugging, print the raw response if JSON parsing fails.
@@ -349,6 +351,7 @@ def invoke_tabpfn(
 # ---------------------------------------------------------------------------
 # Example script entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Run a minimal end-to-end example against the TabPFN endpoint.
@@ -373,19 +376,13 @@ def main() -> None:
         `x_train`, `y_train`, and `x_test` arrays, optionally customizing
         `model_params` and `predict_params` as needed.
     """
-    from sklearn.datasets import load_breast_cancer
-    from sklearn.model_selection import train_test_split
-
     print("Loading breast cancer dataset...")
     X, y = load_breast_cancer(return_X_y=True)
-    x_train, x_test, y_train, y_test = train_test_split(
+    x_train, x_test, y_train, _y_test = train_test_split(
         X, y, test_size=0.5, random_state=42
     )
 
-    print(
-        f"Training set: {x_train.shape[0]} samples, "
-        f"{x_train.shape[1]} features"
-    )
+    print(f"Training set: {x_train.shape[0]} samples, {x_train.shape[1]} features")
     print(f"Test set: {x_test.shape[0]} samples")
 
     result = invoke_tabpfn(
