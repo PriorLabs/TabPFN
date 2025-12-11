@@ -82,12 +82,11 @@ jobs:
             --show-only-failing \
             -0
 
-      # In PRs we use a cache for the model checkpoints. This allows PRs from forks,
-      # which can't access the HF_TOKEN, to have access to the model files. It also
-      # speeds up PRs. On merge to main we don't use the cache, to test downloading.
+      # We use a cache for the model checkpoints. This allows PRs from forks, which
+      # can't access the HF_TOKEN, to have access to the model files. It also speeds up
+      # PRs and avoids flakes.
       - &restore-model-cache
         name: Restore model cache
-        if: github.event_name == 'pull_request'
         id: restore-model-cache
         uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -96,13 +95,13 @@ jobs:
           restore-keys: |
             model-cache-
           enableCrossOsArchive: true
+
       - &download-models
         name: Download models from Hugging Face
-        if: github.event_name == 'pull_request'
         run: uv run --no-sync python scripts/download_all_models.py
+
       - &save-model-cache
         name: Save model cache
-        if: github.event_name == 'pull_request'
         uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ github.workspace }}/model_cache
