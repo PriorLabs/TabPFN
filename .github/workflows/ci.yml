@@ -17,11 +17,9 @@ jobs:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
       - uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
         with:
-          src: "./src ./tests"
           version-file: pyproject.toml
       - uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
         with:
-          src: "./src ./tests"
           args: "format --check"
           version-file: pyproject.toml
 
