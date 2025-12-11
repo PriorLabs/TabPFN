@@ -53,8 +53,8 @@ jobs:
           restore-keys: |
             model-cache-
           enableCrossOsArchive: true
-        # We don't both to save the model cache in this workflow as the main CI workflow
-        # doing it is enough.
+        # We don't save the model cache in this workflow as the main CI workflow already
+        # saves it.
 
       - name: Download models from Hugging Face
         run: |
