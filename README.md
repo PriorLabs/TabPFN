@@ -307,7 +307,7 @@ We're building the future of tabular machine learning and would love your involv
 
 ## Citation
 
-You can read our paper explaining TabPFN [here](https://doi.org/10.1038/s41586-024-08328-6).
+You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
 
 ```bibtex
 @misc{grinsztajn2025tabpfn,
