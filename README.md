@@ -182,14 +182,14 @@ graph LR
 
     subgraph Data
         data_check["Data Checks"];
-        model_choice["Samples > 100k or<br/>Classes > 10?"]
+        model_choice["Samples > 50k or<br/>Classes > 10?"]
         data_check -- "Table Contains Text Data?" --> api_backend_note["Note: API client has<br/>native text support"];
         api_backend_note --> model_choice;
         data_check -- "Time-Series Data?" --> ts_features["Use Time-Series<br/>Features"];
         ts_features --> model_choice;
         data_check -- "Purely Tabular" --> model_choice;
         model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, >100k samples" --> subsample["Large Datasets Guide<br/>"];
+        model_choice -- "Yes, >50k samples" --> subsample["Large Datasets Guide<br/>"];
         model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
     end
 
