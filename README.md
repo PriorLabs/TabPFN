@@ -189,7 +189,8 @@ graph LR
         ts_features --> model_choice;
         data_check -- "Purely Tabular" --> model_choice;
         model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, >50k samples" --> subsample["Large Datasets Guide<br/>"];
+        model_choice -- "Yes, 50k-100k samples" --> ignore_limits["Set ignore_pretraining_limits=True<br/><small>Works for datasets slightly above limits</small>"];
+        model_choice -- "Yes, >100k samples" --> subsample["Large Datasets Guide<br/>"];
         model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
     end
 
@@ -244,11 +245,12 @@ graph LR
     task_type -- "Unsupervised" --> unsupervised_type;
 
     subsample --> finetune_check;
+    ignore_limits --> finetune_check;
     many_class --> finetune_check;
 
     %% 4. APPLY STYLES
     class start,end_node start_node;
-    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators,kv_cache process_node;
+    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,ignore_limits,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators,kv_cache process_node;
     class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check,speed_check decision_node;
     class tuning_complete process_node;
 
@@ -271,7 +273,7 @@ graph LR
     click shap_iq "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/shapiq_example.py" "SHAP IQ Example" _blank
     click post_hoc "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/phe/phe_example.py" "Post-Hoc Ensemble Example" _blank
     click hpo "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/hpo/tuned_tabpfn.py" "HPO Example" _blank
-    click subsample "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py" "Large Datasets Example" _blank
+    click subsample "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py" "Large Datasets Example" _blank    
     click kv_cache "https://github.com/PriorLabs/TabPFN/blob/main/examples/kv_cache_fast_prediction.py" "KV Cache Fast Prediction Example" _blank
 
 ```
