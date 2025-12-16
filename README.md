@@ -307,9 +307,22 @@ We're building the future of tabular machine learning and would love your involv
 
 ## Citation
 
-You can read our paper explaining TabPFN [here](https://doi.org/10.1038/s41586-024-08328-6).
+You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
 
 ```bibtex
+@misc{grinsztajn2025tabpfn,
+  title={TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models},
+  author={Léo Grinsztajn and Klemens Flöge and Oscar Key and Felix Birkel and Philipp Jund and Brendan Roof and
+          Benjamin Jäger and Dominik Safaric and Simone Alessi and Adrian Hayler and Mihir Manium and Rosen Yu and
+          Felix Jablonski and Shi Bin Hoo and Anurag Garg and Jake Robertson and Magnus Bühler and Vladyslav Moroshan and
+          Lennart Purucker and Clara Cornu and Lilly Charlotte Wehrhahn and Alessandro Bonetto and
+          Bernhard Schölkopf and Sauraj Gambhir and Noah Hollmann and Frank Hutter},
+  year={2025},
+  eprint={2511.08667},
+  archivePrefix={arXiv},
+  url={https://arxiv.org/abs/2511.08667},
+}
+
 @article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
  author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
