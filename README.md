@@ -189,7 +189,7 @@ graph LR
         ts_features --> model_choice;
         data_check -- "Purely Tabular" --> model_choice;
         model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, 50k-100k samples" --> ignore_limits["Set ignore_pretraining_limits=True<br/><small>Works for datasets slightly above limits</small>"];
+        model_choice -- "Yes, 50k-100k samples" --> ignore_limits["Set<br/>ignore_pretraining_limits=True"];
         model_choice -- "Yes, >100k samples" --> subsample["Large Datasets Guide<br/>"];
         model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
     end
