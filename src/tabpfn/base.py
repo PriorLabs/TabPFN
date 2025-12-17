@@ -38,6 +38,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.settings import settings
 from tabpfn.utils import (
+    DevicesSpecification,
     infer_devices,
     infer_fp16_inference_mode,
     infer_random_state,
@@ -324,6 +325,7 @@ def create_inference_engine(  # noqa: PLR0913
             ensemble_configs=ensemble_configs,
             rng=rng,
             models=models,
+            devices=devices_,
             n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
@@ -336,6 +338,7 @@ def create_inference_engine(  # noqa: PLR0913
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
             models=models,
+            devices=devices_,
             n_preprocessing_jobs=n_preprocessing_jobs,
             rng=rng,
             dtype_byte_size=byte_size,
@@ -364,6 +367,7 @@ def create_inference_engine(  # noqa: PLR0913
             y_trains=y_train,
             cat_ix=cat_ix,
             models=models,
+            devices=devices_,
             ensemble_configs=ensemble_configs,
             force_inference_dtype=forced_inference_dtype_,
             inference_mode=inference_mode,
@@ -527,14 +531,7 @@ def initialize_model_variables_helper(
     if model_type == "regressor" and maybe_bardist is not None:
         calling_instance.znorm_space_bardist_ = maybe_bardist
 
-    calling_instance.devices_ = infer_devices(calling_instance.device)
-    (
-        calling_instance.use_autocast_,
-        calling_instance.forced_inference_dtype_,
-        byte_size,
-    ) = determine_precision(
-        calling_instance.inference_precision, calling_instance.devices_
-    )
+    byte_size = estimator_to_device(calling_instance, calling_instance.device)
 
     inference_config = inference_config.override_with_user_input(
         user_config=calling_instance.inference_config
@@ -560,6 +557,26 @@ def initialize_model_variables_helper(
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng
+
+
+def estimator_to_device(
+    estimator: TabPFNClassifier | TabPFNRegressor, device: DevicesSpecification
+) -> int:
+    """Move the given estimator to the given device(s)."""
+    parsed_devices = infer_devices(device)
+
+    estimator.device = device
+    estimator.devices_ = parsed_devices
+    estimator.use_autocast_, estimator.forced_inference_dtype_, byte_size = (
+        determine_precision(estimator.inference_precision, estimator.devices_)
+    )
+
+    if hasattr(estimator, "executor_"):
+        estimator.executor_.to(
+            parsed_devices, estimator.forced_inference_dtype_, byte_size
+        )
+
+    return byte_size
 
 
 def initialize_telemetry() -> None:

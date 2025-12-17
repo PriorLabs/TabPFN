@@ -11,7 +11,6 @@ from copy import deepcopy
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from threading import Lock
 from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
@@ -82,7 +81,6 @@ class InferenceEngine(ABC):
         self,
         X: np.ndarray,
         *,
-        devices: Sequence[torch.device],
         autocast: bool,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
@@ -92,7 +90,6 @@ class InferenceEngine(ABC):
 
         Args:
             X: The input data to make predictions on.
-            devices: The devices to run the model on.
             autocast: Whether to use torch.autocast during inference.
         """
         ...
@@ -157,6 +154,29 @@ class InferenceEngine(ABC):
         """
         ...
 
+    def to(
+        self,
+        devices: Sequence[torch.device],
+        force_inference_dtype: torch.dtype | None,
+        dtype_byte_size: int,
+    ) -> None:
+        """Move the inference engine to the given set of devices.
+
+        Args:
+            devices: The devices to use.
+            force_inference_dtype: The dtype to use for inference, as supported by the
+                specified devices.
+            dtype_byte_size: The size of the dtype in bytes.
+        """
+        self.force_inference_dtype = force_inference_dtype
+        self.dtype_byte_size = dtype_byte_size
+        self._move_models_to_devices(devices)
+
+    @abstractmethod
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        """Move the models to the given devices. Used when .to() is called."""
+        ...
+
 
 def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
     if isinstance(engine, InferenceEngineCacheKV):
@@ -199,6 +219,16 @@ class MultiDeviceInferenceEngine(InferenceEngine):
     def _set_models(self, models: list[Architecture]) -> None:
         self.model_caches = [_PerDeviceModelCache(model) for model in models]
 
+    @override
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        for model_cache in self.model_caches:
+            model_cache.to(devices)
+
+    def get_devices(self) -> list[torch.device]:
+        """Return the devices that the models are on."""
+        # We always keep all the models on the same set of devices, so this is safe.
+        return self.model_caches[0].get_devices()
+
 
 @dataclass
 class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
@@ -217,13 +247,14 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
     ensemble_configs: list[EnsembleConfig]
 
     @classmethod
-    def prepare(
+    def prepare(  # noqa: PLR0913
         cls,
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
         cat_ix: list[int],
         models: list[Architecture],
+        devices: Sequence[torch.device],
         ensemble_configs: Sequence[EnsembleConfig],
         rng: np.random.Generator,
         n_preprocessing_jobs: int,
@@ -238,6 +269,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             y_train: The training target.
             cat_ix: The categorical indices.
             models: The models to use.
+            devices: A list of the devices to use for inference. If multiple devices are
+                specified, then the inference engine will parallelize the members of the
+                ensemble across the devices.
             ensemble_configs: The ensemble configurations to use.
             rng: The random number generator.
             n_preprocessing_jobs: The number of workers to use.
@@ -247,7 +281,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         """
         # We save it as a static seed to be reproducible across predicts
         static_seed = rng.integers(0, int(np.iinfo(np.int32).max))
-        return cls(
+        engine = cls(
             X_train=X_train,
             y_train=y_train,
             ensemble_configs=list(ensemble_configs),
@@ -259,17 +293,19 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
         )
+        engine.to(devices, force_inference_dtype, dtype_byte_size)
+        return engine
 
     @override
     def iter_outputs(
         self,
         X: np.ndarray,
         *,
-        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         rng = np.random.default_rng(self.static_seed)
+        devices = self.get_devices()
 
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.ensemble_configs,
@@ -314,14 +350,10 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         for (config, _, _, _, _), output in zip(ensemble_configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
-        for model_cache in self.model_caches:
-            model_cache.to_cpu()
-
     def _call_model(
         self,
         *,
         device: torch.device,
-        is_parallel: bool,
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
@@ -336,9 +368,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         Note that several instances of this function may be executed in parallel in
         different threads, one for each device in the system.
         """
-        # In parallel mode, the inference engine uses multiple devices. Otherwise, it
-        # uses a single device.
-        model = self.model_caches[model_index].get(device, multiple_devices=is_parallel)
+        model = self.model_caches[model_index].get(device)
 
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
@@ -388,6 +418,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         *,
         cat_ix: list[list[list[int]]],
         models: list[Architecture],
+        devices: Sequence[torch.device],
         ensemble_configs: list[list[EnsembleConfig]],
         force_inference_dtype: torch.dtype | None,
         inference_mode: bool,
@@ -401,6 +432,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             y_trains: The training target.
             cat_ix: The categorical indices.
             models: The models to use.
+            devices: A list of devices, the first of which will be used to run the
+                model. The other devices will be ignored.
             ensemble_configs: The ensemble configurations to use.
             inference_mode: Whether to use torch inference mode.
             dtype_byte_size: The byte size of the dtype.
@@ -415,7 +448,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                 )
 
         # We save it as a static seed to be reproducible across predicts
-        return cls(
+        engine = cls(
             X_trains=X_trains,
             y_trains=y_trains,
             cat_ix=cat_ix,
@@ -426,21 +459,17 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             dtype_byte_size=dtype_byte_size,
             save_peak_mem=save_peak_mem,
         )
+        engine.to(devices, force_inference_dtype, dtype_byte_size)
+        return engine
 
     @override
     def iter_outputs(
         self,
         X: list[torch.Tensor],
         *,
-        devices: Sequence[torch.device],
         autocast: bool,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
-        # This engine currently only supports one device, so just take the first.
-        device = devices[0]
-
-        for model in self.models:
-            model.to(device)
-
+        device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
         for i in range(batch_size):
             train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
@@ -463,13 +492,17 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                 )
 
             yield output, self.ensemble_configs[i]
-        if self.inference_mode:
-            for model in self.models:
-                model.cpu()
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
         self.inference_mode = use_inference
+
+    @override
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        # As this inference engine only supports one device, just take the first.
+        self.device = devices[0]
+        for model in self.models:
+            model.to(self.device)
 
 
 @dataclass
@@ -502,6 +535,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         *,
         cat_ix: list[int],
         models: list[Architecture],
+        devices: Sequence[torch.device],
         ensemble_configs: Sequence[EnsembleConfig],
         n_preprocessing_jobs: int,
         rng: np.random.Generator,
@@ -518,6 +552,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             y_train: The training target.
             cat_ix: The categorical indices.
             models: The models to use.
+            devices: A list of the devices to use for inference. If multiple devices are
+                specified, then the inference engine will parallelize the members of the
+                ensemble across the devices.
             ensemble_configs: The ensemble configurations to use.
             n_preprocessing_jobs: The number of workers to use.
             rng: The random number generator.
@@ -542,7 +579,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             parallel_mode="block",
         )
         configs, preprocessors, X_trains, y_trains, cat_ixs = list(zip(*itr))
-        return InferenceEngineCachePreprocessing(
+        engine = InferenceEngineCachePreprocessing(
             X_trains=X_trains,
             y_trains=y_trains,
             X_train_shape_before_preprocessing=tuple[int, int](X_train.shape),
@@ -556,16 +593,19 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             inference_mode=inference_mode,
             no_preprocessing=no_preprocessing,
         )
+        engine.to(devices, force_inference_dtype, dtype_byte_size)
+        return engine
 
     @override
     def iter_outputs(
         self,
         X: np.ndarray | torch.Tensor,
         *,
-        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        devices = self.get_devices()
+
         if self.force_inference_dtype is not None:
             for model_cache in self.model_caches:
                 model_cache.set_dtype(self.force_inference_dtype)
@@ -603,15 +643,10 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         for output, i in zip(outputs, range(len(self.ensemble_configs))):
             yield _move_and_squeeze_output(output, devices[0]), self.ensemble_configs[i]
 
-        if self.inference_mode:
-            for model_cache in self.model_caches:
-                model_cache.to_cpu()
-
     def _call_model(
         self,
         *,
         device: torch.device,
-        is_parallel: bool,
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
@@ -626,9 +661,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         Note that several instances of this function may be executed in parallel in
         different threads, one for each device in the system.
         """
-        # In parallel mode, the inference engine uses multiple devices. Otherwise, it
-        # uses a single device.
-        model = self.model_caches[model_index].get(device, multiple_devices=is_parallel)
+        model = self.model_caches[model_index].get(device)
 
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
@@ -670,6 +703,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     cat_ixs: Sequence[list[int]]
     n_train_samples: list[int]
     ensemble_configs: list[EnsembleConfig]
+    device: torch.device
 
     @classmethod
     def prepare(  # noqa: PLR0913
@@ -698,7 +732,8 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             ensemble_configs: The ensemble configurations to use.
             n_preprocessing_jobs: The number of workers to use.
             models: The models to use.
-            devices: The devices to run the model on.
+            devices: A list of devices, the first of which will be used to run the
+                model. The other devices will be ignored.
             rng: The random number generator.
             dtype_byte_size: Size of the dtype in bytes.
             force_inference_dtype: The dtype to force inference to.
@@ -767,6 +802,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
+            device=device,
         )
 
     @override
@@ -774,13 +810,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         self,
         X: np.ndarray,
         *,
-        devices: Sequence[torch.device],
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        # This engine currently only supports one device, so just take the first.
-        device = devices[0]
-
         for preprocessor, model, config, cat_ix, _X_train_len in zip(
             self.preprocessors,
             self.models,
@@ -788,9 +820,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             self.cat_ixs,
             self.n_train_samples,
         ):
-            model.to(device)
+            model.to(self.device)
             X_test = preprocessor.transform(X).X
-            X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
+            X_test = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
             X_test = X_test.unsqueeze(1)
             batched_cat_ix = [cat_ix]
 
@@ -798,7 +830,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                 model.type(self.force_inference_dtype)
                 X_test = X_test.type(self.force_inference_dtype)
             with (
-                get_autocast_context(device, enabled=autocast),
+                get_autocast_context(self.device, enabled=autocast),
                 torch.inference_mode(),
             ):
                 output = model(
@@ -817,6 +849,14 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             output = output if isinstance(output, dict) else output.squeeze(1)
 
             yield output, config
+
+    @override
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        # Various things in the model do not currently respect the `.to()` function, and
+        # just stay on the device where they were created.
+        raise NotImplementedError(
+            "fit_mode 'fit_with_cache' does not currently support .to() after .fit()"
+        )
 
 
 def _prepare_model_inputs(
@@ -843,72 +883,58 @@ def _move_and_squeeze_output(
 
 
 class _PerDeviceModelCache:
-    """Maintains a copy of a model on each device."""
+    """Maintains a copy of a PyTorch model on a set of devices."""
 
     def __init__(self, model: Architecture) -> None:
+        """Create a new instance."""
         super().__init__()
-        self._model = model
-        self._on_device_cache: dict[torch.device, Architecture] = {}
-        self._on_device_cache_lock = Lock()
+        self._models: dict[torch.device, Architecture] = {
+            _get_current_device(model): model
+        }
 
-    def get(self, device: torch.device, *, multiple_devices: bool) -> Architecture:
-        """Return the model on the specified device.
+    def to(self, devices: Sequence[torch.device]) -> None:
+        """Load copies of the model on the given devices.
 
-        Return the model from the cache, if present, otherwise copy the model to the
-        device.
-
-        This class assumes that each device will be used by a single thread at a time.
-
-        Args:
-            device: The device to get the model for.
-            multiple_devices:
-                If True, indicates that the model is being used on multiple devices.
-                Thus, the model is deepcopied before being moved to the target device,
-                allowing other copies of the model to be on other devices.
-                If False, then the model is moved to the target device without copying
-                to save time.
+        This function will re-use any existing copies of the model, moving them to new
+        devices as needed, before creating new copies. Thus, the called should discard
+        any references to models previously obtained with .get_model() after calling
+        this function.
         """
-        with self._on_device_cache_lock:
-            not_on_device = device not in self._on_device_cache
+        spare_models = [
+            model for device, model in self._models.items() if device not in devices
+        ]
 
-            if not_on_device:
-                if multiple_devices:
-                    self._on_device_cache[device] = deepcopy(self._model)
-                else:
-                    self._on_device_cache.clear()
-                    self._on_device_cache[device] = self._model
+        def get_on_device(device: torch.device) -> Architecture:
+            """Get the model on the given device. Try to reuse existing models."""
+            if device in self._models:
+                return self._models[device]
+            if len(spare_models) > 0:
+                return spare_models.pop().to(device)
+            existing_model = next(iter(self._models.values()))
+            return deepcopy(existing_model).to(device)
 
-        if not_on_device:
-            self._on_device_cache[device].to(device)
+        self._models = {device: get_on_device(device) for device in devices}
 
-        return self._on_device_cache[device]
+    def get(self, device: torch.device) -> Architecture:
+        """Return the model on the given device.
 
-    def to_cpu(self) -> None:
-        """Remove the models from the target devices, keeping one copy on the CPU."""
-        with self._on_device_cache_lock:
-            # If .get() was called with multiple_devices=True, then ._model will remain
-            # on the CPU and only the cached models will be moved to the target devices.
-            # If multiple_devices=False, then ._model will be moved to the target
-            # device. Thus, cover both cases by emptying the cache and moving _model.
-            self._on_device_cache.clear()
-            self._model.cpu()
+        Raises:
+            KeyError: If a device is specified that was not included in the last call to
+                .to()
+        """
+        return self._models[device]
 
     def set_dtype(self, dtype: torch.dtype) -> None:
         """Set the dtype of the model's parameters."""
-        with self._on_device_cache_lock:
-            self._model.type(dtype)
-            for model in self._on_device_cache.values():
-                model.type(dtype)
+        for model in self._models.values():
+            model.type(dtype)
 
-    def __getstate__(self) -> dict:
-        state = self.__dict__.copy()
-        # scikit-learn estimators have to be picklable, but the lock is not picklable,
-        # so we manually delete + recreate it.
-        del state["_on_device_cache_lock"]
-        return state
+    def get_devices(self) -> list[torch.device]:
+        """Return the devices that are in use."""
+        return list(self._models.keys())
 
-    def __setstate__(self, state: dict) -> None:
-        self.__dict__.update(state)
-        # scikit-learn estimators have to be picklable, but the lock is not picklable,
-        # so we manually delete + recreate it.
-        self._on_device_cache_lock = Lock()
+
+def _get_current_device(model: Architecture) -> torch.device:
+    """Return the device that the model parameters are on."""
+    # Assume the model is in a good state: all parameters are on the same device.
+    return next(iter(model.parameters())).device

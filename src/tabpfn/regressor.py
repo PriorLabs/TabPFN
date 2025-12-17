@@ -43,6 +43,7 @@ from tabpfn.base import (
     check_cpu_warning,
     create_inference_engine,
     determine_precision,
+    estimator_to_device,
     get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
     initialize_telemetry,
@@ -284,19 +285,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             device:
                 The device(s) to use for inference.
-
-                If "auto": a single device is selected based on availability in the
-                following order of priority: "cuda:0", "mps", "cpu".
-
-                To manually select a single device: specify a PyTorch device string e.g.
-                "cuda:1". See PyTorch's documentation for information about supported
-                devices.
-
-                To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
-                ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
-                larger datasets, by executing the estimators in parallel on the GPUs.
-                Multiple GPUs are only used when `fit_mode="fit_preprocessors"` or
-                `fit_mode="low_memory"`. In other cases, only the first GPU is used.
+                See the documentation of `.to()`.
 
             ignore_pretraining_limits:
                 Whether to ignore the pre-training limits of the model. The TabPFN
@@ -1085,9 +1074,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Iterate over estimators
         for output, config in self.executor_.iter_outputs(
-            X,
-            devices=self.devices_,
-            autocast=self.use_autocast_,
+            X, autocast=self.use_autocast_
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
@@ -1214,6 +1201,28 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 f"Attempting to load a '{est.__class__.__name__}' as '{cls.__name__}'"
             )
         return est
+
+    def to(self, device: DevicesSpecification) -> None:
+        """Move the estimator to the given device(s).
+
+        If "auto": a single device is selected based on availability in the
+        following order of priority: "cuda:0", "mps", "cpu".
+
+        To manually select a single device: specify a PyTorch device string e.g.
+        "cuda:1". See PyTorch's documentation for information about supported
+        devices.
+
+        To use several GPUs: specify a list of PyTorch GPU device strings, e.g.
+        ["cuda:0", "cuda:1"]. This can dramatically speed up inference for
+        larger datasets, by executing the estimators in parallel on the GPUs.
+        Multiple GPUs are only used when `fit_mode="fit_preprocessors"` or
+        `fit_mode="low_memory"`. In other cases, only the first GPU is used.
+
+        Note:
+            The specified device is only used once the model is initialized. This occurs
+            during the first .fit() call.
+        """
+        estimator_to_device(self, device)
 
 
 def _logits_to_output(

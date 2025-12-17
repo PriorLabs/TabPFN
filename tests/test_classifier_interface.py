@@ -751,7 +751,7 @@ def test_get_embeddings(
     embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instance = model.executor_.model_caches[0]._model
+    model_instance = next(iter(model.executor_.model_caches[0]._models.values()))
     encoder_shape = next(
         m.out_features
         for m in model_instance.encoder.modules()
