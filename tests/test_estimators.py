@@ -136,7 +136,9 @@ def test__to__after_fit__no_tensors_left_on_old_device(
 # - it would be nice to free the device memory
 # - if the model is pickled/unpickled on machines with different devices, this can cause
 #   issues.
-@pytest.skip("The PyTorch model creates internal state does not get moved by .to()")
+@pytest.mark.skip(
+    "The PyTorch model creates internal state does not get moved by .to()"
+)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
 def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
