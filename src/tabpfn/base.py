@@ -283,7 +283,7 @@ def create_inference_engine(  # noqa: PLR0913
     cat_ix: list[int],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
     devices_: Sequence[torch.device],
-    rng: np.random.Generator,
+    preprocessing_initialization_seeds: list[int],
     n_preprocessing_jobs: int,
     byte_size: int,
     forced_inference_dtype_: torch.dtype | None,
@@ -306,7 +306,7 @@ def create_inference_engine(  # noqa: PLR0913
         cat_ix: Indices of inferred categorical features.
         fit_mode: Determines how we prepare inference (pre-cache or not).
         devices_: The devices for inference.
-        rng: Numpy random generator.
+        preprocessing_initialization_seeds: seeds to initialize preprocessing.
         n_preprocessing_jobs: Number of parallel CPU workers to use for the
             preprocessing.
         byte_size: Byte size for the chosen inference precision.
@@ -323,11 +323,6 @@ def create_inference_engine(  # noqa: PLR0913
         | InferenceEngineBatchedNoPreprocessing
     )
 
-    # We need a list of seeds to initialize the preprocessing modules. We generate them
-    # here, and pass them down such that these are the same seeds for all fit_modes.
-    preprocessing_initialization_seeds = [
-        int(x) for x in rng.integers(0, 1_000_000, len(ensemble_configs))
-    ]
     if fit_mode == "low_memory":
         engine = InferenceEngineOnDemand.prepare(
             X_train=X_train,
@@ -439,6 +434,7 @@ def get_preprocessed_datasets_helper(
     split_fn: Callable,
     max_data_size: int | None,
     model_type: Literal["regressor", "classifier"],
+    preprocessing_initialization_seeds: list[int],
     *,
     equal_split_size: bool,
 ) -> DatasetCollectionWithPreprocessing:
@@ -454,6 +450,7 @@ def get_preprocessed_datasets_helper(
         max_data_size: Maximum allowed number of samples within one dataset.
         If None, datasets are not splitted.
         model_type: The type of the model.
+        preprocessing_initialization_seeds: the seeds to initialize the preprocessings.
         equal_split_size: If True, splits data into equally sized chunks under
             max_data_size.
             If False, splits into chunks of size `max_data_size`, with
@@ -513,7 +510,12 @@ def get_preprocessed_datasets_helper(
 
         dataset_config_collection.append(dataset_config)
 
-    return DatasetCollectionWithPreprocessing(split_fn, rng, dataset_config_collection)
+    return DatasetCollectionWithPreprocessing(
+        split_fn,
+        rng,
+        dataset_config_collection,
+        preprocessing_initialization_seeds=preprocessing_initialization_seeds,
+    )
 
 
 def initialize_model_variables_helper(

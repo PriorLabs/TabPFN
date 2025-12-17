@@ -452,6 +452,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.fit_mode: Literal["low_memory", "fit_preprocessors", "batched"] = fit_mode
         self.memory_saving_mode = memory_saving_mode
         self.random_state = random_state
+        # For the preprocessings to be consistent across `fit_modes` and different entry
+        # points `fit` and `fit_from_preprocessed`, we need to store a list of random-
+        # state dependent seeds here, as there is no other shared common starting point.
+        self.preprocessing_initialization_seeds = [
+            infer_random_state(random_state)[0] + i for i in range(n_estimators)
+        ]
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
@@ -614,6 +620,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             max_data_size,
             model_type="regressor",
             equal_split_size=equal_split_size,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
         )
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
@@ -742,12 +749,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, rng = self._initialize_model_variables()
+            byte_size, _ = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-            rng = infer_random_state(self.random_state)[1]
 
         # Create the inference engine
         self.executor_ = create_inference_engine(
@@ -758,7 +764,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             cat_ix=cat_ix,
             fit_mode="batched",
             devices_=self.devices_,
-            rng=rng,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
@@ -843,7 +849,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,
             devices_=self.devices_,
-            rng=rng,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,

@@ -962,13 +962,14 @@ class DatasetCollectionWithPreprocessing(Dataset):
         dataset_config_collection: Sequence[
             RegressorDatasetConfig | ClassifierDatasetConfig
         ],
+        preprocessing_initialization_seeds: list[int],
         n_preprocessing_jobs: int = 1,
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
-        self.preprocessing_initialization_seeds = [infer_random_state(self.rng)[0]]
+        self.preprocessing_initialization_seeds = preprocessing_initialization_seeds
 
     def __len__(self):
         return len(self.configs)

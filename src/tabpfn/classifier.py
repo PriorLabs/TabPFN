@@ -464,6 +464,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             memory_saving_mode
         )
         self.random_state = random_state
+        # For the preprocessings to be consistent across `fit_modes` and different entry
+        # points `fit` and `fit_from_preprocessed`, we need to store a list of random-
+        # state dependent seeds here, as there is no other shared common starting point.
+        self.preprocessing_initialization_seeds = [
+            infer_random_state(random_state)[0] + i for i in range(n_estimators)
+        ]
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
 
@@ -583,6 +589,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             max_data_size,
             model_type="classifier",
             equal_split_size=equal_split_size,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
         )
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
@@ -730,12 +737,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, rng = self._initialize_model_variables()
+            byte_size, _ = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-            rng = infer_random_state(self.random_state)[1]
 
         # Create the inference engine
         self.executor_ = create_inference_engine(
@@ -746,7 +752,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             cat_ix=cat_ix,
             fit_mode="batched",
             devices_=self.devices_,
-            rng=rng,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
@@ -786,11 +792,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="fit", param_names=["X", "y"])
-    def fit(
-        self,
-        X: XType,
-        y: YType,
-    ) -> Self:
+    def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
 
         Args:
@@ -820,10 +822,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(
-            X=X,
-            y=y,
-        )
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 
         self.executor_ = create_inference_engine(
             X_train=X,
@@ -833,7 +832,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             cat_ix=self.inferred_categorical_indices_,
             fit_mode=self.fit_mode,
             devices_=self.devices_,
-            rng=rng,
+            preprocessing_initialization_seeds=self.preprocessing_initialization_seeds,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,

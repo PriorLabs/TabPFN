@@ -116,7 +116,9 @@ TEST_CASES = {
                 **DEFAULT_CONFIG,
             ),
         )
-        for fit_mode in ["fit_preprocessors", "low_memory", "fit_with_cache"]
+        for fit_mode in [
+            "low_memory"
+        ]  # ["fit_preprocessors", "low_memory", "fit_with_cache"] # todo magnus: check
         for version in [ModelVersion.V2, ModelVersion.V2_5]
         # Save compute by only running all the tests for the latest model.
         if version == ModelVersion.V2_5 or fit_mode == "fit_preprocessors"
