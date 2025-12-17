@@ -575,7 +575,5 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
 
         atol = 1e-6
         tensors_match = torch.allclose(p1_squeezed, p3_squeezed, atol=atol)
-        print(p1_squeezed[:1])
-        print(p3_squeezed[:1])
 
         assert tensors_match, "Mismatch between preprocessed model input tensors."

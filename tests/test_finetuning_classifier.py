@@ -711,8 +711,6 @@ class TestTabPFNClassifierPreprocessingInspection(unittest.TestCase):
         atol = 1e-6
         rtol = 1e-5
         tensors_match = torch.allclose(p1_squeezed, p2_squeezed, atol=atol, rtol=rtol)
-        print(p1_squeezed[1])
-        print(p2_squeezed[1])
         if not tensors_match:
             diff = torch.abs(p1_squeezed - p2_squeezed)
             # Find where they differ most
