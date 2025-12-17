@@ -1223,6 +1223,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             during the first .fit() call.
         """
         estimator_to_device(self, device)
+        if hasattr(self, "znorm_space_bardist_"):
+            self.znorm_space_bardist_.to(self.devices_[0])
+        if hasattr(self, "raw_space_bardist_"):
+            self.raw_space_bardist_.to(self.devices_[0])
 
 
 def _logits_to_output(

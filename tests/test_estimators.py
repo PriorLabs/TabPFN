@@ -78,9 +78,7 @@ def test__to__between_fits__outputs_equal(
     estimator.fit(X_train, y_train)
     prediction_2 = estimator.predict(X_test)
 
-    if isinstance(estimator, TabPFNRegressor) and any(
-        d.type == "mps" for d in estimator.devices_
-    ):
+    if isinstance(estimator, TabPFNRegressor) and "mps" in devices:
         # Skip only at this point to check that calling .fit() and .to() in this order
         # doesn't cause a crash.
         pytest.skip("MPS yields different predictions.")
@@ -107,6 +105,98 @@ def test__to__fit_with_cache_and_after_first_fit__raises_error(
     estimator.predict(X_test)
     with pytest.raises(NotImplementedError):
         estimator.to("cpu")
+
+
+@pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
+@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
+def test__to__after_fit__no_tensors_left_on_old_device(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+    fit_mode: str,
+) -> None:
+    alt_device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else None
+    )
+    if alt_device is None:
+        pytest.skip("Test can only run when two devices are available.")
+
+    estimator = estimator_class(fit_mode=fit_mode, device=alt_device, n_estimators=2)
+    X_train, _X_test, y_train = _get_tiny_dataset(estimator)
+    estimator.fit(X_train, y_train)
+    estimator.to("cpu")
+
+    tensors_not_on_cpu = _find_tensors_not_on_cpu(estimator)
+    assert not tensors_not_on_cpu, f"Found tensors not on cpu: {tensors_not_on_cpu}"
+
+
+# This does not matter for inference, but:
+# - it would be nice to free the device memory
+# - if the model is pickled/unpickled on machines with different devices, this can cause
+#   issues.
+@pytest.skip("The PyTorch model creates internal state does not get moved by .to()")
+@pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
+@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
+def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+    fit_mode: str,
+) -> None:
+    alt_device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps"
+        if torch.backends.mps.is_available()
+        else None
+    )
+    if alt_device is None:
+        pytest.skip("Test can only run when two devices are available.")
+
+    estimator = estimator_class(fit_mode=fit_mode, device=alt_device, n_estimators=2)
+    X_train, X_test, y_train = _get_tiny_dataset(estimator)
+    estimator.fit(X_train, y_train)
+    estimator.predict(X_test)
+    estimator.to("cpu")
+
+    tensors_not_on_cpu = _find_tensors_not_on_cpu(estimator)
+    assert not tensors_not_on_cpu, f"Found tensors not on cpu: {tensors_not_on_cpu}"
+
+
+def _find_tensors_not_on_cpu(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    path: str = "root",
+    visited: set[int] | None = None,
+) -> list[str]:
+    if visited is None:
+        visited = set()
+
+    obj_id = id(estimator)
+    if obj_id in visited:
+        return []
+    visited.add(obj_id)
+
+    results: list[str] = []
+
+    if isinstance(estimator, torch.Tensor):
+        if estimator.device.type != "cpu":
+            results.append(f"{path} (device={estimator.device})")
+        return results
+
+    if hasattr(estimator, "__dict__"):
+        for attr_name, attr_value in estimator.__dict__.items():
+            results.extend(
+                _find_tensors_not_on_cpu(attr_value, f"{path}.{attr_name}", visited)
+            )
+
+    if isinstance(estimator, dict):
+        for key, value in estimator.items():
+            results.extend(_find_tensors_not_on_cpu(value, f"{path}[{key!r}]", visited))
+    elif isinstance(estimator, (list, tuple)):
+        for i, item in enumerate(estimator):
+            results.extend(_find_tensors_not_on_cpu(item, f"{path}[{i}]", visited))
+
+    return results
 
 
 def _get_tiny_dataset(
