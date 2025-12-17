@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import platform
+
 import numpy as np
 import pytest
+import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tests.utils import get_pytest_devices
@@ -61,7 +64,13 @@ def test__to__between_fits__outputs_equal(
     device_1: str,
     device_2: str,
 ) -> None:
-    estimator = estimator_class(fit_mode=fit_mode, device=device_1, n_estimators=2)
+    estimator = estimator_class(
+        fit_mode=fit_mode,
+        device=device_1,
+        n_estimators=2,
+        # MPS doesn't support float64, so use a lower precision in that case.
+        inference_precision="auto" if platform.system() == "Darwin" else torch.float64,
+    )
     X_train, X_test, y_train = _get_tiny_dataset(estimator)
     estimator.fit(X_train, y_train)
     prediction_1 = estimator.predict(X_test)
@@ -69,11 +78,19 @@ def test__to__between_fits__outputs_equal(
     estimator.fit(X_train, y_train)
     prediction_2 = estimator.predict(X_test)
 
-    if isinstance(estimator, TabPFNRegressor) and (
-        "mps" in device_1 or "mps" in device_2
+    if isinstance(estimator, TabPFNRegressor) and any(
+        d.type == "mps" for d in estimator.devices_
     ):
+        # Skip only at this point to check that calling .fit() and .to() in this order
+        # doesn't cause a crash.
         pytest.skip("MPS yields different predictions.")
-    np.testing.assert_array_equal(prediction_1, prediction_2)
+
+    np.testing.assert_array_almost_equal(
+        prediction_1,
+        prediction_2,
+        # Use a slightly relaxed comparison as comparing between devices.
+        decimal=5,
+    )
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
