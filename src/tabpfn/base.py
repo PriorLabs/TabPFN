@@ -316,14 +316,8 @@ def create_inference_engine(  # noqa: PLR0913
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
     """
-    engine: (
-        InferenceEngineOnDemand
-        | InferenceEngineCachePreprocessing
-        | InferenceEngineCacheKV
-        | InferenceEngineBatchedNoPreprocessing
-    )
     if fit_mode == "low_memory":
-        engine = InferenceEngineOnDemand.prepare(
+        return InferenceEngineOnDemand.prepare(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
@@ -335,8 +329,8 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
         )
-    elif fit_mode == "fit_preprocessors":
-        engine = InferenceEngineCachePreprocessing.prepare(
+    if fit_mode == "fit_preprocessors":
+        return InferenceEngineCachePreprocessing.prepare(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
@@ -349,8 +343,8 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
         )
-    elif fit_mode == "fit_with_cache":
-        engine = InferenceEngineCacheKV.prepare(
+    if fit_mode == "fit_with_cache":
+        return InferenceEngineCacheKV.prepare(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
@@ -364,8 +358,8 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
         )
-    elif fit_mode == "batched":
-        engine = InferenceEngineBatchedNoPreprocessing.prepare(
+    if fit_mode == "batched":
+        return InferenceEngineBatchedNoPreprocessing.prepare(
             X_trains=X_train,
             y_trains=y_train,
             cat_ix=cat_ix,
@@ -376,10 +370,8 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             dtype_byte_size=byte_size,
         )
-    else:
-        raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
-    return engine
+    raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
 def check_cpu_warning(
