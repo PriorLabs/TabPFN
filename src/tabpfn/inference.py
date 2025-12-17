@@ -68,11 +68,14 @@ class InferenceEngine(ABC):
     Attributes:
         save_peak_mem: Whether to save peak memory usage.
         dtype_byte_size: The byte size of the dtype.
+        force_inference_dtype: If not None, inference will be performed using this
+            dtype. Otherwise, the default dtype will be used.
         models: The models to use for inference.
     """
 
     save_peak_mem: bool | Literal["auto"] | float | int
     dtype_byte_size: int
+    force_inference_dtype: torch.dtype | None
     model_caches: list[_PerDeviceModelCache]
 
     @abstractmethod
@@ -165,7 +168,6 @@ class InferenceEngineOnDemand(InferenceEngine):
     cat_ix: list[int]
     static_seed: int
     n_preprocessing_jobs: int
-    force_inference_dtype: torch.dtype | None
     ensemble_configs: list[EnsembleConfig]
 
     @classmethod
@@ -330,7 +332,6 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
     y_trains: list[torch.Tensor]
     cat_ix: list[list[list[int]]]
     ensemble_configs: list[list[EnsembleConfig]]
-    force_inference_dtype: torch.dtype | None
     inference_mode: bool
 
     @classmethod
@@ -442,7 +443,6 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
     X_train_shape_before_preprocessing: tuple[int, int]
     cat_ixs: Sequence[list[int]]
     preprocessors: Sequence[SequentialFeatureTransformer]
-    force_inference_dtype: torch.dtype | None
     inference_mode: bool
     ensemble_configs: list[EnsembleConfig]
     no_preprocessing: bool = False
@@ -622,7 +622,6 @@ class InferenceEngineCacheKV(InferenceEngine):
     preprocessors: list[SequentialFeatureTransformer]
     cat_ixs: Sequence[list[int]]
     n_train_samples: list[int]
-    force_inference_dtype: torch.dtype | None
     ensemble_configs: list[EnsembleConfig]
 
     @classmethod
