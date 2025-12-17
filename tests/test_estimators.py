@@ -113,13 +113,7 @@ def test__to__after_fit__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
 ) -> None:
-    alt_device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps"
-        if torch.backends.mps.is_available()
-        else None
-    )
+    alt_device = "cuda" if "cuda" in devices else "mps" if "mps" in devices else None
     if alt_device is None:
         pytest.skip("Test can only run when two devices are available.")
 
