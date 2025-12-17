@@ -500,9 +500,9 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
     @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
         # As this inference engine only supports one device, just take the first.
-        self.device = devices[0]
+        device = devices[0]
         for model in self.models:
-            model.to(self.device)
+            model.to(device)
 
 
 @dataclass

@@ -12,7 +12,9 @@ devices = get_pytest_devices()
 
 device_combinations = [
     (devices[0], devices[-1]),
-    ("auto", [devices[0], devices[-1]]),
+    # Use different cpu indicies because the same device can't appear twice. This seems
+    # to work, even if there's only one cpu.
+    ("auto", ["cpu:0", "cpu:1"]),
 ]
 
 
