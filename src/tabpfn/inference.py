@@ -76,7 +76,6 @@ class InferenceEngine(ABC):
     save_peak_mem: bool | Literal["auto"] | float | int
     dtype_byte_size: int
     force_inference_dtype: torch.dtype | None
-    model_caches: list[_PerDeviceModelCache]
 
     @abstractmethod
     def iter_outputs(
@@ -126,10 +125,16 @@ class InferenceEngine(ABC):
         InferenceEngineCacheKV.
         """
         _raise_if_kv_cache_enabled_on_save_or_load(self)
+        joblib.dump(self._create_copy_for_pickling(), path)
 
-        state_copy = deepcopy(self)
-        state_copy.model_caches = None  # type: ignore
-        joblib.dump(state_copy, path)
+    @abstractmethod
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        """Return a copy of the inference engine ready for pickling.
+
+        This should remove the models, which we don't want to include. in the pickled
+        file.
+        """
+        ...
 
     @staticmethod
     def load_state(path: str | Path, models: list[Architecture]) -> InferenceEngine:
@@ -139,11 +144,18 @@ class InferenceEngine(ABC):
         `models` parameter.
         """
         engine: InferenceEngine = joblib.load(Path(path))
-
         _raise_if_kv_cache_enabled_on_save_or_load(engine)
-
-        engine.model_caches = [_PerDeviceModelCache(model) for model in models]
+        engine._set_models(models)
         return engine
+
+    @abstractmethod
+    def _set_models(self, models: list[Architecture]) -> None:
+        """Set the models in the inference engine.
+
+        This is called, when the inference engine is unpickled from disk, to restore the
+        models. These are not included in the pickled file.
+        """
+        ...
 
 
 def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
@@ -155,7 +167,41 @@ def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
 
 
 @dataclass
-class InferenceEngineOnDemand(InferenceEngine):
+class SingleDeviceInferenceEngine(InferenceEngine):
+    """Inference engine that uses a single device to execute the model."""
+
+    models: list[Architecture]
+
+    @override
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        state_copy = deepcopy(self)
+        state_copy.models = None  # type: ignore
+        return state_copy
+
+    @override
+    def _set_models(self, models: list[Architecture]) -> None:
+        self.models = models
+
+
+@dataclass
+class MultiDeviceInferenceEngine(InferenceEngine):
+    """Inference engine that parallelizes the members of the ensemble across devices."""
+
+    model_caches: list[_PerDeviceModelCache]
+
+    @override
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        state_copy = deepcopy(self)
+        state_copy.model_caches = None  # type: ignore
+        return state_copy
+
+    @override
+    def _set_models(self, models: list[Architecture]) -> None:
+        self.model_caches = [_PerDeviceModelCache(model) for model in models]
+
+
+@dataclass
+class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
     """Inference engine that does not cache anything, computes everything as needed.
 
     This is one of the slowest ways to run inference, as computation that could be
@@ -314,7 +360,7 @@ class InferenceEngineOnDemand(InferenceEngine):
 
 
 @dataclass
-class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
+class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
     """Inference engine that uses preprocessed inputs, and allows batched predictions
     on several datasets at once.
 
@@ -373,7 +419,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
             X_trains=X_trains,
             y_trains=y_trains,
             cat_ix=cat_ix,
-            model_caches=[_PerDeviceModelCache(model) for model in models],
+            models=models,
             ensemble_configs=ensemble_configs,
             force_inference_dtype=force_inference_dtype,
             inference_mode=inference_mode,
@@ -392,9 +438,9 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
         # This engine currently only supports one device, so just take the first.
         device = devices[0]
 
-        models = [
-            model.get(device, multiple_devices=False) for model in self.model_caches
-        ]
+        for model in self.models:
+            model.to(device)
+
         batch_size = len(self.X_trains)
         for i in range(batch_size):
             train_x_full = torch.cat([self.X_trains[i], X[i]], dim=-2)
@@ -409,7 +455,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
-                output = models[self.ensemble_configs[i][0]._model_index](
+                output = self.models[self.ensemble_configs[i][0]._model_index](
                     train_x_full.transpose(0, 1),
                     train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
@@ -418,7 +464,8 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
 
             yield output, self.ensemble_configs[i]
         if self.inference_mode:
-            [model_cache.to_cpu() for model_cache in self.model_caches]
+            for model in self.models:
+                model.cpu()
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
@@ -426,7 +473,7 @@ class InferenceEngineBatchedNoPreprocessing(InferenceEngine):
 
 
 @dataclass
-class InferenceEngineCachePreprocessing(InferenceEngine):
+class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     """Inference engine that caches the preprocessing for feeding as model context on
     predict.
 
@@ -610,7 +657,7 @@ class InferenceEngineCachePreprocessing(InferenceEngine):
 
 
 @dataclass
-class InferenceEngineCacheKV(InferenceEngine):
+class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     """Inference engine that caches the actual KV cache calculated from the context
     of the processed training data.
 
@@ -707,8 +754,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                     categorical_inds=batched_preprocessor_cat_ix,
                 )
 
-            if device.type != "cpu":
-                ens_model = ens_model.cpu()
+            ens_model.cpu()
 
             ens_models.append(ens_model)
 
@@ -717,7 +763,7 @@ class InferenceEngineCacheKV(InferenceEngine):
             ensemble_configs=correct_order_configs,
             cat_ixs=cat_ixs,
             n_train_samples=n_train_samples,
-            model_caches=[_PerDeviceModelCache(model) for model in ens_models],
+            models=ens_models,
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
             save_peak_mem=save_peak_mem,
@@ -735,14 +781,14 @@ class InferenceEngineCacheKV(InferenceEngine):
         # This engine currently only supports one device, so just take the first.
         device = devices[0]
 
-        for preprocessor, model_cache, config, cat_ix, _X_train_len in zip(
+        for preprocessor, model, config, cat_ix, _X_train_len in zip(
             self.preprocessors,
-            self.model_caches,
+            self.models,
             self.ensemble_configs,
             self.cat_ixs,
             self.n_train_samples,
         ):
-            model = model_cache.get(device, multiple_devices=False)
+            model.to(device)
             X_test = preprocessor.transform(X).X
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=device)
             X_test = X_test.unsqueeze(1)
@@ -766,7 +812,7 @@ class InferenceEngineCacheKV(InferenceEngine):
                     save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
                 )
 
-            model_cache.to_cpu()
+            model.cpu()
 
             output = output if isinstance(output, dict) else output.squeeze(1)
 
