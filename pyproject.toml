@@ -77,7 +77,7 @@ dev = [
   # Lint/format
   "pre-commit>=4.3.0",
   "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
-  "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==1.19.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
   # Docs
