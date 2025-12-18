@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, overload
+from typing import Any, Callable, Literal, overload
 
 import numpy as np
 import torch
@@ -690,7 +690,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             **kwargs: Keyword arguments passed to the parent SeqEncStep.
         """
         super().__init__(**kwargs)
-        self.column_selection_mask = None
+        self.register_buffer("column_selection_mask", None, persistent=False)
 
     def _fit(self, x: torch.Tensor, **kwargs: Any) -> None:
         """Compute the non-empty feature selection mask on the training set.
@@ -711,7 +711,9 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        return (select_features(x, self.column_selection_mask),)
+        # Ensure that the mask is a bool, because the buffer may get converted to a
+        # a float if .to() is called on the containing module.
+        return (select_features(x, self.column_selection_mask.type(torch.bool)),)
 
 
 class RemoveDuplicateFeaturesEncoderStep(SeqEncStep):
@@ -880,10 +882,10 @@ class InputNormalizationEncoderStep(SeqEncStep):
         self.remove_outliers_sigma = remove_outliers_sigma
         self.seed = seed
         self.reset_seed()
-        self.lower_for_outlier_removal = None
-        self.upper_for_outlier_removal = None
-        self.mean_for_normalization = None
-        self.std_for_normalization = None
+        self.register_buffer("lower_for_outlier_removal", None, persistent=False)
+        self.register_buffer("upper_for_outlier_removal", None, persistent=False)
+        self.register_buffer("mean_for_normalization", None, persistent=False)
+        self.register_buffer("std_for_normalization", None, persistent=False)
 
     def reset_seed(self) -> None:
         """Reset the random seed."""
@@ -1114,7 +1116,15 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
 class MulticlassClassificationTargetEncoder(SeqEncStep):
     def __init__(self, **kwargs: Any):
         super().__init__(**kwargs)
-        self.unique_ys_ = None
+        self.unique_ys_: list[torch.Tensor] | None = None
+
+    def _apply(self, fn: Callable) -> MulticlassClassificationTargetEncoder:
+        super()._apply(fn)
+        # As unique_ys_ is a variable-length list, the easiest way to correctly move it
+        # with device moves is to override the _apply function.
+        if self.unique_ys_ is not None:
+            self.unique_ys_ = [fn(t) for t in self.unique_ys_]
+        return self
 
     def _fit(self, y: torch.Tensor, single_eval_pos: int, **kwargs: Any) -> None:
         assert len(y.shape) == 3 and (y.shape[-1] == 1), "y must be of shape (T, B, 1)"

@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.constants import ModelVersion
 from tests.utils import get_pytest_devices
 
 devices = get_pytest_devices()
@@ -126,24 +127,21 @@ def test__to__after_fit__no_tensors_left_on_old_device(
     assert not tensors_not_on_cpu, f"Found tensors not on cpu: {tensors_not_on_cpu}"
 
 
-# This does not matter for inference, but:
-# - it would be nice to free the device memory
-# - if the model is pickled/unpickled on machines with different devices, this can cause
-#   issues.
-@pytest.mark.skip(
-    "The PyTorch model creates internal state does not get moved by .to()"
-)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
+@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
 def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
+    model_version: ModelVersion,
 ) -> None:
     alt_device = "cuda" if "cuda" in devices else "mps" if "mps" in devices else None
     if alt_device is None:
         pytest.skip("Test can only run when two devices are available.")
 
-    estimator = estimator_class(fit_mode=fit_mode, device=alt_device, n_estimators=2)
+    estimator = estimator_class.create_default_for_version(
+        model_version, fit_mode=fit_mode, device=alt_device, n_estimators=2
+    )
     X_train, X_test, y_train = _get_tiny_dataset(estimator)
     estimator.fit(X_train, y_train)
     estimator.predict(X_test)
