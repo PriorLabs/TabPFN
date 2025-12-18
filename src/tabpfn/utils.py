@@ -109,7 +109,6 @@ def get_embeddings(
     # Cast executor to Any to bypass the iter_outputs signature check
     for output, config in model.executor_.iter_outputs(
         X,
-        devices=model.devices_,
         autocast=model.use_autocast_,
         only_return_standard_out=False,
     ):
