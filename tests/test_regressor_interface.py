@@ -834,3 +834,42 @@ def test__create_default_for_version__passes_through_overrides() -> None:
 
     assert estimator.n_estimators == 16
     assert estimator.softmax_temperature == 0.9
+
+
+@pytest.mark.parametrize("n_estimators", [1, 2])
+def test_predict_raw_logits(
+    X_y: tuple[np.ndarray, np.ndarray],
+    n_estimators: int,
+) -> None:
+    """Tests the predict_raw_logits method."""
+    X, y = X_y
+
+    # Ensure y is float32 for consistency
+    y = y.astype(np.float32)
+
+    regressor = TabPFNRegressor(
+        n_estimators=n_estimators,
+        random_state=42,
+    )
+    regressor.fit(X, y)
+
+    logits = regressor.predict_raw_logits(X)
+    
+    # The number of bins is determined by the internal bar distribution borders
+    # (borders - 1 = number of buckets/logits)
+    n_bins = regressor.znorm_space_bardist_.borders.shape[0] - 1
+
+    assert isinstance(logits, np.ndarray)
+    assert logits.shape == (n_estimators, X.shape[0], n_bins)
+    assert logits.dtype == np.float32
+    assert not np.isnan(logits).any()
+    
+    # Regressors can have -inf logits (log(0) probability), but should not have +inf
+    assert not (np.isinf(logits) & (logits > 0)).any(), "Found +inf in logits"
+    
+    if n_estimators > 1:
+        # Ensure estimators are providing different outputs (diversity check)
+        # We check if the first estimator is exactly equal to the second one across all data
+        assert not np.all(logits[0] == logits[1]), (
+            "Logits are identical across estimators, indicating trivial output."
+        )
