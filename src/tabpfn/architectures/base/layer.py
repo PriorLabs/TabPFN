@@ -144,7 +144,6 @@ class PerFeatureEncoderLayer(Module):
         second_mlp: bool = False,
         layer_norm_with_elementwise_affine: bool = False,
         zero_init: bool = False,
-        save_peak_mem_factor: int | None = None,
         attention_between_features: bool = True,
         d_k: int | None = None,
         d_v: int | None = None,
@@ -236,7 +235,6 @@ class PerFeatureEncoderLayer(Module):
             )
 
         self.pre_norm = pre_norm
-        self.save_peak_mem_factor = save_peak_mem_factor
         self.multiquery_item_attention_for_test_set = (
             config.multiquery_item_attention_for_test_set
         )
@@ -250,6 +248,7 @@ class PerFeatureEncoderLayer(Module):
         state: Tensor,
         single_eval_pos: int,
         *,
+        save_peak_mem_factor: int | None,
         cache_trainset_representation: bool = False,
         att_src: Tensor | None = None,
     ) -> Tensor:
@@ -262,6 +261,9 @@ class PerFeatureEncoderLayer(Module):
             single_eval_pos:
                 The position from which on everything is treated as test
                 set.
+            save_peak_mem_factor: If an integer, chunk batch dimensions internally in
+                the model by this factor, to reduce peak memory consumption. Otherwise,
+                do not chunk.
             cache_trainset_representation:
                 Whether to cache the trainset representation.
                 If single_eval_pos is set (> 0 and not None), create a cache of the
@@ -280,7 +282,6 @@ class PerFeatureEncoderLayer(Module):
         assert len(state.shape) == 4, (
             "src must be of shape (batch_size, num_items, num feature blocks, d_model)"
         )
-        save_peak_mem_factor = self.save_peak_mem_factor
         if cache_trainset_representation and not single_eval_pos:
             assert self.self_attn_between_items.has_cached_kv
             save_peak_mem_factor = None

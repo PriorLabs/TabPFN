@@ -5,8 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-
 ## [Unreleased]
+
+### Added
+
+### Changed
+
+## [6.2.0] - 2025-12-18
+
+### Added
+- Add a `.to()` method to `TabPFNClassifier` and `TabPFNRegressor`, allowing the device to be changed after `.fit()` has been called. This change also stores the model on the GPU between `.fit()` and `.predict()` calls, use `.to("cpu")` to release this GPU memory. [#685](https://github.com/PriorLabs/TabPFN/pull/685)
+
+### Changed
+
+## [6.1.0] - 2025-12-15
 
 ### Added
 
@@ -16,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Don't select MPS devices below PyTorch 2.5 and raise an error if selected, due to poor performance [#619](https://github.com/PriorLabs/TabPFN/pull/619)
 - In multi-GPU inference, cache the model(s) on each device between estimators, to improve speed [#628](https://github.com/PriorLabs/TabPFN/pull/628)
+- Fix crash if model is loaded and then saved again [#672](https://github.com/PriorLabs/TabPFN/pull/672)
 
 ## [6.0.6] - 2025-11-10
 

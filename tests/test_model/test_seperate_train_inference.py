@@ -52,7 +52,6 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
         )
 
     model.cache_trainset_representation = True
-    model.reset_save_peak_mem_factor(None)
     model.empty_trainset_representation_cache()
 
     device = "cpu"

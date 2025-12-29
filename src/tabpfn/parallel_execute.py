@@ -15,16 +15,11 @@ R_co = TypeVar("R_co", covariant=True)
 class ParallelFunction(Protocol, Generic[R_co]):
     """Interface that functions submitted to `parallel_execute()` should implement."""
 
-    def __call__(self, *, device: torch.device, is_parallel: bool) -> R_co:
+    def __call__(self, *, device: torch.device) -> R_co:
         """Execute the function.
 
         Args:
             device: PyTorch device that all computation should be performed on.
-            is_parallel: Indicates whether this function is being executed in parallel
-                with other functions. If True, then the function should take care to
-                copy any state shared with other functions before mutating it. For
-                example, any nn.Modules should be deep copied before moving them to
-                `device`. If False, then copying can be avoided to reduce overhead.
 
         Returns:
             Any desired value. Any Tensors in the returned value should be on `device`.
@@ -64,7 +59,7 @@ def _execute_in_current_thread(
     device: torch.device, functions: Iterable[ParallelFunction[R_co]]
 ) -> Generator[R_co]:
     for function in functions:
-        yield function(device=device, is_parallel=False)
+        yield function(device=device)
 
 
 def _execute_with_multithreading(
@@ -95,7 +90,7 @@ def _execute_function_in_thread(
         device = all_devices[device_index]
         if device.type == "cuda":
             with torch.cuda.device(device):
-                output = function(device=device, is_parallel=True)
+                output = function(device=device)
 
                 # The output will be consumed on a different cuda stream, which needs to
                 # wait for the computation on this stream to be complete. Thus we insert
@@ -112,7 +107,7 @@ def _execute_function_in_thread(
 
         # Theoretically it is possible to parallelise over classes of device other than
         # GPUs, but mainly this is useful for unit testing with multiple CPU devices.
-        output = function(device=device, is_parallel=True)
+        output = function(device=device)
         return lambda: output
     finally:
         free_devices.put(device_index)

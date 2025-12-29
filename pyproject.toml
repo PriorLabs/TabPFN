@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "6.0.6"
+version = "6.2.0"
 dependencies = [
   "torch>=2.1,<3",
   "numpy>=1.21.6,<3",
@@ -304,6 +304,7 @@ force-wrap-aliases = true
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+ignore-decorators = ["typing.override", "typing_extensions.override", "typing.overload"]
 
 [tool.ruff.lint.pylint]
 max-args = 10 # Changed from default of 5

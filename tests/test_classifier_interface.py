@@ -38,6 +38,7 @@ from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
     mark_mps_configs_as_slow,
+    patch_layernorm_no_affine,
 )
 
 exclude_devices = {
@@ -688,46 +689,6 @@ class ModelWrapper(nn.Module):
         )
 
 
-def _patch_layernorm_no_affine(model: nn.Module) -> None:
-    """Workaround for ONNX export issue with LayerNorm(affine=False) in
-    PyTorch <= 2.1.3.
-
-    This patch function was necessary to enable successful ONNX export
-    of the TabPFN model when using PyTorch version 2.1.3. The issue arose
-    because the ONNX exporter in that version (and potentially earlier ones)
-    failed to correctly handle `nn.LayerNorm` layers initialized with
-    `affine=False`, which means they lack the learnable 'weight' (gamma) and
-    'bias' (beta) parameters.
-
-    However, testing indicated that this issue is resolved in later PyTorch
-    versions; specifically, the ONNX export runs without errors on
-    PyTorch 2.6.0 even without this patch.
-
-    This function circumvents the problem by iterating through the model's
-    modules and, for any `nn.LayerNorm` layer where `layer.weight` is None
-    (indicating `affine=False`), it manually adds non-learnable
-    (`requires_grad=False`) parameters for 'weight' (initialized to ones) and
-    'bias' (initialized to zeros). This addition satisfies the requirements
-    of the older ONNX exporter without changing the model's functional
-    behavior, as these added parameters represent an identity affine
-    transformation.
-    """
-    for layer in model.modules():
-        if isinstance(layer, nn.LayerNorm) and layer.weight is None:
-            # Build tensors on the same device/dtype as the layer's buffer
-            device = next(layer.parameters(), torch.tensor([], device="cpu")).device
-            dtype = getattr(layer, "weight_dtype", torch.float32)
-
-            gamma = torch.ones(layer.normalized_shape, dtype=dtype, device=device)
-            beta = torch.zeros_like(gamma)
-
-            layer.weight = nn.Parameter(gamma, requires_grad=False)
-            layer.bias = nn.Parameter(beta, requires_grad=False)
-
-            # Optional: mark that we changed it (useful for logging)
-            layer._patched_for_onnx = True
-
-
 @pytest.mark.filterwarnings("ignore::torch.jit.TracerWarning")
 def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     if os.name == "nt":
@@ -753,7 +714,7 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
             "X": {0: "num_datapoints", 1: "batch_size", 2: "num_features"},
             "y": {0: "num_labels"},
         }
-        _patch_layernorm_no_affine(classifier.models_[0])
+        patch_layernorm_no_affine(classifier.models_[0])
 
         # From 2.9 PyTorch changed the default export mode from TorchScript to
         # Dynamo. We don't support Dynamo, so disable it. The `dynamo` flag is only
@@ -790,7 +751,7 @@ def test_get_embeddings(
     embeddings = model.get_embeddings(X, data_source)
 
     # Need to access the model through the executor
-    model_instance = model.executor_.model_caches[0]._model
+    model_instance = next(iter(model.executor_.model_caches[0]._models.values()))
     encoder_shape = next(
         m.out_features
         for m in model_instance.encoder.modules()

@@ -20,6 +20,11 @@ from tabpfn.preprocessing import (
 
 
 class TestModel(Architecture):
+    def __init__(self) -> None:
+        """Create a new instance."""
+        super().__init__()
+        self.parameter = torch.nn.Parameter(torch.tensor(1.0))
+
     @overload
     def forward(
         self,
@@ -28,6 +33,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -38,6 +45,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> dict[str, Tensor]: ...
 
     @override
@@ -48,6 +57,8 @@ class TestModel(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass, see doc string of `Architecture`."""
         assert isinstance(x, Tensor)
@@ -83,6 +94,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         y_train,
         cat_ix=[] * n_train,
         models=[TestModel()],
+        devices=[torch.device("cpu")],
         ensemble_configs=_create_test_ensemble_configs(
             n_configs=5,
             n_classes=n_classes,
@@ -99,14 +111,14 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
         inference_mode=True,
     )
 
-    outputs_sequential = list(
-        engine.iter_outputs(X_test, devices=[torch.device("cpu")], autocast=False)
+    engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
+    outputs_sequential = list(engine.iter_outputs(X_test, autocast=False))
+    engine.to(
+        [torch.device("cpu"), torch.device("cpu")],
+        force_inference_dtype=None,
+        dtype_byte_size=4,
     )
-    outputs_parallel = list(
-        engine.iter_outputs(
-            X_test, devices=[torch.device("cpu"), torch.device("cpu")], autocast=False
-        )
-    )
+    outputs_parallel = list(engine.iter_outputs(X_test, autocast=False))
 
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:
@@ -132,6 +144,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         y_train,
         cat_ix=[] * n_train,
         models=models,
+        devices=[torch.device("cpu")],
         ensemble_configs=_create_test_ensemble_configs(
             n_configs=5,
             n_classes=3,
@@ -147,14 +160,14 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         save_peak_mem=True,
     )
 
-    outputs_sequential = list(
-        engine.iter_outputs(X_test, devices=[torch.device("cpu")], autocast=False)
+    engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
+    outputs_sequential = list(engine.iter_outputs(X_test, autocast=False))
+    engine.to(
+        [torch.device("cpu"), torch.device("cpu")],
+        force_inference_dtype=None,
+        dtype_byte_size=4,
     )
-    outputs_parallel = list(
-        engine.iter_outputs(
-            X_test, devices=[torch.device("cpu"), torch.device("cpu")], autocast=False
-        )
-    )
+    outputs_parallel = list(engine.iter_outputs(X_test, autocast=False))
 
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:

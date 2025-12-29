@@ -5,17 +5,14 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 from types import MethodType
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import Any, Literal, Union
 
 import torch
 
 from tabpfn.settings import settings
 
-if TYPE_CHECKING:
-    from tabpfn.architectures.interface import Architecture
-
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
-SAVE_PEAK_MEM_FACTOR = 8
+DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
 
 
 def support_save_peak_mem_factor(method: MethodType) -> Callable:
@@ -93,14 +90,6 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
 
 
 MemorySavingMode = Union[bool, Literal["auto"], float, int]
-
-
-def set_save_peak_memory(model: Architecture, *, enabled: bool) -> None:
-    """Set the peak memory factor to the default value, if enabled."""
-    if enabled:
-        model.reset_save_peak_mem_factor(SAVE_PEAK_MEM_FACTOR)
-    else:
-        model.reset_save_peak_mem_factor(None)
 
 
 def should_save_peak_mem(

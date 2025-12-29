@@ -265,33 +265,6 @@ class PerFeatureTransformer(Architecture):
         self.cached_feature_positional_embeddings: torch.Tensor | None = None
         self.random_embedding_seed = config.seed
 
-    def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
-        """Sets the save_peak_mem_factor for all layers.
-
-        This factor controls how much memory is saved during the forward pass
-        in inference mode.
-
-        Setting this factor > 1 will cause the model to save more memory during
-        the forward pass in inference mode.
-
-        A value of 8 is good for a 4x larger width in the fully-connected layers.
-        and yields a situation were we need around
-        `2*num_features*num_items*emsize*2` bytes of memory
-
-        for a forward pass (using mixed precision).
-
-        WARNING: It should only be used with post-norm.
-
-        Args:
-            factor: The save_peak_mem_factor to set. Recommended value is 8.
-        """
-        for layer in self.transformer_encoder.layers:
-            assert hasattr(
-                layer,
-                "save_peak_mem_factor",
-            ), "Layer does not have save_peak_mem_factor"
-            layer.save_peak_mem_factor = factor  # type: ignore
-
     def __setstate__(self, state: dict[str, Any]) -> None:
         state.setdefault("features_per_group", 1)
         state.setdefault("feature_positional_embedding", None)
@@ -308,6 +281,7 @@ class PerFeatureTransformer(Architecture):
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
         force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> torch.Tensor: ...
 
     @overload
@@ -320,6 +294,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
+        save_peak_memory_factor: int | None = None,
         force_recompute_layer: bool = False,
     ) -> dict[str, torch.Tensor]: ...
 
@@ -334,32 +309,15 @@ class PerFeatureTransformer(Architecture):
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
         force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 
         See ModelInterface.forward() for the full docstring.
 
         Args:
-            x: The input data. Either:
-                - A Tensor with shape
-                  `[(train+test) rows, batch size, num input features]`.
-                - A dictionary containing at least `{"main": x}`, where `x` is the
-                  Tensor above. The dictionary may also contain additional keys, which
-                  are relevant for particular encoders.
-            y: The target data. Either:
-                - A Tensor with shape `(train rows)`, `(train_rows, batch_size)`, or
-                  shape `(train_rows, batch_size, 1)`.
-                - A dictionary containing at least `{"main": y}`, where `y` is the
-                  Tensor above. The dictionary may also contain additional keys, which
-                  are relevant for particular encoders.
-                - `None`, if there are no training rows, as when making predictions
-                  using the KV cache.
-            only_return_standard_out: Whether to only return the standard output.
-            categorical_inds: The indices of categorical features.
-            style: The style vector.
-            data_dags: The data DAGs for each example in the batch.
-            force_recompute_layer: Whether to force to recompute layers (i.e.
-            perform activation checkpointing for each layer).
+            force_recompute_layer: If True, enable activation checkpointing for each
+                Transformer block. Otherwise, checkpoint as set in the config.
         """
         assert style is None
 
@@ -569,6 +527,7 @@ class PerFeatureTransformer(Architecture):
             single_eval_pos=single_eval_pos,
             cache_trainset_representation=self.cache_trainset_representation,
             recompute_layer=recompute_layer,
+            save_peak_mem_factor=save_peak_memory_factor,
         )  # b s f+1 e -> b s f+1 e
 
         # If we are using a decoder

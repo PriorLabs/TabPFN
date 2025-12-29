@@ -212,6 +212,8 @@ def _try_huggingface_downloads(
             warnings.filterwarnings("ignore")
 
         try:
+            should_download_config = not base_path.exists()
+
             # Download model checkpoint
             local_path = hf_hub_download(
                 repo_id=source.repo_id,
@@ -226,12 +228,13 @@ def _try_huggingface_downloads(
             # Note that we also handle model caching ourselves, so we don't double
             # count, even with removing the config.json afterwards.
             try:
-                config_local_path = hf_hub_download(
-                    repo_id=source.repo_id,
-                    filename="config.json",
-                    local_dir=base_path.parent,
-                )
-                Path(config_local_path).unlink(missing_ok=True)
+                if should_download_config:
+                    config_local_path = hf_hub_download(
+                        repo_id=source.repo_id,
+                        filename="config.json",
+                        local_dir=base_path.parent,
+                    )
+                    Path(config_local_path).unlink(missing_ok=True)
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"Failed to download config.json: {e!s}")
                 # Continue even if config.json download fails
@@ -331,7 +334,7 @@ def download_model(
     """Download a TabPFN model, trying all available sources.
 
     Args:
-        to: The directory to download the model to.
+        to: The file path to download the model to.
         version: The version of the model to download.
         which: The type of model to download.
         model_name: Optional specific model name to download.
@@ -382,8 +385,14 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
+            path = to / ckpt_name
+            if path.exists():
+                logger.info(
+                    f"Skipping download of checkpoint that already exists: {path}"
+                )
+                continue
             download_model(
-                to=to / ckpt_name,
+                to=path,
                 version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
@@ -963,13 +972,6 @@ def load_fitted_tabpfn_model(
     path: Path | str, *, device: str | torch.device = "cpu"
 ) -> BaseEstimator:
     """Load a fitted TabPFN estimator saved with ``save_fitted_tabpfn_model``."""
-    # This is safe because torch.device(torch.device(...)) is a noop.
-    device = torch.device(device)
-    # In older versions of PyTorch, some torch.cuda functions fail if the device has no
-    # index. 0 is implicit if no index is specified, so add it.
-    if device == torch.device("cuda"):
-        device = torch.device("cuda:0")
-
     path = Path(path)
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
@@ -986,7 +988,7 @@ def load_fitted_tabpfn_model(
         ].startswith("torch."):
             dtype_name = params["inference_precision"].split(".")[1]
             params["inference_precision"] = getattr(torch, dtype_name)
-        params["device"] = device
+        params["device"] = str(device)
 
         if saved_cls_name == "TabPFNClassifier":
             cls = import_module("tabpfn.classifier").TabPFNClassifier
@@ -1008,11 +1010,6 @@ def load_fitted_tabpfn_model(
             tmp / "executor_state.joblib", est.models_
         )
 
-        est.devices_ = (torch.device(device),)
-
-        # Restore other potential torch objects from fitted_attrs
-        for key, value in vars(est).items():
-            if key.endswith("_") and hasattr(value, "to"):
-                setattr(est, key, value.to(device))
+        est.to(str(device))
 
         return est
