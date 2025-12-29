@@ -935,7 +935,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             `train_test_split` signature (e.g.,
             `sklearn.model_selection.train_test_split`). It's used to split
             the raw data (X, y) into train and test sets. It will receive
-            `X`, `y`, and `random_state` as arguments.
+            `X`, `y`, `random_state` and (optional) `stratify` as arguments.
         rng: A NumPy random number generator instance
             used for generating the split seed and potentially within the
             preprocessing steps defined in the configs.
@@ -946,6 +946,8 @@ class DatasetCollectionWithPreprocessing(Dataset):
             fields (`znorm_space_bardist_`).
         n_preprocessing_jobs: The number of workers to use for potentially parallelized
             preprocessing steps (passed to `fit_preprocessing`).
+        stratify: Whether to stratify the data by the target variable.
+            Only used for classification tasks.
 
     Attributes:
         configs (Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]):
@@ -954,6 +956,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
         rng (np.random.Generator): Stores the random number generator.
         n_preprocessing_jobs (int): The number of worker processes that will be used for
             the preprocessing.
+        stratify (bool): Whether to stratify the data when splitting with split_fn.
     """
 
     def __init__(
@@ -964,11 +967,14 @@ class DatasetCollectionWithPreprocessing(Dataset):
             RegressorDatasetConfig | ClassifierDatasetConfig
         ],
         n_preprocessing_jobs: int = 1,
+        *,
+        stratify: bool = False,
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.stratify = stratify
 
     def __len__(self):
         return len(self.configs)
@@ -1061,8 +1067,9 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
         regression_task = isinstance(config, RegressorDatasetConfig)
 
+        stratify_y = y_full_raw if not regression_task and self.stratify else None
         x_train_raw, x_test_raw, y_train_raw, y_test_raw = self.split_fn(
-            x_full_raw, y_full_raw
+            x_full_raw, y_full_raw, stratify=stratify_y
         )
 
         # Compute target variable Z-transform standardization
