@@ -33,6 +33,7 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
         self.poly_factor_2_idx: np.ndarray | None = None
 
         self.standardizer = StandardScaler(with_mean=False)
+        assert self.max_poly_features == max_features
 
     @override
     def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
