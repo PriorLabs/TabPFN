@@ -1,17 +1,22 @@
 # Checks that our first-party packages that depend on TabPFN work correctly.
-name: First Party Compatibility
+name: First-party Compatibility
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_run:
+    workflows: [CI]
+    types:
+      - completed
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: compatibility-${{ github.ref }}
+  group: first-party-compat-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   test_first_party_packages:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     name: Test ${{ matrix.repo-name }}
     runs-on: ubuntu-latest
     strategy:
@@ -28,6 +33,7 @@ jobs:
       - name: Checkout TabPFN at current ref
         uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
         with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           path: TabPFN
 
       - name: Checkout ${{ matrix.repo-name }}
