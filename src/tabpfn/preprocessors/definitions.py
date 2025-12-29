@@ -235,8 +235,8 @@ class EnsembleConfig:
         polynomial_features: Literal["no", "all"] | int,
         feature_shift_decoder: Literal["shuffle", "rotate"] | None,
         preprocessor_configs: Sequence[PreprocessorConfig],
-        random_state: int | np.random.Generator | None,
         target_transforms: Sequence["TransformerMixin" | "Pipeline" | None],
+        random_state: int | np.random.Generator | None,
         num_models: int,
     ) -> list["RegressorEnsembleConfig"]:
         from .core import generate_regression_ensemble_configs
