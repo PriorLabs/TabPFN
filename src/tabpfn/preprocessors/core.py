@@ -4,7 +4,7 @@ import warnings
 from collections.abc import Iterable, Iterator, Sequence
 from functools import partial
 from itertools import chain, product, repeat
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Callable, Literal, TypeVar
 
 import joblib
 import numpy as np
@@ -138,6 +138,30 @@ def _generate_class_permutations(
     n_classes: int,
     rng: np.random.Generator,
 ) -> list[np.ndarray] | list[None]:
+    """Generate per-estimator permutations of class indices for an ensemble.
+
+    Parameters
+    ----------
+    num_estimators:
+        Number of ensemble members for which to generate permutations.
+    class_shift_method:
+        Strategy used to generate permutations of the class indices:
+        * ``"rotate"`` – draw random circular shifts of ``np.arange(n_classes)``
+          and sample from those shifts for each estimator.
+        * ``"shuffle"`` – create random permutations of ``range(n_classes)``,
+          deduplicate them, and balance their usage across estimators.
+        * ``None`` – disable class permutation and return ``None`` entries.
+    n_classes:
+        Total number of distinct classes.
+    rng:
+        Numpy random generator used for reproducible permutations.
+
+    Returns
+    -------
+    list[np.ndarray] | list[None]
+        A list of permutations (or ``None`` entries) with length ``num_estimators``.
+    """
+
     if class_shift_method == "rotate":
         arange = np.arange(0, n_classes)
         shifts = rng.permutation(n_classes).tolist()
@@ -238,7 +262,7 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
     polynomial_features: Literal["no", "all"] | int,
     feature_shift_decoder: Literal["shuffle", "rotate"] | None,
     preprocessor_configs: Sequence[PreprocessorConfig],
-    target_transformations: Sequence[TransformerMixin | Pipeline | None],
+    target_transforms: Sequence[TransformerMixin | Pipeline | None],
     random_state: int | np.random.Generator | None,
     num_models: int,
 ) -> list[RegressorEnsembleConfig]:
@@ -258,7 +282,7 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
         )
     )
 
-    combos = list(product(preprocessor_configs, target_transformations))
+    combos = list(product(preprocessor_configs, target_transforms))
     balance_count = num_estimators // len(combos)
     configs_ = _balance(combos, balance_count)
     leftover = num_estimators - len(configs_)
@@ -462,13 +486,26 @@ class DatasetCollectionWithPreprocessing(Dataset):
 
     def __init__(
         self,
-        configs: Sequence[BaseDatasetConfig],
-        split_fn,
-        n_preprocessing_jobs: int,
-        rng,
-    ):
+        split_fn: Callable,
+        rng: np.random.Generator,
+        dataset_config_collection: Sequence[BaseDatasetConfig],
+        n_preprocessing_jobs: int = 1,
+    ) -> None:
+        """Initialize the dataset collection wrapper.
+
+        Parameters
+        ----------
+        split_fn:
+            Function that splits features and targets into train/test parts.
+        rng:
+            Random number generator used for preprocessing reproducibility.
+        dataset_config_collection:
+            Sequence of dataset configurations that will be lazily processed.
+        n_preprocessing_jobs:
+            Degree of parallelism when fitting preprocessing pipelines.
+        """
         super().__init__()
-        self.configs = configs
+        self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.rng = rng
@@ -477,7 +514,35 @@ class DatasetCollectionWithPreprocessing(Dataset):
         return len(self.configs)
 
     def __getitem__(self, index: int):  # noqa: ANN204
-        """Retrieve processed dataset components for the given index."""
+        """Return the lazily preprocessed dataset elements for one configuration.
+
+        This method selects the configuration at ``index``, splits the raw
+        features/targets using :attr:`split_fn`, applies the configured
+        preprocessing (including optional standardization for regression), and
+        converts arrays to :class:`torch.Tensor` objects.
+
+        Parameters
+        ----------
+        index:
+            Position of the dataset configuration within :attr:`configs`.
+
+        Returns
+        -------
+        tuple
+            A tuple containing the preprocessed tensors and any auxiliary
+            information required by the task. For classification tasks the tuple
+            includes ``X_trains_preprocessed``, ``X_tests_preprocessed``,
+            ``y_trains_preprocessed``, ``y_test_raw``, ``cat_ixs``, and
+            ``conf``. For regression tasks, standardized targets and
+            normalization artifacts are returned alongside the test tensors.
+
+        Raises
+        ------
+        IndexError
+            If ``index`` is out of bounds.
+        TypeError
+            If the stored configuration type is unsupported.
+        """
         if index < 0 or index >= len(self):
             raise IndexError("Index out of bounds.")
 
@@ -495,7 +560,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
         else:
-            raise ValueError(f"Invalid dataset config type: {type(config)}")
+            raise TypeError(f"Invalid dataset config type: {type(config)}")
 
         regression_task = isinstance(config, RegressorDatasetConfig)
 
@@ -559,9 +624,7 @@ class DatasetCollectionWithPreprocessing(Dataset):
             else:
                 y_test_standardized = y_test_standardized.long()
 
-        x_train_raw = torch.from_numpy(x_train_raw)
         x_test_raw = torch.from_numpy(x_test_raw)
-        y_train_raw = torch.from_numpy(y_train_raw)
         y_test_raw = torch.from_numpy(y_test_raw)
 
         if regression_task:

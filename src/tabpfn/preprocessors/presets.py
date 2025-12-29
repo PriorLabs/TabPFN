@@ -24,7 +24,7 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
 
 
 def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Default preprocessor configurations for regression."""
+    """Get default preprocessor configurations for regression."""
     return [
         PreprocessorConfig(
             name="quantile_uni_coarse",

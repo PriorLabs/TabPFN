@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
+    import torch
 
     from tabpfn.preprocessors.preprocessing_helpers import SequentialFeatureTransformer
 
@@ -158,6 +159,14 @@ class PreprocessorConfig:
     differentiable: bool = False
 
     def __str__(self) -> str:  # noqa: D401
+        """Return a concise string identifier for this preprocessor configuration.
+
+        The format is ``"{name}_cat:{categorical_name}[_and_none]_max_feats_per_est_{max_features_per_estimator}[_global_transformer_{global_transformer_name}]"``.
+        The ``[_and_none]`` segment is included only when ``append_original`` is
+        ``True`` and the ``[_global_transformer_{global_transformer_name}]``
+        segment is included only when ``global_transformer_name`` is not ``None``.
+        """
+
         return (
             f"{self.name}_cat:{self.categorical_name}"
             + ("_and_none" if self.append_original else "")
@@ -227,7 +236,7 @@ class EnsembleConfig:
         feature_shift_decoder: Literal["shuffle", "rotate"] | None,
         preprocessor_configs: Sequence[PreprocessorConfig],
         random_state: int | np.random.Generator | None,
-        target_transformations: Sequence["TransformerMixin" | "Pipeline" | None],
+        target_transforms: Sequence["TransformerMixin" | "Pipeline" | None],
         num_models: int,
     ) -> list["RegressorEnsembleConfig"]:
         from .core import generate_regression_ensemble_configs
@@ -241,12 +250,12 @@ class EnsembleConfig:
             feature_shift_decoder=feature_shift_decoder,
             preprocessor_configs=preprocessor_configs,
             random_state=random_state,
-            target_transformations=target_transformations,
+            target_transforms=target_transforms,
             num_models=num_models,
         )
 
     def to_pipeline(
-        self, *, random_state: int | np.random.Generator | None = None
+        self, *, random_state: int | np.random.Generator | None
     ) -> "SequentialFeatureTransformer":
         from .core import build_pipeline
 
