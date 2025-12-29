@@ -1,4 +1,6 @@
-"""Compatibility shim for legacy imports of :mod:`tabpfn.preprocessing`."""
+"""Defines the preprocessing configurations that define the ensembling of
+different members.
+"""
 
 from __future__ import annotations
 

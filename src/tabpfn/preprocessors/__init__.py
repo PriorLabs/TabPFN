@@ -19,6 +19,7 @@ from .presets import (
     v2_regressor_preprocessor_configs,
 )
 from .core import (
+    balance,
     DatasetCollectionWithPreprocessing,
     build_pipeline,
     fit_preprocessing,
@@ -84,6 +85,7 @@ __all__ = [
     "ShuffleFeaturesStep",
     "SquashingScaler",
     "_V2_FEATURE_SUBSAMPLING_THRESHOLD",
+    "balance",
     "build_pipeline",
     "default_classifier_preprocessor_configs",
     "default_regressor_preprocessor_configs",

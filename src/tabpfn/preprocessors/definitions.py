@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Literal, Sequence, TYPE_CHECKING, override
+from typing import Literal, Sequence, TYPE_CHECKING
+
+from typing_extensions import override
 
 import numpy as np
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
@@ -20,7 +22,7 @@ if TYPE_CHECKING:
 class BaseDatasetConfig:
     """Base configuration class for holding dataset specifics."""
 
-    config: Sequence["EnsembleConfig"]
+    config: "EnsembleConfig"
     X_raw: np.ndarray | "torch.Tensor"
     y_raw: np.ndarray | "torch.Tensor"
     cat_ix: list[int]
@@ -302,6 +304,7 @@ class EnsembleConfig:
     def to_pipeline(
         self, *, random_state: int | np.random.Generator | None
     ) -> "SequentialFeatureTransformer":
+        """Convert the ensemble configuration to a preprocessing pipeline."""
         from .core import build_pipeline
 
         return build_pipeline(self, random_state=random_state)
