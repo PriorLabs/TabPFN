@@ -52,15 +52,12 @@ class KDITransformerWithNaN(KDITransformer):
         standardize: bool = True,
         copy: bool = True,
     ) -> None:
-        self.alpha = alpha
-        self.output_distribution = output_distribution
-        self.standardize = standardize
-        self.copy = copy
-
         # ``kditransform`` exposes ``alpha`` and ``output_distribution`` but the PowerTransformer
         # fallback does not. To keep compatibility across both backends, only pass the parameters
         # that are supported by the active base class.
         if KDITransformer is PowerTransformer:
+            self.alpha = alpha
+            self.output_distribution = output_distribution
             super().__init__(standardize=standardize, copy=copy)
         else:
             super().__init__(
