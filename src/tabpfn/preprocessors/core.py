@@ -203,37 +203,23 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
 ) -> list[ClassifierEnsembleConfig]:
     """Generate ensemble configurations for classification.
 
-    Parameters
-    ----------
-    num_estimators:
-        Number of ensemble configurations to generate.
-    subsample_samples:
-        Method to subsample rows. If ``int``, subsample that many samples. If
-        ``float``, subsample that fraction of samples. If a list of lists of
-        indices, subsample the indices for each estimator. If ``None``, no
-        subsampling is done.
-    max_index:
-        Maximum index to generate for.
-    add_fingerprint_feature:
-        Whether to add fingerprint features.
-    polynomial_features:
-        Maximum number of polynomial features to add, if any.
-    feature_shift_decoder:
-        How to shift features.
-    preprocessor_configs:
-        Preprocessor configurations to use on the data.
-    class_shift_method:
-        How to shift classes for class permutation.
-    n_classes:
-        Number of classes.
-    random_state:
-        Random number generator or seed.
-    num_models:
-        Number of models to use.
+    Args:
+        num_estimators: Number of ensemble configurations to generate.
+        subsample_samples: Method to subsample rows. If int, subsample that many
+            samples. If float, subsample that fraction of samples. If a
+            list of lists of indices, subsample the indices for each estimator.
+            If `None`, no subsampling is done.
+        max_index: Maximum index to generate for.
+        add_fingerprint_feature: Whether to add fingerprint features.
+        polynomial_features: Maximum number of polynomial features to add, if any.
+        feature_shift_decoder: How shift features
+        preprocessor_configs: Preprocessor configurations to use on the data.
+        class_shift_method: How to shift classes for classpermutation.
+        n_classes: Number of classes.
+        random_state: Random number generator.
+        num_models: Number of models to use.
 
-    Returns
-    -------
-    list[ClassifierEnsembleConfig]
+    Returns:
         List of ensemble configurations.
     """
 
@@ -302,35 +288,22 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
 ) -> list[RegressorEnsembleConfig]:
     """Generate ensemble configurations for regression.
 
-    Parameters
-    ----------
-    num_estimators:
-        Number of ensemble configurations to generate.
-    subsample_samples:
-        Method to subsample rows. If ``int``, subsample that many samples. If
-        ``float``, subsample that fraction of samples. If a list of lists of
-        indices, subsample the indices for each estimator. If ``None``, no
-        subsampling is done.
-    max_index:
-        Maximum index to generate for.
-    add_fingerprint_feature:
-        Whether to add fingerprint features.
-    polynomial_features:
-        Maximum number of polynomial features to add, if any.
-    feature_shift_decoder:
-        How to shift features.
-    preprocessor_configs:
-        Preprocessor configurations to use on the data.
-    target_transforms:
-        Target transformations to apply.
-    random_state:
-        Random number generator or seed.
-    num_models:
-        Number of models to use.
+    Args:
+        num_estimators: Number of ensemble configurations to generate.
+        subsample_samples: Method to subsample rows. If int, subsample that many
+            samples. If float, subsample that fraction of samples. If a
+            list of lists of indices, subsample the indices for each estimator.
+            If `None`, no subsampling is done.
+        max_index: Maximum index to generate for.
+        add_fingerprint_feature: Whether to add fingerprint features.
+        polynomial_features: Maximum number of polynomial features to add, if any.
+        feature_shift_decoder: How shift features
+        preprocessor_configs: Preprocessor configurations to use on the data.
+        target_transforms: Target transformations to apply.
+        random_state: Random number generator.
+        num_models: Number of models to use.
 
-    Returns
-    -------
-    list[RegressorEnsembleConfig]
+    Returns:
         List of ensemble configurations.
     """
 

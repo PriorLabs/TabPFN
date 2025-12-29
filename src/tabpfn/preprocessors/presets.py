@@ -24,7 +24,14 @@ def default_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
 
 
 def default_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Get default preprocessor configurations for regression."""
+    """Default preprocessor configurations for regression.
+
+    These are the defaults used when training new models, which will then be stored in
+    the model checkpoint.
+
+    See `v2_regressor_preprocessor_configs()`, `v2_5_regressor_preprocessor_configs()`
+    for the preprocessing used earlier versions of the model.
+    """
     return [
         PreprocessorConfig(
             name="quantile_uni_coarse",

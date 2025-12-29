@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Literal, Sequence, TYPE_CHECKING
+from typing import Literal, Sequence, TYPE_CHECKING, override
 
 import numpy as np
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
@@ -158,15 +158,8 @@ class PreprocessorConfig:
     ) = None
     differentiable: bool = False
 
-    def __str__(self) -> str:  # noqa: D401
-        """Return a concise string identifier for this preprocessor configuration.
-
-        The format is ``"{name}_cat:{categorical_name}[_and_none]_max_feats_per_est_{max_features_per_estimator}[_global_transformer_{global_transformer_name}]"``.
-        The ``[_and_none]`` segment is included only when ``append_original`` is
-        ``True`` and the ``[_global_transformer_{global_transformer_name}]``
-        segment is included only when ``global_transformer_name`` is not ``None``.
-        """
-
+    @override
+    def __str__(self) -> str:
         return (
             f"{self.name}_cat:{self.categorical_name}"
             + ("_and_none" if self.append_original else "")
@@ -178,10 +171,21 @@ class PreprocessorConfig:
             )
         )
 
-
-@dataclass(frozen=True, eq=True)
+# TODO: (Klemens)
+# Make this frozen (frozen=True)
+@dataclass
 class EnsembleConfig:
-    """Configuration for an ensemble member."""
+    """Configuration for an ensemble member.
+
+    Attributes:
+        preprocess_config: Preprocessor configuration to use.
+        add_fingerprint_feature: Whether to add fingerprint features.
+        polynomial_features: Maximum number of polynomial features to add, if any.
+        feature_shift_count: How much to shift the features columns.
+        feature_shift_decoder: How to shift features.
+        subsample_ix: Indices of samples to use for this ensemble member.
+            If `None`, no subsampling is done.
+    """
 
     preprocess_config: PreprocessorConfig
     add_fingerprint_feature: bool
@@ -208,6 +212,27 @@ class EnsembleConfig:
         random_state: int | np.random.Generator | None,
         num_models: int,
     ) -> list["ClassifierEnsembleConfig"]:
+        """Generate ensemble configurations for classification.
+
+        Args:
+            num_estimators: Number of ensemble configurations to generate.
+            subsample_samples: Method to subsample rows. If int, subsample that many
+                samples. If float, subsample that fraction of samples. If a
+                list of lists of indices, subsample the indices for each estimator.
+                If `None`, no subsampling is done.
+            max_index: Maximum index to generate for.
+            add_fingerprint_feature: Whether to add fingerprint features.
+            polynomial_features: Maximum number of polynomial features to add, if any.
+            feature_shift_decoder: How shift features
+            preprocessor_configs: Preprocessor configurations to use on the data.
+            class_shift_method: How to shift classes for classpermutation.
+            n_classes: Number of classes.
+            random_state: Random number generator.
+            num_models: Number of models to use.
+
+        Returns:
+            List of ensemble configurations.
+        """
         from .core import generate_classification_ensemble_configs
 
         return generate_classification_ensemble_configs(
@@ -239,6 +264,26 @@ class EnsembleConfig:
         target_transforms: Sequence["TransformerMixin" | "Pipeline" | None],
         num_models: int,
     ) -> list["RegressorEnsembleConfig"]:
+        """Generate ensemble configurations for regression.
+
+        Args:
+            num_estimators: Number of ensemble configurations to generate.
+            subsample_samples: Method to subsample rows. If int, subsample that many
+                samples. If float, subsample that fraction of samples. If a
+                list of lists of indices, subsample the indices for each estimator.
+                If `None`, no subsampling is done.
+            max_index: Maximum index to generate for.
+            add_fingerprint_feature: Whether to add fingerprint features.
+            polynomial_features: Maximum number of polynomial features to add, if any.
+            feature_shift_decoder: How shift features
+            preprocessor_configs: Preprocessor configurations to use on the data.
+            target_transforms: Target transformations to apply.
+            random_state: Random number generator.
+            num_models: Number of models to use.
+
+        Returns:
+            List of ensemble configurations.
+        """
         from .core import generate_regression_ensemble_configs
 
         return generate_regression_ensemble_configs(
