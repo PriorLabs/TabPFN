@@ -29,14 +29,16 @@ from tqdm.auto import tqdm
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetune_utils import clone_model_for_evaluation
-from tabpfn.finetuning.data_util import get_preprocessed_datasets_helper
+from tabpfn.finetuning.data_util import (
+    get_preprocessed_datasets_helper,
+    meta_dataset_collator,
+)
 from tabpfn.finetuning.train_util import (
     get_and_init_optimizer,
     get_checkpoint_path_and_epoch_from_output_dir,
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
-from tabpfn.utils import meta_dataset_collator
 
 logging.basicConfig(
     level=logging.INFO,

@@ -21,7 +21,10 @@ from tqdm import tqdm
 
 from tabpfn import TabPFNRegressor
 from tabpfn.finetune_utils import clone_model_for_evaluation
-from tabpfn.utils import meta_dataset_collator
+from tabpfn.finetuning.data_util import (
+    get_preprocessed_datasets_helper,
+    meta_dataset_collator,
+)
 
 
 def prepare_data(config: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -155,8 +158,15 @@ def main() -> None:
 
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
     # Note: `max_data_size` corresponds to the finetuning `batch_size` in the config
-    training_datasets = regressor.get_preprocessed_datasets(
-        X_train, y_train, splitter, max_data_size=config["finetuning"]["batch_size"]
+    training_datasets = get_preprocessed_datasets_helper(
+        regressor,
+        X_train,
+        y_train,
+        splitter,
+        max_data_size=config["finetuning"]["batch_size"],
+        model_type="regressor",
+        equal_split_size=True,
+        seed=config["random_seed"],
     )
     finetuning_dataloader = DataLoader(
         training_datasets,
