@@ -20,7 +20,18 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_is_fitted
-from torch.amp import GradScaler, autocast
+
+# Handle torch.amp deprecation (torch.cuda.amp deprecated in PyTorch 2.4+)
+try:
+    from torch.amp import (
+        GradScaler as _amp_GradScaler,
+        autocast as _amp_autocast,
+    )
+
+    autocast = partial(_amp_autocast, device_type="cuda")
+    GradScaler = partial(_amp_GradScaler, "cuda")
+except ImportError:
+    from torch.cuda.amp import GradScaler, autocast
 from torch.nn.attention import SDPBackend
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
@@ -28,12 +39,12 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from tabpfn import TabPFNClassifier
-from tabpfn.finetune_utils import clone_model_for_evaluation
 from tabpfn.finetuning.data_util import (
     get_preprocessed_datasets_helper,
     meta_dataset_collator,
 )
 from tabpfn.finetuning.train_util import (
+    clone_model_for_evaluation,
     get_and_init_optimizer,
     get_checkpoint_path_and_epoch_from_output_dir,
     get_cosine_schedule_with_warmup,
@@ -407,7 +418,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         loss_function = torch.nn.CrossEntropyLoss()
 
         use_amp = self.device.startswith("cuda") and torch.cuda.is_available()
-        scaler: GradScaler | None = GradScaler("cuda") if use_amp else None
+        scaler = GradScaler() if use_amp else None  # type: ignore
 
         logging.info("--- 🚀 Starting Fine-tuning ---")
 
@@ -514,7 +525,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
 
                 use_scaler = use_amp and scaler is not None
 
-                with autocast("cuda", enabled=use_scaler):
+                with autocast(enabled=use_scaler):  # type: ignore
                     # This excludes running the cuDNN backend. Otherwise we started to
                     # get stride warnings/errors running the cuDNN backend, after
                     # changing the loss calculation to be "per_estimator".

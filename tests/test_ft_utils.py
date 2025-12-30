@@ -28,8 +28,8 @@ def test_pad_tensors_2d_and_1d():
     assert padded_1d[0][3] == 99, "Padding value not set correctly for 1D case."
 
 
-def test_split_large_data():
-    """Test the split_large_data function with a large dataset."""
+def test_chunk_data():
+    """Test the shuffle_and_chunk_data function with a large dataset."""
     total_size = 1000
     max_chunk = 100
     large_x = np.arange(total_size * 2).reshape((total_size, 2))
@@ -46,6 +46,7 @@ def test_split_large_data():
         equal_split_size=equal_split_size,
         seed=seed,
         min_chunk_size=2,
+        shuffle=False,
     )
 
     assert len(x_chunks) == expected_num_chunks, "Incorrect X chunk count"

@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import warnings
-from dataclasses import asdict
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
 import torch
 from torch.optim import AdamW
 
+from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+from tabpfn.model_loading import save_tabpfn_model
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +41,67 @@ def _format_train_size(train_size: int) -> str:
         thousands = train_size // 1_000
         return f"{thousands}K"
     return str(train_size)
+
+
+def clone_model_for_evaluation(
+    original_model: TabPFNClassifier | TabPFNRegressor,
+    eval_init_args: dict,
+    model_class: type[TabPFNClassifier | TabPFNRegressor],
+) -> TabPFNClassifier | TabPFNRegressor:
+    """Prepares a deep copy of the model for
+    evaluation to prevent modifying the original.
+    Important in FineTuning since we are actively
+    chaning the model being fine-tuned, however we
+    still wish to evaluate it with our standard
+    sklearn fit/predict inference interface.
+
+    Args:
+        original_model: The trained model instance
+        (TabPFNClassifier or TabPFNRegressor).
+        eval_init_args: Initialization arguments for
+        the evaluation model instance.
+        model_class: The class type (TabPFNClassifier
+        or TabPFNRegressor) to instantiate.
+
+    Returns:
+        A new instance of the model class, ready for evaluation.
+    """
+    if hasattr(original_model, "models_") and original_model.models_ is not None:
+        # Deep copy necessary components to avoid modifying the original trained model
+        # Since this is for the purpose of fine tuning, at the moment,
+        # we only ever copy the first model and config.
+        new_model_state = copy.deepcopy(original_model.models_[0])
+        new_architecture_config = copy.deepcopy(original_model.configs_[0])
+        new_inference_config = copy.deepcopy(original_model.inference_config_)
+
+        model_spec_obj = None
+        if isinstance(original_model, TabPFNClassifier):
+            model_spec_obj = ClassifierModelSpecs(
+                model=new_model_state,
+                architecture_config=new_architecture_config,
+                inference_config=new_inference_config,
+            )
+        else:
+            assert isinstance(original_model, TabPFNRegressor), (
+                "Unsupported model type for evaluation preparation."
+            )
+            # Regressor also needs the distribution criterion copied
+            new_bar_dist = copy.deepcopy(original_model.znorm_space_bardist_)
+            model_spec_obj = RegressorModelSpecs(
+                model=new_model_state,
+                architecture_config=new_architecture_config,
+                inference_config=new_inference_config,
+                norm_criterion=new_bar_dist,
+            )
+
+        eval_model = model_class(model_path=model_spec_obj, **eval_init_args)  # type: ignore
+
+    else:
+        # If the original model hasn't been trained
+        # or loaded, create a fresh one for eval
+        eval_model = model_class(**eval_init_args)
+
+    return eval_model
 
 
 def get_checkpoint_name(
@@ -63,74 +127,6 @@ def get_checkpoint_name(
     if epoch is None:
         raise ValueError("epoch must be provided when is_best=False")
     return f"checkpoint_{formatted_size}_{epoch}.pth"
-
-
-# Copied from TabPFN-private/src/tabpfn/model_loading.py
-# but allowing for saving additional fields
-def save_tabpfn_model(
-    model: TabPFNRegressor | TabPFNClassifier,
-    save_path: Path | str | list[Path | str],
-    additional_fields: dict[str, Any] | None = None,
-) -> None:
-    """Save the underlying TabPFN foundation model to ``save_path``.
-
-    This writes only the base pre-trained weights and configuration. It does
-    **not** store a fitted :class:`TabPFNRegressor`/``Classifier`` instance.
-    The resulting file is merely a checkpoint consumed by
-    :func:`load_model_criterion_config` to build a new estimator.
-
-    Args:
-        model:
-            The internal model object of a ``TabPFN`` estimator.
-        save_path:
-            Path to save the checkpoint to.
-        additional_fields:
-            Additional fields to save to the checkpoint.
-    """
-    if len(model.models_) > 1 and (
-        not isinstance(save_path, list) or len(save_path) != len(model.models_)
-    ):
-        raise ValueError(
-            f"Your TabPFN estimator has multiple internal models ({len(model.models_)})"
-            f", so you must provide a list of {len(model.models_)} save paths."
-        )
-
-    models = model.models_
-
-    znorm_space_bardist = None
-    if (
-        hasattr(model, "znorm_space_bardist_")
-        and model.znorm_space_bardist_ is not None  # type: ignore
-    ):
-        znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
-
-    configs = model.configs_
-    save_paths = save_path if isinstance(save_path, list) else [save_path]
-
-    for ens_model, config, path in zip(
-        models,
-        configs,
-        save_paths,
-    ):
-        model_state = ens_model.state_dict()
-
-        if znorm_space_bardist is not None:
-            bardist_state = {
-                f"criterion.{k}": v for k, v in znorm_space_bardist.state_dict().items()
-            }
-            state_dict = {**model_state, **bardist_state}
-        else:
-            state_dict = model_state
-
-        checkpoint = {
-            "state_dict": state_dict,
-            "config": asdict(config),
-        }
-
-        if additional_fields is not None:
-            checkpoint.update(additional_fields)
-
-        torch.save(checkpoint, path)
 
 
 def save_checkpoint(

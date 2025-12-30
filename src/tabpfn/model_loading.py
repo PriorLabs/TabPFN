@@ -848,6 +848,7 @@ def get_n_out(
 def save_tabpfn_model(
     model: TabPFNRegressor | TabPFNClassifier,
     save_path: Path | str | list[Path | str],
+    additional_fields: dict[str, Any] | None = None,
 ) -> None:
     """Save the underlying TabPFN foundation model to ``save_path``.
 
@@ -857,10 +858,10 @@ def save_tabpfn_model(
     :func:`load_model_criterion_config` to build a new estimator.
 
     Args:
-        model:
-            The internal model object of a ``TabPFN`` estimator.
-        save_path:
-            Path to save the checkpoint to.
+        model: The internal model object of a ``TabPFN`` estimator.
+        save_path: Path to save the checkpoint to.
+        additional_fields: Additional data to save to the checkpoint.
+
     """
     if len(model.models_) > 1 and (
         not isinstance(save_path, list) or len(save_path) != len(model.models_)
@@ -898,6 +899,9 @@ def save_tabpfn_model(
             state_dict = model_state
 
         checkpoint = {"state_dict": state_dict, "config": asdict(config)}
+
+        if additional_fields is not None:
+            checkpoint.update(additional_fields)
 
         torch.save(checkpoint, path)
 
