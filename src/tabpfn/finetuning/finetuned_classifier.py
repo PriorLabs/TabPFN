@@ -517,8 +517,12 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 cat_ixs,
                 confs,
             ) in progress_bar:
-                ctx = set(np.unique(y_context_batch))
-                qry = set(np.unique(y_query_batch))
+                ctx = set(
+                    torch.cat([t.flatten() for t in y_context_batch]).unique().tolist()
+                )
+                qry = set(
+                    torch.cat([t.flatten() for t in y_query_batch]).unique().tolist()
+                )
                 if not qry.issubset(ctx):
                     logger.warning(
                         "Skipping batch: query labels %s are not a subset of "

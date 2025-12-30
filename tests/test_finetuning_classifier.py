@@ -437,7 +437,7 @@ def test_checkpoint_resumption(
 
     X, y = synthetic_data
     n_classes = len(np.unique(y))
-    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
     X_train = np.asarray(X_train)
     X_test = np.asarray(X_test)
     y_train = np.asarray(y_train)
