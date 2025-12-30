@@ -583,9 +583,9 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
 
                 if use_scaler:
                     scaler.scale(loss).backward()  # type: ignore
+                    scaler.unscale_(optimizer)  # type: ignore
 
                     if self.grad_clip_value is not None:
-                        scaler.unscale_(optimizer)  # type: ignore
                         clip_grad_norm_(
                             self.finetuned_classifier_.model_.parameters(),  # type: ignore
                             self.grad_clip_value,
