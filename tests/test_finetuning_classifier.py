@@ -334,6 +334,7 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf.fit(X_train, y_train)
@@ -396,6 +397,7 @@ def test_checkpoint_saving_and_loading(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
@@ -476,6 +478,7 @@ def test_checkpoint_resumption(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
@@ -508,6 +511,7 @@ def test_checkpoint_resumption(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf_resumed.fit(X_train, y_train, output_dir=output_folder)
@@ -612,6 +616,7 @@ def test_checkpoint_interval_configuration(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
@@ -675,6 +680,7 @@ def test_best_checkpoint_saving(
 
     with mock.patch(
         "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
         side_effect=mock_forward,
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
