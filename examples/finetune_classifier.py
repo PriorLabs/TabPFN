@@ -30,25 +30,26 @@ warnings.filterwarnings(
 
 # Training hyperparameters
 NUM_EPOCHS = 30
-LEARNING_RATE = 3e-5
-EARLY_STOPPING_PATIENCE = 5
+LEARNING_RATE = 2e-5
+EARLY_STOPPING_PATIENCE = 8
 WEIGHT_DECAY = 0.001
 USE_LR_SCHEDULER = True
 LR_WARMUP_ONLY = False
 
 # Data sampling configuration
 VALIDATION_SPLIT_RATIO = 0.1
-NUM_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 20_000
-FINETUNE_CTX_QUERY_SPLIT_RATIO = 0.02
+NUM_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 10_000
+FINETUNE_CTX_QUERY_SPLIT_RATIO = 0.2
 NUM_INFERENCE_SUBSAMPLE_SAMPLES = 50_000
+USE_ACTIVATION_CHECKPOINTING = True
 
 # Ensemble configuration
 NUM_ESTIMATORS_FINETUNE = 2
-NUM_ESTIMATORS_VALIDATION = 4
+NUM_ESTIMATORS_VALIDATION = 2
 NUM_ESTIMATORS_FINAL_INFERENCE = 8
 
 # Reproducibility
-RANDOM_STATE = 42
+RANDOM_STATE = 0
 
 
 def calculate_roc_auc(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
@@ -59,11 +60,23 @@ def calculate_roc_auc(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
 
 
 def main() -> None:
-    # Get test dataset
-    X_all, y_all = sklearn.datasets.fetch_covtype(return_X_y=True, shuffle=True)
+    # We use the "Higgs" dataset (see https://www.openml.org/search?type=data&sort=runs&id=44129&status=active)
+    # and only take a random subset of 100k samples for this example.
+    data = sklearn.datasets.fetch_openml(data_id=44129, as_frame=True, parser="auto")
+    _, X_all, _, y_all = train_test_split(
+        data.data,
+        data.target,
+        test_size=100_000,
+        random_state=RANDOM_STATE,
+        stratify=data.target,
+    )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X_all, y_all, test_size=0.1, random_state=RANDOM_STATE, stratify=y_all
+    )
+
+    print(
+        f"Loaded {len(X_train):,} samples for training and {len(X_test):,} samples for testing."
     )
 
     # 2. Initial model evaluation on test set
@@ -85,8 +98,8 @@ def main() -> None:
     )  # pyright: ignore[reportReturnType, reportArgumentType]
     log_loss_score = log_loss(y_test, base_pred_proba)
 
-    print(f"📊 Initial Test ROC: {roc_auc:.4f}")
-    print(f"📊 Initial Test Log Loss: {log_loss_score:.4f}\n")
+    print(f"📊 Default TabPFN Test ROC: {roc_auc:.4f}")
+    print(f"📊 Default TabPFN Test Log Loss: {log_loss_score:.4f}\n")
 
     # 3. Initialize and run fine-tuning
     print("--- 2. Initializing and Fitting Model ---\n")
@@ -108,6 +121,7 @@ def main() -> None:
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
+        use_activation_checkpointing=USE_ACTIVATION_CHECKPOINTING,
     )
 
     # 4. Call .fit() to start the fine-tuning process on the training data
@@ -126,8 +140,8 @@ def main() -> None:
     )  # pyright: ignore[reportArgumentType]
     loss = log_loss(y_test, y_pred_proba)
 
-    print(f"📊 Final Test ROC: {roc_auc:.4f}")
-    print(f"📊 Final Test Log Loss: {loss:.4f}")
+    print(f"📊 Finetuned TabPFN Test ROC: {roc_auc:.4f}")
+    print(f"📊 Finetuned TabPFN Test Log Loss: {loss:.4f}")
 
 
 if __name__ == "__main__":

@@ -40,6 +40,11 @@ from torch.optim.lr_scheduler import LambdaLR
 try:
     from torch.nn.attention import SDPBackend, sdpa_kernel
 
+    # This excludes running the cuDNN backend. Otherwise we started to
+    # get stride warnings/errors running the cuDNN backend, after
+    # changing the loss calculation to be "per_estimator".
+    # Since the cuDNN backend was found to be slower anyway, this
+    # fix is good enough for now!
     _SDPA_BACKENDS = [
         SDPBackend.FLASH_ATTENTION,
         SDPBackend.EFFICIENT_ATTENTION,
@@ -186,7 +191,9 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         use_activation_checkpointing: Whether to use activation checkpointing to
             reduce memory usage. Defaults to False.
         use_fixed_preprocessing_seeds: Whether to use fixed preprocessing seeds
-            for the estimators. Defaults to False.
+            for the estimators. This allows for the column order to be fixed
+            during fine-tuning and inference and can improve performance
+            substantially. Defaults to False.
         save_checkpoint_interval: Number of epochs between checkpoint saves. If
             None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
@@ -544,11 +551,6 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 use_scaler = use_amp and scaler is not None
 
                 with autocast(enabled=use_scaler):  # type: ignore
-                    # This excludes running the cuDNN backend. Otherwise we started to
-                    # get stride warnings/errors running the cuDNN backend, after
-                    # changing the loss calculation to be "per_estimator".
-                    # Since the cuDNN backend was found to be slower anyway, this
-                    # fix is good enough for now!
                     with _sdpa_kernel_context():
                         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
                         predictions_QBEL = self.finetuned_classifier_.forward(
@@ -582,7 +584,11 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     )
 
                 if use_scaler:
-                    scaler.scale(loss).backward()  # type: ignore
+                    # When using activation checkpointing, we need to exclude the cuDNN
+                    # backend also during the backward pass because checkpointing re-
+                    # computes the forward pass during backward.
+                    with _sdpa_kernel_context():
+                        scaler.scale(loss).backward()  # type: ignore
                     scaler.unscale_(optimizer)  # type: ignore
 
                     if self.grad_clip_value is not None:
@@ -594,7 +600,8 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     scaler.step(optimizer)  # type: ignore
                     scaler.update()  # type: ignore
                 else:
-                    loss.backward()
+                    with _sdpa_kernel_context():
+                        loss.backward()
 
                     if self.grad_clip_value is not None:
                         clip_grad_norm_(
