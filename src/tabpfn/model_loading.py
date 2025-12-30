@@ -687,8 +687,9 @@ def log_model_init_params(
         # Check if the annotation is a string and the fit_mode is in it.
         # An alternative may be evaluating the annotation, but this is more secure
         # because we don't want to execute arbitrary code.
-        if isinstance(param.annotation, str) and params["fit_mode"] in annotation:
-            logged_params["fit_mode"] = params["fit_mode"]
+        fit_mode = str(params["fit_mode"])
+        if isinstance(param.annotation, str) and fit_mode in annotation:
+            logged_params["fit_mode"] = fit_mode
 
     # Log the logged params
     if logged_params:
