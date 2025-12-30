@@ -1,20 +1,21 @@
+"""Definitions for preprocessor configurations and dataset specifications."""
+
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Literal, Sequence, TYPE_CHECKING
-
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
-import numpy as np
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-
 if TYPE_CHECKING:
+    import numpy as np
     import numpy.typing as npt
+    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
-    import torch
 
+    from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
     from tabpfn.preprocessors.preprocessing_helpers import SequentialFeatureTransformer
 
 
@@ -22,9 +23,9 @@ if TYPE_CHECKING:
 class BaseDatasetConfig:
     """Base configuration class for holding dataset specifics."""
 
-    config: "EnsembleConfig"
-    X_raw: np.ndarray | "torch.Tensor"
-    y_raw: np.ndarray | "torch.Tensor"
+    config: EnsembleConfig
+    X_raw: np.ndarray | torch.Tensor
+    y_raw: np.ndarray | torch.Tensor
     cat_ix: list[int]
 
 
@@ -173,6 +174,7 @@ class PreprocessorConfig:
             )
         )
 
+
 # TODO: (Klemens)
 # Make this frozen (frozen=True)
 @dataclass
@@ -194,7 +196,7 @@ class EnsembleConfig:
     polynomial_features: Literal["no", "all"] | int
     feature_shift_count: int
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
-    subsample_ix: "npt.NDArray[np.int64]" | None  # OPTIM: Could use uintp
+    subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
 
@@ -213,7 +215,7 @@ class EnsembleConfig:
         n_classes: int,
         random_state: int | np.random.Generator | None,
         num_models: int,
-    ) -> list["ClassifierEnsembleConfig"]:
+    ) -> list[ClassifierEnsembleConfig]:
         """Generate ensemble configurations for classification.
 
         Args:
@@ -235,7 +237,9 @@ class EnsembleConfig:
         Returns:
             List of ensemble configurations.
         """
-        from .core import generate_classification_ensemble_configs
+        from .core import (  # noqa: PLC0415
+            generate_classification_ensemble_configs,
+        )
 
         return generate_classification_ensemble_configs(
             num_estimators=num_estimators,
@@ -252,7 +256,7 @@ class EnsembleConfig:
         )
 
     @classmethod
-    def generate_for_regression(  # noqa: PLR0913
+    def generate_for_regression(
         cls,
         *,
         num_estimators: int,
@@ -263,9 +267,9 @@ class EnsembleConfig:
         feature_shift_decoder: Literal["shuffle", "rotate"] | None,
         preprocessor_configs: Sequence[PreprocessorConfig],
         random_state: int | np.random.Generator | None,
-        target_transforms: Sequence["TransformerMixin" | "Pipeline" | None],
+        target_transforms: Sequence[TransformerMixin | Pipeline | None],
         num_models: int,
-    ) -> list["RegressorEnsembleConfig"]:
+    ) -> list[RegressorEnsembleConfig]:
         """Generate ensemble configurations for regression.
 
         Args:
@@ -286,7 +290,9 @@ class EnsembleConfig:
         Returns:
             List of ensemble configurations.
         """
-        from .core import generate_regression_ensemble_configs
+        from .core import (  # noqa: PLC0415
+            generate_regression_ensemble_configs,
+        )
 
         return generate_regression_ensemble_configs(
             num_estimators=num_estimators,
@@ -302,10 +308,10 @@ class EnsembleConfig:
         )
 
     def to_pipeline(
-        self, *, random_state: int | np.random.Generator | None
-    ) -> "SequentialFeatureTransformer":
+        self, *, random_state: int | np.random.Generator | None = None
+    ) -> SequentialFeatureTransformer:
         """Convert the ensemble configuration to a preprocessing pipeline."""
-        from .core import build_pipeline
+        from .core import build_pipeline  # noqa: PLC0415
 
         return build_pipeline(self, random_state=random_state)
 
@@ -321,7 +327,7 @@ class ClassifierEnsembleConfig(EnsembleConfig):
 class RegressorEnsembleConfig(EnsembleConfig):
     """Configuration for a regression ensemble member."""
 
-    target_transform: "TransformerMixin" | "Pipeline" | None
+    target_transform: TransformerMixin | Pipeline | None
 
 
 __all__ = [

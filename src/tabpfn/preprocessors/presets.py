@@ -1,3 +1,9 @@
+"""Predefined preprocessor configurations for different model versions.
+
+This module provides factory functions that return preprocessor configurations
+for different versions of the model (v2, v2.5, default).
+"""
+
 from __future__ import annotations
 
 from .definitions import PreprocessorConfig

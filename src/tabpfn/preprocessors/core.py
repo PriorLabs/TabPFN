@@ -1,3 +1,9 @@
+"""Core preprocessing functionality for the TabPFN model.
+
+This module provides the core preprocessing pipeline and configuration generation
+for both classification and regression tasks and dataset preparation for the model.
+"""
+
 from __future__ import annotations
 
 import warnings
@@ -22,7 +28,6 @@ from tabpfn.utils import infer_random_state
 
 from .add_fingerprint_features_step import AddFingerprintFeaturesStep
 from .definitions import (
-    BaseDatasetConfig,
     ClassifierDatasetConfig,
     ClassifierEnsembleConfig,
     EnsembleConfig,
@@ -33,7 +38,10 @@ from .definitions import (
 from .differentiable_z_norm_step import DifferentiableZNormStep
 from .encode_categorical_features_step import EncodeCategoricalFeaturesStep
 from .nan_handling_polynomial_features_step import NanHandlingPolynomialFeaturesStep
-from .preprocessing_helpers import FeaturePreprocessingTransformerStep, SequentialFeatureTransformer
+from .preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
+)
 from .remove_constant_features_step import RemoveConstantFeaturesStep
 from .reshape_feature_distribution_step import ReshapeFeatureDistributionsStep
 from .shuffle_features_step import ShuffleFeaturesStep
@@ -53,7 +61,6 @@ def balance(x: Iterable[T], n: int) -> list[T]:
 
     E.g. balance([1, 2, 3], 2) -> [1, 1, 2, 2, 3, 3]
     """
-
     return list(chain.from_iterable(repeat(elem, n) for elem in x))
 
 
@@ -80,7 +87,6 @@ def generate_index_permutations(
     Returns:
         List of indices to subsample.
     """
-
     _, rng = infer_random_state(random_state)
     if isinstance(subsample, int):
         if subsample < 1:
@@ -119,7 +125,6 @@ def get_subsample_indices_for_estimators(
     Returns:
         List of list of indices to subsample for each estimator.
     """
-
     if isinstance(subsample_samples, (int, float)):
         subsample_indices = generate_index_permutations(
             n=num_estimators,
@@ -175,39 +180,40 @@ def _generate_class_permutations(
         Number of ensemble members for which to generate permutations.
     class_shift_method:
         Strategy used to generate permutations of the class indices:
-        * ``"rotate"`` – draw random circular shifts of ``np.arange(n_classes)``
+        * ``"rotate"`` - draw random circular shifts of ``np.arange(n_classes)``
           and sample from those shifts for each estimator.
-        * ``"shuffle"`` – create random permutations of ``range(n_classes)``,
+        * ``"shuffle"`` - create random permutations of ``range(n_classes)``,
           deduplicate them, and balance their usage across estimators.
-        * ``None`` – disable class permutation and return ``None`` entries.
+        * ``None`` - disable class permutation and return ``None`` entries.
     n_classes:
         Total number of distinct classes.
     rng:
         Numpy random generator used for reproducible permutations.
 
-    Returns
+    Returns:
     -------
     list[np.ndarray] | list[None]
         A list of permutations (or ``None`` entries) with length ``num_estimators``.
     """
-
     if class_shift_method == "rotate":
         arange = np.arange(0, n_classes)
         shifts = rng.permutation(n_classes).tolist()
         class_permutations = [np.roll(arange, s) for s in shifts]
-        return [
-            class_permutations[c] for c in rng.choice(n_classes, num_estimators)
-        ]
+        return [class_permutations[c] for c in rng.choice(n_classes, num_estimators)]
 
     if class_shift_method == "shuffle":
-        noise = rng.random((num_estimators * CLASS_SHUFFLE_OVERESTIMATE_FACTOR, n_classes))
+        noise = rng.random(
+            (num_estimators * CLASS_SHUFFLE_OVERESTIMATE_FACTOR, n_classes)
+        )
         shufflings = np.argsort(noise, axis=1)
         uniqs = np.unique(shufflings, axis=0)
         balance_count = num_estimators // len(uniqs)
         class_permutations = balance(uniqs, balance_count)
         rand_count = num_estimators % len(uniqs)
         if rand_count > 0:
-            class_permutations += [uniqs[i] for i in rng.choice(len(uniqs), size=rand_count)]
+            class_permutations += [
+                uniqs[i] for i in rng.choice(len(uniqs), size=rand_count)
+            ]
         return class_permutations
 
     if class_shift_method is None:
@@ -251,7 +257,6 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     Returns:
         List of ensemble configurations.
     """
-
     static_seed, rng = infer_random_state(random_state)
     start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
     featshifts = np.arange(start, start + num_estimators)
@@ -292,17 +297,23 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
             subsample_ix=subsample_ix,
             _model_index=model_index,
         )
-        for featshift, subsample_ix, preprocesses_config, class_permutation, model_index in zip(
+        for (
+            featshift,
+            subsample_ix,
+            preprocesses_config,
+            class_permutation,
+            model_index,
+        ) in zip(
             featshifts,
             subsample_indices,
-            configs_,
+            preprocessor_configs,
             class_permutations,
             model_indices,
         )
     ]
 
 
-def generate_regression_ensemble_configs(  # noqa: PLR0913
+def generate_regression_ensemble_configs(
     *,
     num_estimators: int,
     subsample_samples: int | float | list[np.ndarray] | None,
@@ -335,7 +346,6 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
     Returns:
         List of ensemble configurations.
     """
-
     static_seed, rng = infer_random_state(random_state)
     start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
     featshifts = np.arange(start, start + num_estimators)
@@ -370,7 +380,10 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
             target_transform=target_transform,
             _model_index=model_index,
         )
-        for featshift, subsample_ix, (preprocess_config, target_transform), model_index in zip(
+        for featshift, subsample_ix, (
+            preprocess_config,
+            target_transform,
+        ), model_index in zip(
             featshifts,
             subsample_indices,
             configs_,
@@ -382,7 +395,9 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
 # --- pipeline construction ---
 
 
-def _polynomial_feature_settings(polynomial_features: Literal["no", "all"] | int) -> tuple[bool, int | None]:
+def _polynomial_feature_settings(
+    polynomial_features: Literal["no", "all"] | int,
+) -> tuple[bool, int | None]:
     if isinstance(polynomial_features, int):
         assert polynomial_features > 0, "Poly. features to add must be >0!"
         return True, polynomial_features
@@ -399,7 +414,6 @@ def build_pipeline(
     random_state: int | np.random.Generator | None,
 ) -> SequentialFeatureTransformer:
     """Convert the ensemble configuration to a preprocessing pipeline."""
-
     steps: list[FeaturePreprocessingTransformerStep] = []
 
     use_poly_features, max_poly_features = _polynomial_feature_settings(
@@ -483,7 +497,6 @@ def fit_preprocessing_one(
         the transformed training data, the transformed target, and the indices of
         categorical features.
     """
-
     static_seed, _ = infer_random_state(random_state)
     if config.subsample_ix is not None:
         X_train = X_train[config.subsample_ix]
@@ -512,7 +525,6 @@ def transform_labels_one(
 
     Return: The processed labels.
     """
-
     if isinstance(config, RegressorEnsembleConfig):
         if config.target_transform is not None:
             y_train = config.target_transform.fit_transform(
@@ -575,7 +587,6 @@ def fit_preprocessing(
         preprocessing pipeline, the transformed training data, the transformed target,
         and the indices of categorical features.
     """
-
     _, rng = infer_random_state(random_state)
 
     if SUPPORTS_RETURN_AS:
