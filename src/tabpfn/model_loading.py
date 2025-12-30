@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import logging
 import os
@@ -651,6 +652,56 @@ def _log_model_config(
         set_model_config(path.name, version.value)
     else:
         set_model_config("OTHER", version.value)
+
+
+def log_model_init_params(
+    estimator: TabPFNClassifier | TabPFNRegressor, params: dict[str, Any]
+) -> None:
+    """Anonymously model initialization parameters for anonymized
+    usage telemetry.
+
+    At the moment, we only log the `fit_mode` parameter.
+
+    Args:
+        estimator: The TabPFN estimator instance.
+        params: The model initialization parameters.
+    """
+    constructor = getattr(estimator.__class__, "__init__", None)
+    if constructor is None:
+        return
+
+    # Create a validated copy of logged params; avoid passing in arbitrary params
+    # as that would allow for PII leakage
+    logged_params = {}
+
+    signature_params = inspect.signature(constructor).parameters
+    if "fit_mode" in params:
+        param = signature_params.get("fit_mode")
+
+        # Early return, may be replaced in the future when we start tracking
+        # more parameters and validate their types.
+        if not param:
+            return
+
+        annotation = param.annotation
+        # Check if the annotation is a string and the fit_mode is in it.
+        # An alternative may be evaluating the annotation, but this is more secure
+        # because we don't want to execute arbitrary code.
+        fit_mode = str(params["fit_mode"])
+        if isinstance(param.annotation, str) and fit_mode in annotation:
+            logged_params["fit_mode"] = fit_mode
+
+    # Log the logged params
+    if logged_params:
+        try:
+            # We conditionally import here to avoid introducing breaking changes as
+            # this interface was introduced in tabpfn_common_utils 0.2.13 and not all
+            # users have upgraded to this version yet.
+            from tabpfn_common_utils.telemetry import set_init_params  # noqa: PLC0415
+
+            set_init_params(logged_params)
+        except ImportError:
+            pass
 
 
 def resolve_model_version(

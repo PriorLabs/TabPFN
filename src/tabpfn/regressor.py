@@ -52,6 +52,7 @@ from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocess
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
+    log_model_init_params,
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
@@ -452,6 +453,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
         initialize_telemetry()
+
+        # Only anonymously record `fit_mode` usage
+        log_model_init_params(self, {"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
