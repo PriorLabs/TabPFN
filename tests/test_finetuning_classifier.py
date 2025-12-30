@@ -121,7 +121,7 @@ for param in finetuned_param_order:
 
 def create_mock_architecture_forward(
     n_classes: int,
-) -> Callable[[torch.Tensor, torch.Tensor | None], torch.Tensor]:
+) -> Callable[..., torch.Tensor]:
     """Create a side_effect function for mocking the Architecture forward method.
 
     The Architecture.forward method signature is:
@@ -140,6 +140,7 @@ def create_mock_architecture_forward(
     """
 
     def mock_forward(
+        self: torch.nn.Module,
         x: torch.Tensor | dict[str, torch.Tensor],
         y: torch.Tensor | dict[str, torch.Tensor] | None,
         **_kwargs: bool,
@@ -159,13 +160,22 @@ def create_mock_architecture_forward(
         batch_size = x.shape[1]
         num_test_rows = total_rows - num_train_rows
 
+        # Touch a model parameter so gradients flow during backward pass.
+        # This is needed for GradScaler to record inf checks on CUDA
+        # on older torch versions.
+        first_param = next(self.parameters())
+        param_contribution = 0.0 * first_param.sum()
+
         # Return shape (test_rows, batch_size, num_classes)
-        return torch.randn(
-            num_test_rows,
-            batch_size,
-            n_classes,
-            requires_grad=True,
-            device=x.device,
+        return (
+            torch.randn(
+                num_test_rows,
+                batch_size,
+                n_classes,
+                requires_grad=True,
+                device=x.device,
+            )
+            + param_contribution
         )
 
     return mock_forward
