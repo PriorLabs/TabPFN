@@ -657,7 +657,7 @@ def _log_model_config(
 def log_model_init_params(
     estimator: TabPFNClassifier | TabPFNRegressor, params: dict[str, Any]
 ) -> None:
-    """Anonymously log the some model initialization parameters for anonymized
+    """Anonymously model initialization parameters for anonymized
     usage telemetry.
 
     At the moment, we only log the `fit_mode` parameter.
