@@ -19,7 +19,7 @@ from tabpfn.architectures.base.bar_distribution import (
     FullSupportBarDistribution,
 )
 from tabpfn.finetuning.data_util import (
-    get_preprocessed_datasets_helper,
+    get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
@@ -152,7 +152,7 @@ def test_regressor_dataset_and_collator_batches_type(
     are of the correct type.
     """
     X, y = synthetic_regression_data
-    dataset_collection = get_preprocessed_datasets_helper(
+    dataset_collection = get_preprocessed_dataset_chunks(
         ft_regressor_instance,
         X,
         y,
@@ -222,7 +222,7 @@ def test_tabpfn_regressor_finetuning_loop(
         differentiable_input=False,
     )
 
-    datasets_list = get_preprocessed_datasets_helper(
+    datasets_list = get_preprocessed_dataset_chunks(
         reg,
         X_train,
         y_train,
@@ -375,7 +375,7 @@ def test_finetuning_consistency_bar_distribution(
     reg_standard.fit(X_train_raw, y_train_raw)
     reg_standard.predict(X_test_raw, output_type="mean")
 
-    datasets_list = get_preprocessed_datasets_helper(
+    datasets_list = get_preprocessed_dataset_chunks(
         reg_batched,
         x_full_raw,
         y_full_raw,
@@ -539,7 +539,7 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         # --- 3. Path 3: FT Full Workflow ---
         # (get_prep -> fit_prep -> forward -> Capture Tensor)
 
-        datasets_list = get_preprocessed_datasets_helper(
+        datasets_list = get_preprocessed_dataset_chunks(
             reg_batched,
             X,
             y,

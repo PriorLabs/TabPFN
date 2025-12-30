@@ -27,7 +27,7 @@ from torch.utils.data import DataLoader
 from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.data_util import (
     DatasetCollectionWithPreprocessing,
-    get_preprocessed_datasets_helper,
+    get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
@@ -359,9 +359,8 @@ def test_checkpoint_saving_and_loading(
 
     X, y = synthetic_data
     n_classes = len(np.unique(y))
-    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
     X_train = np.asarray(X_train)
-    X_test = np.asarray(X_test)
     y_train = np.asarray(y_train)
 
     output_folder = tmp_path / "checkpoints"
@@ -438,7 +437,7 @@ def test_checkpoint_resumption(
 
     X, y = synthetic_data
     n_classes = len(np.unique(y))
-    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=42)
     X_train = np.asarray(X_train)
     X_test = np.asarray(X_test)
     y_train = np.asarray(y_train)
@@ -692,7 +691,7 @@ def test_get_preprocessed_datasets_basic() -> None:
     y = rng.integers(0, 3, size=100)
 
     clf = TabPFNClassifier()
-    dataset = get_preprocessed_datasets_helper(
+    dataset = get_preprocessed_dataset_chunks(
         clf,
         X,
         y,
@@ -721,7 +720,7 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     test_size = 0.3
 
     split_fn = partial(train_test_split, test_size=test_size, shuffle=True)
-    dataset_collection = get_preprocessed_datasets_helper(
+    dataset_collection = get_preprocessed_dataset_chunks(
         classifier_instance,
         X_raw,
         y_raw,
@@ -775,7 +774,7 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
     X_list = [X for X, _ in datasets]
     y_list = [y for _, y in datasets]
 
-    dataset_collection = get_preprocessed_datasets_helper(
+    dataset_collection = get_preprocessed_dataset_chunks(
         clf,
         X_list,
         y_list,
@@ -821,7 +820,7 @@ def test_dataset_and_collator_with_dataloader_uniform(
     """Test dataset and collator integration with DataLoader using uniform data."""
     X_list = [X for X, _ in uniform_synthetic_dataset_collection]
     y_list = [y for _, y in uniform_synthetic_dataset_collection]
-    dataset_collection = get_preprocessed_datasets_helper(
+    dataset_collection = get_preprocessed_dataset_chunks(
         classifier_instance,
         X_list,
         y_list,
@@ -861,7 +860,7 @@ def test_classifier_dataset_and_collator_batches_type(
     """Test that batches from dataset and collator have correct types."""
     X_list = [X for X, _ in variable_synthetic_dataset_collection]
     y_list = [y for _, y in variable_synthetic_dataset_collection]
-    dataset_collection = get_preprocessed_datasets_helper(
+    dataset_collection = get_preprocessed_dataset_chunks(
         classifier_instance,
         X_list,
         y_list,
@@ -901,7 +900,7 @@ def test_get_preprocessed_datasets_multiple_datasets(
     y1 = rng.integers(0, 2, size=10)
     X2 = rng.standard_normal((8, 4))
     y2 = rng.integers(0, 2, size=8)
-    datasets = get_preprocessed_datasets_helper(
+    datasets = get_preprocessed_dataset_chunks(
         classifier_instance,
         [X1, X2],
         [y1, y2],
@@ -922,7 +921,7 @@ def test_get_preprocessed_datasets_categorical_features(
     X = np.array([[0, 1.2, 3.4], [1, 2.3, 4.5], [0, 0.1, 2.2], [2, 1.1, 3.3]])
     y = np.array([0, 1, 0, 1])
     classifier_instance.categorical_features_indices = [0]
-    datasets = get_preprocessed_datasets_helper(
+    datasets = get_preprocessed_dataset_chunks(
         classifier_instance,
         X,
         y,
@@ -966,7 +965,7 @@ def test_fit_from_preprocessed_runs(
 
     split_fn = partial(train_test_split, test_size=0.3, random_state=42)
 
-    datasets_list = get_preprocessed_datasets_helper(
+    datasets_list = get_preprocessed_dataset_chunks(
         clf,
         X_train,
         y_train,
@@ -1089,7 +1088,7 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     # Step 3a: Get preprocessed datasets using the *full* dataset
     # Requires fit_mode='batched' on clf_batched
     # Make sure default max_data_size is large enough.
-    datasets_list = get_preprocessed_datasets_helper(
+    datasets_list = get_preprocessed_dataset_chunks(
         clf_batched,
         X,
         y,

@@ -311,15 +311,16 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
             znorm_space_bardist_ = config.znorm_space_bardist_
-        elif isinstance(config, ClassifierDatasetConfig):
+            regression_task = True
+        else:
+            assert isinstance(config, ClassifierDatasetConfig), (
+                "Invalid dataset config type"
+            )
             conf = config.config
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
-        else:
-            raise ValueError(f"Invalid dataset config type: {type(config)}")
-
-        regression_task = isinstance(config, RegressorDatasetConfig)
+            regression_task = False
 
         stratify_y = y_full_raw if not regression_task and self.stratify else None
         x_train_raw, x_test_raw, y_train_raw, y_test_raw = self.split_fn(
@@ -391,9 +392,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             else:
                 y_test_standardized = y_test_standardized.long()
 
-        x_train_raw = torch.from_numpy(x_train_raw)
         x_test_raw = torch.from_numpy(x_test_raw)
-        y_train_raw = torch.from_numpy(y_train_raw)
         y_test_raw = torch.from_numpy(y_test_raw)
 
         # Also return raw_target variable because of flexiblity
@@ -556,10 +555,7 @@ def shuffle_and_chunk_data(
     )
 
 
-# Copied from tabpfn.base.get_preprocessed_datasets_helper
-# Most likely we can remove the function in the base class
-# as well as the member functions of classifier and regressor
-def get_preprocessed_datasets_helper(
+def get_preprocessed_dataset_chunks(
     calling_instance: Any,
     X_raw: XType | list[XType],
     y_raw: YType | list[YType],

@@ -58,7 +58,7 @@ from tqdm.auto import tqdm
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.data_util import (
-    get_preprocessed_datasets_helper,
+    get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
 from tabpfn.finetuning.train_util import (
@@ -74,7 +74,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-logging.getLogger().setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def evaluate_model(
@@ -122,7 +122,7 @@ def evaluate_model(
         )
         log_loss_score = log_loss(y_val, probabilities)
     except (ValueError, RuntimeError, AttributeError) as e:
-        logging.warning(f"An error occurred during evaluation: {e}")
+        logger.warning(f"An error occurred during evaluation: {e}")
         roc_auc, log_loss_score = np.nan, np.nan
 
     return roc_auc, log_loss_score  # pyright: ignore[reportReturnType]
@@ -282,7 +282,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         base_config: dict[str, Any],
         n_estimators_override: int | None,
     ) -> dict[str, Any]:
-        """Return eval config sharing settings except for a optional n_estimators override."""  # noqa: E501
+        """Return eval config sharing settings except for an optional n_estimators override."""  # noqa: E501
         config = self._build_classifier_config(base_config, n_estimators_override)
         existing = dict(config.get("inference_config", {}) or {})
         existing["SUBSAMPLE_SAMPLES"] = self.n_inference_subsample_samples
@@ -326,10 +326,6 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         output_dir: Path | None = None,
     ) -> FinetunedTabPFNClassifier:
         """Internal implementation of fit that runs the finetuning loop."""
-        # Global counters used for logging learning curves.
-        global_step = 0
-        num_examples_seen = 0
-
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
 
@@ -403,7 +399,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 )
             )
             if checkpoint_path is not None:
-                logging.info(
+                logger.info(
                     f"Restarting training from checkpoint {checkpoint_path} at epoch "
                     f"{epoch_to_start_from}",
                 )
@@ -438,7 +434,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         use_amp = self.device.startswith("cuda") and torch.cuda.is_available()
         scaler = GradScaler() if use_amp else None  # type: ignore
 
-        logging.info("--- 🚀 Starting Fine-tuning ---")
+        logger.info("--- 🚀 Starting Fine-tuning ---")
 
         best_roc_auc = -np.inf
         patience_counter = 0
@@ -461,7 +457,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 random_state=self.random_state + epoch,
             )
 
-            training_datasets = get_preprocessed_datasets_helper(
+            training_datasets = get_preprocessed_dataset_chunks(
                 calling_instance=self.finetuned_classifier_,
                 X_raw=X_train,
                 y_raw=y_train,
@@ -485,7 +481,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
             if self.use_lr_scheduler and scheduler is None:
                 steps_per_epoch = len(finetuning_dataloader)
                 if steps_per_epoch == 0:
-                    logging.warning(
+                    logger.warning(
                         "No training batches available; ending training early.",
                     )
                     break
@@ -500,7 +496,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 )
                 scheduler = LambdaLR(optimizer, lr_lambda=lrate_schedule_fn)
 
-                logging.info(
+                logger.info(
                     "Using LambdaLR %s schedule: total_steps=%d, warmup_steps=%d",
                     "warmup-only (constant LR after warmup)"
                     if self.lr_warmup_only
@@ -524,7 +520,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 ctx = set(np.unique(y_context_batch))
                 qry = set(np.unique(y_query_batch))
                 if not qry.issubset(ctx):
-                    logging.warning(
+                    logger.warning(
                         "Skipping batch: query labels %s are not a subset of "
                         "context labels %s",
                         qry,
@@ -612,9 +608,6 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 epoch_loss_sum += loss_scalar
                 epoch_batches += 1
 
-                global_step += 1
-                num_examples_seen += int(y_query_batch.shape[1])
-
                 progress_bar.set_postfix(
                     loss=f"{loss_scalar:.4f}",
                 )
@@ -632,7 +625,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 y_val,  # pyright: ignore[reportArgumentType]
             )
 
-            logging.info(
+            logger.info(
                 f"📊 Epoch {epoch + 1} Evaluation | Val ROC: {roc_auc:.4f}, "
                 f"Val Log Loss: {log_loss_score:.4f}, Train Loss: {mean_train_loss:.4f}"
             )
@@ -664,14 +657,14 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     best_model = copy.deepcopy(self.finetuned_classifier_)
                 else:
                     patience_counter += 1
-                    logging.info(
+                    logger.info(
                         "⚠️  No improvement for %s epochs. Best ROC AUC: %.4f",
                         patience_counter,
                         best_roc_auc,
                     )
 
                 if patience_counter >= self.early_stopping_patience:
-                    logging.info(
+                    logger.info(
                         "🛑 Early stopping triggered. Best ROC AUC: %.4f",
                         best_roc_auc,
                     )
@@ -683,7 +676,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         if self.early_stopping and best_model is not None:
             self.finetuned_classifier_ = best_model
 
-        logging.info("--- ✅ Fine-tuning Finished ---")
+        logger.info("--- ✅ Fine-tuning Finished ---")
 
         finetuned_inference_classifier = clone_model_for_evaluation(
             self.finetuned_classifier_,  # type: ignore

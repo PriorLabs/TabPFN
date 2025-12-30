@@ -10,6 +10,7 @@ import numpy as np
 import sklearn.datasets
 import torch
 from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.finetuned_classifier import (
@@ -61,16 +62,9 @@ def main() -> None:
     # Get test dataset
     X_all, y_all = sklearn.datasets.fetch_covtype(return_X_y=True, shuffle=True)
 
-    rng = np.random.default_rng(42)
-
-    test_size = 0.1
-    test_indices = rng.choice(
-        np.arange(len(y_all)), size=int(len(y_all) * test_size), replace=False
+    X_train, X_test, y_train, y_test = train_test_split(
+        X_all, y_all, test_size=0.1, random_state=RANDOM_STATE, stratify=y_all
     )
-    X_test = X_all[test_indices]
-    y_test = y_all[test_indices]
-    X_train = X_all[~test_indices]
-    y_train = y_all[~test_indices]
 
     # 2. Initial model evaluation on test set
     inference_config = {
