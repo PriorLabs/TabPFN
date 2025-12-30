@@ -50,7 +50,7 @@ class KDITransformerWithNaN(KDITransformer):
     def __init__(
         self,
         alpha: float = 1.0,
-        output_distribution: str = "normal",
+        output_distribution: str = "uniform",
         *,
         standardize: bool = True,
         copy: bool = True,
@@ -67,7 +67,6 @@ class KDITransformerWithNaN(KDITransformer):
             super().__init__(
                 alpha=alpha,
                 output_distribution=output_distribution,
-                standardize=standardize,
                 copy=copy,
             )
 
