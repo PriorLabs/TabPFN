@@ -32,9 +32,27 @@ try:
     GradScaler = partial(_amp_GradScaler, "cuda")
 except ImportError:
     from torch.cuda.amp import GradScaler, autocast
-from torch.nn.attention import SDPBackend
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
+
+# Handle torch.nn.attention API introduced in PyTorch 2.4+
+# For older versions (2.1-2.3), use torch.backends.cuda.sdp_kernel
+try:
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    _SDPA_BACKENDS = [
+        SDPBackend.FLASH_ATTENTION,
+        SDPBackend.EFFICIENT_ATTENTION,
+        SDPBackend.MATH,
+    ]
+    _sdpa_kernel_context = partial(sdpa_kernel, _SDPA_BACKENDS)
+except ImportError:
+    _sdpa_kernel_context = partial(  # type: ignore[misc]
+        torch.backends.cuda.sdp_kernel,
+        enable_flash=True,
+        enable_math=True,
+        enable_mem_efficient=True,
+    )
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -531,13 +549,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     # changing the loss calculation to be "per_estimator".
                     # Since the cuDNN backend was found to be slower anyway, this
                     # fix is good enough for now!
-                    with torch.nn.attention.sdpa_kernel(
-                        [
-                            SDPBackend.FLASH_ATTENTION,
-                            SDPBackend.EFFICIENT_ATTENTION,
-                            SDPBackend.MATH,
-                        ]
-                    ):
+                    with _sdpa_kernel_context():
                         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
                         predictions_QBEL = self.finetuned_classifier_.forward(
                             X_query_batch,
