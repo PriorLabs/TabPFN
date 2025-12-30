@@ -1,8 +1,4 @@
-"""Utilities for data preparation used in fine-tuning wrappers.
-
-Note that the get_preprocessed_datasets_helper() method below is a copy
-of the public package. Copied here for easier modification.
-"""
+"""Utilities for data preparation used in fine-tuning wrappers."""
 
 from __future__ import annotations
 
@@ -28,7 +24,7 @@ if TYPE_CHECKING:
 
 
 def _take(obj: Any, idx: np.ndarray) -> Any:
-    """Index obj by idx using .iloc when available, otherwise []."""
+    """Index obj by idx using .iloc when available (for pd.DataFrame), otherwise []."""
     return obj.iloc[idx] if hasattr(obj, "iloc") else obj[idx]
 
 

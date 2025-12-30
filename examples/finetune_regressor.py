@@ -8,6 +8,7 @@ Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as ful
 support for the Apple Silicon (MPS) backend is still under development.
 """
 
+import warnings
 from functools import partial
 
 import numpy as np
@@ -20,10 +21,16 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from tabpfn import TabPFNRegressor
-from tabpfn.finetune_utils import clone_model_for_evaluation
 from tabpfn.finetuning.data_util import (
-    get_preprocessed_datasets_helper,
+    get_preprocessed_dataset_chunks,
     meta_dataset_collator,
+)
+from tabpfn.finetuning.train_util import clone_model_for_evaluation
+
+warnings.warn(
+    "This script is out of date and will be updated as soon as possible.",
+    UserWarning,
+    stacklevel=2,
 )
 
 
@@ -158,7 +165,7 @@ def main() -> None:
 
     splitter = partial(train_test_split, test_size=config["valid_set_ratio"])
     # Note: `max_data_size` corresponds to the finetuning `batch_size` in the config
-    training_datasets = get_preprocessed_datasets_helper(
+    training_datasets = get_preprocessed_dataset_chunks(
         regressor,
         X_train,
         y_train,

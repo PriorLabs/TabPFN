@@ -61,7 +61,7 @@ def calculate_roc_auc(y_true: np.ndarray, y_pred_proba: np.ndarray) -> float:
 
 def main() -> None:
     # We use the "Higgs" dataset (see https://www.openml.org/search?type=data&sort=runs&id=44129&status=active)
-    # and only take a random subset of 100k samples for this example.
+    # but only take a random subset of 100k samples for this example.
     data = sklearn.datasets.fetch_openml(data_id=44129, as_frame=True, parser="auto")
     _, X_all, _, y_all = train_test_split(
         data.data,
@@ -92,10 +92,7 @@ def main() -> None:
     base_clf.fit(X_train, y_train)
 
     base_pred_proba = base_clf.predict_proba(X_test)
-    roc_auc = calculate_roc_auc(
-        y_test,
-        base_pred_proba,
-    )  # pyright: ignore[reportReturnType, reportArgumentType]
+    roc_auc = calculate_roc_auc(y_test, base_pred_proba)
     log_loss_score = log_loss(y_test, base_pred_proba)
 
     print(f"📊 Default TabPFN Test ROC: {roc_auc:.4f}")
@@ -125,19 +122,14 @@ def main() -> None:
     )
 
     # 4. Call .fit() to start the fine-tuning process on the training data
-    finetuned_clf.fit(X_train, y_train)  # pyright: ignore[reportArgumentType]
+    finetuned_clf.fit(X_train, y_train)
     print("\n")
 
     # 5. Evaluate the fine-tuned model
     print("--- 3. Evaluating Model on Held-out Test Set ---\n")
-    y_pred_proba = finetuned_clf.predict_proba(
-        X_test,
-    )  # pyright: ignore[reportArgumentType]
+    y_pred_proba = finetuned_clf.predict_proba(X_test)
 
-    roc_auc = calculate_roc_auc(
-        y_test,
-        y_pred_proba,
-    )  # pyright: ignore[reportArgumentType]
+    roc_auc = calculate_roc_auc(y_test, y_pred_proba)
     loss = log_loss(y_test, y_pred_proba)
 
     print(f"📊 Finetuned TabPFN Test ROC: {roc_auc:.4f}")

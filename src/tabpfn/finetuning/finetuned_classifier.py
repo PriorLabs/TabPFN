@@ -190,10 +190,6 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
             used. Defaults to 8.
         use_activation_checkpointing: Whether to use activation checkpointing to
             reduce memory usage. Defaults to False.
-        use_fixed_preprocessing_seeds: Whether to use fixed preprocessing seeds
-            for the estimators. This allows for the column order to be fixed
-            during fine-tuning and inference and can improve performance
-            substantially. Defaults to False.
         save_checkpoint_interval: Number of epochs between checkpoint saves. If
             None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
@@ -224,7 +220,6 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         n_estimators_validation: int | None = 4,
         n_estimators_final_inference: int | None = 8,
         use_activation_checkpointing: bool = False,
-        use_fixed_preprocessing_seeds: bool = False,
         save_checkpoint_interval: int | None = 10,
         extra_classifier_kwargs: dict[str, Any] | None = None,
     ):
@@ -249,27 +244,9 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         self.n_estimators_validation = n_estimators_validation
         self.n_estimators_final_inference = n_estimators_final_inference
         self.use_activation_checkpointing = use_activation_checkpointing
-        self.use_fixed_preprocessing_seeds = use_fixed_preprocessing_seeds
         self.classifier_kwargs = extra_classifier_kwargs or {}
 
         self.save_checkpoint_interval = save_checkpoint_interval
-
-        if self.use_fixed_preprocessing_seeds and not (
-            self.n_estimators_finetune
-            == self.n_estimators_validation
-            == self.n_estimators_final_inference
-        ):
-            warnings.warn(
-                "`use_fixed_preprocessing_seeds` is only supported if "
-                "`n_estimators_finetune` == `n_estimators_validation` == "
-                "`n_estimators_final_inference`. We are setting the number of "
-                "estimators for validation and final inference to the same value "
-                f"as `n_estimators_finetune`(={self.n_estimators_finetune}).",
-                UserWarning,
-                stacklevel=2,
-            )
-            self.n_estimators_validation = self.n_estimators_finetune
-            self.n_estimators_final_inference = self.n_estimators_finetune
 
         assert self.meta_batch_size == 1, "meta_batch_size must be 1 for finetuning"
 
@@ -350,17 +327,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
             len(y_train),
         )
 
-        max_num_estimators = max(
-            self.n_estimators_finetune or 0,
-            self.n_estimators_validation or 0,
-            self.n_estimators_final_inference or 0,
-        )
         inference_config = self.classifier_kwargs.get("inference_config", {})
-        if self.use_fixed_preprocessing_seeds:
-            inference_config["FIXED_PREPROCESSING_SEED_PER_ESTIMATOR"] = list(
-                range(42, 42 + max_num_estimators)
-            )
-
         base_classifier_config: dict[str, Any] = {
             **self.classifier_kwargs,
             "ignore_pretraining_limits": True,
