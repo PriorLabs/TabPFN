@@ -20,48 +20,13 @@ from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_is_fitted
-
-# Handle torch.amp deprecation (torch.cuda.amp deprecated in PyTorch 2.4+)
-try:
-    from torch.amp import (
-        GradScaler as _amp_GradScaler,
-        autocast as _amp_autocast,
-    )
-
-    autocast = partial(_amp_autocast, device_type="cuda")
-    GradScaler = partial(_amp_GradScaler, "cuda")
-except ImportError:
-    from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
-
-# Handle torch.nn.attention API introduced in PyTorch 2.4+
-# For older versions (2.1-2.3), use torch.backends.cuda.sdp_kernel
-try:
-    from torch.nn.attention import SDPBackend, sdpa_kernel
-
-    # This excludes running the cuDNN backend. Otherwise we started to
-    # get stride warnings/errors running the cuDNN backend, after
-    # changing the loss calculation to be "per_estimator".
-    # Since the cuDNN backend was found to be slower anyway, this
-    # fix is good enough for now!
-    _SDPA_BACKENDS = [
-        SDPBackend.FLASH_ATTENTION,
-        SDPBackend.EFFICIENT_ATTENTION,
-        SDPBackend.MATH,
-    ]
-    _sdpa_kernel_context = partial(sdpa_kernel, _SDPA_BACKENDS)
-except ImportError:
-    _sdpa_kernel_context = partial(  # type: ignore[misc]
-        torch.backends.cuda.sdp_kernel,
-        enable_flash=True,
-        enable_math=True,
-        enable_mem_efficient=True,
-    )
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from tabpfn import TabPFNClassifier
+from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
 from tabpfn.finetuning.data_util import (
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
@@ -211,13 +176,13 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
         meta_batch_size: int = 1,
         random_state: int = 0,
         early_stopping: bool = True,
-        early_stopping_patience: int = 6,
+        early_stopping_patience: int = 8,
         min_delta: float = 1e-4,
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
         lr_warmup_only: bool = False,
         n_estimators_finetune: int | None = 2,
-        n_estimators_validation: int | None = 4,
+        n_estimators_validation: int | None = 2,
         n_estimators_final_inference: int | None = 8,
         use_activation_checkpointing: bool = False,
         save_checkpoint_interval: int | None = 10,
@@ -518,7 +483,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                 use_scaler = use_amp and scaler is not None
 
                 with autocast(enabled=use_scaler):  # type: ignore
-                    with _sdpa_kernel_context():
+                    with sdpa_kernel_context():
                         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
                         predictions_QBEL = self.finetuned_classifier_.forward(
                             X_query_batch,
@@ -554,7 +519,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     # When using activation checkpointing, we need to exclude the cuDNN
                     # backend also during the backward pass because checkpointing re-
                     # computes the forward pass during backward.
-                    with _sdpa_kernel_context():
+                    with sdpa_kernel_context():
                         scaler.scale(loss).backward()  # type: ignore
                     scaler.unscale_(optimizer)  # type: ignore
 
@@ -567,7 +532,7 @@ class FinetunedTabPFNClassifier(BaseEstimator, ClassifierMixin):
                     scaler.step(optimizer)  # type: ignore
                     scaler.update()  # type: ignore
                 else:
-                    with _sdpa_kernel_context():
+                    with sdpa_kernel_context():
                         loss.backward()
 
                     if self.grad_clip_value is not None:

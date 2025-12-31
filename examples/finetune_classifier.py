@@ -31,21 +31,25 @@ warnings.filterwarnings(
 # Training hyperparameters
 NUM_EPOCHS = 30
 LEARNING_RATE = 2e-5
-EARLY_STOPPING_PATIENCE = 8
-WEIGHT_DECAY = 0.001
-USE_LR_SCHEDULER = True
-LR_WARMUP_ONLY = False
 
-# Data sampling configuration
+# Data sampling configuration (dataset dependent)
+# the ratio of the total dataset to be used for validation during training
 VALIDATION_SPLIT_RATIO = 0.1
+# total context split into train/test
 NUM_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 10_000
+# the following means 0.2*10_000=2_000 test samples are used in training
 FINETUNE_CTX_QUERY_SPLIT_RATIO = 0.2
 NUM_INFERENCE_SUBSAMPLE_SAMPLES = 50_000
+# to reduce memory usage during training we can use activation checkpointing,
+# may not be necessary for small datasets
 USE_ACTIVATION_CHECKPOINTING = True
 
 # Ensemble configuration
+# number of estimators to use during finetuning
 NUM_ESTIMATORS_FINETUNE = 2
+# number of estimators to use during trian time validation
 NUM_ESTIMATORS_VALIDATION = 2
+# number of estimators to use during final inference
 NUM_ESTIMATORS_FINAL_INFERENCE = 8
 
 # Reproducibility
@@ -111,10 +115,6 @@ def main() -> None:
         finetune_ctx_query_split_ratio=FINETUNE_CTX_QUERY_SPLIT_RATIO,
         n_inference_subsample_samples=NUM_INFERENCE_SUBSAMPLE_SAMPLES,
         random_state=RANDOM_STATE,
-        early_stopping_patience=EARLY_STOPPING_PATIENCE,
-        weight_decay=WEIGHT_DECAY,
-        use_lr_scheduler=USE_LR_SCHEDULER,
-        lr_warmup_only=LR_WARMUP_ONLY,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
