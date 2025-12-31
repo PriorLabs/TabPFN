@@ -22,29 +22,17 @@ from tabpfn.constants import (
     PARALLEL_MODE_TO_RETURN_AS,
     SUPPORTS_RETURN_AS,
 )
-from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
+from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
-)
-from tabpfn.preprocessing.steps.differentiable_z_norm_step import (
     DifferentiableZNormStep,
-)
-from tabpfn.preprocessing.steps.encode_categorical_features_step import (
     EncodeCategoricalFeaturesStep,
-)
-from tabpfn.preprocessing.steps.nan_handling_polynomial_features_step import (
-    NanHandlingPolynomialFeaturesStep,
-)
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
-)
-from tabpfn.preprocessing.steps.remove_constant_features_step import (
+    NanHandlingPolynomialFeaturesStep,
     RemoveConstantFeaturesStep,
-)
-from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     ReshapeFeatureDistributionsStep,
+    SequentialFeatureTransformer,
+    ShuffleFeaturesStep,
 )
-from tabpfn.preprocessing.steps.shuffle_features_step import ShuffleFeaturesStep
 from tabpfn.utils import infer_random_state
 
 from .definitions import (

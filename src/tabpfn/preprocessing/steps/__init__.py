@@ -17,7 +17,10 @@ from .kdi_transformer import (
 from .nan_handling_polynomial_features_step import (
     NanHandlingPolynomialFeaturesStep,
 )
-from .preprocessing_helpers import FeaturePreprocessingTransformerStep
+from .preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
+)
 from .remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
@@ -40,6 +43,7 @@ __all__ = [
     "RemoveConstantFeaturesStep",
     "ReshapeFeatureDistributionsStep",
     "SafePowerTransformer",
+    "SequentialFeatureTransformer",
     "ShuffleFeaturesStep",
     "SquashingScaler",
     "get_all_kdi_transformers",
