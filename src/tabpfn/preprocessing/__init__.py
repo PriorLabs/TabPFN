@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from .core import (
-    DatasetCollectionWithPreprocessing,
     SequentialFeatureTransformer,
     fit_preprocessing,
     generate_classification_ensemble_configs,
@@ -29,7 +28,6 @@ __all__ = [
     "BaseDatasetConfig",
     "ClassifierDatasetConfig",
     "ClassifierEnsembleConfig",
-    "DatasetCollectionWithPreprocessing",
     "EnsembleConfig",
     "PreprocessorConfig",
     "RegressorDatasetConfig",
