@@ -466,11 +466,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 seed=self.random_state + epoch,
             )
 
+            dataloader_generator = torch.Generator().manual_seed(
+                self.random_state + epoch
+            )
             finetuning_dataloader = DataLoader(
                 training_datasets,
                 batch_size=self.meta_batch_size,
                 collate_fn=meta_dataset_collator,
                 shuffle=True,
+                generator=dataloader_generator,
             )
 
             # Instantiate the LR scheduler only once
