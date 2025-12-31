@@ -95,7 +95,7 @@ def get_embeddings(
     selected_data = data_map[data_source]
 
     # Avoid circular imports
-    from tabpfn.preprocessors import (  # noqa: PLC0415
+    from tabpfn.preprocessing import (  # noqa: PLC0415
         ClassifierEnsembleConfig,
         RegressorEnsembleConfig,
     )

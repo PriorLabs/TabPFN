@@ -65,14 +65,14 @@ from tabpfn.model_loading import (
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
-from tabpfn.preprocessors import (
+from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
     PreprocessorConfig,
     generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,

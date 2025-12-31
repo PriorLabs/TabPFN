@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-    from tabpfn.preprocessors.steps.preprocessing_helpers import (
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
         SequentialFeatureTransformer,
     )
 
@@ -70,7 +70,7 @@ class RegressorDatasetConfig(BaseDatasetConfig):
 
 @dataclass(frozen=True, eq=True)
 class PreprocessorConfig:
-    """Configuration for data preprocessors.
+    """Configuration for data preprocessing.
 
     Attributes:
         name: Name of the preprocessor.

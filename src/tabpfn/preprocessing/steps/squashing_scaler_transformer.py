@@ -177,7 +177,7 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
     --------
     >>> import pandas as pd
     >>> import numpy as np
-    >>> from tabpfn.preprocessors import SquashingScaler
+    >>> from tabpfn.preprocessing import SquashingScaler
 
     In the general case, this scale uses a RobustScaler:
 

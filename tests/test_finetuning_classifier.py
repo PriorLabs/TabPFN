@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
-from tabpfn.preprocessors import (
+from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
 )

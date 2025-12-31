@@ -24,29 +24,29 @@ from tabpfn.constants import (
     PARALLEL_MODE_TO_RETURN_AS,
     SUPPORTS_RETURN_AS,
 )
-from tabpfn.preprocessors.steps.add_fingerprint_features_step import (
+from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
-from tabpfn.preprocessors.steps.differentiable_z_norm_step import (
+from tabpfn.preprocessing.steps.differentiable_z_norm_step import (
     DifferentiableZNormStep,
 )
-from tabpfn.preprocessors.steps.encode_categorical_features_step import (
+from tabpfn.preprocessing.steps.encode_categorical_features_step import (
     EncodeCategoricalFeaturesStep,
 )
-from tabpfn.preprocessors.steps.nan_handling_polynomial_features_step import (
+from tabpfn.preprocessing.steps.nan_handling_polynomial_features_step import (
     NanHandlingPolynomialFeaturesStep,
 )
-from tabpfn.preprocessors.steps.preprocessing_helpers import (
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
     SequentialFeatureTransformer,
 )
-from tabpfn.preprocessors.steps.remove_constant_features_step import (
+from tabpfn.preprocessing.steps.remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
-from tabpfn.preprocessors.steps.reshape_feature_distribution_step import (
+from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     ReshapeFeatureDistributionsStep,
 )
-from tabpfn.preprocessors.steps.shuffle_features_step import ShuffleFeaturesStep
+from tabpfn.preprocessing.steps.shuffle_features_step import ShuffleFeaturesStep
 from tabpfn.utils import infer_random_state
 
 from .definitions import (
@@ -638,12 +638,12 @@ class DatasetCollectionWithPreprocessing(Dataset):
     2.  Splits the raw data into training and testing sets using the provided
         `split_fn` and a random seed derived from `rng`. For regression,
         both raw and pre-standardized targets might be split.
-    3.  Fits preprocessors (defined in the dataset configuration's `config`
+    3.  Fits preprocessing (defined in the dataset configuration's `config`
         attribute) on the *training* data using the `fit_preprocessing`
         utility. This may result in multiple preprocessed versions
         if the configuration specifies an ensemble of preprocessing pipelines.
         For regression we also standardise the target variable.
-    4.  Applies the fitted preprocessors to the *testing* features (`x_test_raw`).
+    4.  Applies the fitted preprocessing to the *testing* features (`x_test_raw`).
     5.  Converts relevant outputs to `torch.Tensor` objects.
     6.  Returns the preprocessed data splits along with other relevant
         information (like raw test data, configs) as a tuple.

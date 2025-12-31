@@ -23,12 +23,12 @@ from tabpfn.architectures.base.memory import (
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
-from tabpfn.preprocessors.core import fit_preprocessing
+from tabpfn.preprocessing.core import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture
-    from tabpfn.preprocessors import EnsembleConfig, SequentialFeatureTransformer
+    from tabpfn.preprocessing import EnsembleConfig, SequentialFeatureTransformer
 
 
 @dataclass
@@ -509,7 +509,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     """Inference engine that caches the preprocessing for feeding as model context on
     predict.
 
-    This will fit the preprocessors on the training data, as well as cache the
+    This will fit the preprocessing on the training data, as well as cache the
     transformed training data on RAM (not GPU RAM).
 
     This saves some time on each predict call, at the cost of increasing the amount

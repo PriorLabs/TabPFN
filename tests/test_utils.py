@@ -12,7 +12,7 @@ from torch.torch_version import TorchVersion
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
-from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     balance_probas_by_class_counts,
     fix_dtypes,
