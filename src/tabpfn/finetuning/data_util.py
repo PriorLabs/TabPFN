@@ -41,7 +41,12 @@ class ClassifierBatch:
     X_query: list[torch.Tensor]
     y_context: list[torch.Tensor]
     y_query: torch.Tensor
-    cat_indices: list[list[int] | None]
+    # In a single dataset sample, this is "per-estimator":
+    #   list[list[int] | None]
+    # After collation (batch_size datasets), categorical indices must be batched:
+    #   list[list[list[int] | None]]
+    # The batched structure is required by InferenceEngineBatchedNoPreprocessing.
+    cat_indices: list[list[int] | None] | list[list[list[int] | None]]
     configs: list[Any]
 
 
@@ -66,7 +71,8 @@ class RegressorBatch:
     X_query: list[torch.Tensor]
     y_context: list[torch.Tensor]
     y_query: torch.Tensor
-    cat_indices: list[list[int] | None]
+    # See ClassifierBatch.cat_indices for the rationale of this union type.
+    cat_indices: list[list[int] | None] | list[list[list[int] | None]]
     configs: list[Any]
     raw_space_bardist: FullSupportBarDistribution
     znorm_space_bardist: FullSupportBarDistribution
@@ -485,6 +491,47 @@ def _collate_tensor_field(
     )
 
 
+def _collate_cat_indices(
+    batch: Sequence[ClassifierBatch | RegressorBatch],
+) -> list[list[list[int] | None]]:
+    """Collate cat indices into the batched shape expected by the batched executor.
+
+    In fine-tuning, the batched inference engine expects categorical indices as:
+        [dataset_batch][estimator][cat_index]
+
+    Individual dataset samples carry categorical indices as:
+        [estimator][cat_index]  (or None per estimator)
+    """
+    batched_cat_indices: list[list[list[int] | None]] = []
+    for item in batch:
+        cat_indices = item.cat_indices
+
+        # Empty is unambiguous (no estimators / no categorical features).
+        if len(cat_indices) == 0:
+            batched_cat_indices.append([])
+            continue
+
+        # If the first element is a list of ints, it's the per-estimator form.
+        first = cat_indices[0]
+        if first is None:
+            batched_cat_indices.append(cat_indices)  # type: ignore[arg-type]
+            continue
+
+        if len(first) == 0 or isinstance(first[0], int):
+            batched_cat_indices.append(cat_indices)  # type: ignore[arg-type]
+            continue
+
+        # Otherwise it's already batched: [dataset_batch][estimator][...].
+        # We only support batch_size=1 in this collator.
+        assert len(cat_indices) == 1, (
+            "Only implemented and tested for batch size of 1. "
+            "Use tabpfn.utils.collate_for_tabpfn_dataset for larger batch sizes."
+        )
+        batched_cat_indices.append(cat_indices[0])  # type: ignore[index]
+
+    return batched_cat_indices
+
+
 def meta_dataset_collator(
     batch: list[ClassifierBatch | RegressorBatch],
     padding_val: float = 0.0,
@@ -528,9 +575,7 @@ def meta_dataset_collator(
                 batch, "y_context", num_estimators, padding_val
             ),
             y_query=_collate_tensor_field(batch, "y_query", padding_val),
-            cat_indices=_collate_list_field(
-                batch, "cat_indices", num_estimators, padding_val
-            ),
+            cat_indices=_collate_cat_indices(batch),
             configs=_collate_list_field(batch, "configs", num_estimators, padding_val),
         )
 
@@ -542,9 +587,7 @@ def meta_dataset_collator(
         X_query=_collate_list_field(batch, "X_query", num_estimators, padding_val),
         y_context=_collate_list_field(batch, "y_context", num_estimators, padding_val),
         y_query=_collate_tensor_field(batch, "y_query", padding_val),
-        cat_indices=_collate_list_field(
-            batch, "cat_indices", num_estimators, padding_val
-        ),
+        cat_indices=_collate_cat_indices(batch),
         configs=_collate_list_field(batch, "configs", num_estimators, padding_val),
         raw_space_bardist=first_item.raw_space_bardist,
         znorm_space_bardist=first_item.znorm_space_bardist,
