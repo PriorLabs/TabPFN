@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from .core import (
     DatasetCollectionWithPreprocessing,
+    SequentialFeatureTransformer,
     fit_preprocessing,
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
@@ -33,6 +34,7 @@ __all__ = [
     "PreprocessorConfig",
     "RegressorDatasetConfig",
     "RegressorEnsembleConfig",
+    "SequentialFeatureTransformer",
     "default_classifier_preprocessor_configs",
     "default_regressor_preprocessor_configs",
     "fit_preprocessing",

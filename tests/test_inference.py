@@ -16,6 +16,7 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
     PreprocessorConfig,
+    generate_classification_ensemble_configs,
 )
 
 
@@ -196,7 +197,7 @@ def _create_test_ensemble_configs(
             max_features_per_estimator=500,
         ),
     ]
-    return EnsembleConfig.generate_for_classification(
+    return generate_classification_ensemble_configs(
         num_estimators=n_configs,
         subsample_samples=None,
         max_index=n_classes - 1,
