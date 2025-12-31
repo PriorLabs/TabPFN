@@ -16,9 +16,9 @@ from sklearn.preprocessing import (
     PowerTransformer,
 )
 
-from tabpfn import preprocessors
-from tabpfn.preprocessing import get_subsample_indices_for_estimators
-from tabpfn.preprocessors import (
+from tabpfn import preprocessing
+from tabpfn.preprocessing.core import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.steps import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
     FeaturePreprocessingTransformerStep,
@@ -26,7 +26,9 @@ from tabpfn.preprocessors import (
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,
 )
-from tabpfn.preprocessors.preprocessing_helpers import OrderPreservingColumnTransformer
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    OrderPreservingColumnTransformer,
+)
 
 
 @pytest.fixture
@@ -228,7 +230,7 @@ def _get_preprocessing_steps() -> list[
 ]:
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
-        for cls in preprocessors.__dict__.values()
+        for cls in preprocessing.__dict__.values()
         if (
             isinstance(cls, type)
             and issubclass(cls, FeaturePreprocessingTransformerStep)
@@ -552,7 +554,7 @@ def test__get_subsample_indices_for_estimators():
         np.array([5, 6, 7, 8, 9]),
         np.array([0, 1, 2, 3, 4]),
     ]
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -564,7 +566,7 @@ def test__get_subsample_indices_for_estimators():
         assert (subsample_index == expected_subsample_index).all()
 
     subsample_samples = 0.5
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -574,7 +576,7 @@ def test__get_subsample_indices_for_estimators():
         assert len(subsample_index) == 3  # (max_index + 1) * 0.5
 
     subsample_samples = 2
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )

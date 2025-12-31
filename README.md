@@ -289,6 +289,14 @@ from tabpfn.constants import ModelVersion
 tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 ```
 
+## Enterprise & Production
+
+For high-throughput or massive-scale production environments, we offer an **Enterprise Edition** with the following capabilities:
+-   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN-2.5 into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
+-   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**—a 1,000x increase over the original TabPFNv2.
+-   **Commercial Support**: Includes a Commercial Enterprise License for production use-cases, dedicated integration support, and access to private high-speed inference engines.
+
+**To learn more or request a commercial license, please contact us at [sales@priorlabs.ai](mailto:sales@priorlabs.ai).**
 
 
 ## Join Our Community

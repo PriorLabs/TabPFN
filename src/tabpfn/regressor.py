@@ -48,7 +48,7 @@ from tabpfn.base import (
     initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
-from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -59,9 +59,12 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing import (
     EnsembleConfig,
     RegressorEnsembleConfig,
+    generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
-from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps import (
+    get_all_reshape_feature_distribution_preprocessors,
+)
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
@@ -637,7 +640,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 preprocessor = None
             target_preprocessors.append(preprocessor)
 
-        ensemble_configs = EnsembleConfig.generate_for_regression(
+        ensemble_configs = generate_regression_ensemble_configs(
             num_estimators=self.n_estimators,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
