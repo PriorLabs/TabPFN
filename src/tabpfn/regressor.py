@@ -61,6 +61,8 @@ from tabpfn.preprocessors import (
     EnsembleConfig,
     RegressorEnsembleConfig,
     generate_regression_ensemble_configs,
+)
+from tabpfn.preprocessors.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder

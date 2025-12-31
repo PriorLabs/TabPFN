@@ -31,7 +31,7 @@ from tabpfn.inference_tuning import (
     ClassifierTuningConfig,
 )
 from tabpfn.model_loading import ModelSource, prepend_cache_path
-from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.preprocessors import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
 from .utils import (
