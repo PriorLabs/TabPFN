@@ -28,8 +28,7 @@ from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture
-    from tabpfn.preprocessing import EnsembleConfig
-    from tabpfn.preprocessors import SequentialFeatureTransformer
+    from tabpfn.preprocessing import EnsembleConfig, SequentialFeatureTransformer
 
 
 @dataclass

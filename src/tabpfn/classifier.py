@@ -69,8 +69,9 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
     PreprocessorConfig,
+    generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -626,7 +627,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.preprocessor_ = None
             preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
-        ensemble_configs = EnsembleConfig.generate_for_classification(
+        ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
