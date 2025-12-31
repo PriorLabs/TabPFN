@@ -26,7 +26,9 @@ from tabpfn.preprocessors import (
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,
 )
-from tabpfn.preprocessors.preprocessing_helpers import OrderPreservingColumnTransformer
+from tabpfn.preprocessors.steps.preprocessing_helpers import (
+    OrderPreservingColumnTransformer,
+)
 
 
 @pytest.fixture

@@ -16,7 +16,9 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-    from tabpfn.preprocessors.preprocessing_helpers import SequentialFeatureTransformer
+    from tabpfn.preprocessors.steps.preprocessing_helpers import (
+        SequentialFeatureTransformer,
+    )
 
 
 @dataclass

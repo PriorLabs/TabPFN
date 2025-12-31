@@ -71,7 +71,7 @@ from tabpfn.preprocessors import (
     EnsembleConfig,
     PreprocessorConfig,
 )
-from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,

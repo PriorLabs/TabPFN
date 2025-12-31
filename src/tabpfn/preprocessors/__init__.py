@@ -1,11 +1,39 @@
 from __future__ import annotations
 
-from .adaptive_quantile_transformer import (
+from tabpfn.preprocessors.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )
-from .add_fingerprint_features_step import (
+from tabpfn.preprocessors.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
+from tabpfn.preprocessors.steps.differentiable_z_norm_step import (
+    DifferentiableZNormStep,
+)
+from tabpfn.preprocessors.steps.encode_categorical_features_step import (
+    EncodeCategoricalFeaturesStep,
+)
+from tabpfn.preprocessors.steps.kdi_transformer import (
+    KDITransformerWithNaN,
+    get_all_kdi_transformers,
+)
+from tabpfn.preprocessors.steps.nan_handling_polynomial_features_step import (
+    NanHandlingPolynomialFeaturesStep,
+)
+from tabpfn.preprocessors.steps.preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
+)
+from tabpfn.preprocessors.steps.remove_constant_features_step import (
+    RemoveConstantFeaturesStep,
+)
+from tabpfn.preprocessors.steps.reshape_feature_distribution_step import (
+    ReshapeFeatureDistributionsStep,
+    get_all_reshape_feature_distribution_preprocessors,
+)
+from tabpfn.preprocessors.steps.safe_power_transformer import SafePowerTransformer
+from tabpfn.preprocessors.steps.shuffle_features_step import ShuffleFeaturesStep
+from tabpfn.preprocessors.steps.squashing_scaler_transformer import SquashingScaler
+
 from .core import (
     DatasetCollectionWithPreprocessing,
     balance,
@@ -27,21 +55,6 @@ from .definitions import (
     RegressorDatasetConfig,
     RegressorEnsembleConfig,
 )
-from .differentiable_z_norm_step import DifferentiableZNormStep
-from .encode_categorical_features_step import (
-    EncodeCategoricalFeaturesStep,
-)
-from .kdi_transformer import (
-    KDITransformerWithNaN,
-    get_all_kdi_transformers,
-)
-from .nan_handling_polynomial_features_step import (
-    NanHandlingPolynomialFeaturesStep,
-)
-from .preprocessing_helpers import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
-)
 from .presets import (
     _V2_FEATURE_SUBSAMPLING_THRESHOLD,
     default_classifier_preprocessor_configs,
@@ -51,16 +64,6 @@ from .presets import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
-from .remove_constant_features_step import (
-    RemoveConstantFeaturesStep,
-)
-from .reshape_feature_distribution_step import (
-    ReshapeFeatureDistributionsStep,
-    get_all_reshape_feature_distribution_preprocessors,
-)
-from .safe_power_transformer import SafePowerTransformer
-from .shuffle_features_step import ShuffleFeaturesStep
-from .squashing_scaler_transformer import SquashingScaler
 
 __all__ = [
     "_V2_FEATURE_SUBSAMPLING_THRESHOLD",

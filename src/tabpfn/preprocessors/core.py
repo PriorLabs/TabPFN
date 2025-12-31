@@ -24,9 +24,31 @@ from tabpfn.constants import (
     PARALLEL_MODE_TO_RETURN_AS,
     SUPPORTS_RETURN_AS,
 )
+from tabpfn.preprocessors.steps.add_fingerprint_features_step import (
+    AddFingerprintFeaturesStep,
+)
+from tabpfn.preprocessors.steps.differentiable_z_norm_step import (
+    DifferentiableZNormStep,
+)
+from tabpfn.preprocessors.steps.encode_categorical_features_step import (
+    EncodeCategoricalFeaturesStep,
+)
+from tabpfn.preprocessors.steps.nan_handling_polynomial_features_step import (
+    NanHandlingPolynomialFeaturesStep,
+)
+from tabpfn.preprocessors.steps.preprocessing_helpers import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
+)
+from tabpfn.preprocessors.steps.remove_constant_features_step import (
+    RemoveConstantFeaturesStep,
+)
+from tabpfn.preprocessors.steps.reshape_feature_distribution_step import (
+    ReshapeFeatureDistributionsStep,
+)
+from tabpfn.preprocessors.steps.shuffle_features_step import ShuffleFeaturesStep
 from tabpfn.utils import infer_random_state
 
-from .add_fingerprint_features_step import AddFingerprintFeaturesStep
 from .definitions import (
     ClassifierDatasetConfig,
     ClassifierEnsembleConfig,
@@ -35,16 +57,6 @@ from .definitions import (
     RegressorDatasetConfig,
     RegressorEnsembleConfig,
 )
-from .differentiable_z_norm_step import DifferentiableZNormStep
-from .encode_categorical_features_step import EncodeCategoricalFeaturesStep
-from .nan_handling_polynomial_features_step import NanHandlingPolynomialFeaturesStep
-from .preprocessing_helpers import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
-)
-from .remove_constant_features_step import RemoveConstantFeaturesStep
-from .reshape_feature_distribution_step import ReshapeFeatureDistributionsStep
-from .shuffle_features_step import ShuffleFeaturesStep
 
 if TYPE_CHECKING:
     import numpy.typing as npt

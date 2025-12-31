@@ -49,7 +49,7 @@ from tabpfn.base import (
     initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
-from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -62,7 +62,7 @@ from tabpfn.preprocessors import (
     RegressorEnsembleConfig,
     get_all_reshape_feature_distribution_preprocessors,
 )
-from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,

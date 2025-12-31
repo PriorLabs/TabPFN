@@ -6,7 +6,7 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.preprocessors.preprocessing_helpers import (
+from tabpfn.preprocessors.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
 )
 
