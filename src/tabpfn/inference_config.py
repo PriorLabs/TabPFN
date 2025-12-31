@@ -47,7 +47,7 @@ class InferenceConfig:
     `PreprocessorConfig` for options and more details. If multiple `PreprocessorConfig`
     are provided, they are (repeatedly) applied across different estimators.
 
-    By default, for classification, two preprocessing are applied:
+    By default, for classification, two preprocessors are applied:
         1. Uses the original input data, all features transformed with a quantile
             scaler, and the first n-many components of SVD transformer (whereby
             n is a fract of on the number of features or samples). Categorical features
@@ -131,7 +131,7 @@ class InferenceConfig:
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
-    it. The preprocessing should be passed as a tuple/list and are then (repeatedly)
+    it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
     used by the estimators in the ensembles.
 
     By default, we use no preprocessing and a power transformation (if we have
