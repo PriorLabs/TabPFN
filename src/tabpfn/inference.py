@@ -509,7 +509,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     """Inference engine that caches the preprocessing for feeding as model context on
     predict.
 
-    This will fit the preprocessing on the training data, as well as cache the
+    This will fit the preprocessors on the training data, as well as cache the
     transformed training data on RAM (not GPU RAM).
 
     This saves some time on each predict call, at the cost of increasing the amount

@@ -295,7 +295,7 @@ def create_inference_engine(  # noqa: PLR0913
     """Creates the appropriate TabPFN inference engine based on `fit_mode`.
 
     Each execution mode will perform slightly different operations based on the mode
-    specified by the user. In the case where preprocessing will be fit after `prepare`,
+    specified by the user. In the case where preprocessors will be fit after `prepare`,
     we will use them to further transform the associated borders with each ensemble
     config member.
 
