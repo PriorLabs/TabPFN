@@ -322,14 +322,15 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
 
         config = self.configs[index]
 
+        is_regression_task = isinstance(config, RegressorDatasetConfig)
+
         # Check type of Dataset Config
-        if isinstance(config, RegressorDatasetConfig):
+        if is_regression_task:
             conf = config.config
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
             znorm_space_bardist_ = config.znorm_space_bardist_
-            regression_task = True
         else:
             assert isinstance(config, ClassifierDatasetConfig), (
                 "Invalid dataset config type"
@@ -338,9 +339,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             x_full_raw = config.X_raw
             y_full_raw = config.y_raw
             cat_ix = config.cat_ix
-            regression_task = False
 
-        stratify_y = y_full_raw if not regression_task and self.stratify else None
+        stratify_y = y_full_raw if not is_regression_task and self.stratify else None
         x_train_raw, x_test_raw, y_train_raw, y_test_raw = self.split_fn(
             x_full_raw, y_full_raw, stratify=stratify_y
         )
@@ -351,7 +351,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         # it is not set as an attribute of the Regressor class
         # This however makes also sense when considering that
         # this attribute changes on every dataset
-        if regression_task:
+        if is_regression_task:
             train_mean = np.mean(y_train_raw)
             train_std = np.std(y_train_raw)
             y_test_standardized = (y_test_raw - train_mean) / train_std
@@ -403,7 +403,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                     y_trains_preprocessed[i], dtype=torch.float32
                 )
 
-        if regression_task and not isinstance(y_test_standardized, torch.Tensor):
+        if is_regression_task and not isinstance(y_test_standardized, torch.Tensor):
             y_test_standardized = torch.from_numpy(y_test_standardized)
             if torch.is_floating_point(y_test_standardized):
                 y_test_standardized = y_test_standardized.float()
@@ -414,7 +414,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         y_test_raw = torch.from_numpy(y_test_raw)
 
         # Return structured batch data using dataclasses for clarity
-        if regression_task:
+        if is_regression_task:
             return RegressorBatch(
                 X_context=X_trains_preprocessed,
                 X_query=X_tests_preprocessed,

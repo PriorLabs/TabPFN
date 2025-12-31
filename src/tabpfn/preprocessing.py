@@ -60,7 +60,7 @@ def balance(x: Iterable[T], n: int) -> list[T]:
 class BaseDatasetConfig:
     """Base configuration class for holding dataset specifics."""
 
-    config: EnsembleConfig
+    config: list[EnsembleConfig]
     X_raw: np.ndarray | torch.Tensor
     y_raw: np.ndarray | torch.Tensor
     cat_ix: list[int]
