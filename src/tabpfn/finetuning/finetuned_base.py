@@ -27,6 +27,8 @@ from tqdm.auto import tqdm
 
 from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
 from tabpfn.finetuning.data_util import (
+    ClassifierBatch,
+    RegressorBatch,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
@@ -140,9 +142,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
         lr_warmup_only: bool = False,
-        n_estimators_finetune: int | None = 2,
-        n_estimators_validation: int | None = 2,
-        n_estimators_final_inference: int | None = 8,
+        n_estimators_finetune: int = 2,
+        n_estimators_validation: int = 2,
+        n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = False,
         save_checkpoint_interval: int | None = 10,
     ):
@@ -230,14 +232,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         ...
 
     @abstractmethod
-    def _setup_batch(self, batch: tuple) -> None:
+    def _setup_batch(self, batch: ClassifierBatch | RegressorBatch) -> None:
         """Perform any batch-specific setup before the forward pass."""
         ...
 
     @abstractmethod
     def _forward_with_loss(
         self,
-        batch: tuple,
+        batch: ClassifierBatch | RegressorBatch,
     ) -> torch.Tensor:
         """Perform forward pass and compute loss for the given batch.
 
@@ -508,17 +510,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                 self._setup_batch(batch)
 
-                # Unpack common batch items for fit_from_preprocessed
-                X_context_batch = batch[0]
-                y_context_batch = batch[2]
-                cat_ixs = batch[4]
-                confs = batch[5]
-
                 self.finetuned_estimator_.fit_from_preprocessed(
-                    X_context_batch,
-                    y_context_batch,
-                    cat_ixs,
-                    confs,
+                    batch.X_context,
+                    batch.y_context,
+                    batch.cat_indices,
+                    batch.configs,
                 )
 
                 use_scaler = use_amp and scaler is not None

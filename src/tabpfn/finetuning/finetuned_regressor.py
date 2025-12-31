@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import override
 
 import numpy as np
@@ -25,6 +25,9 @@ from tabpfn.finetuning.train_util import clone_model_for_evaluation
 from tabpfn.model_loading import get_n_out
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from tabpfn.finetuning.data_util import RegressorBatch
 
 
 class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
@@ -65,9 +68,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
         lr_warmup_only: bool = False,
-        n_estimators_finetune: int | None = 2,
-        n_estimators_validation: int | None = 2,
-        n_estimators_final_inference: int | None = 8,
+        n_estimators_finetune: int = 2,
+        n_estimators_validation: int = 2,
+        n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = False,
         save_checkpoint_interval: int | None = 10,
         extra_regressor_kwargs: dict[str, Any] | None = None,
@@ -147,29 +150,25 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         )
 
     @override
-    def _setup_batch(self, batch: tuple) -> None:
+    def _setup_batch(self, batch: RegressorBatch) -> None:  # type: ignore[override]
         """Set up bar distribution for this batch."""
-        raw_space_bardist_ = batch[6]
-        znorm_space_bardist_ = batch[7]
-
-        self.finetuned_estimator_.raw_space_bardist_ = raw_space_bardist_[0]
-        self.finetuned_estimator_.bardist_ = znorm_space_bardist_[0]
-        self._current_loss_function = znorm_space_bardist_[0]
+        self.finetuned_estimator_.raw_space_bardist_ = batch.raw_space_bardist
+        self.finetuned_estimator_.bardist_ = batch.znorm_space_bardist
+        self._current_loss_function = batch.znorm_space_bardist
 
     @override
-    def _forward_with_loss(self, batch: tuple) -> torch.Tensor:
+    def _forward_with_loss(self, batch: RegressorBatch) -> torch.Tensor:  # type: ignore[override]
         """Perform forward pass and compute bar distribution loss with optional MSE.
 
         Args:
-            batch: The batch tuple containing (X_context, X_query, y_context,
-                y_query, cat_ixs, confs, raw_space_bardist, znorm_space_bardist,
-                x_test_raw, y_test_raw).
+            batch: The RegressorBatch containing preprocessed context and query
+                data plus bar distribution information.
 
         Returns:
             The computed loss tensor (bar distribution + optional MSE auxiliary).
         """
-        X_query_batch = batch[1]
-        y_query_batch = batch[3]
+        X_query_batch = batch.X_query
+        y_query_batch = batch.y_query
         loss_function = self._current_loss_function
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits

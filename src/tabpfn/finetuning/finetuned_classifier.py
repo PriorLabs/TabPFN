@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from typing_extensions import override
 
 import numpy as np
@@ -24,6 +24,9 @@ from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from tabpfn.finetuning.data_util import ClassifierBatch
 
 
 class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
@@ -60,9 +63,9 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
         lr_warmup_only: bool = False,
-        n_estimators_finetune: int | None = 2,
-        n_estimators_validation: int | None = 2,
-        n_estimators_final_inference: int | None = 8,
+        n_estimators_finetune: int = 2,
+        n_estimators_validation: int = 2,
+        n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = False,
         save_checkpoint_interval: int | None = 10,
         extra_classifier_kwargs: dict[str, Any] | None = None,
@@ -143,22 +146,22 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         )
 
     @override
-    def _setup_batch(self, batch: tuple) -> None:
+    def _setup_batch(self, batch: ClassifierBatch) -> None:  # type: ignore[override]
         """No batch-specific setup needed for classifier."""
 
     @override
-    def _forward_with_loss(self, batch: tuple) -> torch.Tensor:
+    def _forward_with_loss(self, batch: ClassifierBatch) -> torch.Tensor:  # type: ignore[override]
         """Perform forward pass and compute and return cross-entropy loss.
 
         Args:
-            batch: The batch tuple containing (X_context, X_query, y_context,
-                y_query, cat_ixs, confs).
+            batch: The ClassifierBatch containing preprocessed context and
+                query data.
 
         Returns:
             The computed cross-entropy loss tensor.
         """
-        X_query_batch = batch[1]
-        y_query_batch = batch[3]
+        X_query_batch = batch.X_query
+        y_query_batch = batch.y_query
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
         predictions_QBEL = self.finetuned_estimator_.forward(
