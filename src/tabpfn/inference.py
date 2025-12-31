@@ -23,7 +23,7 @@ from tabpfn.architectures.base.memory import (
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
-from tabpfn.preprocessing.core import fit_preprocessing
+from tabpfn.preprocessing import fit_preprocessing
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
