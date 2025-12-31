@@ -56,12 +56,12 @@ from tabpfn.model_loading import (
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
-from tabpfn.preprocessing import (
+from tabpfn.preprocessors import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
     RegressorEnsembleConfig,
+    get_all_reshape_feature_distribution_preprocessors,
 )
-from tabpfn.preprocessors import get_all_reshape_feature_distribution_preprocessors
 from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,

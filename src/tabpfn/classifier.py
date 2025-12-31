@@ -65,7 +65,7 @@ from tabpfn.model_loading import (
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
-from tabpfn.preprocessing import (
+from tabpfn.preprocessors import (
     ClassifierEnsembleConfig,
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,

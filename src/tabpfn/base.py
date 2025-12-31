@@ -30,7 +30,7 @@ from tabpfn.inference import (
     InferenceEngineOnDemand,
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
-from tabpfn.preprocessing import (
+from tabpfn.preprocessors import (
     BaseDatasetConfig,
     ClassifierDatasetConfig,
     DatasetCollectionWithPreprocessing,

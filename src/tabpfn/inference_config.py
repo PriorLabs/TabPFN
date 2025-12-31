@@ -11,7 +11,7 @@ from typing import Literal
 import pydantic
 
 from tabpfn.constants import ModelVersion, TaskType
-from tabpfn.preprocessing import (
+from tabpfn.preprocessors import (
     PreprocessorConfig,
     default_classifier_preprocessor_configs,
     default_regressor_preprocessor_configs,
