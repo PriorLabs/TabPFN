@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal
 from typing_extensions import override
 
@@ -21,6 +22,56 @@ from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
+
+
+@dataclass
+class ClassifierBatch:
+    """Batch data for classifier fine-tuning.
+
+    Attributes:
+        X_context: Preprocessed training features (list per estimator).
+        X_query: Preprocessed test features (list per estimator).
+        y_context: Preprocessed training targets (list per estimator).
+        y_query: Raw test target tensor.
+        cat_indices: Categorical feature indices (list per estimator).
+        configs: Preprocessing configurations used for this batch.
+    """
+
+    X_context: list[torch.Tensor]
+    X_query: list[torch.Tensor]
+    y_context: list[torch.Tensor]
+    y_query: torch.Tensor
+    cat_indices: list[list[int] | None]
+    configs: list[Any]
+
+
+@dataclass
+class RegressorBatch:
+    """Batch data for regressor fine-tuning.
+
+    Attributes:
+        X_context: Preprocessed training features (list per estimator).
+        X_query: Preprocessed test features (list per estimator).
+        y_context: Preprocessed standardized training targets (list per estimator).
+        y_query: Standardized test target tensor.
+        cat_indices: Categorical feature indices (list per estimator).
+        configs: Preprocessing configurations used for this batch.
+        raw_space_bardist: Bar distribution in raw (original) target space.
+        znorm_space_bardist: Bar distribution in z-normalized target space.
+        X_query_raw: Original unprocessed test features.
+        y_query_raw: Original unprocessed test targets.
+    """
+
+    X_context: list[torch.Tensor]
+    X_query: list[torch.Tensor]
+    y_context: list[torch.Tensor]
+    y_query: torch.Tensor
+    cat_indices: list[list[int] | None]
+    configs: list[Any]
+    raw_space_bardist: FullSupportBarDistribution
+    znorm_space_bardist: FullSupportBarDistribution
+    X_query_raw: torch.Tensor
+    y_query_raw: torch.Tensor
 
 
 def _take(obj: Any, idx: np.ndarray) -> Any:
@@ -229,71 +280,42 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         return len(self.configs)
 
     @override
-    def __getitem__(self, index: int) -> tuple[Any, ...]:  # noqa: C901, PLR0912
+    def __getitem__(self, index: int) -> ClassifierBatch | RegressorBatch:  # noqa: C901, PLR0912
         """Retrieves, splits, and preprocesses the dataset config at the index.
 
         Performs train/test splitting and applies potentially multiple
         preprocessing pipelines defined in the dataset's configuration.
 
         Args:
-            index (int): The index of the dataset configuration in the
+            index: The index of the dataset configuration in the
                 `dataset_config_collection` to process.
 
         Returns:
-            Tuple: A tuple containing the processed data and metadata. Each
-                element in the tuple is a list whose length equals the number
-                of estimators in the TabPFN ensemble. As such each element
-                in the list corresponds to the preprocessed data/configs for a
-                single ensemble member.
+            A ClassifierBatch or RegressorBatch dataclass containing the
+            processed data and metadata. Each list field has length equal to
+            the number of estimators in the TabPFN ensemble.
 
-                The structure depends on the task type derived from the dataset
-                configuration object (`RegressorDatasetConfig` or
-                `ClassifierDatasetConfig`):
+            For **Classification** tasks: Returns a ClassifierBatch with:
+                - X_context: Preprocessed training features (per estimator)
+                - X_query: Preprocessed test features (per estimator)
+                - y_context: Preprocessed training targets (per estimator)
+                - y_query: Raw test target tensor
+                - cat_indices: Categorical feature indices (per estimator)
+                - configs: Preprocessing configurations used
 
-                For **Classification** tasks (`ClassifierDatasetConfig`):
-                * `X_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  training feature tensors (one per preprocessing pipeline).
-                * `X_tests_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  test feature tensors (one per preprocessing pipeline).
-                * `y_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  training target tensors (one per preprocessing pipeline).
-                * `y_test_raw` (torch.Tensor): Original, unprocessed test target
-                  tensor.
-                * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
-                  indices corresponding to each preprocessed X_train/X_test.
-                * `conf` (List): The list of preprocessing configurations used for
-                  this dataset (usually reflects ensemble settings).
-
-                For **Regression** tasks (`RegressorDatasetConfig`):
-                * `X_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  training feature tensors.
-                * `X_tests_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  test feature tensors.
-                * `y_trains_preprocessed` (List[torch.Tensor]): List of preprocessed
-                  *standardized* training target tensors.
-                * `y_test_standardized` (torch.Tensor): *Standardized* test target
-                  tensor (derived from `y_full_standardised`).
-                * `cat_ixs` (List[Optional[List[int]]]): List of categorical feature
-                  indices corresponding to each preprocessed X_train/X_test.
-                * `conf` (List): The list of preprocessing configurations used.
-                * `raw_space_bardist_` (FullSupportBarDistribution): Binning class
-                  for target variable (specific to the regression config). The
-                  calculations will be on raw data in raw space.
-                * `znorm_space_bardist_` (FullSupportBarDistribution): Binning class for
-                  target variable (specific to the regression config). The calculations
-                  will be on standardized data in znorm space.
-                * `x_test_raw` (torch.Tensor): Original, unprocessed test feature
-                  tensor.
-                * `y_test_raw` (torch.Tensor): Original, unprocessed test target
-                  tensor.
+            For **Regression** tasks: Returns a RegressorBatch with all
+            ClassifierBatch fields plus:
+                - raw_space_bardist: Bar distribution in raw target space
+                - znorm_space_bardist: Bar distribution in z-normalized space
+                - X_query_raw: Original unprocessed test features
+                - y_query_raw: Original unprocessed test targets
 
         Raises:
-            IndexError: If the index is out of the bounds of the dataset collection.
+            IndexError: If the index is out of the bounds of the dataset
+                collection.
             ValueError: If the dataset configuration type at the index is not
-                        recognized (neither `RegressorDatasetConfig` nor
-                        `ClassifierDatasetConfig`).
-            AssertionError: If sanity checks during processing fail (e.g.,
-                            standardized mean not close to zero in regression).
+                recognized.
+            AssertionError: If sanity checks during processing fail.
         """
         if index < 0 or index >= len(self):
             raise IndexError("Index out of bounds.")
@@ -391,58 +413,100 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         x_test_raw = torch.from_numpy(x_test_raw)
         y_test_raw = torch.from_numpy(y_test_raw)
 
-        # Also return raw_target variable because of flexiblity
-        # in optimisation space -> see examples/
-        # Also return corresponding target variable binning
-        # classes raw_space_bardist_ and znorm_space_bardist_
+        # Return structured batch data using dataclasses for clarity
         if regression_task:
-            return (
-                X_trains_preprocessed,
-                X_tests_preprocessed,
-                y_trains_preprocessed,
-                y_test_standardized,
-                cat_ixs,
-                conf,
-                raw_space_bardist_,
-                znorm_space_bardist_,
-                x_test_raw,
-                y_test_raw,
+            return RegressorBatch(
+                X_context=X_trains_preprocessed,
+                X_query=X_tests_preprocessed,
+                y_context=y_trains_preprocessed,
+                y_query=y_test_standardized,
+                cat_indices=list(cat_ixs),
+                configs=list(conf),
+                raw_space_bardist=raw_space_bardist_,
+                znorm_space_bardist=znorm_space_bardist_,
+                X_query_raw=x_test_raw,
+                y_query_raw=y_test_raw,
             )
 
-        return (
-            X_trains_preprocessed,
-            X_tests_preprocessed,
-            y_trains_preprocessed,
-            y_test_raw,
-            cat_ixs,
-            conf,
+        return ClassifierBatch(
+            X_context=X_trains_preprocessed,
+            X_query=X_tests_preprocessed,
+            y_context=y_trains_preprocessed,
+            y_query=y_test_raw,
+            cat_indices=list(cat_ixs),
+            configs=list(conf),
         )
 
 
-def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
+def _collate_list_field(
+    batch: list,
+    field_name: str,
+    num_estimators: int,
+    padding_val: float,
+) -> list:
+    """Collate a list field (per-estimator data) from batch items."""
+    batch_sz = len(batch)
+    field_values = [getattr(b, field_name) for b in batch]
+    estim_list = []
+    for estim_no in range(num_estimators):
+        if isinstance(field_values[0][0], torch.Tensor):
+            labels = field_values[0][0].ndim == 1
+            estim_list.append(
+                torch.stack(
+                    pad_tensors(
+                        [field_values[r][estim_no] for r in range(batch_sz)],
+                        padding_val=padding_val,
+                        labels=labels,
+                    )
+                )
+            )
+        else:
+            estim_list.append(
+                list(field_values[r][estim_no] for r in range(batch_sz))  # noqa: C400
+            )
+    return estim_list
+
+
+def _collate_tensor_field(
+    batch: list,
+    field_name: str,
+    padding_val: float,
+) -> torch.Tensor:
+    """Collate a tensor field from batch items."""
+    batch_sz = len(batch)
+    field_values = [getattr(b, field_name) for b in batch]
+    labels = field_values[0].ndim == 1
+    return torch.stack(
+        pad_tensors(
+            [field_values[r] for r in range(batch_sz)],
+            padding_val=padding_val,
+            labels=labels,
+        )
+    )
+
+
+def meta_dataset_collator(
+    batch: list[ClassifierBatch | RegressorBatch],
+    padding_val: float = 0.0,
+) -> ClassifierBatch | RegressorBatch:
     """Collate function for torch.utils.data.DataLoader.
 
     Designed for batches from DatasetCollectionWithPreprocessing.
     Takes a list of dataset samples (the batch) and structures them
-    into a single tuple suitable for model input, often for fine-tuning
-    using `fit_from_preprocessed`.
+    into a single batch dataclass suitable for model input, often for
+    fine-tuning using `fit_from_preprocessed`.
 
     Handles samples containing nested lists (e.g., for ensemble members)
     and tensors. Pads tensors to consistent shapes using `pad_tensors`
     before stacking. Non-tensor items are grouped into lists.
 
     Args:
-        batch (list): A list where each element is one sample from the
-            Dataset. Samples often contain multiple components like
-            features, labels, configs, etc., potentially nested in lists.
-        padding_val (float): Value used for padding tensors to allow
-            stacking across the batch dimension.
+        batch: A list of ClassifierBatch or RegressorBatch dataclass instances.
+        padding_val: Value used for padding tensors to allow stacking across
+            the batch dimension.
 
     Returns:
-        tuple: A tuple where each element is a collated component from the
-            input batch (e.g., stacked tensors, lists of configs).
-            The structure matches the input required by methods like
-            `fit_from_preprocessed`.
+        A collated ClassifierBatch or RegressorBatch with stacked/padded data.
 
     Note:
         Currently only implemented and tested for `batch_size = 1`,
@@ -450,43 +514,43 @@ def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
     """
     batch_sz = len(batch)
     assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
-    num_estim = len(batch[0][0])
-    items_list = []
-    for item_idx in range(len(batch[0])):
-        if isinstance(batch[0][item_idx], list):
-            estim_list = []
-            for estim_no in range(num_estim):
-                if isinstance(batch[0][item_idx][0], torch.Tensor):
-                    labels = batch[0][item_idx][0].ndim == 1
-                    estim_list.append(
-                        torch.stack(
-                            pad_tensors(
-                                [batch[r][item_idx][estim_no] for r in range(batch_sz)],
-                                padding_val=padding_val,
-                                labels=labels,
-                            )
-                        )
-                    )
-                else:
-                    estim_list.append(
-                        list(batch[r][item_idx][estim_no] for r in range(batch_sz))  # noqa: C400
-                    )
-            items_list.append(estim_list)
-        elif isinstance(batch[0][item_idx], torch.Tensor):
-            labels = batch[0][item_idx].ndim == 1
-            items_list.append(
-                torch.stack(
-                    pad_tensors(
-                        [batch[r][item_idx] for r in range(batch_sz)],
-                        padding_val=padding_val,
-                        labels=labels,
-                    )
-                )
-            )
-        else:
-            items_list.append([batch[r][item_idx] for r in range(batch_sz)])
 
-    return tuple(items_list)
+    first_item = batch[0]
+    num_estimators = len(first_item.X_context)
+
+    if isinstance(first_item, ClassifierBatch):
+        return ClassifierBatch(
+            X_context=_collate_list_field(
+                batch, "X_context", num_estimators, padding_val
+            ),
+            X_query=_collate_list_field(batch, "X_query", num_estimators, padding_val),
+            y_context=_collate_list_field(
+                batch, "y_context", num_estimators, padding_val
+            ),
+            y_query=_collate_tensor_field(batch, "y_query", padding_val),
+            cat_indices=_collate_list_field(
+                batch, "cat_indices", num_estimators, padding_val
+            ),
+            configs=_collate_list_field(batch, "configs", num_estimators, padding_val),
+        )
+
+    # RegressorBatch - since batch_size=1, we extract the single item for bardist
+    # first_item is already narrowed to RegressorBatch by the isinstance check above
+    assert isinstance(first_item, RegressorBatch)
+    return RegressorBatch(
+        X_context=_collate_list_field(batch, "X_context", num_estimators, padding_val),
+        X_query=_collate_list_field(batch, "X_query", num_estimators, padding_val),
+        y_context=_collate_list_field(batch, "y_context", num_estimators, padding_val),
+        y_query=_collate_tensor_field(batch, "y_query", padding_val),
+        cat_indices=_collate_list_field(
+            batch, "cat_indices", num_estimators, padding_val
+        ),
+        configs=_collate_list_field(batch, "configs", num_estimators, padding_val),
+        raw_space_bardist=first_item.raw_space_bardist,
+        znorm_space_bardist=first_item.znorm_space_bardist,
+        X_query_raw=_collate_tensor_field(batch, "X_query_raw", padding_val),
+        y_query_raw=_collate_tensor_field(batch, "y_query_raw", padding_val),
+    )
 
 
 def shuffle_and_chunk_data(
