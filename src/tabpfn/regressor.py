@@ -60,6 +60,7 @@ from tabpfn.preprocessors import (
     DatasetCollectionWithPreprocessing,
     EnsembleConfig,
     RegressorEnsembleConfig,
+    generate_regression_ensemble_configs,
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessors.steps.preprocessing_helpers import get_ordinal_encoder
@@ -677,7 +678,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 preprocessor = None
             target_preprocessors.append(preprocessor)
 
-        ensemble_configs = EnsembleConfig.generate_for_regression(
+        ensemble_configs = generate_regression_ensemble_configs(
             num_estimators=self.n_estimators,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
