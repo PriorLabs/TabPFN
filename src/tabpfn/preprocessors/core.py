@@ -68,7 +68,7 @@ T = TypeVar("T")
 # --- helpers ---
 
 
-def balance(x: Iterable[T], n: int) -> list[T]:
+def _balance(x: Iterable[T], n: int) -> list[T]:
     """Take a list of elements and make a new list where each appears `n` times.
 
     E.g. balance([1, 2, 3], 2) -> [1, 1, 2, 2, 3, 3]
@@ -79,7 +79,7 @@ def balance(x: Iterable[T], n: int) -> list[T]:
 # --- sampling ---
 
 
-def generate_index_permutations(
+def _generate_index_permutations(
     n: int,
     *,
     max_index: int,
@@ -116,7 +116,7 @@ def generate_index_permutations(
     raise ValueError(f"{subsample=} must be int or float.")
 
 
-def get_subsample_indices_for_estimators(
+def _get_subsample_indices_for_estimators(
     subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
     max_index: int,
@@ -138,7 +138,7 @@ def get_subsample_indices_for_estimators(
         List of list of indices to subsample for each estimator.
     """
     if isinstance(subsample_samples, (int, float)):
-        subsample_indices = generate_index_permutations(
+        subsample_indices = _generate_index_permutations(
             n=num_estimators,
             max_index=max_index,
             subsample=subsample_samples,
@@ -159,7 +159,7 @@ def get_subsample_indices_for_estimators(
                 "Length of subsampled indices must be larger than 0"
             )
         balance_count = num_estimators // len(subsample_samples)
-        subsample_indices = balance(subsample_samples, balance_count)
+        subsample_indices = _balance(subsample_samples, balance_count)
         leftover = num_estimators % len(subsample_samples)
         if leftover > 0:
             subsample_indices += subsample_samples[:leftover]
@@ -220,7 +220,7 @@ def _generate_class_permutations(
         shufflings = np.argsort(noise, axis=1)
         uniqs = np.unique(shufflings, axis=0)
         balance_count = num_estimators // len(uniqs)
-        class_permutations = balance(uniqs, balance_count)
+        class_permutations = _balance(uniqs, balance_count)
         rand_count = num_estimators % len(uniqs)
         if rand_count > 0:
             class_permutations += [
@@ -282,7 +282,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     )
 
     subsample_indices: list[None] | list[np.ndarray] = (
-        get_subsample_indices_for_estimators(
+        _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=num_estimators,
             max_index=max_index,
@@ -291,7 +291,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     )
 
     balance_count = num_estimators // len(preprocessor_configs)
-    configs_ = balance(preprocessor_configs, balance_count)
+    configs_ = _balance(preprocessor_configs, balance_count)
     leftover = num_estimators - len(configs_)
     if leftover > 0:
         configs_.extend(preprocessor_configs[:leftover])
@@ -364,7 +364,7 @@ def generate_regression_ensemble_configs(
     featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore[arg-type]
 
     subsample_indices: list[None] | list[np.ndarray] = (
-        get_subsample_indices_for_estimators(
+        _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=num_estimators,
             max_index=max_index,
@@ -374,7 +374,7 @@ def generate_regression_ensemble_configs(
 
     combos = list(product(preprocessor_configs, target_transforms))
     balance_count = num_estimators // len(combos)
-    configs_ = balance(combos, balance_count)
+    configs_ = _balance(combos, balance_count)
     leftover = num_estimators - len(configs_)
     if leftover > 0:
         configs_ += combos[:leftover]
@@ -479,7 +479,7 @@ def build_pipeline(
 # --- fitting/orchestration ---
 
 
-def fit_preprocessing_one(
+def _fit_preprocessing_one(
     config: EnsembleConfig,
     X_train: np.ndarray | torch.Tensor,
     y_train: np.ndarray | torch.Tensor,
@@ -520,12 +520,12 @@ def fit_preprocessing_one(
     preprocessor = build_pipeline(config, random_state=static_seed)
     res = preprocessor.fit_transform(X_train, cat_ix)
 
-    y_train_processed = transform_labels_one(config, y_train)
+    y_train_processed = _transform_labels_one(config, y_train)
 
     return (config, preprocessor, res.X, y_train_processed, res.categorical_features)
 
 
-def transform_labels_one(
+def _transform_labels_one(
     config: EnsembleConfig, y_train: np.ndarray | torch.Tensor
 ) -> np.ndarray:
     """Transform the labels for one ensemble config.
@@ -610,7 +610,7 @@ def fit_preprocessing(
         )
     else:
         executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
-    func = partial(fit_preprocessing_one, cat_ix=cat_ix)
+    func = partial(_fit_preprocessing_one, cat_ix=cat_ix)
     worker_func = joblib.delayed(func)
 
     seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))

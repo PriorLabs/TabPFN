@@ -17,7 +17,7 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn import preprocessors
-from tabpfn.preprocessors import get_subsample_indices_for_estimators
+from tabpfn.preprocessors import _get_subsample_indices_for_estimators
 from tabpfn.preprocessors.steps import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
@@ -554,7 +554,7 @@ def test__get_subsample_indices_for_estimators():
         np.array([5, 6, 7, 8, 9]),
         np.array([0, 1, 2, 3, 4]),
     ]
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -566,7 +566,7 @@ def test__get_subsample_indices_for_estimators():
         assert (subsample_index == expected_subsample_index).all()
 
     subsample_samples = 0.5
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -576,7 +576,7 @@ def test__get_subsample_indices_for_estimators():
         assert len(subsample_index) == 3  # (max_index + 1) * 0.5
 
     subsample_samples = 2
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
