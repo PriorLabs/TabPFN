@@ -290,7 +290,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
         ClassifierEnsembleConfig(
             preprocess_config=preprocesses_config,
             feature_shift_count=featshift,
-            class_permutation=class_permutation,
+            class_permutation=class_perm,
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
             feature_shift_decoder=feature_shift_decoder,
@@ -299,14 +299,14 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
         )
         for (
             featshift,
-            subsample_ix,
             preprocesses_config,
-            class_permutation,
+            subsample_ix,
+            class_perm,
             model_index,
         ) in zip(
             featshifts,
+            configs_,
             subsample_indices,
-            preprocessor_configs,
             class_permutations,
             model_indices,
         )
