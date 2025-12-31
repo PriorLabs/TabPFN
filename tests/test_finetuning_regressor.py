@@ -18,8 +18,11 @@ from tabpfn.architectures.base.bar_distribution import (
     BarDistribution,
     FullSupportBarDistribution,
 )
+from tabpfn.finetuning.data_util import (
+    get_preprocessed_dataset_chunks,
+    meta_dataset_collator,
+)
 from tabpfn.preprocessing import RegressorEnsembleConfig
-from tabpfn.utils import meta_dataset_collator
 
 from .utils import get_pytest_devices, mark_mps_configs_as_slow
 
@@ -149,8 +152,15 @@ def test_regressor_dataset_and_collator_batches_type(
     are of the correct type.
     """
     X, y = synthetic_regression_data
-    dataset_collection = ft_regressor_instance.get_preprocessed_datasets(
-        X, y, train_test_split, 100
+    dataset_collection = get_preprocessed_dataset_chunks(
+        ft_regressor_instance,
+        X,
+        y,
+        train_test_split,
+        max_data_size=100,
+        model_type="regressor",
+        equal_split_size=True,
+        seed=42,
     )
     batch_size = 1
     dl = DataLoader(
@@ -212,8 +222,15 @@ def test_tabpfn_regressor_finetuning_loop(
         differentiable_input=False,
     )
 
-    datasets_list = reg.get_preprocessed_datasets(
-        X_train, y_train, train_test_split, 100
+    datasets_list = get_preprocessed_dataset_chunks(
+        reg,
+        X_train,
+        y_train,
+        train_test_split,
+        max_data_size=100,
+        model_type="regressor",
+        equal_split_size=True,
+        seed=42,
     )
 
     batch_size = 1
@@ -358,8 +375,16 @@ def test_finetuning_consistency_bar_distribution(
     reg_standard.fit(X_train_raw, y_train_raw)
     reg_standard.predict(X_test_raw, output_type="mean")
 
-    datasets_list = reg_batched.get_preprocessed_datasets(
-        x_full_raw, y_full_raw, splitfn, max_data_size=1000
+    datasets_list = get_preprocessed_dataset_chunks(
+        reg_batched,
+        x_full_raw,
+        y_full_raw,
+        splitfn,
+        max_data_size=1_000,
+        model_type="regressor",
+        equal_split_size=True,
+        seed=42,
+        shuffle=False,
     )
 
     batch_size = 1
@@ -514,8 +539,16 @@ class TestTabPFNPreprocessingInspection(unittest.TestCase):
         # --- 3. Path 3: FT Full Workflow ---
         # (get_prep -> fit_prep -> forward -> Capture Tensor)
 
-        datasets_list = reg_batched.get_preprocessed_datasets(
-            X, y, splitfn, max_data_size=1000
+        datasets_list = get_preprocessed_dataset_chunks(
+            reg_batched,
+            X,
+            y,
+            splitfn,
+            max_data_size=1000,
+            model_type="regressor",
+            equal_split_size=True,
+            seed=42,
+            shuffle=False,
         )
 
         # Fit FT regressor

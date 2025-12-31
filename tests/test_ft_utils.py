@@ -3,9 +3,9 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from tabpfn.finetuning.data_util import shuffle_and_chunk_data
 from tabpfn.utils import (
     pad_tensors,
-    split_large_data,
 )
 
 
@@ -28,18 +28,25 @@ def test_pad_tensors_2d_and_1d():
     assert padded_1d[0][3] == 99, "Padding value not set correctly for 1D case."
 
 
-def test_split_large_data():
-    """Test the split_large_data function with a large dataset."""
+def test_chunk_data():
+    """Test the shuffle_and_chunk_data function with a large dataset."""
     total_size = 1000
     max_chunk = 100
     large_x = np.arange(total_size * 2).reshape((total_size, 2))
     large_y = np.arange(total_size)
     equal_split_size = True
+    seed = 42
 
     expected_num_chunks = ((total_size - 1) // max_chunk) + 1
 
-    x_chunks, y_chunks = split_large_data(
-        large_x, large_y, max_chunk, equal_split_size=equal_split_size
+    x_chunks, y_chunks = shuffle_and_chunk_data(
+        large_x,
+        large_y,
+        max_chunk_size=max_chunk,
+        equal_split_size=equal_split_size,
+        seed=seed,
+        min_chunk_size=2,
+        shuffle=False,
     )
 
     assert len(x_chunks) == expected_num_chunks, "Incorrect X chunk count"
@@ -63,15 +70,26 @@ def test_split_large_data():
     np.testing.assert_array_equal(reconstructed_y, large_y, "Reconstructed y differs")
 
     # Test edge case: empty input
-    x_empty, y_empty = split_large_data(
-        [], [], max_chunk, equal_split_size=equal_split_size
+    x_empty, y_empty = shuffle_and_chunk_data(
+        [],
+        [],
+        max_chunk_size=max_chunk,
+        equal_split_size=equal_split_size,
+        seed=42,
+        min_chunk_size=2,
     )
     assert x_empty == [], "X should be empty list for empty input"
     assert y_empty == [], "y should be empty list for empty input"
 
     # Test edge case: max_data_size >= total_size
-    x_single, y_single = split_large_data(
-        large_x, large_y, total_size + 5, equal_split_size=equal_split_size
+    x_single, y_single = shuffle_and_chunk_data(
+        large_x,
+        large_y,
+        max_chunk_size=total_size + 5,
+        equal_split_size=equal_split_size,
+        seed=42,
+        min_chunk_size=2,
+        shuffle=False,
     )
     assert len(x_single) == 1, "Should be 1 X chunk if max_size is large"
     assert len(y_single) == 1, "Should be 1 y chunk if max_size is large"
@@ -79,8 +97,13 @@ def test_split_large_data():
     np.testing.assert_array_equal(y_single[0], large_y)
 
     # Test edge case: max_data_size = 1
-    x_max_one, y_max_one = split_large_data(
-        large_x, large_y, 1, equal_split_size=equal_split_size
+    x_max_one, y_max_one = shuffle_and_chunk_data(
+        large_x,
+        large_y,
+        max_chunk_size=1,
+        equal_split_size=equal_split_size,
+        seed=42,
+        min_chunk_size=2,
     )
     assert len(x_max_one) == total_size, "Should be total_size chunks if max_size=1"
     assert len(y_max_one) == total_size, "Should be total_size chunks if max_size=1"
@@ -92,8 +115,13 @@ def test_split_large_data():
     max_chunk_exact = 30
     large_x_exact = np.arange(total_size_exact * 2).reshape((total_size_exact, 2))
     large_y_exact = np.arange(total_size_exact)
-    x_exact, y_exact = split_large_data(
-        large_x_exact, large_y_exact, max_chunk_exact, equal_split_size=equal_split_size
+    x_exact, y_exact = shuffle_and_chunk_data(
+        large_x_exact,
+        large_y_exact,
+        max_chunk_size=max_chunk_exact,
+        equal_split_size=equal_split_size,
+        seed=42,
+        min_chunk_size=2,
     )
     assert len(x_exact) == total_size_exact // max_chunk_exact  # Should be 3 chunks
     assert len(y_exact) == total_size_exact // max_chunk_exact  # Should be 3 chunks
