@@ -16,16 +16,19 @@ from sklearn.preprocessing import (
     PowerTransformer,
 )
 
-from tabpfn import preprocessors
-from tabpfn.preprocessing import get_subsample_indices_for_estimators
-from tabpfn.preprocessors import (
+from tabpfn import preprocessing
+from tabpfn.preprocessing.core import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.steps import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
     FeaturePreprocessingTransformerStep,
+    KDITransformerWithNaN,
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,
 )
-from tabpfn.preprocessors.preprocessing_helpers import OrderPreservingColumnTransformer
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    OrderPreservingColumnTransformer,
+)
 
 
 @pytest.fixture
@@ -227,7 +230,7 @@ def _get_preprocessing_steps() -> list[
 ]:
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
-        for cls in preprocessors.__dict__.values()
+        for cls in preprocessing.__dict__.values()
         if (
             isinstance(cls, type)
             and issubclass(cls, FeaturePreprocessingTransformerStep)
@@ -337,6 +340,35 @@ def test_adaptive_quantile_transformer_with_numpy_generator():
     # Further assertion to ensure the transformer is functional
     assert hasattr(transformer, "quantiles_")
     assert transformer.quantiles_.shape == (10, 10)
+
+
+def test_kdi_transformer_with_nan_integration():
+    """Tests KDITransformerWithNaN handles NaNs and maintains mask."""
+    # Create data with NaNs and a torch tensor to test both features
+    X = torch.tensor(
+        [[1.0, np.nan, 3.0], [4.0, 5.0, np.nan], [np.nan, 8.0, 9.0]],
+        dtype=torch.float32,
+    )
+
+    transformer = KDITransformerWithNaN(alpha=1.0, output_distribution="normal")
+
+    # Test fit
+    transformer.fit(X)
+    assert hasattr(transformer, "imputation_values_")
+
+    # Test transform
+    Xt = transformer.transform(X)
+
+    # Verify type and shape
+    assert isinstance(Xt, np.ndarray)
+    assert Xt.shape == X.shape
+
+    # Verify NaNs are preserved in the exact same positions
+    mask = torch.isnan(X).numpy()
+    assert np.all(np.isnan(Xt) == mask)
+
+    # Verify non-NaN values are actual numbers (transformed)
+    assert np.all(np.isfinite(Xt[~mask]))
 
 
 def test__safe_power_transformer__normal_cases__same_results_as_power_transformer():
@@ -522,7 +554,7 @@ def test__get_subsample_indices_for_estimators():
         np.array([5, 6, 7, 8, 9]),
         np.array([0, 1, 2, 3, 4]),
     ]
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -534,7 +566,7 @@ def test__get_subsample_indices_for_estimators():
         assert (subsample_index == expected_subsample_index).all()
 
     subsample_samples = 0.5
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )
@@ -544,7 +576,7 @@ def test__get_subsample_indices_for_estimators():
         assert len(subsample_index) == 3  # (max_index + 1) * 0.5
 
     subsample_samples = 2
-    subsample_indices = get_subsample_indices_for_estimators(
+    subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
         **kwargs,
     )

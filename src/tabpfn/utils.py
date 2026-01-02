@@ -813,62 +813,6 @@ def transform_borders_one(
     return logit_cancel_mask, descending_borders, borders_t
 
 
-def split_large_data(
-    largeX: XType,
-    largey: YType,
-    max_data_size: int,
-    *,
-    equal_split_size: bool,
-) -> tuple[list[XType], list[YType]]:
-    """Split a large dataset into chunks along the first dimension.
-
-    Args:
-        largeX: features
-        largey: labels
-        max_data_size: int that indicates max size of a chunks.
-            We chose the minimum number of chunks that keeps each chunk under
-            max_data_size.
-        equal_split_size: If True, splits data into equally sized chunks under
-            max_data_size.
-            If False, splits into chunks of size `max_data_size`, with
-            the last chunk having the remainder samples but is dropped if its
-            size is less than 2.
-    """
-    tot_size = len(largeX)
-    if max_data_size <= 0:
-        raise ValueError("max_data_size must be positive")
-    if tot_size == 0:
-        return [], []
-
-    if not equal_split_size:
-        MIN_BATCH_SIZE = 2
-
-        xlst, ylst = [], []
-        offset = 0
-        while offset + max_data_size <= tot_size:
-            xlst.append(largeX[offset : offset + max_data_size])
-            ylst.append(largey[offset : offset + max_data_size])
-            offset += max_data_size
-
-        if tot_size - offset >= MIN_BATCH_SIZE:
-            xlst.append(largeX[offset:])
-            ylst.append(largey[offset:])
-
-        return xlst, ylst
-    num_chunks = ((tot_size - 1) // max_data_size) + 1
-    basechunk_size = tot_size // num_chunks
-    remainder = tot_size % num_chunks
-
-    offset = 0
-    xlst, ylst = [], []
-    for b in range(num_chunks):
-        chunk_sz = basechunk_size + (1 if b < remainder else 0)
-        xlst.append(largeX[offset : offset + chunk_sz])
-        ylst.append(largey[offset : offset + chunk_sz])
-        offset += chunk_sz
-    return xlst, ylst
-
-
 def pad_tensors(
     tensor_list: list[torch.Tensor],
     padding_val: float | None = 0,
@@ -899,76 +843,6 @@ def pad_tensors(
         )
         ret_list.append(padded_item)
     return ret_list
-
-
-def meta_dataset_collator(batch: list, padding_val: float = 0.0) -> tuple:
-    """Collate function for torch.utils.data.DataLoader.
-
-    Designed for batches from DatasetCollectionWithPreprocessing.
-    Takes a list of dataset samples (the batch) and structures them
-    into a single tuple suitable for model input, often for fine-tuning
-    using `fit_from_preprocessed`.
-
-    Handles samples containing nested lists (e.g., for ensemble members)
-    and tensors. Pads tensors to consistent shapes using `pad_tensors`
-    before stacking. Non-tensor items are grouped into lists.
-
-    Args:
-        batch (list): A list where each element is one sample from the
-            Dataset. Samples often contain multiple components like
-            features, labels, configs, etc., potentially nested in lists.
-        padding_val (float): Value used for padding tensors to allow
-            stacking across the batch dimension.
-
-    Returns:
-        tuple: A tuple where each element is a collated component from the
-            input batch (e.g., stacked tensors, lists of configs).
-            The structure matches the input required by methods like
-            `fit_from_preprocessed`.
-
-    Note:
-        Currently only implemented and tested for `batch_size = 1`,
-        as enforced by an internal assertion.
-    """
-    batch_sz = len(batch)
-    assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
-    num_estim = len(batch[0][0])
-    items_list = []
-    for item_idx in range(len(batch[0])):
-        if isinstance(batch[0][item_idx], list):
-            estim_list = []
-            for estim_no in range(num_estim):
-                if isinstance(batch[0][item_idx][0], torch.Tensor):
-                    labels = batch[0][item_idx][0].ndim == 1
-                    estim_list.append(
-                        torch.stack(
-                            pad_tensors(
-                                [batch[r][item_idx][estim_no] for r in range(batch_sz)],
-                                padding_val=padding_val,
-                                labels=labels,
-                            )
-                        )
-                    )
-                else:
-                    estim_list.append(
-                        list(batch[r][item_idx][estim_no] for r in range(batch_sz))  # noqa: C400
-                    )
-            items_list.append(estim_list)
-        elif isinstance(batch[0][item_idx], torch.Tensor):
-            labels = batch[0][item_idx].ndim == 1
-            items_list.append(
-                torch.stack(
-                    pad_tensors(
-                        [batch[r][item_idx] for r in range(batch_sz)],
-                        padding_val=padding_val,
-                        labels=labels,
-                    )
-                )
-            )
-        else:
-            items_list.append([batch[r][item_idx] for r in range(batch_sz)])
-
-    return tuple(items_list)
 
 
 def balance_probas_by_class_counts(

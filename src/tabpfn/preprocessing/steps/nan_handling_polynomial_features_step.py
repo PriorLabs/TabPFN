@@ -9,7 +9,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessors.preprocessing_helpers import (
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
 )
 from tabpfn.utils import infer_random_state
@@ -72,12 +72,9 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
                     used_indices.tolist(),
                 )
                 if len(indices_) == 0:
-                    self.poly_factor_1_idx[i] = rng.choice(
-                        np.arange(0, X.shape[1]),
-                        size=1,
-                    )
+                    self.poly_factor_1_idx[i] = rng.choice(np.arange(0, X.shape[1]))
                     continue
-                self.poly_factor_2_idx[i] = rng.choice(list(indices_), size=1)
+                self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
         return categorical_features
 

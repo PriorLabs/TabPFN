@@ -21,19 +21,19 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessors.adaptive_quantile_transformer import (
+from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )
-from tabpfn.preprocessors.kdi_transformer import (
+from tabpfn.preprocessing.steps.kdi_transformer import (
     KDITransformerWithNaN,
     get_all_kdi_transformers,
 )
-from tabpfn.preprocessors.preprocessing_helpers import (
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
     TransformResult,
 )
-from tabpfn.preprocessors.safe_power_transformer import SafePowerTransformer
-from tabpfn.preprocessors.squashing_scaler_transformer import SquashingScaler
+from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
+from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -503,7 +503,7 @@ def get_all_reshape_feature_distribution_preprocessors(
     num_examples: int,
     random_state: int | None = None,
 ) -> dict[str, TransformerMixin | Pipeline]:
-    """Returns a dictionary of preprocessors to preprocess the data."""
+    """Returns a dictionary of preprocessing to preprocess the data."""
     all_preprocessors = {
         "power": _add_safe_standard_to_safe_power_without_standard(
             PowerTransformer(standardize=False),

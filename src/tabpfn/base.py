@@ -7,7 +7,7 @@ from __future__ import annotations
 import pathlib
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Callable, Literal, Union
+from typing import TYPE_CHECKING, Any, Literal, Union
 
 import torch
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
@@ -19,8 +19,6 @@ from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
     ModelPath,
-    XType,
-    YType,
 )
 from tabpfn.inference import (
     InferenceEngine,
@@ -30,19 +28,12 @@ from tabpfn.inference import (
     InferenceEngineOnDemand,
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
-from tabpfn.preprocessing import (
-    BaseDatasetConfig,
-    ClassifierDatasetConfig,
-    DatasetCollectionWithPreprocessing,
-    RegressorDatasetConfig,
-)
 from tabpfn.settings import settings
 from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
     infer_fp16_inference_mode,
     infer_random_state,
-    split_large_data,
     update_encoder_params,
 )
 
@@ -420,90 +411,6 @@ def check_cpu_warning(
                 "https://github.com/PriorLabs/tabpfn-client",
                 stacklevel=2,
             )
-
-
-def get_preprocessed_datasets_helper(
-    calling_instance: Any,  # Union[TabPFNClassifier, TabPFNRegressor],
-    X_raw: XType | list[XType],
-    y_raw: YType | list[YType],
-    split_fn: Callable,
-    max_data_size: int | None,
-    model_type: Literal["regressor", "classifier"],
-    *,
-    equal_split_size: bool,
-) -> DatasetCollectionWithPreprocessing:
-    """Helper function to create a DatasetCollectionWithPreprocessing.
-    Relies on methods from the calling_instance for specific initializations.
-    Modularises Code for both Regressor and Classifier.
-
-    Args:
-        calling_instance: The instance of the TabPFNRegressor or TabPFNClassifier.
-        X_raw: individual or list of input dataset features
-        y_raw: individual or list of input dataset labels
-        split_fn: A function to dissect a dataset into train and test partition.
-        max_data_size: Maximum allowed number of samples within one dataset.
-        If None, datasets are not splitted.
-        model_type: The type of the model.
-        equal_split_size: If True, splits data into equally sized chunks under
-            max_data_size.
-            If False, splits into chunks of size `max_data_size`, with
-            the last chunk having the remainder samples but is dropped if its
-            size is less than 2.
-    """
-    if not isinstance(X_raw, list):
-        X_raw = [X_raw]
-    if not isinstance(y_raw, list):
-        y_raw = [y_raw]
-    assert len(X_raw) == len(y_raw), "X and y lists must have the same length."
-
-    if not hasattr(calling_instance, "models_") or calling_instance.models_ is None:
-        _, rng = calling_instance._initialize_model_variables()
-    else:
-        _static_seed, rng = infer_random_state(calling_instance.random_state)
-
-    X_split, y_split = [], []
-    for X_item, y_item in zip(X_raw, y_raw):
-        if max_data_size is not None:
-            Xparts, yparts = split_large_data(
-                X_item, y_item, max_data_size, equal_split_size=equal_split_size
-            )
-        else:
-            Xparts, yparts = [X_item], [y_item]
-        X_split.extend(Xparts)
-        y_split.extend(yparts)
-
-    dataset_config_collection: list[BaseDatasetConfig] = []
-    for X_item, y_item in zip(X_split, y_split):
-        if model_type == "classifier":
-            ensemble_configs, X_mod, y_mod = (
-                calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
-            )
-            current_cat_ix = calling_instance.inferred_categorical_indices_
-
-            dataset_config = ClassifierDatasetConfig(
-                config=ensemble_configs,
-                X_raw=X_mod,
-                y_raw=y_mod,
-                cat_ix=current_cat_ix,
-            )
-        elif model_type == "regressor":
-            ensemble_configs, X_mod, y_mod, bardist_ = (
-                calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
-            )
-            current_cat_ix = calling_instance.inferred_categorical_indices_
-            dataset_config = RegressorDatasetConfig(
-                config=ensemble_configs,
-                X_raw=X_mod,
-                y_raw=y_mod,
-                cat_ix=current_cat_ix,
-                znorm_space_bardist_=bardist_,
-            )
-        else:
-            raise ValueError(f"Invalid model_type: {model_type}")
-
-        dataset_config_collection.append(dataset_config)
-
-    return DatasetCollectionWithPreprocessing(split_fn, rng, dataset_config_collection)
 
 
 def initialize_model_variables_helper(

@@ -8,9 +8,7 @@ import numpy as np
 import torch
 
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessors.preprocessing_helpers import (
-    FeaturePreprocessingTransformerStep,
-)
+from tabpfn.preprocessing.steps.preprocessing_helpers import FeaturePreprocessingTransformerStep
 
 
 class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):

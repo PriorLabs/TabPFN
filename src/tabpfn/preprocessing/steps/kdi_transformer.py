@@ -41,12 +41,35 @@ ALPHAS = (
 
 
 class KDITransformerWithNaN(KDITransformer):
-    """KDI transformer that can handle NaN values. It performs KDI with NaNs replaced by
-    mean values and then fills the NaN values with NaNs after the transformation.
+    """KDI transformer that can handle NaN values.
+
+    It performs KDI with NaNs replaced by mean values and then fills the NaN values
+    with NaNs after the transformation.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        alpha: float = 1.0,
+        output_distribution: str = "uniform",
+        *,
+        standardize: bool = True,
+        copy: bool = True,
+    ) -> None:
+        # ``kditransform`` exposes ``alpha`` and ``output_distribution`` but the
+        # PowerTransformer fallback does not. To keep compatibility across both
+        # backends, only pass the parameters that are supported by the active
+        # base class.
+        if KDITransformer is PowerTransformer:
+            self.alpha = alpha
+            self.output_distribution = output_distribution
+            super().__init__(standardize=standardize, copy=copy)
+        else:
+            self.standardize = standardize
+            super().__init__(
+                alpha=alpha,
+                output_distribution=output_distribution,
+                copy=copy,
+            )
 
     def _more_tags(self) -> dict:
         return {"allow_nan": True}

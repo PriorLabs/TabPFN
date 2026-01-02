@@ -39,7 +39,6 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
-    get_preprocessed_datasets_helper,
     initialize_model_variables_helper,
     initialize_telemetry,
 )
@@ -62,16 +61,17 @@ from tabpfn.inference_tuning import (
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
+    log_model_init_params,
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
-    DatasetCollectionWithPreprocessing,
     EnsembleConfig,
     PreprocessorConfig,
+    generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessors.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -469,6 +469,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.tuning_config = tuning_config
         initialize_telemetry()
 
+        # Only anonymously record `fit_mode` usage
+        log_model_init_params(self, {"fit_mode": self.fit_mode})
+
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
         """Construct a classifier that uses the given version of the model.
@@ -531,48 +534,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tags.input_tags.allow_nan = True
         tags.estimator_type = "classifier"
         return tags
-
-    def get_preprocessed_datasets(
-        self,
-        X_raw: XType | list[XType],
-        y_raw: YType | list[YType],
-        split_fn: Callable,
-        max_data_size: None | int = 10000,
-        *,
-        equal_split_size: bool = True,
-    ) -> DatasetCollectionWithPreprocessing:
-        """Transforms raw input data into a collection of datasets,
-        with varying preprocessings.
-
-        The helper function initializes an RNG. This RNG is passed to the
-        `DatasetCollectionWithPreprocessing` class. When an item (dataset)
-        is retrieved, the collection's preprocessing routine uses this stored
-        RNG to generate seeds for its individual workers/pipelines, ensuring
-        reproducible stochastic transformations from a fixed initial state.
-
-        Args:
-            X_raw: single or list of input dataset features, in case of single it
-            is converted to list inside get_preprocessed_datasets_helper()
-            y_raw: single or list of input dataset labels, in case of single it
-            is converted to list inside get_preprocessed_datasets_helper()
-            split_fn: A function to dissect a dataset into train and test partition.
-            max_data_size: Maximum allowed number of samples in one dataset.
-            If None, datasets are not splitted.
-            equal_split_size: If True, splits data into equally sized chunks under
-            max_data_size.
-            If False, splits into chunks of size `max_data_size`, with
-            the last chunk having the remainder samples but is dropped if its
-            size is less than 2.
-        """
-        return get_preprocessed_datasets_helper(
-            self,
-            X_raw,
-            y_raw,
-            split_fn,
-            max_data_size,
-            model_type="classifier",
-            equal_split_size=equal_split_size,
-        )
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Perform initialization of the model, return determined byte_size
@@ -666,7 +627,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.preprocessor_ = None
             preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
-        ensemble_configs = EnsembleConfig.generate_for_classification(
+        ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,

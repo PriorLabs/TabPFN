@@ -140,7 +140,7 @@ class InferenceConfig:
     The options are:
         - None: no preprocessing is done.
         - One of the options from
-          `tabpfn.preprocessors.get_all_reshape_feature_distribution_preprocessors()`
+          `tabpfn.preprocessing.get_all_reshape_feature_distribution_preprocessors()`
     """
 
     USE_SKLEARN_16_DECIMAL_PRECISION: bool = False
