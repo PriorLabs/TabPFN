@@ -290,6 +290,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             bar distribution loss. Set to 0.0 to disable. Defaults to 8.0.
         mse_loss_clip: Optional upper bound for the auxiliary MSE loss term.
             If None, no clipping is applied. Defaults to None.
+        mae_loss_weight: Weight for an auxiliary MAE term computed on the mean
+            decoded prediction. Defaults to 0.0.
+        mae_loss_clip: Optional upper bound for the auxiliary MAE loss term.
+            If None, no clipping is applied. Defaults to None.
     """
 
     def __init__(  # noqa: PLR0913
@@ -537,6 +541,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         Args:
             X: The input samples of shape (n_samples, n_features).
+            output_type: The type of output to return.
 
         Returns:
             The predicted target values with shape (n_samples,).
