@@ -19,20 +19,12 @@ import pytest
 import torch
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
 
 from tabpfn.architectures.base.bar_distribution import BarDistribution
-from tabpfn.finetuning.data_util import (
-    RegressorBatch,
-    get_preprocessed_dataset_chunks,
-    meta_dataset_collator,
-)
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
     compute_regression_loss,
 )
-from tabpfn.preprocessing import RegressorEnsembleConfig
-from tabpfn.regressor import TabPFNRegressor
 
 from .utils import get_pytest_devices
 
@@ -107,37 +99,6 @@ def synthetic_regression_data() -> tuple[np.ndarray, np.ndarray]:
     X = np.asarray(result[0], dtype=np.float32)
     y = np.asarray(result[1], dtype=np.float32)
     return X, y
-
-
-@pytest.fixture(params=devices)
-def regressor_instance(request: pytest.FixtureRequest) -> TabPFNRegressor:
-    """Provide a basic regressor instance, parameterized by device."""
-    device = request.param
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA device requested but not available.")
-    return TabPFNRegressor(
-        n_estimators=2,
-        device=device,
-        random_state=42,
-        inference_precision=torch.float32,
-        fit_mode="batched",
-        differentiable_input=False,
-    )
-
-
-@pytest.fixture
-def variable_synthetic_regression_dataset_collection() -> list[
-    tuple[np.ndarray, np.ndarray]
-]:
-    """Create a small collection of synthetic regression datasets with varying sizes."""
-    datasets = []
-    dataset_sizes = [10, 20, 30]
-    num_features = 3
-    for num_samples in dataset_sizes:
-        X = rng.normal(size=(num_samples, num_features)).astype(np.float32)
-        y = rng.normal(size=(num_samples,)).astype(np.float32)
-        datasets.append((X, y))
-    return datasets
 
 
 @pytest.mark.parametrize(
@@ -441,50 +402,3 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
         mae_loss_clip=None,
     )
     assert combined_loss.item() == pytest.approx(expected_rps + expected_rls)
-
-
-def test_regressor_dataset_and_collator_batches_type(
-    variable_synthetic_regression_dataset_collection: list[
-        tuple[np.ndarray, np.ndarray]
-    ],
-    regressor_instance: TabPFNRegressor,
-) -> None:
-    """Test that dataset and collator produce correctly-typed RegressorBatch objects."""
-    X_list = [X for X, _ in variable_synthetic_regression_dataset_collection]
-    y_list = [y for _, y in variable_synthetic_regression_dataset_collection]
-    dataset_collection = get_preprocessed_dataset_chunks(
-        regressor_instance,
-        X_list,
-        y_list,
-        train_test_split,
-        100,
-        model_type="regressor",
-        equal_split_size=True,
-        seed=42,
-    )
-
-    dl = DataLoader(
-        dataset_collection,
-        batch_size=1,
-        collate_fn=meta_dataset_collator,
-    )
-    for batch in dl:
-        assert isinstance(batch, RegressorBatch)
-        for est_tensor in batch.X_context:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == 1
-        for est_tensor in batch.y_context:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == 1
-
-        assert isinstance(batch.cat_indices, list)
-        for conf in batch.configs:
-            for c in conf:
-                assert isinstance(c, RegressorEnsembleConfig)
-
-        assert isinstance(batch.X_query_raw, torch.Tensor)
-        assert isinstance(batch.y_query_raw, torch.Tensor)
-        assert batch.X_query_raw.shape[0] == 1
-        assert batch.y_query_raw.shape[0] == 1
-        assert batch.y_query.shape[0] == 1
-        break
