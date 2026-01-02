@@ -420,7 +420,7 @@ if sklearn_version < parse_version("1.6"):
             try:
                _check_n_features(_estimator, X, reset=reset)
                _check_feature_names(_estimator, X, reset=reset)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 raise TabPFNValidationError(str(e)) from e
 
             no_val_X = isinstance(X, str) and X == "no_validation"
@@ -445,7 +445,7 @@ if sklearn_version < parse_version("1.6"):
                 force_all_finite=force_all_finite,
                 **kwargs,
             )
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             raise TabPFNValidationError(str(e)) from e
 
     def _check_n_features(estimator, X, *, reset):

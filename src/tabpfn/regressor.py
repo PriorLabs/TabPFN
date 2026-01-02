@@ -49,7 +49,7 @@ from tabpfn.base import (
     initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
-from tabpfn.errors import TabPFNValidationError
+from tabpfn.errors import TabPFNUserError
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
@@ -928,14 +928,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
-        else:
-            assert all((0 <= q <= 1) and (isinstance(q, float)) for q in quantiles), (
-                TabPFNValidationError(
-                    "All quantiles must be between 0 and 1 and floats."
-                )
-            )
+        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
+            raise TabPFNUserError("All quantiles must be between 0 and 1 and floats.")
         if output_type not in _USABLE_OUTPUT_TYPES:
-            raise TabPFNValidationError(f"Invalid output type: {output_type}")
+            raise TabPFNUserError(f"Invalid output type: {output_type}")
 
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
