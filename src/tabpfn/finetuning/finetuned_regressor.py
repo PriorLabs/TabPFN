@@ -541,7 +541,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         Args:
             X: The input samples of shape (n_samples, n_features).
-            output_type: The type of output to return.
 
         Returns:
             The predicted target values with shape (n_samples,).
