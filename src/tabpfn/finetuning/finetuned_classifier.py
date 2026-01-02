@@ -29,6 +29,26 @@ if TYPE_CHECKING:
     from tabpfn.finetuning.data_util import ClassifierBatch
 
 
+def compute_classification_loss(
+    *,
+    predictions_BLQ: torch.Tensor,
+    targets_BQ: torch.Tensor,
+) -> torch.Tensor:
+    """Compute the cross-entropy training loss.
+
+    Shapes suffixes:
+        B=batch * estimators, L=logits, Q=n_queries.
+
+    Args:
+        predictions_BLQ: Raw logits of shape (B*E, L, Q).
+        targets_BQ: Integer class targets of shape (B*E, Q).
+
+    Returns:
+        A scalar loss tensor.
+    """
+    return torch.nn.functional.cross_entropy(predictions_BLQ, targets_BQ)
+
+
 class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
     """A scikit-learn compatible wrapper for fine-tuning the TabPFNClassifier.
 
@@ -130,7 +150,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         self.finetuned_estimator_.softmax_temperature_ = (
             self.finetuned_estimator_.softmax_temperature
         )
-        self.loss_function_ = torch.nn.CrossEntropyLoss()
 
     @override
     def _get_train_val_split(
@@ -178,10 +197,13 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         # Reshape for CE loss: treat estimator dim as batch dim
         # permute to shape (B, E, L, Q) then reshape to (B*E, L, Q)
         predictions_BLQ = predictions_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
+        targets_BQ = y_query_batch.repeat(B * self.n_estimators_finetune, 1).to(
+            self.device
+        )
 
-        return self.loss_function_(
-            predictions_BLQ,
-            y_query_batch.repeat(self.n_estimators_finetune, 1).to(self.device),
+        return compute_classification_loss(
+            predictions_BLQ=predictions_BLQ,
+            targets_BQ=targets_BQ,
         )
 
     @override
