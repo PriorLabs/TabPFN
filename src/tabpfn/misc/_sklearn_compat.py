@@ -24,6 +24,8 @@ from typing import Callable, Literal
 import sklearn
 from sklearn.utils.fixes import parse_version
 
+from tabpfn.errors import TabPFNValidationError
+
 sklearn_version = parse_version(parse_version(sklearn.__version__).base_version)
 
 
@@ -415,8 +417,11 @@ if sklearn_version < parse_version("1.6"):
         https://scikit-learn.org/stable/modules/generated/sklearn.utils.validation.validate_data.html#sklearn.utils.validation.validate_data
         """
         if skip_check_array:
-            _check_n_features(_estimator, X, reset=reset)
-            _check_feature_names(_estimator, X, reset=reset)
+            try:
+                _check_n_features(_estimator, X, reset=reset)
+                _check_feature_names(_estimator, X, reset=reset)
+            except (ValueError, TypeError) as e:
+                raise TabPFNValidationError(str(e)) from e
 
             no_val_X = isinstance(X, str) and X == "no_validation"
             no_val_y = y is None or (isinstance(y, str) and y == "no_validation")
@@ -431,14 +436,17 @@ if sklearn_version < parse_version("1.6"):
             force_all_finite = kwargs.pop("ensure_all_finite")
         else:
             force_all_finite = True
-        return _estimator._validate_data(
-            X=X,
-            y=y,
-            reset=reset,
-            validate_separately=validate_separately,
-            force_all_finite=force_all_finite,
-            **kwargs,
-        )
+        try:
+            return _estimator._validate_data(
+                X=X,
+                y=y,
+                reset=reset,
+                validate_separately=validate_separately,
+                force_all_finite=force_all_finite,
+                **kwargs,
+            )
+        except (ValueError, TypeError) as e:
+            raise TabPFNValidationError(str(e)) from e
 
     def _check_n_features(estimator, X, *, reset):
         """Set the `n_features_in_` attribute, or check against it on an estimator."""
