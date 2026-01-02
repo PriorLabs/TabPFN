@@ -19,7 +19,6 @@ import pytest
 import torch
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
 
 from tabpfn.architectures.base.bar_distribution import BarDistribution
 from tabpfn.finetuning.finetuned_regressor import (
