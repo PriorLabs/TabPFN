@@ -20,7 +20,6 @@ import torch
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
-from tabpfn import TabPFNRegressor
 from tabpfn.architectures.base.bar_distribution import BarDistribution
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
