@@ -27,24 +27,25 @@ warnings.filterwarnings(
 
 # Training hyperparameters
 NUM_EPOCHS = 30
-LEARNING_RATE = 2e-5
+LEARNING_RATE = 1e-5
 
 # Data sampling configuration (dataset dependent)
 # the ratio of the total dataset to be used for validation during training
 VALIDATION_SPLIT_RATIO = 0.1
 # total context split into train/test
-NUM_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 5_000
-FINETUNE_CTX_QUERY_SPLIT_RATIO = 0.2
+NUM_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 10_000
+FINETUNE_CTX_QUERY_SPLIT_RATIO = 0.5
 NUM_INFERENCE_SUBSAMPLE_SAMPLES = 20_000
 # to reduce memory usage during training we can use activation checkpointing,
 # may not be necessary for small datasets
 USE_ACTIVATION_CHECKPOINTING = True
+WEIGHT_DECAY = 0.1
 
 # Ensemble configuration
 # number of estimators to use during finetuning
-NUM_ESTIMATORS_FINETUNE = 2
+NUM_ESTIMATORS_FINETUNE = 8
 # number of estimators to use during train time validation
-NUM_ESTIMATORS_VALIDATION = 2
+NUM_ESTIMATORS_VALIDATION = 8
 # number of estimators to use during final inference
 NUM_ESTIMATORS_FINAL_INFERENCE = 8
 
@@ -110,6 +111,7 @@ def main() -> None:
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
+        weight_decay=WEIGHT_DECAY,
         use_activation_checkpointing=USE_ACTIVATION_CHECKPOINTING,
     )
 
