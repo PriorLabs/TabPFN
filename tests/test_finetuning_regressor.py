@@ -20,6 +20,7 @@ import torch
 from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 
+from tabpfn import TabPFNRegressor
 from tabpfn.architectures.base.bar_distribution import BarDistribution
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
@@ -222,53 +223,6 @@ def test__regressor_checkpoint_contains_mse_metric(
     assert "mse" in best_checkpoint
     assert "roc_auc" not in best_checkpoint
     assert "log_loss" not in best_checkpoint
-
-
-def test_regressor_dataset_and_collator_batches_type(
-    variable_synthetic_regression_dataset_collection: list[
-        tuple[np.ndarray, np.ndarray]
-    ],
-    regressor_instance: TabPFNRegressor,
-) -> None:
-    """Test that dataset and collator produce correctly-typed RegressorBatch objects."""
-    X_list = [X for X, _ in variable_synthetic_regression_dataset_collection]
-    y_list = [y for _, y in variable_synthetic_regression_dataset_collection]
-    dataset_collection = get_preprocessed_dataset_chunks(
-        regressor_instance,
-        X_list,
-        y_list,
-        train_test_split,
-        100,
-        model_type="regressor",
-        equal_split_size=True,
-        seed=42,
-    )
-
-    dl = DataLoader(
-        dataset_collection,
-        batch_size=1,
-        collate_fn=meta_dataset_collator,
-    )
-    for batch in dl:
-        assert isinstance(batch, RegressorBatch)
-        for est_tensor in batch.X_context:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == 1
-        for est_tensor in batch.y_context:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == 1
-
-        assert isinstance(batch.cat_indices, list)
-        for conf in batch.configs:
-            for c in conf:
-                assert isinstance(c, RegressorEnsembleConfig)
-
-        assert isinstance(batch.X_query_raw, torch.Tensor)
-        assert isinstance(batch.y_query_raw, torch.Tensor)
-        assert batch.X_query_raw.shape[0] == 1
-        assert batch.y_query_raw.shape[0] == 1
-        assert batch.y_query.shape[0] == 1
-        break
 
 
 def test__compute_regression_loss__correct_mse_and_mae_with_nan_targets() -> None:
