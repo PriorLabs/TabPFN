@@ -35,13 +35,13 @@ def compute_regression_loss(
     logits_BQL: torch.Tensor,
     targets_BQ: torch.Tensor,
     bardist_loss_fn: Any,
-    ce_loss_weight: float,
+    ce_loss_weight: float = 1.0,
     rps_loss_weight: float = 0.0,
     rls_loss_weight: float = 0.0,
-    mse_loss_weight: float,
-    mse_loss_clip: float | None,
-    mae_loss_weight: float,
-    mae_loss_clip: float | None,
+    mse_loss_weight: float = 0.0,
+    mse_loss_clip: float | None = None,
+    mae_loss_weight: float = 0.0,
+    mae_loss_clip: float | None = None,
 ) -> torch.Tensor:
     """Compute the regression training loss from bar distribution and auxiliary terms.
 
@@ -58,10 +58,9 @@ def compute_regression_loss(
             (cross-entropy-like). Set to 0.0 to disable.
         rps_loss_weight: Weight for a ranked probability score (RPS) term computed on
             ordered bar probabilities (squared CDF error). Set to 0.0 to disable.
-            Defaults to 0.0.
         rls_loss_weight: Weight for a ranked logarithmic score (RLS) term computed on
             ordered bar probabilities (logarithmic score on cumulative
-            probabilities). Set to 0.0 to disable. Defaults to 0.0.
+            probabilities). Set to 0.0 to disable.
         mse_loss_weight: Weight for an auxiliary MSE term computed on the mean decoded
             prediction. Set to 0.0 to disable.
         mse_loss_clip: Optional upper bound for the auxiliary mean-MSE term.
@@ -317,9 +316,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         extra_regressor_kwargs: dict[str, Any] | None = None,
-        ce_loss_weight: float = 1.0,
+        ce_loss_weight: float = 0.0,
         rps_loss_weight: float = 1.0,
-        rls_loss_weight: float = 1.0,
+        rls_loss_weight: float = 0.0,
         mse_loss_weight: float = 1.0,
         mse_loss_clip: float | None = None,
         mae_loss_weight: float = 0.0,
@@ -538,7 +537,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         Args:
             X: The input samples of shape (n_samples, n_features).
-            output_type: The type of output to return.
 
         Returns:
             The predicted target values with shape (n_samples,).
