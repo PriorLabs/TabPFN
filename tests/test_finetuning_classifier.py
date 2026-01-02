@@ -26,6 +26,7 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.data_util import (
+    ClassifierBatch,
     DatasetCollectionWithPreprocessing,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
@@ -340,7 +341,7 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
         finetuned_clf.fit(X_train, y_train)
 
     assert finetuned_clf.is_fitted_
-    assert hasattr(finetuned_clf, "finetuned_classifier_")
+    assert hasattr(finetuned_clf, "finetuned_estimator_")
     assert hasattr(finetuned_clf, "finetuned_inference_classifier_")
 
     probabilities = finetuned_clf.predict_proba(X_test)
@@ -721,8 +722,13 @@ def test_get_preprocessed_datasets_basic() -> None:
     assert hasattr(dataset, "__len__")
     assert len(dataset) > 0
     item = dataset[0]
-    assert isinstance(item, tuple)
-    assert len(item) == 6
+    assert isinstance(item, ClassifierBatch)
+    assert hasattr(item, "X_context")
+    assert hasattr(item, "X_query")
+    assert hasattr(item, "y_context")
+    assert hasattr(item, "y_query")
+    assert hasattr(item, "cat_indices")
+    assert hasattr(item, "configs")
 
 
 def test_datasetcollectionwithpreprocessing_classification_single_dataset(
@@ -751,29 +757,17 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     assert len(dataset_collection) == 1, "Collection should contain one dataset config"
 
     item_index = 0
-    processed_dataset_item = dataset_collection[item_index]
+    batch = dataset_collection[item_index]
 
-    assert isinstance(processed_dataset_item, tuple)
-    assert len(processed_dataset_item) == 6, (
-        "Item tuple should have 6 elements for classification"
-    )
+    assert isinstance(batch, ClassifierBatch)
 
-    (
-        X_trains_preprocessed,
-        _X_tests_preprocessed,
-        _y_trains_preprocessed,
-        y_test_raw_tensor,
-        _cat_ixs,
-        _returned_ensemble_configs,
-    ) = processed_dataset_item
-
-    assert isinstance(X_trains_preprocessed, list)
-    assert len(X_trains_preprocessed) == n_estimators
+    assert isinstance(batch.X_context, list)
+    assert len(batch.X_context) == n_estimators
     n_samples_total = X_raw.shape[0]
     expected_n_test = int(np.floor(n_samples_total * test_size))
     expected_n_train = n_samples_total - expected_n_test
-    assert y_test_raw_tensor.shape == (expected_n_test,)
-    assert X_trains_preprocessed[0].shape[0] == expected_n_train
+    assert batch.y_query.shape == (expected_n_test,)
+    assert batch.X_context[0].shape[0] == expected_n_train
 
 
 def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
@@ -807,26 +801,15 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
     )
 
     for item_index in range(len(datasets)):
-        processed_dataset_item = dataset_collection[item_index]
-        assert isinstance(processed_dataset_item, tuple)
-        assert len(processed_dataset_item) == 6, (
-            "Item tuple should have 6 elements for classification"
-        )
-        (
-            X_trains_preprocessed,
-            _X_tests_preprocessed,
-            _y_trains_preprocessed,
-            y_test_raw_tensor,
-            _cat_ixs,
-            _returned_ensemble_configs,
-        ) = processed_dataset_item
-        assert isinstance(X_trains_preprocessed, list)
-        assert len(X_trains_preprocessed) == n_estimators
+        batch = dataset_collection[item_index]
+        assert isinstance(batch, ClassifierBatch)
+        assert isinstance(batch.X_context, list)
+        assert len(batch.X_context) == n_estimators
         n_samples_total = X_list[item_index].shape[0]
         expected_n_test = int(np.floor(n_samples_total * test_size))
         expected_n_train = n_samples_total - expected_n_test
-        assert y_test_raw_tensor.shape == (expected_n_test,)
-        assert X_trains_preprocessed[0].shape[0] == expected_n_train
+        assert batch.y_query.shape == (expected_n_test,)
+        assert batch.X_context[0].shape[0] == expected_n_train
 
 
 def test_dataset_and_collator_with_dataloader_uniform(
@@ -853,15 +836,13 @@ def test_dataset_and_collator_with_dataloader_uniform(
         collate_fn=meta_dataset_collator,
     )
     for batch in dl:
-        # Should be tuple with X_trains, X_tests, y_trains, y_tests, cat_ixs, confs
-        assert isinstance(batch, tuple)
-        X_trains, _X_tests, y_trains, _y_tests, _cat_ixs, _confs = batch
-        for est_tensor in X_trains:
+        assert isinstance(batch, ClassifierBatch)
+        for est_tensor in batch.X_context:
             assert isinstance(est_tensor, torch.Tensor), (
                 "Each estimator's batch should be a tensor."
             )
             assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains:
+        for est_tensor in batch.y_context:
             assert isinstance(est_tensor, torch.Tensor), (
                 "Each estimator's batch should be a tensor for labels."
             )
@@ -893,16 +874,15 @@ def test_classifier_dataset_and_collator_batches_type(
         collate_fn=meta_dataset_collator,
     )
     for batch in dl:
-        assert isinstance(batch, tuple)
-        X_trains, _X_tests, y_trains, _y_tests, cat_ixs, confs = batch
-        for est_tensor in X_trains:
+        assert isinstance(batch, ClassifierBatch)
+        for est_tensor in batch.X_context:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains:
+        for est_tensor in batch.y_context:
             assert isinstance(est_tensor, torch.Tensor)
             assert est_tensor.shape[0] == batch_size
-        assert isinstance(cat_ixs, list)
-        for conf in confs:
+        assert isinstance(batch.cat_indices, list)
+        for conf in batch.configs:
             for c in conf:
                 assert isinstance(c, ClassifierEnsembleConfig)
         break
@@ -996,13 +976,15 @@ def test_fit_from_preprocessed_runs(
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
     )
 
-    for data_batch in dl:
-        X_trains, X_tests, y_trains, y_tests, cat_ixs, confs = data_batch
-        clf.fit_from_preprocessed(X_trains, y_trains, cat_ixs, confs)
-        preds = clf.forward(X_tests)
+    for batch in dl:
+        assert isinstance(batch, ClassifierBatch)
+        clf.fit_from_preprocessed(
+            batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+        )
+        preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
-        assert preds.shape[0] == X_tests[0].shape[0]
-        assert preds.shape[0] == y_tests.shape[0]
+        assert preds.shape[0] == batch.X_query[0].shape[0]
+        assert preds.shape[0] == batch.y_query.shape[0]
         assert preds.shape[1] == clf.n_classes_
 
         probs_sum = preds.sum(dim=1)
@@ -1124,12 +1106,13 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
         collate_fn=meta_dataset_collator,
         shuffle=False,
     )
-    data_batch = next(iter(dataloader), None)
-    assert data_batch is not None, "DataLoader yielded no batches."
+    batch = next(iter(dataloader), None)
+    assert batch is not None, "DataLoader yielded no batches."
+    assert isinstance(batch, ClassifierBatch)
 
-    X_trains_p2, X_tests_p2, y_trains_p2, _, cat_ixs_p2, confs_p2, *_ = data_batch
-
-    clf_batched.fit_from_preprocessed(X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2)
+    clf_batched.fit_from_preprocessed(
+        batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+    )
     assert hasattr(clf_batched, "models_"), (
         "Batched classifier models_ not found after fit_from_preprocessed."
     )
@@ -1144,7 +1127,7 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     with patch.object(
         clf_batched.models_[0], "forward", wraps=clf_batched.models_[0].forward
     ) as mock_forward_p2:
-        _ = clf_batched.forward(X_tests_p2)
+        _ = clf_batched.forward(batch.X_query)
         assert mock_forward_p2.called, "Batched models_[0].forward was not called."
 
         # Capture the tensor input 'x' (assuming same argument position as Path 1)
