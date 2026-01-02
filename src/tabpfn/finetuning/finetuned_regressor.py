@@ -30,6 +30,43 @@ if TYPE_CHECKING:
     from tabpfn.finetuning.data_util import RegressorBatch
 
 
+def compute_regression_loss(
+    *,
+    predictions_BLQ: torch.Tensor,
+    targets_BQ: torch.Tensor,
+    bardist_loss_fn: Any,
+    mse_loss_weight: float,
+    mse_loss_clip: float | None,
+) -> torch.Tensor:
+    """Compute the regression training loss from bar distribution and auxiliary terms.
+
+    Shapes suffixes:
+        B=batch * estimators, L=logits, Q=n_queries.
+
+    Args:
+        predictions_BLQ: Bar distribution logits of shape (B*E, Q, L).
+        targets_BQ: Regression targets of shape (B*E, Q).
+        bardist_loss_fn: Bar distribution loss function (callable) which also
+            exposes a `.mean()` method for converting bar logits to mean
+            predictions.
+        mse_loss_weight: Weight for an auxiliary MSE term. Set to 0.0 to disable.
+        mse_loss_clip: Optional upper bound for the auxiliary MSE term.
+
+    Returns:
+        A scalar loss tensor.
+    """
+    losses = bardist_loss_fn(predictions_BLQ, targets_BQ)
+
+    if mse_loss_weight > 0.0:
+        predictions_mean = bardist_loss_fn.mean(predictions_BLQ)
+        mse_aux_loss = ((predictions_mean - targets_BQ) ** 2).mean()
+        if mse_loss_clip is not None:
+            mse_aux_loss = mse_aux_loss.clamp(max=mse_loss_clip)
+        losses = losses + mse_loss_weight * mse_aux_loss
+
+    return losses.mean()
+
+
 class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     """A scikit-learn compatible wrapper for fine-tuning the TabPFNRegressor.
 
@@ -154,7 +191,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         """Set up bar distribution for this batch."""
         self.finetuned_estimator_.raw_space_bardist_ = batch.raw_space_bardist
         self.finetuned_estimator_.bardist_ = batch.znorm_space_bardist
-        self._current_loss_function = batch.znorm_space_bardist
+        self._bardist_loss = batch.znorm_space_bardist
 
     @override
     def _forward_with_loss(self, batch: RegressorBatch) -> torch.Tensor:  # type: ignore[override]
@@ -169,18 +206,16 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         """
         X_query_batch = batch.X_query
         y_query_batch = batch.y_query
-        loss_function = self._current_loss_function
+        bardist_loss_fn = self._bardist_loss
 
-        # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        _avg_logits_QBL, per_estim_logits, _per_estim_borders = (
-            self.finetuned_estimator_.forward(X_query_batch)
-        )
+        _, per_estim_logits, _ = self.finetuned_estimator_.forward(X_query_batch)
         # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
 
+        # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
         predictions_QBEL = torch.stack(per_estim_logits, dim=2)
 
         Q, B, E, L = predictions_QBEL.shape
-        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], loss_function)
+        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], bardist_loss_fn)
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E
@@ -190,20 +225,17 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         # permute to shape (B, E, Q, L) then reshape to (B*E, Q, L)
         predictions_BLQ = predictions_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
-        targets_BQ = y_query_batch.repeat(self.n_estimators_finetune, 1).to(self.device)
+        targets_BQ = y_query_batch.repeat(B * self.n_estimators_finetune, 1).to(
+            self.device
+        )
 
-        # Bar distribution loss (negative log likelihood)
-        losses = loss_function(predictions_BLQ, targets_BQ)
-
-        # Optional MSE auxiliary loss
-        if self.mse_loss_weight > 0.0:
-            predictions_mean = loss_function.mean(predictions_BLQ)
-            mse_aux_loss = ((predictions_mean - targets_BQ) ** 2).mean()
-            if self.mse_loss_clip is not None:
-                mse_aux_loss = mse_aux_loss.clamp(max=self.mse_loss_clip)
-            losses = losses + self.mse_loss_weight * mse_aux_loss
-
-        return losses.mean()
+        return compute_regression_loss(
+            predictions_BLQ=predictions_BLQ,
+            targets_BQ=targets_BQ,
+            bardist_loss_fn=bardist_loss_fn,
+            mse_loss_weight=self.mse_loss_weight,
+            mse_loss_clip=self.mse_loss_clip,
+        )
 
     @override
     def _evaluate_model(
