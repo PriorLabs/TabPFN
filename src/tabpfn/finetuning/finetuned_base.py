@@ -118,8 +118,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             Defaults to 8.
         use_activation_checkpointing: Whether to use activation checkpointing to
             reduce memory usage. Defaults to False.
-        save_checkpoint_interval: Number of epochs between checkpoint saves. If
-            None, no intermediate checkpoints are saved. The best model checkpoint
+        save_checkpoint_interval: Number of epochs between checkpoint saves. This
+            only has an effect if `output_dir` is provided during the `fit()` call.
+            If None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
     """
 
