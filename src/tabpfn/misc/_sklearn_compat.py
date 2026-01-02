@@ -418,8 +418,8 @@ if sklearn_version < parse_version("1.6"):
         """
         if skip_check_array:
             try:
-               _check_n_features(_estimator, X, reset=reset)
-               _check_feature_names(_estimator, X, reset=reset)
+                _check_n_features(_estimator, X, reset=reset)
+                _check_feature_names(_estimator, X, reset=reset)
             except (ValueError, TypeError) as e:
                 raise TabPFNValidationError(str(e)) from e
 
