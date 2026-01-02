@@ -21,6 +21,7 @@ from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
+from tabpfn.architectures.base.bar_distribution import BarDistribution
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -28,6 +29,7 @@ from tabpfn.finetuning.data_util import (
 )
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
+    compute_regression_loss,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
@@ -147,7 +149,7 @@ def variable_synthetic_regression_dataset_collection() -> list[
         for use_lr_scheduler in [True, False]
     ],
 )
-def test_finetuned_tabpfn_regressor_fit_and_predict(
+def test__finetuned_tabpfn_regressor__fit_and_predict(
     device: str,
     early_stopping: bool,
     use_lr_scheduler: bool,
@@ -202,7 +204,7 @@ def test_finetuned_tabpfn_regressor_fit_and_predict(
 
 
 @pytest.mark.parametrize("device", devices)
-def test_regressor_checkpoint_contains_mse_metric(
+def test__regressor_checkpoint_contains_mse_metric(
     device: str,
     tmp_path: Path,
     synthetic_regression_data: tuple[np.ndarray, np.ndarray],
@@ -306,3 +308,136 @@ def test_regressor_dataset_and_collator_batches_type(
         assert batch.y_query_raw.shape[0] == 1
         assert batch.y_query.shape[0] == 1
         break
+
+
+def test__compute_regression_loss__correct_mse_and_mae_with_nan_targets() -> None:
+    """Ensure NaN targets are ignored for auxiliary regression losses."""
+    borders = torch.linspace(-2.0, 2.0, steps=9, dtype=torch.float32)
+    bardist_loss_fn = BarDistribution(borders=borders, ignore_nan_targets=True)
+
+    # Deterministic setup: zero logits -> uniform bar probabilities.
+    # For symmetric borders, this yields an exact mean prediction of 0.0.
+    logits_BQL = torch.zeros((1, 4, bardist_loss_fn.num_bars), dtype=torch.float32)
+    predictions_mean_BQ = bardist_loss_fn.mean(logits_BQL)
+    assert torch.equal(predictions_mean_BQ, torch.zeros_like(predictions_mean_BQ))
+
+    targets_BQ = torch.tensor([[0.0, 0.5, float("nan"), -0.5]], dtype=torch.float32)
+    assert torch.isnan(targets_BQ[0, 2]).item()
+
+    mse_mae_only_loss = compute_regression_loss(
+        logits_BQL=logits_BQL,
+        targets_BQ=targets_BQ,
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        mse_loss_weight=1.0,
+        mse_loss_clip=None,
+        mae_loss_weight=1.0,
+        mae_loss_clip=None,
+    )
+    assert torch.isfinite(mse_mae_only_loss).item()
+    # MSE terms (valid only): (0.0 - 0.0)^2 + (0.0 - 0.5)^2 + (0.0 - (-0.5))^2 = 0.5
+    # Mean is over all 4 positions (NaN position contributes 0.0): 0.5 / 4 = 0.125
+    expected_mse = 0.125
+    # MAE terms (valid only): |0.0 - 0.0| + |0.0 - 0.5| + |0.0 - (-0.5)| = 1.0
+    # Mean over all 4 positions: 1.0 / 4 = 0.25
+    expected_mae = 0.25
+    expected_total = expected_mse + expected_mae
+    assert mse_mae_only_loss.item() == expected_total
+
+
+def test__compute_regression_loss__masks_nan_targets() -> None:
+    borders = torch.linspace(-2.0, 2.0, steps=9, dtype=torch.float32)
+    bardist_loss_fn = BarDistribution(borders=borders, ignore_nan_targets=True)
+    logits_BQL = torch.zeros((1, 4, bardist_loss_fn.num_bars), dtype=torch.float32)
+
+    rps_only_loss = compute_regression_loss(
+        logits_BQL=logits_BQL,
+        targets_BQ=torch.full((1, 4), float("nan"), dtype=torch.float32),
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        rps_loss_weight=1.0,
+        mse_loss_weight=1.0,
+        mse_loss_clip=None,
+        mae_loss_weight=1.0,
+        mae_loss_clip=None,
+    )
+    assert torch.isfinite(rps_only_loss).item()
+    assert rps_only_loss.item() == 0.0
+
+    rls_only_loss = compute_regression_loss(
+        logits_BQL=logits_BQL,
+        targets_BQ=torch.full((1, 4), float("nan"), dtype=torch.float32),
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        rls_loss_weight=1.0,
+        mse_loss_weight=1.0,
+        mse_loss_clip=None,
+        mae_loss_weight=1.0,
+        mae_loss_clip=None,
+    )
+    assert torch.isfinite(rls_only_loss).item()
+    assert rls_only_loss.item() == 0.0
+
+
+def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
+    """Check RPS (squared) vs RLS (log) ranked probability loss.
+
+    Uses a deterministic 2-bin toy example so expected values are easy to verify.
+    """
+    borders = torch.tensor([0.0, 1.0, 2.0])
+    bardist_loss_fn = BarDistribution(borders=borders, ignore_nan_targets=True)
+
+    # Two bins. Desired probs: [0.25, 0.75] -> pred CDF: [0.25, 1.0]
+    probs_L = torch.tensor([0.25, 0.75])
+    logits_L = probs_L.log()
+    logits_BLQ = logits_L.view(1, 1, -1)
+
+    # Target y in bin 1 -> target CDF: [0.0, 1.0]
+    targets_BQ = torch.tensor([[1.2]])
+
+    rps_loss = compute_regression_loss(
+        logits_BQL=logits_BLQ,
+        targets_BQ=targets_BQ,
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        rps_loss_weight=1.0,
+        mse_loss_weight=0.0,
+        mse_loss_clip=None,
+        mae_loss_weight=0.0,
+        mae_loss_clip=None,
+    )
+
+    rls_loss = compute_regression_loss(
+        logits_BQL=logits_BLQ,
+        targets_BQ=targets_BQ,
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        rls_loss_weight=1.0,
+        mse_loss_weight=0.0,
+        mse_loss_clip=None,
+        mae_loss_weight=0.0,
+        mae_loss_clip=None,
+    )
+
+    # second term is zero but is added for clarity
+    expected_rps = (0.25 - 0) ** 2 + (1 - 1) ** 2
+
+    # second term is zero but just added here for clarity
+    expected_rls = -np.log(abs(0.25 + 0 - 1)) - np.log(abs(1 + 1 - 1))
+
+    assert rls_loss.item() == pytest.approx(expected_rls)
+    assert rps_loss.item() == pytest.approx(expected_rps)
+
+    combined_loss = compute_regression_loss(
+        logits_BQL=logits_BLQ,
+        targets_BQ=targets_BQ,
+        bardist_loss_fn=bardist_loss_fn,
+        ce_loss_weight=0.0,
+        rps_loss_weight=1.0,
+        rls_loss_weight=1.0,
+        mse_loss_weight=0.0,
+        mse_loss_clip=None,
+        mae_loss_weight=0.0,
+        mae_loss_clip=None,
+    )
+    assert combined_loss.item() == pytest.approx(expected_rps + expected_rls)
