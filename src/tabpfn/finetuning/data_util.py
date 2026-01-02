@@ -523,10 +523,7 @@ def _collate_cat_indices(
 
         # Otherwise it's already batched: [dataset_batch][estimator][...].
         # We only support batch_size=1 in this collator.
-        assert len(cat_indices) == 1, (
-            "Only implemented and tested for batch size of 1. "
-            "Use tabpfn.utils.collate_for_tabpfn_dataset for larger batch sizes."
-        )
+        assert len(cat_indices) == 1
         batched_cat_indices.append(cat_indices[0])  # type: ignore[index]
 
     return batched_cat_indices
