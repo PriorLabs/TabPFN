@@ -1115,8 +1115,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
-        if getattr(self, "softmax_temperature_", self.softmax_temperature) != 1.0:
-            return logits / self.softmax_temperature_
+        temp = getattr(self, "softmax_temperature_", self.softmax_temperature)
+        if temp != 1.0:
+            return logits / temp
         return logits
 
     def _average_across_estimators(self, tensors: torch.Tensor) -> torch.Tensor:
