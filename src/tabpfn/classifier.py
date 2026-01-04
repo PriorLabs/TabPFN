@@ -1107,7 +1107,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             The input probas if no tuning is done, otherwise the reweighted
             probabilities.
         """
-        if self.tuned_classification_thresholds_ is None:
+        if getattr(self, "tuned_classification_thresholds_", None) is None:
             return probas
 
         probas = probas / np.maximum(self.tuned_classification_thresholds_, 1e-8)
@@ -1115,7 +1115,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
         """Scales logits by the softmax temperature."""
-        if self.softmax_temperature_ != 1.0:
+        if getattr(self, "softmax_temperature_", self.softmax_temperature) != 1.0:
             return logits / self.softmax_temperature_
         return logits
 
@@ -1129,7 +1129,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def _apply_balancing(self, probas: torch.Tensor) -> torch.Tensor:
         """Applies class balancing to a probability tensor."""
-        return balance_probas_by_class_counts(probas, self.class_counts_)
+        counts = getattr(self, "class_counts_", None)
+        if counts is None:
+            return probas
+        return balance_probas_by_class_counts(probas, counts)
 
     def logits_to_probabilities(
         self,
