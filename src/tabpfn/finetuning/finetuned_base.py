@@ -80,12 +80,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             Defaults to 30.
         learning_rate: The learning rate for the AdamW optimizer. A small value
             is crucial for stable fine-tuning. Defaults to 1e-5.
-        weight_decay: The weight decay for the AdamW optimizer. Defaults to 1e-3.
+        weight_decay: The weight decay for the AdamW optimizer. Defaults to 0.01.
         validation_split_ratio: Fraction of the original training data reserved
             as a validation set for early stopping and monitoring. Defaults to 0.1.
         n_finetune_ctx_plus_query_samples: The total number of samples per
             meta-dataset during fine-tuning (context plus query) before applying
-            the `finetune_ctx_query_split_ratio`. Defaults to 20_000.
+            the `finetune_ctx_query_split_ratio`. Defaults to 10_000.
         finetune_ctx_query_split_ratio: The proportion of each fine-tuning
             meta-dataset to use as query samples for calculating the loss. The
             remainder is used as context. Defaults to 0.2.
@@ -122,7 +122,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             None, the value from `kwargs` or the estimator default is used.
             Defaults to 8.
         use_activation_checkpointing: Whether to use activation checkpointing to
-            reduce memory usage. Defaults to False.
+            reduce memory usage. Defaults to True.
         save_checkpoint_interval: Number of epochs between checkpoint saves. This
             only has an effect if `output_dir` is provided during the `fit()` call.
             If None, no intermediate checkpoints are saved. The best model checkpoint
@@ -135,9 +135,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         device: str = "cuda",
         epochs: int = 30,
         learning_rate: float = 1e-5,
-        weight_decay: float = 0.001,
+        weight_decay: float = 0.01,
         validation_split_ratio: float = 0.1,
-        n_finetune_ctx_plus_query_samples: int = 20_000,
+        n_finetune_ctx_plus_query_samples: int = 10_000,
         finetune_ctx_query_split_ratio: float = 0.2,
         n_inference_subsample_samples: int = 50_000,
         random_state: int = 0,
@@ -150,7 +150,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         n_estimators_finetune: int = 2,
         n_estimators_validation: int = 2,
         n_estimators_final_inference: int = 8,
-        use_activation_checkpointing: bool = False,
+        use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
     ):
         super().__init__()
