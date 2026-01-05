@@ -9,9 +9,9 @@ class TabPFNError(Exception):
     """Base class for all TabPFN-specific exceptions."""
 
 
-class TabPFNValidationError(TabPFNError):
+class TabPFNUserError(TabPFNError):
     """Base class for errors caused by invalid user input (safe to map to HTTP 400)."""
 
 
-class TabPFNValidationError(ValueError, TabPFNValidationError):
+class TabPFNValidationError(ValueError, TabPFNUserError):
     """User provided invalid data (shape, NaNs, categories, etc.)."""
