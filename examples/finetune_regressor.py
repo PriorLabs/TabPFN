@@ -23,6 +23,9 @@ warnings.filterwarnings(
 # =============================================================================
 # Fine-tuning Configuration
 # For details and more options see FinetunedTabPFNRegressor
+#
+# These settings work well for the California Housing dataset.
+# For other datasets, you may need to adjust these settings to get good results.
 # =============================================================================
 
 # Training hyperparameters
@@ -54,7 +57,6 @@ RANDOM_STATE = 0
 
 
 def main() -> None:
-    # We use the California Housing dataset for this example.
     data = sklearn.datasets.fetch_california_housing(as_frame=True)
     X_all = data.data
     y_all = data.target
