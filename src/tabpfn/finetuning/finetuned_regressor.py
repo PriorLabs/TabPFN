@@ -74,16 +74,69 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     TabPFN on a specific dataset using the familiar .fit() and .predict() API.
 
     Args:
+        device: The device to run the model on. Defaults to "cuda".
+        epochs: The total number of passes through the fine-tuning data.
+            Defaults to 30.
+        learning_rate: The learning rate for the AdamW optimizer. A small value
+            is crucial for stable fine-tuning. Defaults to 1e-5.
+        weight_decay: The weight decay for the AdamW optimizer. Defaults to 1e-3.
+        validation_split_ratio: Fraction of the original training data reserved
+            as a validation set for early stopping and monitoring. Defaults to 0.1.
+        n_finetune_ctx_plus_query_samples: The total number of samples per
+            meta-dataset during fine-tuning (context plus query) before applying
+            the `finetune_ctx_query_split_ratio`. Defaults to 20_000.
+        finetune_ctx_query_split_ratio: The proportion of each fine-tuning
+            meta-dataset to use as query samples for calculating the loss. The
+            remainder is used as context. Defaults to 0.2.
+        n_inference_subsample_samples: The total number of subsampled training
+            samples per estimator during validation and final inference.
+            Defaults to 50_000.
+        meta_batch_size: The number of meta-datasets to process in a single
+            optimization step. Currently, this should be kept at 1. Defaults to 1.
+        random_state: Seed for reproducibility of data splitting and model
+            initialization. Defaults to 0.
+        early_stopping: Whether to use early stopping based on validation
+            performance. Defaults to True.
+        early_stopping_patience: Number of epochs to wait for improvement before
+            early stopping. Defaults to 8.
+        min_delta: Minimum change in metric to be considered as an improvement.
+            Defaults to 1e-4.
+        grad_clip_value: Maximum norm for gradient clipping. If None, gradient
+            clipping is disabled. Gradient clipping helps stabilize training by
+            preventing exploding gradients. Defaults to 1.0.
+        use_lr_scheduler: Whether to use a learning rate scheduler (linear warmup
+            with optional cosine decay) during fine-tuning. Defaults to True.
+        lr_warmup_only: If True, only performs linear warmup to the base learning
+            rate and then keeps it constant. If False, applies cosine decay after
+            warmup. Defaults to False.
+        n_estimators_finetune: If set, overrides `n_estimators` of the underlying
+            estimator only during fine-tuning to control the number of
+            estimators (ensemble size) used in the training loop. If None, the
+            value from `kwargs` or the estimator default is used.
+            Defaults to 2.
+        n_estimators_validation: If set, overrides `n_estimators` only for
+            validation-time evaluation during fine-tuning (early-stopping /
+            monitoring). If None, the value from `kwargs` or the
+            estimator default is used. Defaults to 2.
+        n_estimators_final_inference: If set, overrides `n_estimators` only for
+            the final fitted inference model that is used after fine-tuning. If
+            None, the value from `kwargs` or the estimator default is used.
+            Defaults to 8.
+        use_activation_checkpointing: Whether to use activation checkpointing to
+            reduce memory usage. Defaults to False.
+        save_checkpoint_interval: Number of epochs between checkpoint saves. This
+            only has an effect if `output_dir` is provided during the `fit()` call.
+            If None, no intermediate checkpoints are saved. The best model checkpoint
+            is always saved regardless of this setting. Defaults to 10.
+
         FinetunedTabPFNRegressor specific arguments:
 
+        extra_regressor_kwargs: Additional keyword arguments to pass to the
+            underlying `TabPFNRegressor`, such as `n_estimators`.
         mse_loss_weight: Weight for an auxiliary MSE loss term added to the
             bar distribution loss. Set to 0.0 to disable. Defaults to 8.0.
         mse_loss_clip: Optional upper bound for the auxiliary MSE loss term.
             If None, no clipping is applied. Defaults to None.
-        extra_regressor_kwargs: Additional keyword arguments to pass to the
-            underlying `TabPFNRegressor`, such as `n_estimators`.
-
-        See FinetunedTabPFNBase for details on common arguments.
     """
 
     def __init__(  # noqa: PLR0913
@@ -137,17 +190,15 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
         )
+        self.extra_regressor_kwargs = extra_regressor_kwargs
         self.mse_loss_weight = mse_loss_weight
         self.mse_loss_clip = mse_loss_clip
-        self.regressor_kwargs = extra_regressor_kwargs or {}
-        # Store for sklearn get_params compatibility
-        self.extra_regressor_kwargs = extra_regressor_kwargs
 
     @property
     @override
     def _estimator_kwargs(self) -> dict[str, Any]:
         """Return the regressor-specific kwargs."""
-        return self.regressor_kwargs
+        return self.extra_regressor_kwargs or {}
 
     @property
     @override
@@ -185,6 +236,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             test_size=self.validation_split_ratio,
             random_state=self.random_state,
         )
+
+    @override
+    def _should_skip_batch(self, batch: RegressorBatch) -> bool:  # type: ignore[override]
+        """Never skip a batch for regression."""
+        return False
 
     @override
     def _setup_batch(self, batch: RegressorBatch) -> None:  # type: ignore[override]

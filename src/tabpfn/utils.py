@@ -430,7 +430,23 @@ def validate_Xy_fit(
     ensure_y_numeric: bool = False,
     ignore_pretraining_limits: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
-    """Validate the input data for fitting."""
+    """Validate the input data for fitting.
+
+    Args:
+        X: The input data.
+        y: The target data.
+        estimator: The estimator to validate the data for.
+        max_num_features: The maximum number of features to allow.
+            Ignored if `ignore_pretraining_limits` is True.
+        max_num_samples: The maximum number of samples to allow.
+            Ignored if `ignore_pretraining_limits` is True.
+        ensure_y_numeric: Whether to ensure the target data is numeric.
+        ignore_pretraining_limits: Whether to ignore the pretraining limits.
+
+    Returns:
+        A tuple of the validated input data X, target data y, feature names,
+        and number of features.
+    """
     # Calls `validate_data()` with specification
 
     # Checks that we do not call validate_data() in case

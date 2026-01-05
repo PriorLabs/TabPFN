@@ -14,7 +14,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
@@ -38,13 +38,12 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
+from tabpfn.utils import infer_devices, validate_Xy_fit
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from tabpfn.constants import XType, YType
 
 
 @dataclass
@@ -238,6 +237,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         ...
 
     @abstractmethod
+    def _should_skip_batch(self, batch: ClassifierBatch | RegressorBatch) -> bool:
+        """Check if the batch should be skipped."""
+        ...
+
+    @abstractmethod
     def _forward_with_loss(
         self,
         batch: ClassifierBatch | RegressorBatch,
@@ -319,7 +323,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         ...
 
     def fit(
-        self, X: np.ndarray, y: np.ndarray, output_dir: Path | None = None
+        self, X: XType, y: YType, output_dir: Path | None = None
     ) -> FinetunedTabPFNBase:
         """Fine-tune the TabPFN model on the provided training data.
 
@@ -342,6 +346,16 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             )
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
+
+        X, y, _, _ = validate_Xy_fit(
+            X,
+            y,
+            estimator=self.finetuned_estimator_,
+            ensure_y_numeric=self._model_type == "regressor",
+            max_num_samples=-1,  # ignored if ignore_pretraining_limits is True
+            max_num_features=-1,  # ignored if ignore_pretraining_limits is True
+            ignore_pretraining_limits=True,
+        )
 
         self.X_ = X
         self.y_ = y
@@ -391,11 +405,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             self.n_estimators_final_inference,
         )
 
-        if self.device.startswith("cuda") and torch.cuda.is_available():
-            eval_devices = [f"cuda:{i}" for i in range(torch.cuda.device_count())]
-        else:
-            eval_devices = ["cpu"]  # Used in tests
-
+        eval_devices = infer_devices(self.device)
         validation_eval_config["device"] = eval_devices
         final_inference_eval_config["device"] = eval_devices
 
@@ -512,6 +522,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             )
             for batch in progress_bar:
                 optimizer.zero_grad()
+
+                if self._should_skip_batch(batch):
+                    continue
 
                 self._setup_batch(batch)
 
