@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal
@@ -360,6 +361,18 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         if is_regression_task:
             train_mean = np.mean(y_train_raw)
             train_std = np.std(y_train_raw)
+
+            eps = 1e-8
+            if train_std < eps:
+                warnings.warn(
+                    f"Target variable has constant or near-constant values "
+                    f"(std={train_std:.2e}). Adding epsilon={eps} to prevent "
+                    f"division by zero in standardization.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                train_std = eps
+
             y_test_standardized = (y_test_raw - train_mean) / train_std
             y_train_standardized = (y_train_raw - train_mean) / train_std
             raw_space_bardist_ = FullSupportBarDistribution(

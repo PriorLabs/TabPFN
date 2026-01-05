@@ -39,7 +39,7 @@ NUM_INFERENCE_SUBSAMPLE_SAMPLES = 20_000
 # to reduce memory usage during training we can use activation checkpointing,
 # may not be necessary for small datasets
 USE_ACTIVATION_CHECKPOINTING = True
-WEIGHT_DECAY = 0.1
+WEIGHT_DECAY = 0.01
 
 # Ensemble configuration
 # number of estimators to use during finetuning
