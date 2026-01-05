@@ -32,6 +32,10 @@ warnings.filterwarnings(
 NUM_EPOCHS = 30
 LEARNING_RATE = 1e-5
 
+# We can fine-tune using almost the entire housing dataset
+# in the context of the train batches.
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 20_000
+
 # Ensemble configuration
 # number of estimators to use during finetuning
 NUM_ESTIMATORS_FINETUNE = 8
@@ -83,6 +87,7 @@ def main() -> None:
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
         random_state=RANDOM_STATE,
+        n_finetune_ctx_plus_query_samples=N_FINETUNE_CTX_PLUS_QUERY_SAMPLES,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
