@@ -20,6 +20,7 @@ from tabpfn.constants import (
     DEFAULT_DTYPE_BYTE_SIZE,
     ModelPath,
 )
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -261,7 +262,9 @@ def determine_precision(
         forced_inference_dtype_ = inference_precision
         byte_size = inference_precision.itemsize
     else:
-        raise ValueError(f"Unknown inference_precision={inference_precision}")
+        raise TabPFNValidationError(
+            f"Unknown inference_precision={inference_precision}"
+        )
 
     return use_autocast_, forced_inference_dtype_, byte_size
 

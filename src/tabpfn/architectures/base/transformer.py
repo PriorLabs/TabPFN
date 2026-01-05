@@ -25,6 +25,7 @@ from tabpfn.architectures.base.encoders import (
 from tabpfn.architectures.base.layer import PerFeatureEncoderLayer
 from tabpfn.architectures.base.thinking_tokens import AddThinkingTokens
 from tabpfn.architectures.interface import Architecture
+from tabpfn.errors import TabPFNValidationError
 
 if TYPE_CHECKING:
     from tabpfn.architectures.base.config import ModelConfig
@@ -503,7 +504,7 @@ class PerFeatureTransformer(Architecture):
         embedded_input = torch.cat((embedded_x, embedded_y.unsqueeze(2)), dim=2)
 
         if torch.isnan(embedded_input).any():
-            raise ValueError(
+            raise TabPFNValidationError(
                 f"There should be no NaNs in the encoded x and y."
                 "Check that you do not feed NaNs or use a NaN-handling enocder."
                 "Your embedded x and y returned the following:"
