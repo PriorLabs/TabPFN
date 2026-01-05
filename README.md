@@ -464,7 +464,7 @@ Not effective:
 A: Beyond the default checkpoints, the other available checkpoints are experimental and worse on average, and we recommend to always start with the defaults. They can be used as part of an ensembling or hyperparameter optimization system (and are used automatically in `AutoTabPFNClassifier`) or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
 <details>
-<summary>More detail on each checkpoint</summary>
+<summary>More detail on each TabPFN-2.5 checkpoint</summary>
 
 We add the 🌍 emoji for checkpoints finetuned on real datasets. See the [TabPFN-2.5 paper](https://arxiv.org/abs/2511.08667) for the list of 43 datasets.
 

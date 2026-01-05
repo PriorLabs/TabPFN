@@ -281,7 +281,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   with the use of an environment variable `TABPFN_MODEL_CACHE_DIR`.
                 - If a path or a string of a path, the model will be loaded from
                   the user-specified location if available, otherwise it will be
-                  downloaded to this location.
+                  downloaded to this location. Details on available checkpoints are
+                  available in the repository README.
 
             device:
                 The device(s) to use for inference.
