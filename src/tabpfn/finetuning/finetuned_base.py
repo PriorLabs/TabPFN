@@ -45,6 +45,14 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
 
+# Currently, we only support a batch size of 1 for finetuning.
+META_BATCH_SIZE = 1
+
+# Hard limit on the number of samples to use for validation.
+# This is used to avoid spending too much time on validation
+# and prevent OOM issues for very large datasets.
+MAX_VALIDATION_SAMPLES = 50_000
+
 
 @dataclass
 class EvalResult:
@@ -84,8 +92,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         n_inference_subsample_samples: The total number of subsampled training
             samples per estimator during validation and final inference.
             Defaults to 50_000.
-        meta_batch_size: The number of meta-datasets to process in a single
-            optimization step. Currently, this should be kept at 1. Defaults to 1.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
@@ -134,7 +140,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         n_finetune_ctx_plus_query_samples: int = 20_000,
         finetune_ctx_query_split_ratio: float = 0.2,
         n_inference_subsample_samples: int = 50_000,
-        meta_batch_size: int = 1,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
@@ -157,7 +162,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.n_finetune_ctx_plus_query_samples = n_finetune_ctx_plus_query_samples
         self.finetune_ctx_query_split_ratio = finetune_ctx_query_split_ratio
         self.n_inference_subsample_samples = n_inference_subsample_samples
-        self.meta_batch_size = meta_batch_size
         self.random_state = random_state
         self.early_stopping = early_stopping
         self.early_stopping_patience = early_stopping_patience
@@ -170,8 +174,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.n_estimators_final_inference = n_estimators_final_inference
         self.use_activation_checkpointing = use_activation_checkpointing
         self.save_checkpoint_interval = save_checkpoint_interval
-
-        assert self.meta_batch_size == 1, "meta_batch_size must be 1 for finetuning"
+        self.meta_batch_size = META_BATCH_SIZE
 
     def _build_estimator_config(
         self,
@@ -222,13 +225,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
     @abstractmethod
     def _setup_estimator(self) -> None:
         """Perform any task-specific setup after estimator creation."""
-        ...
-
-    @abstractmethod
-    def _get_train_val_split(
-        self, X: np.ndarray, y: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Split data into train/validation sets with task-specific options."""
         ...
 
     @abstractmethod
@@ -322,6 +318,35 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         """Predict target values for X."""
         ...
 
+    def _get_train_val_split(
+        self, X: np.ndarray, y: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Split data into train/validation sets with task-specific options."""
+        n_samples = len(y)
+        desired_val_size = int(n_samples * self.validation_split_ratio)
+
+        if desired_val_size > MAX_VALIDATION_SAMPLES:
+            test_size = MAX_VALIDATION_SAMPLES
+            warnings.warn(
+                f"Validation set size would be {desired_val_size:,} samples "
+                f"based on validation_split_ratio="
+                f"{self.validation_split_ratio:.2f}, but limiting to "
+                f"{MAX_VALIDATION_SAMPLES:,} samples to avoid excessive "
+                f"validation time and memory usage.",
+                UserWarning,
+                stacklevel=3,
+            )
+        else:
+            test_size = self.validation_split_ratio
+
+        return train_test_split(  # type: ignore[return-value]
+            X,
+            y,
+            test_size=test_size,
+            random_state=self.random_state,
+            stratify=y if self._model_type == "classifier" else None,
+        )
+
     def fit(
         self, X: XType, y: YType, output_dir: Path | None = None
     ) -> FinetunedTabPFNBase:
@@ -347,38 +372,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        X, y, _, _ = validate_Xy_fit(
-            X,
-            y,
-            estimator=self.finetuned_estimator_,
-            ensure_y_numeric=self._model_type == "regressor",
-            max_num_samples=-1,  # ignored if ignore_pretraining_limits is True
-            max_num_features=-1,  # ignored if ignore_pretraining_limits is True
-            ignore_pretraining_limits=True,
-        )
-
-        self.X_ = X
-        self.y_ = y
-
         return self._fit(X=X, y=y, output_dir=output_dir)
 
     def _fit(  # noqa: C901,PLR0912
         self,
-        X: np.ndarray,
-        y: np.ndarray,
+        X: XType,
+        y: YType,
         output_dir: Path | None = None,
     ) -> FinetunedTabPFNBase:
         """Internal implementation of fit that runs the finetuning loop."""
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
-
-        X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
-
-        # Calculate the context size used during finetuning.
-        n_finetune_ctx_plus_query_samples = min(
-            self.n_finetune_ctx_plus_query_samples,
-            len(y_train),
-        )
 
         inference_config = self._estimator_kwargs.get("inference_config", {})
         base_estimator_config: dict[str, Any] = {
@@ -428,6 +432,27 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
+
+        X, y, _, _ = validate_Xy_fit(
+            X,
+            y,
+            estimator=self.finetuned_estimator_,
+            ensure_y_numeric=self._model_type == "regressor",
+            max_num_samples=-1,  # ignored if ignore_pretraining_limits is True
+            max_num_features=-1,  # ignored if ignore_pretraining_limits is True
+            ignore_pretraining_limits=True,
+        )
+
+        self.X_ = X
+        self.y_ = y
+
+        X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
+
+        # Calculate the context size used during finetuning.
+        n_finetune_ctx_plus_query_samples = min(
+            self.n_finetune_ctx_plus_query_samples,
+            len(y_train),
+        )
 
         self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)

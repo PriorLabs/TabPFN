@@ -16,7 +16,6 @@ import numpy as np
 import torch
 from sklearn.base import ClassifierMixin
 from sklearn.metrics import log_loss, roc_auc_score
-from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNClassifier
@@ -26,6 +25,7 @@ from tabpfn.finetuning.train_util import clone_model_for_evaluation
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from tabpfn.constants import XType, YType
     from tabpfn.finetuning.data_util import ClassifierBatch
 
 
@@ -73,8 +73,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         n_inference_subsample_samples: The total number of subsampled training
             samples per estimator during validation and final inference.
             Defaults to 50_000.
-        meta_batch_size: The number of meta-datasets to process in a single
-            optimization step. Currently, this should be kept at 1. Defaults to 1.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
@@ -128,7 +126,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         n_finetune_ctx_plus_query_samples: int = 20_000,
         finetune_ctx_query_split_ratio: float = 0.2,
         n_inference_subsample_samples: int = 50_000,
-        meta_batch_size: int = 1,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
@@ -152,7 +149,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             n_finetune_ctx_plus_query_samples=n_finetune_ctx_plus_query_samples,
             finetune_ctx_query_split_ratio=finetune_ctx_query_split_ratio,
             n_inference_subsample_samples=n_inference_subsample_samples,
-            meta_batch_size=meta_batch_size,
             random_state=random_state,
             early_stopping=early_stopping,
             early_stopping_patience=early_stopping_patience,
@@ -200,19 +196,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         """Set up softmax temperature after estimator creation."""
         self.finetuned_estimator_.softmax_temperature_ = (
             self.finetuned_estimator_.softmax_temperature
-        )
-
-    @override
-    def _get_train_val_split(
-        self, X: np.ndarray, y: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Split data with stratification for classification."""
-        return train_test_split(  # type: ignore[return-value]
-            X,
-            y,
-            test_size=self.validation_split_ratio,
-            random_state=self.random_state,
-            stratify=y,
         )
 
     @override
@@ -357,7 +340,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
     @override
     def fit(
-        self, X: np.ndarray, y: np.ndarray, output_dir: Path | None = None
+        self, X: XType, y: YType, output_dir: Path | None = None
     ) -> FinetunedTabPFNClassifier:
         """Fine-tune the TabPFN model on the provided training data.
 
@@ -374,7 +357,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         super().fit(X, y, output_dir)
         return self
 
-    def predict_proba(self, X: np.ndarray) -> np.ndarray:
+    def predict_proba(self, X: XType) -> np.ndarray:
         """Predict class probabilities for X.
 
         Args:
@@ -389,7 +372,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         return self.finetuned_inference_classifier_.predict_proba(X)  # type: ignore
 
     @override
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: XType) -> np.ndarray:
         """Predict the class for X.
 
         Args:

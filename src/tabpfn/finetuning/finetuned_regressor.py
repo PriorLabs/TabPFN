@@ -16,7 +16,6 @@ import numpy as np
 import torch
 from sklearn.base import RegressorMixin
 from sklearn.metrics import mean_squared_error
-from sklearn.model_selection import train_test_split
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
@@ -27,6 +26,7 @@ from tabpfn.model_loading import get_n_out
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from tabpfn.constants import XType, YType
     from tabpfn.finetuning.data_util import RegressorBatch
 
 
@@ -91,8 +91,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         n_inference_subsample_samples: The total number of subsampled training
             samples per estimator during validation and final inference.
             Defaults to 50_000.
-        meta_batch_size: The number of meta-datasets to process in a single
-            optimization step. Currently, this should be kept at 1. Defaults to 1.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
@@ -150,7 +148,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         n_finetune_ctx_plus_query_samples: int = 20_000,
         finetune_ctx_query_split_ratio: float = 0.2,
         n_inference_subsample_samples: int = 50_000,
-        meta_batch_size: int = 1,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
@@ -176,7 +173,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             n_finetune_ctx_plus_query_samples=n_finetune_ctx_plus_query_samples,
             finetune_ctx_query_split_ratio=finetune_ctx_query_split_ratio,
             n_inference_subsample_samples=n_inference_subsample_samples,
-            meta_batch_size=meta_batch_size,
             random_state=random_state,
             early_stopping=early_stopping,
             early_stopping_patience=early_stopping_patience,
@@ -224,18 +220,6 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     @override
     def _setup_estimator(self) -> None:
         """No additional setup needed for regressor at creation time."""
-
-    @override
-    def _get_train_val_split(
-        self, X: np.ndarray, y: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Split data without stratification for regression."""
-        return train_test_split(  # type: ignore[return-value]
-            X,
-            y,
-            test_size=self.validation_split_ratio,
-            random_state=self.random_state,
-        )
 
     @override
     def _should_skip_batch(self, batch: RegressorBatch) -> bool:  # type: ignore[override]
@@ -360,7 +344,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
     @override
     def fit(
-        self, X: np.ndarray, y: np.ndarray, output_dir: Path | None = None
+        self, X: XType, y: YType, output_dir: Path | None = None
     ) -> FinetunedTabPFNRegressor:
         """Fine-tune the TabPFN model on the provided training data.
 
@@ -378,7 +362,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return self
 
     @override
-    def predict(self, X: np.ndarray) -> np.ndarray:
+    def predict(self, X: XType) -> np.ndarray:
         """Predict target values for X.
 
         Args:
