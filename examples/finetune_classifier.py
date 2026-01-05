@@ -26,6 +26,9 @@ warnings.filterwarnings(
 # =============================================================================
 # Fine-tuning Configuration
 # For details and more options see FinetunedTabPFNClassifier
+#
+# These settings work well for the Higgs dataset.
+# For other datasets, you may need to adjust these settings to get good results.
 # =============================================================================
 
 # Training hyperparameters
