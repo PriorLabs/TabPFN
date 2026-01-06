@@ -11,6 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+## [6.3.0] - 2026-01-06
+
+### Added
+
+- Fix sklearn issue making new tests fail by @noahho in https://github.com/PriorLabs/TabPFN/pull/698
+- Fix KDI transformer init signature for sklearn compatibility by @noahho in https://github.com/PriorLabs/TabPFN/pull/696
+- Improved analytics for tracking usage of different fit modes by @safaricd in https://github.com/PriorLabs/TabPFN/pull/646
+- Add finetuning wrapper for classifier by @bejaeger in https://github.com/PriorLabs/TabPFN/pull/701
+- Add Enterprise Edition section to README by @noahho in https://github.com/PriorLabs/TabPFN/pull/704
+- [WIP] Refactor preprocessing into preprocessors package by @noahho in https://github.com/PriorLabs/TabPFN/pull/697
+- Make fitted attributes safe by @noahho in https://github.com/PriorLabs/TabPFN/pull/707
+- Document available checkpoints on Hugging Face by @LeoGrin in https://github.com/PriorLabs/TabPFN/pull/690
+- Custom error for input validation by @simo-prior in https://github.com/PriorLabs/TabPFN/pull/692
+
 ## [6.2.0] - 2025-12-18
 
 ### Added
