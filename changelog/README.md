@@ -23,6 +23,7 @@ echo "Add support for custom loss functions in finetuning" > changelog/712.added
 
 | Category | Filename | Description |
 |----------|----------|-------------|
+| Breaking | `<PR>.breaking.md` | Breaking changes (requires user action) |
 | Added | `<PR>.added.md` | New features |
 | Changed | `<PR>.changed.md` | Changes to existing functionality |
 | Fixed | `<PR>.fixed.md` | Bug fixes |

@@ -29,7 +29,7 @@ jobs:
           Missing changelog entry!
 
           Add a file: changelog/${{ github.event.pull_request.number }}.<category>.md
-          Categories: added, changed, fixed, deprecated
+          Categories: breaking, added, changed, fixed, deprecated
 
           Example:
             towncrier create ${{ github.event.pull_request.number }}.added.md --content "Your change description"
