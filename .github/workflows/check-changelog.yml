@@ -15,7 +15,6 @@ jobs:
 
       - name: Check changelog entry
         id: changelog_check
-        if: ${{ !contains(github.event.pull_request.labels.*.name, 'no changelog needed') }}
         uses: scientific-python/action-towncrier-changelog@v2.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
