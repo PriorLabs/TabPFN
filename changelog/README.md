@@ -29,6 +29,24 @@ echo "Add support for custom loss functions in finetuning" > changelog/712.added
 | Fixed | `<PR>.fixed.md` | Bug fixes |
 | Deprecated | `<PR>.deprecated.md` | Deprecated features |
 
+## Multiple Entries per PR
+
+You can have multiple changelog entries for one PR. Use different types as needed:
+
+```bash
+712.added.md    # New feature
+712.fixed.md    # Bug fix in same PR
+```
+
+If you need **multiple entries of the same type**, add a counter:
+
+```bash
+712.added.1.md  # First new feature
+712.added.2.md  # Second new feature
+```
+
+Pattern: `<PR>.<type>.md` or `<PR>.<type>.<counter>.md`
+
 ## When is a Changelog Entry Required?
 
 A changelog entry is required for all PRs unless a maintainer adds the **"no changelog needed"** label.
