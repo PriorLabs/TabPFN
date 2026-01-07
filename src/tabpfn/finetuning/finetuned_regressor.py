@@ -183,7 +183,7 @@ def _ranked_probability_score_loss_from_bar_logits(
         ~valid_mask_BQ if valid_mask_BQ is not None else torch.isnan(targets_BQ)
     )
     # Filled with zeros if the target is ignored.
-    # Will be ignored in final loss anyway.
+    # Will be ignored in final loss below.
     filled_targets_BQ = torch.where(
         ignore_loss_mask_BQ, torch.zeros_like(targets_BQ), targets_BQ
     )
@@ -209,6 +209,7 @@ def _ranked_probability_score_loss_from_bar_logits(
 
     weighted_term_losses_BQL = cdf_term_losses_BQL * bucket_widths_L.view(1, 1, -1)
     rps_losses_BQ = weighted_term_losses_BQL.sum(dim=-1)
+
     if ignore_loss_mask_BQ.any():
         rps_losses_BQ[ignore_loss_mask_BQ] = 0.0
 
