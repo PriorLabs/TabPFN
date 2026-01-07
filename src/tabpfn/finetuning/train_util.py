@@ -19,13 +19,7 @@ from tabpfn.model_loading import save_tabpfn_model
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-
-logging.getLogger().setLevel(logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def _format_train_size(train_size: int) -> str:
