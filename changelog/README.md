@@ -29,7 +29,7 @@ echo "Add support for custom loss functions in finetuning" > changelog/712.added
 | Fixed | `<PR>.fixed.md` | Bug fixes |
 | Deprecated | `<PR>.deprecated.md` | Deprecated features |
 
-## Multiple Entries per PR
+### Multiple Entries per PR
 
 You can have multiple changelog entries for one PR. Use different types as needed:
 
