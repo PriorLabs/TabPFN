@@ -1,7 +1,5 @@
 """Methods to generate a preprocessing pipeline from ensemble configurations."""
 
-# TODO: call this file "pipeline.py"
-
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal

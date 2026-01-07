@@ -90,13 +90,11 @@ class BaseDatasetConfig:
     cat_ix: list[int]
 
 
-# TODO: Potentially move to finetuning/data_util.py
 @dataclass
 class ClassifierDatasetConfig(BaseDatasetConfig):
     """Classification Dataset + Model Configuration class."""
 
 
-# TODO: Potentially move to finetuning/data_util.py
 @dataclass
 class RegressorDatasetConfig(BaseDatasetConfig):
     """Regression Dataset + Model Configuration class."""
