@@ -1,4 +1,4 @@
-"""Methods to define ensemble configurations."""
+"""Module for generating ensemble configurations."""
 
 from __future__ import annotations
 

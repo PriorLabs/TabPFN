@@ -1,4 +1,4 @@
-"""Preprocessor and ensemble configurations."""
+"""Preprocessor and ensemble config objects."""
 
 from __future__ import annotations
 
