@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from tabpfn.finetuning.data_util import ClassifierBatch
 
 
-def compute_classification_loss(
+def _compute_classification_loss(
     *,
     predictions_BLQ: torch.Tensor,
     targets_BQ: torch.Tensor,
@@ -257,7 +257,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             self.device
         )
 
-        return compute_classification_loss(
+        return _compute_classification_loss(
             predictions_BLQ=predictions_BLQ,
             targets_BQ=targets_BQ,
         )

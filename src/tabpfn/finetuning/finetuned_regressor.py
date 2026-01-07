@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from tabpfn.finetuning.data_util import RegressorBatch
 
 
-def compute_regression_loss(
+def _compute_regression_loss(  # noqa: C901
     *,
     logits_BQL: torch.Tensor,
     targets_BQ: torch.Tensor,
@@ -94,7 +94,6 @@ def compute_regression_loss(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
-            valid_mask_BQ=valid_mask_BQ,
             loss_type="rps",
         )
         total_loss = total_loss + rps_loss_weight * rps_loss
@@ -104,32 +103,29 @@ def compute_regression_loss(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
-            valid_mask_BQ=valid_mask_BQ,
             loss_type="rls",
         )
         total_loss = total_loss + rls_loss_weight * rls_loss
 
-    if mse_loss_weight > 0.0:
+    if mse_loss_weight > 0.0 or mae_loss_weight > 0.0:
         predictions_mean_BQ = bardist_loss_fn.mean(logits_BQL)
-        filled_targets_BQ = torch.where(valid_mask_BQ, targets_BQ, predictions_mean_BQ)
-        diffs_BQ = predictions_mean_BQ - filled_targets_BQ
-        mse_terms_BQ = torch.where(
-            valid_mask_BQ, diffs_BQ.square(), torch.zeros_like(diffs_BQ)
-        )
-        if mse_loss_clip is not None:
-            mse_terms_BQ = mse_terms_BQ.clamp(max=mse_loss_clip)
-        total_loss = total_loss + mse_loss_weight * mse_terms_BQ.mean()
+        diffs_BQ = predictions_mean_BQ - targets_BQ
 
-    if mae_loss_weight > 0.0:
-        predictions_mean_BQ = bardist_loss_fn.mean(logits_BQL)
-        filled_targets_BQ = torch.where(valid_mask_BQ, targets_BQ, predictions_mean_BQ)
-        diffs_BQ = predictions_mean_BQ - filled_targets_BQ
-        mae_terms_BQ = torch.where(
-            valid_mask_BQ, diffs_BQ.abs(), torch.zeros_like(diffs_BQ)
-        )
-        if mae_loss_clip is not None:
-            mae_terms_BQ = mae_terms_BQ.clamp(max=mae_loss_clip)
-        total_loss = total_loss + mae_loss_weight * mae_terms_BQ.mean()
+        if mse_loss_weight > 0.0:
+            mse_terms_BQ = torch.where(
+                valid_mask_BQ, diffs_BQ.square(), torch.zeros_like(diffs_BQ)
+            )
+            if mse_loss_clip is not None:
+                mse_terms_BQ = mse_terms_BQ.clamp(max=mse_loss_clip)
+            total_loss = total_loss + mse_loss_weight * mse_terms_BQ.mean()
+
+        if mae_loss_weight > 0.0:
+            mae_terms_BQ = torch.where(
+                valid_mask_BQ, diffs_BQ.abs(), torch.zeros_like(diffs_BQ)
+            )
+            if mae_loss_clip is not None:
+                mae_terms_BQ = mae_terms_BQ.clamp(max=mae_loss_clip)
+            total_loss = total_loss + mae_loss_weight * mae_terms_BQ.mean()
 
     return total_loss
 
@@ -139,7 +135,6 @@ def _ranked_probability_score_loss_from_bar_logits(
     logits_BQL: torch.Tensor,
     targets_BQ: torch.Tensor,
     bardist_loss_fn: Any,
-    valid_mask_BQ: torch.Tensor | None = None,
     loss_type: Literal["rps", "rls"] = "rps",
 ) -> torch.Tensor:
     """Compute a ranked-probability loss from bar distribution logits.
@@ -164,7 +159,6 @@ def _ranked_probability_score_loss_from_bar_logits(
         targets_BQ: Targets of shape (B, Q)
         bardist_loss_fn: The BarDistribution instance used for bin mapping and
             bucket index mapping.
-        valid_mask_BQ: Optional mask of shape (B, Q) indicating valid targets.
         loss_type: Which variant to compute. "rps" uses squared CDF differences,
             "rls" uses a log score applied to the cumulative probabilities.
 
@@ -179,10 +173,8 @@ def _ranked_probability_score_loss_from_bar_logits(
     probs_BQL = torch.softmax(logits_BQL, dim=-1)
     pred_cdf_BQL = torch.cumsum(probs_BQL, dim=-1)
 
-    ignore_loss_mask_BQ = (
-        ~valid_mask_BQ if valid_mask_BQ is not None else torch.isnan(targets_BQ)
-    )
-    # Filled with zeros if the target is ignored.
+    ignore_loss_mask_BQ = torch.isnan(targets_BQ)
+    # Filled with zeros if the target is NaN.
     # Will be ignored in final loss below.
     filled_targets_BQ = torch.where(
         ignore_loss_mask_BQ, torch.zeros_like(targets_BQ), targets_BQ
@@ -192,8 +184,7 @@ def _ranked_probability_score_loss_from_bar_logits(
         0, bardist_loss_fn.num_bars - 1
     )
     # The target CDF is a step function: 0 for bins < target_bin, 1 for bins >=
-    # target_bin. We construct it directly to avoid allocating a one-hot and then
-    # taking a cumulative sum.
+    # target_bin.
     bin_indices_L = torch.arange(probs_BQL.shape[-1], device=probs_BQL.device)
     target_cdf_BQL = (bin_indices_L.view(1, 1, -1) >= target_bins_BQ.unsqueeze(-1)).to(
         probs_BQL.dtype
@@ -439,7 +430,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             self.device
         )
 
-        return compute_regression_loss(
+        return _compute_regression_loss(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,

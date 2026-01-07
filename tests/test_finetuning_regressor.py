@@ -29,7 +29,7 @@ from tabpfn.finetuning.data_util import (
 )
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
-    compute_regression_loss,
+    _compute_regression_loss,
 )
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
@@ -277,7 +277,7 @@ def test__compute_regression_loss__correct_mse_and_mae_with_nan_targets() -> Non
     targets_BQ = torch.tensor([[0.0, 0.5, float("nan"), -0.5]], dtype=torch.float32)
     assert torch.isnan(targets_BQ[0, 2]).item()
 
-    mse_mae_only_loss = compute_regression_loss(
+    mse_mae_only_loss = _compute_regression_loss(
         logits_BQL=logits_BQL,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
@@ -303,7 +303,7 @@ def test__compute_regression_loss__masks_nan_targets() -> None:
     bardist_loss_fn = BarDistribution(borders=borders, ignore_nan_targets=True)
     logits_BQL = torch.zeros((1, 4, bardist_loss_fn.num_bars), dtype=torch.float32)
 
-    rps_only_loss = compute_regression_loss(
+    rps_only_loss = _compute_regression_loss(
         logits_BQL=logits_BQL,
         targets_BQ=torch.full((1, 4), float("nan"), dtype=torch.float32),
         bardist_loss_fn=bardist_loss_fn,
@@ -317,7 +317,7 @@ def test__compute_regression_loss__masks_nan_targets() -> None:
     assert torch.isfinite(rps_only_loss).item()
     assert rps_only_loss.item() == 0.0
 
-    rls_only_loss = compute_regression_loss(
+    rls_only_loss = _compute_regression_loss(
         logits_BQL=logits_BQL,
         targets_BQ=torch.full((1, 4), float("nan"), dtype=torch.float32),
         bardist_loss_fn=bardist_loss_fn,
@@ -348,7 +348,7 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     # Target y in bin 1 -> target CDF: [0.0, 1.0]
     targets_BQ = torch.tensor([[1.2]])
 
-    rps_loss = compute_regression_loss(
+    rps_loss = _compute_regression_loss(
         logits_BQL=logits_BLQ,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
@@ -360,7 +360,7 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
         mae_loss_clip=None,
     )
 
-    rls_loss = compute_regression_loss(
+    rls_loss = _compute_regression_loss(
         logits_BQL=logits_BLQ,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
@@ -381,7 +381,7 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     assert rls_loss.item() == pytest.approx(expected_rls)
     assert rps_loss.item() == pytest.approx(expected_rps)
 
-    combined_loss = compute_regression_loss(
+    combined_loss = _compute_regression_loss(
         logits_BQL=logits_BLQ,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
