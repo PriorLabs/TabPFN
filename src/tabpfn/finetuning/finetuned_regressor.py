@@ -168,7 +168,7 @@ def _ranked_probability_score_loss_from_bar_logits(
     bucket_widths_L = bardist_loss_fn.bucket_widths.to(logits_BQL.device)
     assert bucket_widths_L.shape == (logits_BQL.shape[-1],), (
         f"bucket_widths_L.shape: {bucket_widths_L.shape} "
-        f"predictions_BQL.shape: {logits_BQL.shape}"
+        f"logits_BQL.shape: {logits_BQL.shape}"
     )
     probs_BQL = torch.softmax(logits_BQL, dim=-1)
     pred_cdf_BQL = torch.cumsum(probs_BQL, dim=-1)
