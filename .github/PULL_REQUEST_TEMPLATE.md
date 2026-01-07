@@ -23,7 +23,7 @@ This allows us to discuss the proposal and helps avoid unnecessary work.
 
 -   [ ] The changes have been tested locally.
 -   [ ] Documentation has been updated (if the public API or usage changes).
--   [ ] A entry has been added to `CHANGELOG.md` (if relevant for users).
+-   [ ] A changelog entry has been added (see `changelog/README.md`), or "no changelog needed" label requested.
 -   [ ] The code follows the project's style guidelines.
 -   [ ] I have considered the impact of these changes on the public API.
 

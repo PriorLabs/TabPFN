@@ -1,0 +1,43 @@
+name: Check Changelog
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled, unlabeled]
+
+jobs:
+  check:
+    name: Changelog entry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check changelog entry
+        id: changelog_check
+        if: ${{ !contains(github.event.pull_request.labels.*.name, 'no changelog needed') }}
+        uses: scientific-python/action-towncrier-changelog@v2.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BOT_USERNAME: changelog-bot
+
+      - name: Show instructions on failure
+        if: failure() && steps.changelog_check.outcome == 'failure'
+        run: |
+          cat << EOF
+
+          ─────────────────────────────────────────────────────────────
+          Missing changelog entry!
+
+          Add a file: changelog/${{ github.event.pull_request.number }}.<category>.md
+          Categories: added, changed, fixed, deprecated
+
+          Example:
+            towncrier create ${{ github.event.pull_request.number }}.added.md --content "Your change description"
+
+          Or request the "no changelog needed" label from a maintainer.
+          See changelog/README.md for details.
+          ─────────────────────────────────────────────────────────────
+
+          EOF
+          exit 1
