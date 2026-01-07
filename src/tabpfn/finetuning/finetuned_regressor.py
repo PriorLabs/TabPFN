@@ -141,7 +141,7 @@ def _ranked_probability_score_loss_from_bar_logits(
 
     This implements scoring rules for *ordered categorical* outcomes via the
     cumulative distribution function (CDF), using the bar bins as ordered
-    categories. Defintions taken from https://scoringrules.readthedocs.io/en/latest/theory.html
+    categories. Definitions taken from https://scoringrules.readthedocs.io/en/latest/theory.html
 
         RPS (squared): sum_k=1^K w_k (CDF(k) - y_k)^2
         RLS (log):     -sum_k=1^K w_k log(|CDF(k) + y_k - 1|)
@@ -272,14 +272,14 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         extra_regressor_kwargs: Additional keyword arguments to pass to the
             underlying `TabPFNRegressor`, such as `n_estimators`.
         ce_loss_weight: Weight for the bar distribution negative log-likelihood term
-            (cross-entropy-like). Defaults to 1.0.
+            (cross-entropy-like). Defaults to 0.0.
         rps_loss_weight: Weight for the ranked probability score (RPS) term computed
-            on ordered bar probabilities (squared CDF error). Defaults to 0.0.
+            on ordered bar probabilities (squared CDF error). Defaults to 1.0.
         rls_loss_weight: Weight for the ranked logarithmic score (RLS) term computed
             on ordered bar probabilities (log score on cumulative probabilities).
             Defaults to 0.0.
         mse_loss_weight: Weight for an auxiliary MSE loss term added to the
-            bar distribution loss. Set to 0.0 to disable. Defaults to 8.0.
+            bar distribution loss. Set to 0.0 to disable. Defaults to 1.0.
         mse_loss_clip: Optional upper bound for the auxiliary MSE loss term.
             If None, no clipping is applied. Defaults to None.
         mae_loss_weight: Weight for an auxiliary MAE term computed on the mean

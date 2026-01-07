@@ -343,13 +343,13 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     # Two bins. Desired probs: [0.25, 0.75] -> pred CDF: [0.25, 1.0]
     probs_L = torch.tensor([0.25, 0.75])
     logits_L = probs_L.log()
-    logits_BLQ = logits_L.view(1, 1, -1)
+    logits_BQL = logits_L.view(1, 1, -1)
 
     # Target y in bin 1 -> target CDF: [0.0, 1.0]
     targets_BQ = torch.tensor([[1.2]])
 
     rps_loss = _compute_regression_loss(
-        logits_BQL=logits_BLQ,
+        logits_BQL=logits_BQL,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
         ce_loss_weight=0.0,
@@ -361,7 +361,7 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     )
 
     rls_loss = _compute_regression_loss(
-        logits_BQL=logits_BLQ,
+        logits_BQL=logits_BQL,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
         ce_loss_weight=0.0,
@@ -382,7 +382,7 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     assert rps_loss.item() == pytest.approx(expected_rps)
 
     combined_loss = _compute_regression_loss(
-        logits_BQL=logits_BLQ,
+        logits_BQL=logits_BQL,
         targets_BQ=targets_BQ,
         bardist_loss_fn=bardist_loss_fn,
         ce_loss_weight=0.0,
