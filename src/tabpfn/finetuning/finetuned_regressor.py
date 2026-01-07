@@ -1,6 +1,6 @@
-"""A TabPFN classifier that finetunes the underlying model for a single task.
+"""A TabPFN regressor that finetunes the underlying model for a single task.
 
-This module provides the FinetunedTabPFNClassifier class, which wraps TabPFN
+This module provides the FinetunedTabPFNRegressor class, which wraps TabPFN
 and allows fine-tuning on a specific dataset using the familiar scikit-learn
 .fit() and .predict() API.
 """
@@ -14,43 +14,61 @@ from typing_extensions import override
 
 import numpy as np
 import torch
-from sklearn.base import ClassifierMixin
-from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.base import RegressorMixin
+from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
-from tabpfn import TabPFNClassifier
+from tabpfn import TabPFNRegressor
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
+from tabpfn.model_loading import get_n_out
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
-    from tabpfn.finetuning.data_util import ClassifierBatch
+    from tabpfn.finetuning.data_util import RegressorBatch
 
 
-def compute_classification_loss(
+def compute_regression_loss(
     *,
     predictions_BLQ: torch.Tensor,
     targets_BQ: torch.Tensor,
+    bardist_loss_fn: Any,
+    mse_loss_weight: float,
+    mse_loss_clip: float | None,
 ) -> torch.Tensor:
-    """Compute the cross-entropy training loss.
+    """Compute the regression training loss from bar distribution and auxiliary terms.
 
     Shapes suffixes:
         B=batch * estimators, L=logits, Q=n_queries.
 
     Args:
-        predictions_BLQ: Raw logits of shape (B*E, L, Q).
-        targets_BQ: Integer class targets of shape (B*E, Q).
+        predictions_BLQ: Bar distribution logits of shape (B*E, Q, L).
+        targets_BQ: Regression targets of shape (B*E, Q).
+        bardist_loss_fn: Bar distribution loss function (callable) which also
+            exposes a `.mean()` method for converting bar logits to mean
+            predictions.
+        mse_loss_weight: Weight for an auxiliary MSE term. Set to 0.0 to disable.
+        mse_loss_clip: Optional upper bound for the auxiliary MSE term.
 
     Returns:
         A scalar loss tensor.
     """
-    return torch.nn.functional.cross_entropy(predictions_BLQ, targets_BQ)
+    losses = bardist_loss_fn(predictions_BLQ, targets_BQ)
+
+    if mse_loss_weight > 0.0:
+        predictions_mean = bardist_loss_fn.mean(predictions_BLQ)
+        mse_aux_loss = ((predictions_mean - targets_BQ) ** 2).mean()
+        if mse_loss_clip is not None:
+            mse_aux_loss = mse_aux_loss.clamp(max=mse_loss_clip)
+        losses = losses + mse_loss_weight * mse_aux_loss
+
+    return losses.mean()
 
 
-class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
-    """A scikit-learn compatible wrapper for fine-tuning the TabPFNClassifier.
+class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
+    """A scikit-learn compatible wrapper for fine-tuning the TabPFNRegressor.
 
     This class encapsulates the fine-tuning loop, allowing you to fine-tune
     TabPFN on a specific dataset using the familiar .fit() and .predict() API.
@@ -109,10 +127,14 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             If None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
 
-        FinetunedTabPFNClassifier specific arguments:
+        FinetunedTabPFNRegressor specific arguments:
 
-        extra_classifier_kwargs: Additional keyword arguments to pass to the
-            underlying `TabPFNClassifier`, such as `n_estimators`.
+        extra_regressor_kwargs: Additional keyword arguments to pass to the
+            underlying `TabPFNRegressor`, such as `n_estimators`.
+        mse_loss_weight: Weight for an auxiliary MSE loss term added to the
+            bar distribution loss. Set to 0.0 to disable. Defaults to 8.0.
+        mse_loss_clip: Optional upper bound for the auxiliary MSE loss term.
+            If None, no clipping is applied. Defaults to None.
     """
 
     def __init__(  # noqa: PLR0913
@@ -138,7 +160,9 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
-        extra_classifier_kwargs: dict[str, Any] | None = None,
+        extra_regressor_kwargs: dict[str, Any] | None = None,
+        mse_loss_weight: float = 8.0,
+        mse_loss_clip: float | None = None,
     ):
         super().__init__(
             device=device,
@@ -162,30 +186,32 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
         )
-        self.extra_classifier_kwargs = extra_classifier_kwargs
+        self.extra_regressor_kwargs = extra_regressor_kwargs
+        self.mse_loss_weight = mse_loss_weight
+        self.mse_loss_clip = mse_loss_clip
 
     @property
     @override
     def _estimator_kwargs(self) -> dict[str, Any]:
-        """Return the classifier-specific kwargs."""
-        return self.extra_classifier_kwargs or {}
+        """Return the regressor-specific kwargs."""
+        return self.extra_regressor_kwargs or {}
 
     @property
     @override
     def _model_type(self) -> Literal["classifier", "regressor"]:
         """Return the model type string."""
-        return "classifier"
+        return "regressor"
 
     @property
     @override
     def _metric_name(self) -> str:
         """Return the name of the primary metric."""
-        return "ROC AUC"
+        return "MSE"
 
     @override
-    def _create_estimator(self, config: dict[str, Any]) -> TabPFNClassifier:
-        """Create the TabPFNClassifier with the given config."""
-        return TabPFNClassifier(
+    def _create_estimator(self, config: dict[str, Any]) -> TabPFNRegressor:
+        """Create the TabPFNRegressor with the given config."""
+        return TabPFNRegressor(
             **config,
             fit_mode="batched",
             differentiable_input=False,
@@ -193,73 +219,62 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
     @override
     def _setup_estimator(self) -> None:
-        """Set up softmax temperature after estimator creation."""
-        self.finetuned_estimator_.softmax_temperature_ = (
-            self.finetuned_estimator_.softmax_temperature
-        )
+        """No additional setup needed for regressor at creation time."""
 
     @override
-    def _setup_batch(self, batch: ClassifierBatch) -> None:  # type: ignore[override]
-        """No batch-specific setup needed for classifier."""
-
-    @override
-    def _should_skip_batch(self, batch: ClassifierBatch) -> bool:  # type: ignore[override]
-        """Check if the batch should be skipped."""
-        ctx_unique = torch.unique(
-            torch.cat([torch.unique(t.reshape(-1)) for t in batch.y_context])
-        )
-        qry_unique = torch.unique(
-            torch.cat([torch.unique(t.reshape(-1)) for t in batch.y_query])
-        )
-
-        query_in_context = torch.isin(qry_unique, ctx_unique, assume_unique=True)
-        if not bool(query_in_context.all()):
-            missing_labels = qry_unique[~query_in_context].detach().cpu().numpy()
-            context_labels = ctx_unique.detach().cpu().numpy()
-            logger.warning(
-                "Skipping batch: query labels %s are not a subset of context labels %s",
-                missing_labels,
-                context_labels,
-            )
-            return True
+    def _should_skip_batch(self, batch: RegressorBatch) -> bool:  # type: ignore[override]
+        """Never skip a batch for regression."""
         return False
 
     @override
-    def _forward_with_loss(self, batch: ClassifierBatch) -> torch.Tensor:  # type: ignore[override]
-        """Perform forward pass and compute and return cross-entropy loss.
+    def _setup_batch(self, batch: RegressorBatch) -> None:  # type: ignore[override]
+        """Set up bar distribution for this batch."""
+        self.finetuned_estimator_.raw_space_bardist_ = batch.raw_space_bardist
+        self.finetuned_estimator_.bardist_ = batch.znorm_space_bardist
+        self._bardist_loss = batch.znorm_space_bardist
+
+    @override
+    def _forward_with_loss(self, batch: RegressorBatch) -> torch.Tensor:  # type: ignore[override]
+        """Perform forward pass and compute bar distribution loss with optional MSE.
 
         Args:
-            batch: The ClassifierBatch containing preprocessed context and
-                query data.
+            batch: The RegressorBatch containing preprocessed context and query
+                data plus bar distribution information.
 
         Returns:
-            The computed cross-entropy loss tensor.
+            The computed loss tensor (bar distribution + optional MSE auxiliary).
         """
         X_query_batch = batch.X_query
         y_query_batch = batch.y_query
+        bardist_loss_fn = self._bardist_loss
+
+        _, per_estim_logits, _ = self.finetuned_estimator_.forward(X_query_batch)
+        # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        predictions_QBEL = self.finetuned_estimator_.forward(
-            X_query_batch,
-            return_raw_logits=True,
-        )
+        predictions_QBEL = torch.stack(per_estim_logits, dim=2)
 
         Q, B, E, L = predictions_QBEL.shape
+        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], bardist_loss_fn)
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E
-        assert self.finetuned_estimator_.n_classes_ == L
+        assert num_bars == L
 
-        # Reshape for CE loss: treat estimator dim as batch dim
-        # permute to shape (B, E, L, Q) then reshape to (B*E, L, Q)
-        predictions_BLQ = predictions_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
+        # Reshape for bar distribution loss: treat estimator dim as batch dim
+        # permute to shape (B, E, Q, L) then reshape to (B*E, Q, L)
+        predictions_BLQ = predictions_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
+
         targets_BQ = y_query_batch.repeat(B * self.n_estimators_finetune, 1).to(
             self.device
         )
 
-        return compute_classification_loss(
+        return compute_regression_loss(
             predictions_BLQ=predictions_BLQ,
             targets_BQ=targets_BQ,
+            bardist_loss_fn=bardist_loss_fn,
+            mse_loss_weight=self.mse_loss_weight,
+            mse_loss_clip=self.mse_loss_clip,
         )
 
     @override
@@ -271,77 +286,66 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         X_val: np.ndarray,
         y_val: np.ndarray,
     ) -> EvalResult:
-        """Evaluate the classifier using ROC AUC and log loss."""
-        eval_classifier = clone_model_for_evaluation(
+        """Evaluate the regressor using MSE."""
+        eval_regressor = clone_model_for_evaluation(
             self.finetuned_estimator_,
             eval_config,
-            TabPFNClassifier,
+            TabPFNRegressor,
         )
-        eval_classifier.fit(X_train, y_train)
+        eval_regressor.fit(X_train, y_train)
 
         try:
-            probabilities = eval_classifier.predict_proba(X_val)  # type: ignore
-            if probabilities.shape[1] > 2:
-                roc_auc = roc_auc_score(y_val, probabilities, multi_class="ovr")
-            else:
-                roc_auc = roc_auc_score(y_val, probabilities[:, 1])
-            log_loss_score = log_loss(y_val, probabilities)
+            predictions = eval_regressor.predict(X_val)  # type: ignore
+            mse = mean_squared_error(y_val, predictions)
         except (ValueError, RuntimeError, AttributeError) as e:
             logger.warning(f"An error occurred during evaluation: {e}")
-            roc_auc, log_loss_score = np.nan, np.nan
+            mse = np.nan
 
-        return EvalResult(
-            primary=roc_auc,  # pyright: ignore[reportArgumentType]
-            secondary={"log_loss": log_loss_score},
-        )
+        return EvalResult(primary=mse)  # pyright: ignore[reportArgumentType]
 
     @override
     def _is_improvement(self, current: float, best: float) -> bool:
-        """Check if current ROC AUC is better (higher) than best."""
-        return current > best + self.min_delta
+        """Check if current MSE is better (lower) than best."""
+        return current < best - self.min_delta
 
     @override
     def _get_initial_best_metric(self) -> float:
-        """Return -inf for maximization."""
-        return -np.inf
+        """Return inf for minimization."""
+        return np.inf
 
     @override
     def _get_checkpoint_metrics(self, eval_result: EvalResult) -> dict[str, float]:
         """Return metrics for checkpoint saving."""
-        return {
-            "roc_auc": eval_result.primary,
-            "log_loss": eval_result.secondary.get("log_loss", np.nan),
-        }
+        return {"mse": eval_result.primary}
 
     @override
     def _log_epoch_evaluation(
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:
-        """Log evaluation results for classification."""
-        log_loss_score = eval_result.secondary.get("log_loss", np.nan)
+        """Log evaluation results for regression."""
         logger.info(
-            f"📊 Epoch {epoch + 1} Evaluation | Val ROC: {eval_result.primary:.4f}, "
-            f"Val Log Loss: {log_loss_score:.4f}, Train Loss: {mean_train_loss:.4f}"
+            f"📊 Epoch {epoch + 1} Evaluation | Val MSE: {eval_result.primary:.4f}, "
+            f"Train Loss: {mean_train_loss:.4f}"
         )
 
     @override
     def _setup_inference_model(
         self, final_inference_eval_config: dict[str, Any]
     ) -> None:
-        """Set up the final inference classifier."""
-        finetuned_inference_classifier = clone_model_for_evaluation(
+        """Set up the final inference regressor."""
+        finetuned_inference_regressor = clone_model_for_evaluation(
             self.finetuned_estimator_,
             final_inference_eval_config,
-            TabPFNClassifier,
+            TabPFNRegressor,
         )
-        self.finetuned_inference_classifier_ = finetuned_inference_classifier
-        self.finetuned_inference_classifier_.fit_mode = "fit_preprocessors"  # type: ignore
-        self.finetuned_inference_classifier_.fit(self.X_, self.y_)  # type: ignore
+        self.finetuned_inference_regressor_ = finetuned_inference_regressor
+        self.finetuned_inference_regressor_.fit_mode = "fit_preprocessors"  # type: ignore
+        self.finetuned_inference_regressor_.fit(self.X_, self.y_)  # type: ignore
 
     @override
     def fit(
         self, X: XType, y: YType, output_dir: Path | None = None
-    ) -> FinetunedTabPFNClassifier:
+    ) -> FinetunedTabPFNRegressor:
         """Fine-tune the TabPFN model on the provided training data.
 
         Args:
@@ -357,30 +361,16 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         super().fit(X, y, output_dir)
         return self
 
-    def predict_proba(self, X: XType) -> np.ndarray:
-        """Predict class probabilities for X.
-
-        Args:
-            X: The input samples of shape (n_samples, n_features).
-
-        Returns:
-            The class probabilities of the input samples with shape
-            (n_samples, n_classes).
-        """
-        check_is_fitted(self)
-
-        return self.finetuned_inference_classifier_.predict_proba(X)  # type: ignore
-
     @override
     def predict(self, X: XType) -> np.ndarray:
-        """Predict the class for X.
+        """Predict target values for X.
 
         Args:
             X: The input samples of shape (n_samples, n_features).
 
         Returns:
-            The predicted classes with shape (n_samples,).
+            The predicted target values with shape (n_samples,).
         """
         check_is_fitted(self)
 
-        return self.finetuned_inference_classifier_.predict(X)  # type: ignore
+        return self.finetuned_inference_regressor_.predict(X)  # type: ignore

@@ -1,93 +1,115 @@
+"""Tests for TabPFN regressor finetuning functionality.
+
+This module contains regressor-specific tests for:
+- The FinetunedTabPFNRegressor wrapper class (.fit() / .predict()).
+- Regression checkpoint metric fields (e.g. storing 'mse').
+
+We intentionally avoid duplicating tests that primarily exercise common logic in
+`FinetunedTabPFNBase`, since those are covered by the classifier finetuning tests.
+"""
+
 from __future__ import annotations
 
-import unittest
-from functools import partial
-from typing import Literal
-from unittest.mock import patch
+from collections.abc import Callable
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
-import sklearn
 import torch
+from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
-from torch.optim import Adam
 from torch.utils.data import DataLoader
 
-from tabpfn import TabPFNRegressor
-from tabpfn.architectures.base.bar_distribution import (
-    BarDistribution,
-    FullSupportBarDistribution,
-)
 from tabpfn.finetuning.data_util import (
+    RegressorBatch,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
+from tabpfn.finetuning.finetuned_regressor import (
+    FinetunedTabPFNRegressor,
+)
 from tabpfn.preprocessing import RegressorEnsembleConfig
+from tabpfn.regressor import TabPFNRegressor
 
-from .utils import get_pytest_devices, mark_mps_configs_as_slow
+from .utils import get_pytest_devices
 
 rng = np.random.default_rng(42)
 
 devices = get_pytest_devices()
 
-fit_modes = [
-    "batched",
-    "fit_preprocessors",
-]
-inference_precision_methods: list[torch.types._dtype | Literal["autocast", "auto"]] = [
-    "auto",
-    torch.float64,
-]
-estimators = [1, 2]
-optimization_spaces_values = ["raw_label_space", "preprocessed"]
 
-param_order = [
-    "device",
-    "n_estimators",
-    "fit_mode",
-    "inference_precision",
-    "optimization_space",
-]
+def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]:
+    """Return a side_effect for mocking the internal Architecture forward in regression.
 
-default_config = {
-    "n_estimators": 1,
-    "device": "cpu",
-    "fit_mode": "batched",
-    "inference_precision": "auto",
-    "optimization_space": "raw_label_space",
-}
+    The Architecture.forward method signature is:
+    forward(x, y, *, only_return_standard_out=True, categorical_inds=None)
 
-param_values: dict[str, list] = {
-    "n_estimators": estimators,
-    "device": devices,
-    "fit_mode": fit_modes,
-    "inference_precision": inference_precision_methods,
-    "optimization_space": optimization_spaces_values,
-}
+    Where:
+    - x has shape (train+test rows, batch_size, num_features)
+    - y has shape (train rows, batch_size) or (train rows, batch_size, 1)
+    - returns shape (test rows, batch_size, n_out), with n_out determined by the model.
+    """
 
-combinations = [tuple(default_config[p] for p in param_order)]
-for param_name in param_order:
-    for value in param_values[param_name]:
-        if value != default_config[param_name]:
-            current_config = default_config.copy()
-            current_config[param_name] = value
-            combinations.append(tuple(current_config[p] for p in param_order))
+    def mock_forward(
+        self: torch.nn.Module,
+        x: torch.Tensor | dict[str, torch.Tensor],
+        y: torch.Tensor | dict[str, torch.Tensor] | None,
+        **_kwargs: bool,
+    ) -> torch.Tensor:
+        """Mock forward pass that returns random logits with the correct shape."""
+        if isinstance(x, dict):
+            x = x["main"]
+
+        if y is not None:
+            y_tensor = y["main"] if isinstance(y, dict) else y
+            num_train_rows = y_tensor.shape[0]
+        else:
+            num_train_rows = 0
+
+        total_rows = x.shape[0]
+        batch_size = x.shape[1]
+        num_test_rows = total_rows - num_train_rows
+
+        # Touch a model parameter so gradients flow during backward pass.
+        # This mirrors the classifier tests and avoids GradScaler issues on CUDA.
+        first_param = next(self.parameters())
+        param_contribution = 0.0 * first_param.sum()
+
+        n_out = int(getattr(self, "n_out", 1))
+        return (
+            torch.randn(
+                num_test_rows,
+                batch_size,
+                n_out,
+                requires_grad=True,
+                device=x.device,
+            )
+            + param_contribution
+        )
+
+    return mock_forward
 
 
 @pytest.fixture(scope="module")
-def synthetic_regression_data():
-    """Generate synthetic regression data."""
-    X = rng.normal(size=(30, 4)).astype(np.float32)
-    # Generate continuous target variable
-    y = (X @ rng.normal(size=4)).astype(np.float32)
-    # Add to previous as line too long otherwise
-    y += rng.normal(size=30).astype(np.float32) * 0.1
+def synthetic_regression_data() -> tuple[np.ndarray, np.ndarray]:
+    """Generate synthetic regression data for testing."""
+    result = make_regression(
+        n_samples=120,
+        n_features=6,
+        n_informative=4,
+        noise=0.1,
+        random_state=42,
+        coef=False,
+    )
+    X = np.asarray(result[0], dtype=np.float32)
+    y = np.asarray(result[1], dtype=np.float32)
     return X, y
 
 
 @pytest.fixture(params=devices)
-def ft_regressor_instance(request) -> TabPFNRegressor:
-    """Provides a basic regressor instance, parameterized by device."""
+def regressor_instance(request: pytest.FixtureRequest) -> TabPFNRegressor:
+    """Provide a basic regressor instance, parameterized by device."""
     device = request.param
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA device requested but not available.")
@@ -101,512 +123,186 @@ def ft_regressor_instance(request) -> TabPFNRegressor:
     )
 
 
-@pytest.fixture(params=devices)
-def std_regressor_instance(request) -> TabPFNRegressor:
-    """Provides a basic regressor instance, parameterized by device."""
-    device = request.param
-    if device == "cuda" and not torch.cuda.is_available():
-        pytest.skip("CUDA device requested but not available.")
-    return TabPFNRegressor(
-        n_estimators=2,
-        device=device,
-        random_state=42,
-        inference_precision=torch.float32,
-        fit_mode="low_memory",
-        differentiable_input=False,
-    )
+@pytest.fixture
+def variable_synthetic_regression_dataset_collection() -> list[
+    tuple[np.ndarray, np.ndarray]
+]:
+    """Create a small collection of synthetic regression datasets with varying sizes."""
+    datasets = []
+    dataset_sizes = [10, 20, 30]
+    num_features = 3
+    for num_samples in dataset_sizes:
+        X = rng.normal(size=(num_samples, num_features)).astype(np.float32)
+        y = rng.normal(size=(num_samples,)).astype(np.float32)
+        datasets.append((X, y))
+    return datasets
 
 
-def create_regressor(
-    n_estimators: int,
+@pytest.mark.parametrize(
+    ("device", "early_stopping", "use_lr_scheduler"),
+    [
+        (device, early_stopping, use_lr_scheduler)
+        for device in devices
+        for early_stopping in [True, False]
+        for use_lr_scheduler in [True, False]
+    ],
+)
+def test_finetuned_tabpfn_regressor_fit_and_predict(
     device: str,
-    fit_mode: str,
-    inference_precision: torch.types._dtype | Literal["autocast", "auto"],
-    **kwargs,
-) -> TabPFNRegressor:
-    """Instantiates regressor with common parameters."""
-    if device == "cpu" and inference_precision == "autocast":
-        pytest.skip("Unsupported combination: CPU with 'autocast'")
+    early_stopping: bool,
+    use_lr_scheduler: bool,
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Test FinetunedTabPFNRegressor fit/predict with a mocked forward pass."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA device requested but not available.")
 
-    default_kwargs = {"random_state": 42}
-    default_kwargs.update(kwargs)
-
-    return TabPFNRegressor(
-        n_estimators=n_estimators,
-        device=device,
-        fit_mode=fit_mode,
-        inference_precision=inference_precision,
-        **default_kwargs,
-    )
-
-
-# --- Tests ---
-
-
-def test_regressor_dataset_and_collator_batches_type(
-    synthetic_regression_data, ft_regressor_instance
-):
-    """Test that the batches returned by the dataset and collator
-    are of the correct type.
-    """
     X, y = synthetic_regression_data
-    dataset_collection = get_preprocessed_dataset_chunks(
-        ft_regressor_instance,
-        X,
-        y,
-        train_test_split,
-        max_data_size=100,
-        model_type="regressor",
-        equal_split_size=True,
-        seed=42,
+    X_train, X_test, y_train, _y_test = train_test_split(
+        X, y, test_size=0.3, random_state=42
     )
-    batch_size = 1
-    dl = DataLoader(
-        dataset_collection,
-        batch_size=batch_size,
-        collate_fn=meta_dataset_collator,
+    X_train = np.asarray(X_train)
+    X_test = np.asarray(X_test)
+    y_train = np.asarray(y_train)
+
+    epochs = 4 if early_stopping else 2
+    finetuned_reg = FinetunedTabPFNRegressor(
+        device=device,
+        epochs=epochs,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=60,
+        finetune_ctx_query_split_ratio=0.2,
+        n_inference_subsample_samples=120,
+        random_state=42,
+        early_stopping=early_stopping,
+        early_stopping_patience=2,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=use_lr_scheduler,
+        lr_warmup_only=False,
     )
-    for batch in dl:
-        assert isinstance(batch, tuple)
-        (
-            X_trains_preprocessed,
-            _X_tests_preprocessed,
-            y_trains_preprocessed,
-            _y_test_standardized,
-            cat_ixs,
-            confs,
-            raw_space_bardist_,
-            bar_distribution,
-            _x_test_raw,
-            _y_test_raw,
-        ) = batch
-        for est_tensor in X_trains_preprocessed:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == batch_size
-        for est_tensor in y_trains_preprocessed:
-            assert isinstance(est_tensor, torch.Tensor)
-            assert est_tensor.shape[0] == batch_size
-        assert isinstance(cat_ixs, list)
-        for conf in confs:
-            for c in conf:
-                assert isinstance(c, RegressorEnsembleConfig)
-        for ren_crit in raw_space_bardist_:
-            assert isinstance(ren_crit, FullSupportBarDistribution)
-        for bar_dist in bar_distribution:
-            assert isinstance(bar_dist, BarDistribution)
-        break
+
+    mock_forward = create_mock_architecture_forward_regression()
+    with mock.patch(
+        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
+        side_effect=mock_forward,
+    ):
+        finetuned_reg.fit(X_train, y_train)
+
+    assert finetuned_reg.is_fitted_
+    assert hasattr(finetuned_reg, "finetuned_estimator_")
+    assert hasattr(finetuned_reg, "finetuned_inference_regressor_")
+
+    predictions = finetuned_reg.predict(X_test)
+    assert predictions.shape == (X_test.shape[0],)
+    assert np.isfinite(predictions).all()
 
 
-@pytest.mark.parametrize(param_order, mark_mps_configs_as_slow(combinations))
-def test_tabpfn_regressor_finetuning_loop(
-    device,
-    n_estimators,
-    fit_mode,
-    inference_precision,
-    optimization_space,
-    synthetic_regression_data,
+@pytest.mark.parametrize("device", devices)
+def test_regressor_checkpoint_contains_mse_metric(
+    device: str,
+    tmp_path: Path,
+    synthetic_regression_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
+    """Ensure regressor checkpoints store regression metrics (mse).
+
+    This also checks that classifier-only metric fields are not stored.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
     X, y = synthetic_regression_data
     X_train, _X_test, y_train, _y_test = train_test_split(
         X, y, test_size=0.3, random_state=42
     )
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+    output_folder = tmp_path / "checkpoints_regressor"
 
-    reg = create_regressor(
-        n_estimators,
-        device,
-        fit_mode,
-        inference_precision,
-        random_state=2,
-        differentiable_input=False,
+    finetuned_reg = FinetunedTabPFNRegressor(
+        device=device,
+        epochs=2,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=60,
+        finetune_ctx_query_split_ratio=0.2,
+        n_inference_subsample_samples=120,
+        random_state=42,
+        early_stopping=False,
+        use_lr_scheduler=False,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        save_checkpoint_interval=1,
     )
 
-    datasets_list = get_preprocessed_dataset_chunks(
-        reg,
-        X_train,
-        y_train,
+    mock_forward = create_mock_architecture_forward_regression()
+    with mock.patch(
+        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        autospec=True,
+        side_effect=mock_forward,
+    ):
+        finetuned_reg.fit(X_train, y_train, output_dir=output_folder)
+
+    best_checkpoint_candidates = list(output_folder.glob("checkpoint_*_best.pth"))
+    assert len(best_checkpoint_candidates) == 1, "Expected exactly one best checkpoint."
+    best_checkpoint_path = best_checkpoint_candidates[0]
+
+    best_checkpoint = torch.load(best_checkpoint_path, weights_only=False)
+    assert "state_dict" in best_checkpoint
+    assert "config" in best_checkpoint
+    assert "optimizer" in best_checkpoint
+    assert "epoch" in best_checkpoint
+    assert "mse" in best_checkpoint
+    assert "roc_auc" not in best_checkpoint
+    assert "log_loss" not in best_checkpoint
+
+
+def test_regressor_dataset_and_collator_batches_type(
+    variable_synthetic_regression_dataset_collection: list[
+        tuple[np.ndarray, np.ndarray]
+    ],
+    regressor_instance: TabPFNRegressor,
+) -> None:
+    """Test that dataset and collator produce correctly-typed RegressorBatch objects."""
+    X_list = [X for X, _ in variable_synthetic_regression_dataset_collection]
+    y_list = [y for _, y in variable_synthetic_regression_dataset_collection]
+    dataset_collection = get_preprocessed_dataset_chunks(
+        regressor_instance,
+        X_list,
+        y_list,
         train_test_split,
-        max_data_size=100,
+        100,
         model_type="regressor",
         equal_split_size=True,
         seed=42,
     )
 
-    batch_size = 1
-    my_dl_train = DataLoader(
-        datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
-    )
-
-    optim_impl = Adam(reg.models_[0].parameters(), lr=1e-5)
-
-    if inference_precision == torch.float64:
-        pass
-        # TODO: check that it fails with the right error
-
-    elif fit_mode in [
-        "fit_preprocessors",
-        "fit_with_cache",
-        "low_memory",
-    ]:
-        # TODO: check that it fails with the right error
-        pass
-    else:
-        for data_batch in my_dl_train:
-            optim_impl.zero_grad()
-
-            (
-                X_trains_preprocessed,
-                X_tests_preprocessed,
-                y_trains_preprocessed,
-                y_test_standardized,
-                cat_ixs,
-                confs,
-                raw_space_bardist_,
-                _bar_distribution,
-                _batch_x_test_raw,
-                batch_y_test_raw,
-            ) = data_batch
-
-            reg.fit_from_preprocessed(
-                X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
-            )
-
-            reg.raw_space_bardist_ = raw_space_bardist_[0]
-
-            averaged_pred_logits, _, _ = reg.forward(X_tests_preprocessed)
-
-            # --- Basic Shape Checks ---
-            assert averaged_pred_logits.ndim == 3, (
-                f"Expected 3D output, got {averaged_pred_logits.shape}"
-            )
-
-            # Batch Size
-            assert averaged_pred_logits.shape[0] == batch_y_test_raw.shape[0]
-            assert averaged_pred_logits.shape[0] == batch_size
-            assert averaged_pred_logits.shape[0] == X_tests_preprocessed[0].shape[0]
-            assert averaged_pred_logits.shape[0] == y_test_standardized.shape[0]
-
-            # N_samples
-            assert averaged_pred_logits.shape[1] == batch_y_test_raw.shape[1]
-            assert averaged_pred_logits.shape[1] == y_test_standardized.shape[1]
-
-            # N_bins
-            n_borders_bardist = reg.znorm_space_bardist_.borders.shape[0]
-            assert averaged_pred_logits.shape[2] == n_borders_bardist - 1
-            n_borders_norm_crit = reg.raw_space_bardist_.borders.shape[0]
-            assert averaged_pred_logits.shape[2] == n_borders_norm_crit - 1
-
-            assert len(X_tests_preprocessed) == reg.n_estimators
-            assert len(X_trains_preprocessed) == reg.n_estimators
-            assert len(y_trains_preprocessed) == reg.n_estimators
-            assert reg.models_ is not None, "Model not initialized after fit"
-            assert hasattr(reg, "znorm_space_bardist_"), (
-                "Regressor missing 'znorm_space_bardist_' attribute after fit"
-            )
-            assert hasattr(reg, "raw_space_bardist_"), (
-                "Regressor missing 'raw_space_bardist_' attribute after fit"
-            )
-            assert reg.znorm_space_bardist_ is not None, (
-                "reg.znorm_space_bardist_ is None"
-            )
-
-            lossfn = None
-            if optimization_space == "raw_label_space":
-                lossfn = reg.raw_space_bardist_
-            elif optimization_space == "preprocessed":
-                lossfn = reg.znorm_space_bardist_
-            else:
-                raise ValueError("Need to define optimization space")
-
-            nll_loss_per_sample = lossfn(
-                averaged_pred_logits, batch_y_test_raw.to(device)
-            )
-            loss = nll_loss_per_sample.mean()
-
-            # --- Gradient Check ---
-            loss.backward()
-            optim_impl.step()
-
-            assert torch.isfinite(loss).all(), f"Loss is not finite: {loss.item()}"
-
-            gradients_found = False
-            for param in reg.models_[0].parameters():
-                if (
-                    param.requires_grad
-                    and param.grad is not None
-                    and param.grad.abs().sum().item() > 1e-12
-                ):
-                    gradients_found = True
-                    break
-            assert gradients_found, "No non-zero gradients found."
-
-            reg.models_[0].zero_grad()
-            break  # Only test one batch
-
-
-def test_finetuning_consistency_bar_distribution(
-    std_regressor_instance, ft_regressor_instance, synthetic_regression_data
-):
-    """Tests if predict() output matches the output derived from
-    get_preprocessed_datasets -> fit_from_preprocessed -> forward() -> post-processing,
-    when no actual fine-tuning occurs.
-    """
-    common_seed = 10
-    test_set_size = 0.2
-
-    reg_standard = std_regressor_instance
-    reg_batched = ft_regressor_instance
-
-    if reg_standard.device != reg_batched.device:
-        pytest.skip("Devices do not match.")
-
-    x_full_raw, y_full_raw = synthetic_regression_data
-
-    splitfn = partial(
-        train_test_split,
-        test_size=test_set_size,
-        random_state=common_seed,
-        shuffle=False,
-    )
-
-    X_train_raw, X_test_raw, y_train_raw, y_test_raw = splitfn(x_full_raw, y_full_raw)
-
-    reg_standard.fit(X_train_raw, y_train_raw)
-    reg_standard.predict(X_test_raw, output_type="mean")
-
-    datasets_list = get_preprocessed_dataset_chunks(
-        reg_batched,
-        x_full_raw,
-        y_full_raw,
-        splitfn,
-        max_data_size=1_000,
-        model_type="regressor",
-        equal_split_size=True,
-        seed=42,
-        shuffle=False,
-    )
-
-    batch_size = 1
-    dataloader = DataLoader(
-        datasets_list,
-        batch_size=batch_size,
+    dl = DataLoader(
+        dataset_collection,
+        batch_size=1,
         collate_fn=meta_dataset_collator,
-        shuffle=False,
     )
-    data_batch = next(iter(dataloader))
-    (
-        X_trains_preprocessed,
-        _X_tests_preprocessed,
-        y_trains_preprocessed,
-        y_test_standardized,
-        cat_ixs,
-        confs,
-        raw_space_bardist_,
-        _bar_distribution,
-        batch_x_test_raw,
-        batch_y_test_raw,
-    ) = data_batch
+    for batch in dl:
+        assert isinstance(batch, RegressorBatch)
+        for est_tensor in batch.X_context:
+            assert isinstance(est_tensor, torch.Tensor)
+            assert est_tensor.shape[0] == 1
+        for est_tensor in batch.y_context:
+            assert isinstance(est_tensor, torch.Tensor)
+            assert est_tensor.shape[0] == 1
 
-    np.testing.assert_allclose(
-        batch_y_test_raw.flatten().detach().cpu().numpy(),
-        y_test_raw,
-        rtol=1e-5,
-        atol=1e-5,
-    )
+        assert isinstance(batch.cat_indices, list)
+        for conf in batch.configs:
+            for c in conf:
+                assert isinstance(c, RegressorEnsembleConfig)
 
-    reg_batched.fit_from_preprocessed(
-        X_trains_preprocessed, y_trains_preprocessed, cat_ixs, confs
-    )
-
-    mean = np.mean(y_train_raw)
-    std = np.std(y_train_raw)
-    y_train_std_ = std.item() + 1e-20
-    y_train_mean_ = mean.item()
-    y_standardised_investigated = (y_test_raw - y_train_mean_) / y_train_std_
-
-    np.testing.assert_allclose(
-        y_test_standardized[0].flatten().detach().cpu().numpy(),
-        y_standardised_investigated,
-        rtol=1e-5,
-        atol=1e-5,
-    )
-
-    np.testing.assert_allclose(
-        batch_x_test_raw[0].detach().cpu().numpy(),
-        X_test_raw,
-        rtol=1e-5,
-        atol=1e-5,
-    )
-
-    raw_space_bardist_ = raw_space_bardist_[0]
-    reg_batched.raw_space_bardist_ = raw_space_bardist_
-
-    torch.testing.assert_close(
-        raw_space_bardist_.borders,
-        reg_batched.raw_space_bardist_.borders,
-        rtol=1e-5,
-        atol=1e-5,
-        msg="Renormalized criterion borders do not match.",
-    )
-
-    torch.testing.assert_close(
-        raw_space_bardist_.borders,
-        reg_standard.raw_space_bardist_.borders,
-        rtol=1e-5,  # Standard float tolerance
-        atol=1e-5,
-        msg="Renormalized criterion borders do not match.",
-    )
-
-    torch.testing.assert_close(
-        reg_standard.raw_space_bardist_.borders,
-        reg_batched.raw_space_bardist_.borders,
-        rtol=1e-5,  # Standard float tolerance
-        atol=1e-5,
-        msg="Renormalized criterion borders do not match.",
-    )
-
-    torch.testing.assert_close(
-        reg_standard.znorm_space_bardist_.borders,
-        reg_batched.znorm_space_bardist_.borders,
-        rtol=1e-5,  # Standard float tolerance
-        atol=1e-5,
-        msg="Bar distribution borders do not match.",
-    )
-
-
-# ----------------
-
-
-class TestTabPFNPreprocessingInspection(unittest.TestCase):
-    def test_finetuning_consistency_preprocessing_regressor(self):
-        """In order to test the consistency of our FineTuning code
-        and the preprocessing code, we will test the consistency
-        of the preprocessed datasets. We do this by checking
-        comparing the tensors that enter the internal transformer
-        model.
-        """
-        test_set_size = 0.3
-        common_seed = 42
-        n_total = 20
-        n_features = 10
-        n_estimators = 1
-
-        X, y = sklearn.datasets.make_regression(
-            n_samples=n_total, n_features=n_features, random_state=common_seed
-        )
-        splitfn = partial(
-            train_test_split,
-            test_size=test_set_size,
-            random_state=common_seed,
-            shuffle=False,  # Keep False for consistent results if slicing were needed
-        )
-        X_train_raw, X_test_raw, y_train_raw, _ = splitfn(X, y)
-
-        # Initialize two regressors with the inference and FineTuning
-        reg_standard = TabPFNRegressor(
-            n_estimators=n_estimators,
-            device="auto",
-            random_state=common_seed,
-            fit_mode="fit_preprocessors",  # Example standard mode
-        )
-        reg_batched = TabPFNRegressor(
-            n_estimators=n_estimators,
-            device="auto",
-            random_state=common_seed,
-            fit_mode="batched",  # Mode compatible with get_preprocessed_datasets
-        )
-
-        # --- 2. Path 1: Standard fit -> predict -> Capture Tensor ---
-        reg_standard.fit(X_train_raw, y_train_raw)
-        assert hasattr(reg_standard, "models_")
-        assert hasattr(reg_standard.models_[0], "forward")
-
-        tensor_p1_full = None
-        # Patch the standard regressor's internal model's forward method
-        with patch.object(
-            reg_standard.models_[0], "forward", wraps=reg_standard.models_[0].forward
-        ) as mock_forward_p1:
-            _ = reg_standard.predict(X_test_raw)  # Trigger the patched method
-            assert mock_forward_p1.called
-            # Capture the tensor input to the internal model
-            tensor_p1_full = mock_forward_p1.call_args.args[0]
-
-        assert tensor_p1_full is not None
-        # Standard path's internal model receives the combined train+test sequence
-        assert tensor_p1_full.shape[0] == n_total
-
-        # --- 3. Path 3: FT Full Workflow ---
-        # (get_prep -> fit_prep -> forward -> Capture Tensor)
-
-        datasets_list = get_preprocessed_dataset_chunks(
-            reg_batched,
-            X,
-            y,
-            splitfn,
-            max_data_size=1000,
-            model_type="regressor",
-            equal_split_size=True,
-            seed=42,
-            shuffle=False,
-        )
-
-        # Fit FT regressor
-        dataloader = DataLoader(
-            datasets_list,
-            batch_size=1,
-            collate_fn=meta_dataset_collator,
-            shuffle=False,
-        )
-        data_batch = next(iter(dataloader))
-        (
-            X_trains_p2,
-            X_tests_p2,
-            y_trains_p2,
-            _,
-            cat_ixs_p2,
-            confs_p2,
-            _,
-            _,
-            _,
-            _,
-        ) = data_batch
-        reg_batched.fit_from_preprocessed(
-            X_trains_p2, y_trains_p2, cat_ixs_p2, confs_p2
-        )
-        assert hasattr(reg_batched, "models_")
-        assert hasattr(reg_batched.models_[0], "forward")
-
-        # Step 3c: Call forward and capture the input tensor to the *internal model*
-        tensor_p3_full = None
-        # Patch the *batched* regressor's internal model's forward method
-        with patch.object(
-            reg_batched.models_[0], "forward", wraps=reg_batched.models_[0].forward
-        ) as mock_forward_p3:
-            # Pass the list of preprocessed test tensors obtained earlier
-            _ = reg_batched.forward(X_tests_p2)
-            assert mock_forward_p3.called
-            # Capture the tensor input to the internal model
-            tensor_p3_full = mock_forward_p3.call_args.args[0]
-
-        assert tensor_p3_full is not None
-        # As confirmed before, the internal model in this path
-        # also receives the full sequence
-        assert tensor_p3_full.shape[0] == n_total
-
-        # --- 4. Comparison (Path 1 vs Path 3) ---
-
-        # Compare the two full tensors captured from the input to models_[0].forward
-        # Squeeze dimensions of size 1 for direct comparison
-        # shapes should be [N_Total, Features+1]
-        p1_squeezed = tensor_p1_full.squeeze()
-        p3_squeezed = tensor_p3_full.squeeze()
-
-        assert p1_squeezed.shape == p3_squeezed.shape, (
-            "Shapes of final model input tensors mismatch."
-        )
-
-        atol = 1e-6
-        tensors_match = torch.allclose(p1_squeezed, p3_squeezed, atol=atol)
-
-        assert tensors_match, "Mismatch between preprocessed model input tensors."
+        assert isinstance(batch.X_query_raw, torch.Tensor)
+        assert isinstance(batch.y_query_raw, torch.Tensor)
+        assert batch.X_query_raw.shape[0] == 1
+        assert batch.y_query_raw.shape[0] == 1
+        assert batch.y_query.shape[0] == 1
+        break
