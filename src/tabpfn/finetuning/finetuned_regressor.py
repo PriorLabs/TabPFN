@@ -194,9 +194,13 @@ def _ranked_probability_score_loss_from_bar_logits(
         cdf_diff_BQL = pred_cdf_BQL - target_cdf_BQL
         cdf_term_losses_BQL = cdf_diff_BQL.square()
     else:
-        eps = 1e-8
-        log_arg_BQL = (pred_cdf_BQL + target_cdf_BQL - 1.0).abs().clamp(min=eps)
-        cdf_term_losses_BQL = -torch.log(log_arg_BQL)
+        eps = torch.finfo(pred_cdf_BQL.dtype).eps
+        cdf = pred_cdf_BQL.clamp(eps, 1 - eps)
+        # target_cdf_BQL is binary, so we can expand the log(|CDF(k) + y_k - 1|) term
+        # into two separate terms and use log1p. This is numerically more stable.
+        cdf_term_losses_BQL = target_cdf_BQL * (-torch.log(cdf)) + (
+            1 - target_cdf_BQL
+        ) * (-torch.log1p(-cdf))
 
     weighted_term_losses_BQL = cdf_term_losses_BQL * bucket_widths_L.view(1, 1, -1)
     rps_losses_BQ = weighted_term_losses_BQL.sum(dim=-1)
