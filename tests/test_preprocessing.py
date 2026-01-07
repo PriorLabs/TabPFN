@@ -17,7 +17,7 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn import preprocessing
-from tabpfn.preprocessing.core import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.ensemble import _get_subsample_indices_for_estimators
 from tabpfn.preprocessing.steps import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,

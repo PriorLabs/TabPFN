@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Callable, Literal
 from typing_extensions import override
 
@@ -15,8 +15,7 @@ from sklearn.model_selection import StratifiedKFold
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.preprocessing import (
-    ClassifierDatasetConfig,
-    RegressorDatasetConfig,
+    EnsembleConfig,
     fit_preprocessing,
 )
 from tabpfn.utils import infer_random_state, pad_tensors
@@ -79,6 +78,56 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
+
+
+@dataclass
+class BaseDatasetConfig:
+    """Base configuration class for holding dataset specifics."""
+
+    config: EnsembleConfig
+    X_raw: np.ndarray | torch.Tensor
+    y_raw: np.ndarray | torch.Tensor
+    cat_ix: list[int]
+
+
+# TODO: Potentially move to finetuning/data_util.py
+@dataclass
+class ClassifierDatasetConfig(BaseDatasetConfig):
+    """Classification Dataset + Model Configuration class."""
+
+
+# TODO: Potentially move to finetuning/data_util.py
+@dataclass
+class RegressorDatasetConfig(BaseDatasetConfig):
+    """Regression Dataset + Model Configuration class."""
+
+    znorm_space_bardist_: FullSupportBarDistribution | None = field(default=None)
+
+    @property
+    def bardist_(self) -> FullSupportBarDistribution:
+        """DEPRECATED: Accessing `bardist_` is deprecated.
+        Use `znorm_space_bardist_` instead.
+        """
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.znorm_space_bardist_
+
+    @bardist_.setter
+    def bardist_(self, value: FullSupportBarDistribution) -> None:
+        """DEPRECATED: Setting `bardist_` is deprecated.
+        Use `znorm_space_bardist_`.
+        """
+        warnings.warn(
+            "`bardist_` is deprecated and will be removed in a future version. "
+            "Please use `znorm_space_bardist_` instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self.znorm_space_bardist_ = value
 
 
 def _take(obj: Any, idx: np.ndarray) -> Any:

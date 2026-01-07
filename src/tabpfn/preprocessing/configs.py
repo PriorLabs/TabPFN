@@ -1,71 +1,20 @@
-"""Definitions for preprocessor configurations and dataset specifications."""
+"""Preprocessor and ensemble configurations."""
 
 from __future__ import annotations
 
-import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 if TYPE_CHECKING:
     import numpy as np
     import numpy.typing as npt
-    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
-    from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         SequentialFeatureTransformer,
     )
-
-
-@dataclass
-class BaseDatasetConfig:
-    """Base configuration class for holding dataset specifics."""
-
-    config: EnsembleConfig
-    X_raw: np.ndarray | torch.Tensor
-    y_raw: np.ndarray | torch.Tensor
-    cat_ix: list[int]
-
-
-@dataclass
-class ClassifierDatasetConfig(BaseDatasetConfig):
-    """Classification Dataset + Model Configuration class."""
-
-
-@dataclass
-class RegressorDatasetConfig(BaseDatasetConfig):
-    """Regression Dataset + Model Configuration class."""
-
-    znorm_space_bardist_: FullSupportBarDistribution | None = field(default=None)
-
-    @property
-    def bardist_(self) -> FullSupportBarDistribution:
-        """DEPRECATED: Accessing `bardist_` is deprecated.
-        Use `znorm_space_bardist_` instead.
-        """
-        warnings.warn(
-            "`bardist_` is deprecated and will be removed in a future version. "
-            "Please use `znorm_space_bardist_` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        return self.znorm_space_bardist_
-
-    @bardist_.setter
-    def bardist_(self, value: FullSupportBarDistribution) -> None:
-        """DEPRECATED: Setting `bardist_` is deprecated.
-        Use `znorm_space_bardist_`.
-        """
-        warnings.warn(
-            "`bardist_` is deprecated and will be removed in a future version. "
-            "Please use `znorm_space_bardist_` instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        self.znorm_space_bardist_ = value
 
 
 @dataclass(frozen=True, eq=True)
@@ -201,11 +150,12 @@ class EnsembleConfig:
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
 
+    # TODO(prep-refactor): remove this function
     def to_pipeline(
         self, *, random_state: int | np.random.Generator | None = None
     ) -> SequentialFeatureTransformer:
         """Convert the ensemble configuration to a preprocessing pipeline."""
-        from .core import build_pipeline  # noqa: PLC0415
+        from .pipeline import build_pipeline  # noqa: PLC0415
 
         return build_pipeline(self, random_state=random_state)
 
@@ -225,11 +175,8 @@ class RegressorEnsembleConfig(EnsembleConfig):
 
 
 __all__ = [
-    "BaseDatasetConfig",
-    "ClassifierDatasetConfig",
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
     "PreprocessorConfig",
-    "RegressorDatasetConfig",
     "RegressorEnsembleConfig",
 ]
