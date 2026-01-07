@@ -4,6 +4,7 @@ Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as ful
 support for the Apple Silicon (MPS) backend is still under development.
 """
 
+import logging
 import warnings
 
 import numpy as np
@@ -21,6 +22,11 @@ warnings.filterwarnings(
     "ignore",
     category=FutureWarning,
     module=r"google\.api_core\._python_version_support",
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
 # =============================================================================

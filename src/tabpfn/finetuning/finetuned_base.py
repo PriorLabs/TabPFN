@@ -384,7 +384,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
 
-        inference_config = self._estimator_kwargs.get("inference_config", {})
+        inference_config = copy.deepcopy(
+            self._estimator_kwargs.get("inference_config", {})
+        )
         base_estimator_config: dict[str, Any] = {
             **self._estimator_kwargs,
             "ignore_pretraining_limits": True,
