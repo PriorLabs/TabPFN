@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Refactored preprocessing related code [#713](https://github.com/PriorLabs/TabPFN/pull/713), [#720](https://github.com/PriorLabs/TabPFN/pull/720)
-
 ## [6.3.0] - 2026-01-06
 
 ### Added
