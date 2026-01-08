@@ -245,7 +245,6 @@ jobs:
     name: Test on GPU
     needs: 
       - test_ubuntu_latest_314
-      - test_first_party_packages
 
     strategy:
       fail-fast: false
