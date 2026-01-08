@@ -10,6 +10,7 @@ from .ensemble import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
 )
+from .initialization import tag_features_and_sanitize_data
 from .pipeline import (
     SequentialFeatureTransformer,
 )
@@ -21,9 +22,7 @@ from .presets import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
-from .transform import (
-    fit_preprocessing,
-)
+from .transform import fit_preprocessing
 
 __all__ = [
     "ClassifierEnsembleConfig",
@@ -36,6 +35,7 @@ __all__ = [
     "fit_preprocessing",
     "generate_classification_ensemble_configs",
     "generate_regression_ensemble_configs",
+    "tag_features_and_sanitize_data",
     "v2_5_classifier_preprocessor_configs",
     "v2_5_regressor_preprocessor_configs",
     "v2_classifier_preprocessor_configs",

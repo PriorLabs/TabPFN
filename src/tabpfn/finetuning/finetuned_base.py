@@ -38,7 +38,8 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
-from tabpfn.utils import infer_devices, validate_Xy_fit
+from tabpfn.utils import infer_devices
+from tabpfn.validation import validate_Xy_fit
 
 logger = logging.getLogger(__name__)
 

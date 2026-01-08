@@ -12,15 +12,14 @@ from torch.torch_version import TorchVersion
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
+from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.tag import infer_categorical_features
 from tabpfn.utils import (
     balance_probas_by_class_counts,
-    fix_dtypes,
-    infer_categorical_features,
     infer_devices,
-    process_text_na_dataframe,
-    validate_Xy_fit,
 )
+from tabpfn.validation import validate_Xy_fit
 
 
 def test_infer_categorical_with_str_and_nan_provided_included():
