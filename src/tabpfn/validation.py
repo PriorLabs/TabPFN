@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING, Any
 import torch
 from sklearn.base import is_classifier
 from sklearn.utils.multiclass import check_classification_targets
-from sklearn.utils.validation import check_array, validate_data
 
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.misc._sklearn_compat import check_array, validate_data
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
