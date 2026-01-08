@@ -155,8 +155,7 @@ def validate_Xy_fit_differentiable_input(
         )
     if len(X.shape) != 2:
         raise ValueError(
-            f"Number of features in X ({X.shape[1]}) does not match the number "
-            f"of features in y ({y.shape[1]}).",
+            f"The input data X is not a 2D array. Got shape: {X.shape}",
         )
 
     _validate_dataset_size(
