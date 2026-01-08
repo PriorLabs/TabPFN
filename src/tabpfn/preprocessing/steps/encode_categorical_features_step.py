@@ -42,6 +42,7 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
         X: np.ndarray,
         categorical_features: list[int],
     ) -> tuple[ColumnTransformer | None, list[int]]:
+        # TODO DETECT: This area should be aware of what are the categorical features
         if self.categorical_transform_name.startswith("ordinal"):
             name = self.categorical_transform_name[len("ordinal") :]
             # Create a column transformer

@@ -699,6 +699,7 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
             x: The input tensor.
             **kwargs: Additional keyword arguments (unused).
         """
+        # TODO DETECT: We detect here empty features, this could happen in advance.
         self.column_selection_mask = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     def _transform(self, x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
@@ -711,8 +712,6 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
-        # Ensure that the mask is a bool, because the buffer may get converted to a
-        # a float if .to() is called on the containing module.
         return (select_features(x, self.column_selection_mask.type(torch.bool)),)
 
 

@@ -24,6 +24,7 @@ class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):
     def _fit(  # type: ignore
         self, X: np.ndarray | torch.Tensor, categorical_features: list[int]
     ) -> list[int]:
+        # TODO DETECT: We would like to detect 'constant' in advance, and pass it to here
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
         else:

@@ -357,6 +357,7 @@ def fix_dtypes(  # noqa: D103
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
 ) -> pd.DataFrame:
+    # TODO DETECT: This function does both detection and conversion. We would like to decouple, and store it
     if isinstance(X, pd.DataFrame):
         # This will help us get better dtype inference later
         convert_dtype = True
@@ -371,6 +372,7 @@ def fix_dtypes(  # noqa: D103
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
         elif X.dtype.kind in STRING_DTYPE_KINDS:
+            # TODO DETECT: We would like to detect in advance that there are strings
             raise ValueError(
                 f"String dtypes are not supported. Got dtype: {X.dtype}",
             )
@@ -532,6 +534,7 @@ def validate_X_predict(
     return typing.cast("np.ndarray", result)
 
 
+# TODO: DETECT: this function should appear in the preprocesing areas?
 def infer_categorical_features(
     X: np.ndarray,
     *,
@@ -636,6 +639,7 @@ def process_text_na_dataframe(
 
     Note that this function sometimes mutates its input.
     """
+    # TODO DETECT: This function should be aware of the types.
     # Replace NAN values in X, for dtypes, which the OrdinalEncoder cannot handle
     # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
     string_cols = X.select_dtypes(include=["string", "object"]).columns

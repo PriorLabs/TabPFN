@@ -603,6 +603,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
 
         if not self.differentiable_input:
+            # TODO DETECT: this part is very important, as detection occurs here. We shall replace this for sure.
             self.inferred_categorical_indices_ = infer_categorical_features(
                 X=X,
                 provided=self.categorical_features_indices,
@@ -624,6 +625,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.preprocessor_ = ord_encoder
 
         else:  # Minimal preprocessing for prompt tuning
+            # TODO DETECT: Unsure if and how we want to change this flow, as we would like to deprecate inferred_categorical_indices_?
             self.inferred_categorical_indices_ = []
             self.preprocessor_ = None
             preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
