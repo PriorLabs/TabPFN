@@ -414,6 +414,20 @@ def fix_dtypes(  # noqa: D103
     if convert_dtype:
         X = X.convert_dtypes()
 
+    # We identify columns that are completely empty (all NaNs) and not identified as Categorical.
+    # We force them to be 'string' dtype (pandas StringDtype).
+    # 1. This ensures the ColumnTransformer selects them (it looks for "string").
+    # 2. The OrdinalEncoder fits on them (learning "Missing").
+    # 3. If future data has strings in this column, the Encoder handles it
+    #    gracefully instead of crashing (which would happen if we inferred "float").
+    nan_cols = set(X.columns[X.isna().all()])
+    # If cat indices are integers, we look them up; otherwise take them as is.
+    is_int = cat_indices and len(cat_indices) > 0 and isinstance(cat_indices[0], (int, np.integer))
+    cat_cols = set(X.columns[cat_indices] if is_int else (cat_indices or []))
+    nan_not_cat_cols = list(nan_cols - cat_cols)
+    if nan_not_cat_cols:
+        X[nan_not_cat_cols] = X[nan_not_cat_cols].astype("string")
+
     integer_columns = X.select_dtypes(include=["number"]).columns
     if len(integer_columns) > 0:
         X[integer_columns] = X[integer_columns].astype(numeric_dtype)
@@ -634,6 +648,10 @@ def process_text_na_dataframe(
     If `ord_encoder` is not None, then it will be used to encode `X` before the
     conversion to float64.
 
+    !!! warning "Column Order Change"
+        The output array will have columns reordered: **Categorical columns first**,
+        followed by **Numerical columns**. Indices will not match the input `X`.
+
     Note that this function sometimes mutates its input.
     """
     # Replace NAN values in X, for dtypes, which the OrdinalEncoder cannot handle
@@ -642,20 +660,28 @@ def process_text_na_dataframe(
     if len(string_cols) > 0:
         X[string_cols] = X[string_cols].fillna(placeholder)
 
-    if fit_encoder and ord_encoder is not None:
-        X_encoded = ord_encoder.fit_transform(X)
-    elif ord_encoder is not None:
-        X_encoded = ord_encoder.transform(X)
+    if ord_encoder is not None:
+        if fit_encoder:
+            X_encoded = ord_encoder.fit_transform(X)
+        else:
+            X_encoded = ord_encoder.transform(X)
+        pre_encoding_ix = ord_encoder._transformer_to_input_indices['encoder']
+        post_encoding_ix = ord_encoder.output_indices_['encoder']
+
     else:
         X_encoded = X
+        pre_encoding_ix = [X.columns.get_loc(col) for col in string_cols]
+        post_encoding_ix = pre_encoding_ix
 
-    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
-    placeholder_mask = X[string_cols] == placeholder
-    X_encoded[:, string_cols_ix] = np.where(
-        placeholder_mask,
-        np.nan,
-        X_encoded[:, string_cols_ix],
-    )
+    if len(pre_encoding_ix) > 0:
+        # Check the pre-encoding X for the placeholder
+        placeholder_mask = (X.iloc[:, pre_encoding_ix] == placeholder).to_numpy()
+        # Apply NaNs to the post-encoding X
+        X_encoded[:, post_encoding_ix] = np.where(
+            placeholder_mask,
+            np.nan,
+            X_encoded[:, post_encoding_ix]
+        )
     return X_encoded.astype(np.float64)
 
 
