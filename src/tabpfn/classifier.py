@@ -72,12 +72,12 @@ from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.typing import infer_categorical_features
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
     fix_dtypes,
     get_embeddings,
-    infer_categorical_features,
     infer_random_state,
     process_text_na_dataframe,
     validate_X_predict,

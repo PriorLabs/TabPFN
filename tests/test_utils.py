@@ -13,10 +13,10 @@ from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.typing import infer_categorical_features
 from tabpfn.utils import (
     balance_probas_by_class_counts,
     fix_dtypes,
-    infer_categorical_features,
     infer_devices,
     process_text_na_dataframe,
     validate_Xy_fit,

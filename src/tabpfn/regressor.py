@@ -66,11 +66,11 @@ from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.typing import infer_categorical_features
 from tabpfn.utils import (
     DevicesSpecification,
     fix_dtypes,
     get_embeddings,
-    infer_categorical_features,
     infer_random_state,
     process_text_na_dataframe,
     transform_borders_one,
