@@ -136,6 +136,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         """Returns a list of column types for the given data, that indicate how
         the data should be preprocessed.
         """
+        # TODO(eddiebergman): Bad to keep calling skew again and again here...
         # TODO DETECT: This function Should to the very least know what are categorical variables
         column_types = []
         for col in range(X.shape[1]):

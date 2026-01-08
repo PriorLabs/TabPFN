@@ -712,6 +712,8 @@ class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
         Returns:
             A tuple containing the transformed tensor with empty features removed.
         """
+        # Ensure that the mask is a bool, because the buffer may get converted to a
+        # a float if .to() is called on the containing module.
         return (select_features(x, self.column_selection_mask.type(torch.bool)),)
 
 
