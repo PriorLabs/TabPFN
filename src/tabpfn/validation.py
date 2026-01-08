@@ -38,14 +38,14 @@ def validate_differentiable_inputs(
     devices: tuple[torch.device, ...],
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Validate and convert inputs to compatible format for differentiable input."""
-    X, y = validate_Xy_fit_differentiable_input(
+    X, y = _validate_Xy_fit_differentiable_input(
         X,
         y,
         max_num_samples=inference_config.MAX_NUMBER_OF_SAMPLES,
         max_num_features=inference_config.MAX_NUMBER_OF_FEATURES,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    check_cpu_warning_for_num_samples(
+    _check_cpu_warning_for_num_samples(
         devices=devices,
         num_samples=X.shape[0],
         allow_cpu_override=ignore_pretraining_limits,
@@ -74,7 +74,7 @@ def validate_inputs(
         max_num_features=max_num_features,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    check_cpu_warning_for_num_samples(
+    _check_cpu_warning_for_num_samples(
         devices=devices,
         num_samples=X.shape[0],
         allow_cpu_override=ignore_pretraining_limits,
@@ -96,77 +96,6 @@ def validate_num_classes(
             f"Number of classes `{num_classes}` exceeds the maximum number of "
             f"classes `{max_num_classes}` officially supported by TabPFN.",
         )
-
-
-def _validate_dataset_size(
-    num_features: int,
-    num_samples: int,
-    max_num_features: int,
-    max_num_samples: int,
-    *,
-    ignore_pretraining_limits: bool = False,
-) -> None:
-    """Validate the dataset size.
-
-    If `ignore_pretraining_limits` is True, the validation is skipped.
-
-    Raises a TabPFNValidationError if the number of features or samples exceeds
-    the maximum number of features or samples officially supported by TabPFN.
-    """
-    if ignore_pretraining_limits:
-        return
-
-    if num_features > max_num_features:
-        raise TabPFNValidationError(
-            f"Number of features `{num_features}` in the input data is greater than "
-            f"the maximum number of features `{max_num_features}` officially "
-            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
-            "to override this error!",
-        )
-    if num_samples > max_num_samples:
-        raise TabPFNValidationError(
-            f"Number of samples `{num_samples:,}` in the input data is greater than "
-            f"the maximum number of samples `{max_num_samples:,}` officially supported"
-            f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
-            f"error!",
-        )
-
-
-def validate_Xy_fit_differentiable_input(
-    X: torch.Tensor,
-    y: torch.Tensor,
-    *,
-    max_num_features: int,
-    max_num_samples: int,
-    ignore_pretraining_limits: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Validate the input data for fitting with differentiable input.
-
-    Args:
-        X: The input data.
-        y: The target data.
-        max_num_features: The maximum number of features to allow.
-        max_num_samples: The maximum number of samples to allow.
-        ignore_pretraining_limits: Whether to ignore the pretraining limits.
-    """
-    if len(X) != len(y):
-        raise ValueError(
-            f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
-        )
-    if len(X.shape) != 2:
-        raise ValueError(
-            f"The input data X is not a 2D array. Got shape: {X.shape}",
-        )
-
-    _validate_dataset_size(
-        num_features=X.shape[1],
-        num_samples=X.shape[0],
-        max_num_features=max_num_features,
-        max_num_samples=max_num_samples,
-        ignore_pretraining_limits=ignore_pretraining_limits,
-    )
-
-    return X, y
 
 
 def validate_Xy_fit(
@@ -259,7 +188,78 @@ def validate_X_predict(
     return typing.cast("np.ndarray", result)
 
 
-def check_cpu_warning_for_num_samples(
+def _validate_Xy_fit_differentiable_input(
+    X: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    max_num_features: int,
+    max_num_samples: int,
+    ignore_pretraining_limits: bool = False,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Validate the input data for fitting with differentiable input.
+
+    Args:
+        X: The input data.
+        y: The target data.
+        max_num_features: The maximum number of features to allow.
+        max_num_samples: The maximum number of samples to allow.
+        ignore_pretraining_limits: Whether to ignore the pretraining limits.
+    """
+    if len(X) != len(y):
+        raise ValueError(
+            f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
+        )
+    if len(X.shape) != 2:
+        raise ValueError(
+            f"The input data X is not a 2D array. Got shape: {X.shape}",
+        )
+
+    _validate_dataset_size(
+        num_features=X.shape[1],
+        num_samples=X.shape[0],
+        max_num_features=max_num_features,
+        max_num_samples=max_num_samples,
+        ignore_pretraining_limits=ignore_pretraining_limits,
+    )
+
+    return X, y
+
+
+def _validate_dataset_size(
+    num_features: int,
+    num_samples: int,
+    max_num_features: int,
+    max_num_samples: int,
+    *,
+    ignore_pretraining_limits: bool = False,
+) -> None:
+    """Validate the dataset size.
+
+    If `ignore_pretraining_limits` is True, the validation is skipped.
+
+    Raises a TabPFNValidationError if the number of features or samples exceeds
+    the maximum number of features or samples officially supported by TabPFN.
+    """
+    if ignore_pretraining_limits:
+        return
+
+    if num_features > max_num_features:
+        raise TabPFNValidationError(
+            f"Number of features `{num_features}` in the input data is greater than "
+            f"the maximum number of features `{max_num_features}` officially "
+            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
+            "to override this error!",
+        )
+    if num_samples > max_num_samples:
+        raise TabPFNValidationError(
+            f"Number of samples `{num_samples:,}` in the input data is greater than "
+            f"the maximum number of samples `{max_num_samples:,}` officially supported"
+            f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
+            f"error!",
+        )
+
+
+def _check_cpu_warning_for_num_samples(
     devices: Sequence[torch.device],
     num_samples: int,
     *,
