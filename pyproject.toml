@@ -80,6 +80,8 @@ dev = [
   "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
+  # Changelog
+  "towncrier>=24.8.0",
   # Docs
   "mkdocs>=1.6.1",
   "mkdocs-material>=9.6.21",
@@ -417,3 +419,43 @@ ignore_packages = [
     # Our packages
     "tabpfn*",
 ]
+
+[tool.changelog-bot.towncrier_changelog]
+enabled = true
+changelog_skip_label = "no changelog needed"
+
+[tool.towncrier]
+directory = "changelog"
+filename = "CHANGELOG.md"
+start_string = "## [Unreleased]\n"
+title_format = "## [{version}] - {project_date}"
+issue_format = "[#{issue}](https://github.com/PriorLabs/TabPFN/pull/{issue})"
+
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking Changes"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "deprecated"
+name = "Deprecated"
+showcontent = true
+
+[[tool.towncrier.section]]
+path = ""
+name = ""
