@@ -189,9 +189,12 @@ def test__infer_devices__mps_specified_but_torch_too_old__raises(
 
 
 # --- Test Data for the "test_process_text_na_dataframe" test ---
+# Notice that test_process_text_na_dataframe reorder the columns
 test_cases = [
     {
         # Mixed dtypes & None / pd.Na
+        # Original Order: [Ratio(N), Risk(C), Height(C), Amount(N), Type(C)]
+        # Output Order:   [Risk(C), Height(C), Type(C), Ratio(N), Amount(N)]
         "df": pd.DataFrame(
             {
                 "ratio": [0.4, 0.5, 0.6],
@@ -204,14 +207,16 @@ test_cases = [
         "categorical_indices": [1, 2, 4],
         "ground_truth": np.array(
             [
-                [0.4, 0, 0, 10.2, 0],
-                [0.5, np.nan, 0, 20.4, 1],
-                [0.6, 1, 0, 20.5, np.nan],
+                [0, 0, 0, 0.4, 10.2],
+                [np.nan, 0, 1, 0.5, 20.4],
+                [1, 0, np.nan, 0.6, 20.5],
             ]
         ),
     },
     {
         # Mixed dtypes & no missing values
+        # Original Order: [Ratio(N), Risk(C), Height(C), Amount(N), Type(C)]
+        # Output Order:   [Risk(C), Height(C), Type(C), Ratio(N), Amount(N)]
         "df": pd.DataFrame(
             {
                 "ratio": [0.4, 0.5, 0.6],
@@ -224,14 +229,14 @@ test_cases = [
         "categorical_indices": [1, 2, 4],
         "ground_truth": np.array(
             [
-                [0.4, 0, 1, 10.2, 0],
-                [0.5, 2, 1, 20.4, 1],
-                [0.6, 1, 0, np.nan, 2],
+                [0, 1, 0, 0.4, 10.2],
+                [2, 1, 1, 0.5, 20.4],
+                [1, 0, 2, 0.6, np.nan],
             ]
         ),
     },
     {
-        # All numerical no nan
+        # All numerical - Order is preserved (No categoricals to move)
         "df": pd.DataFrame(
             {
                 "ratio": [0.1, 0.2, 0.3],
@@ -249,7 +254,7 @@ test_cases = [
         ),
     },
     {
-        # all categorical no nan
+        # All categorical - Order is preserved (No numericals to move)
         "df": pd.DataFrame(
             {
                 "risk": ["High", "High", "High"],
@@ -321,10 +326,6 @@ def prepared_tabpfn_data(request):
     )
 
 
-# --- Actual test ---
-# This is a test for the OrderPreservingColumnTransformer, which is not used currently
-# But might be used in the future, therefore I'll leave it in.
-@pytest.mark.skip
 def test_process_text_na_dataframe(prepared_tabpfn_data):
     X, categorical_idx, ground_truth = prepared_tabpfn_data  # use the fixture
 
@@ -339,13 +340,35 @@ def test_process_text_na_dataframe(prepared_tabpfn_data):
     assert X_out.shape[0] == ground_truth.shape[0]
     assert X_out.shape[1] == ground_truth.shape[1]
 
+    # Create Map to find where columns moved: Categoricals moved to front, Numerics moved to back
+    col_idx_map = {}
+    n_cols = X.shape[1]
+
+    # Sort indices to preserve relative order within groups
+    sorted_cat = sorted(categorical_idx)
+    sorted_num = sorted(np.setdiff1d(np.arange(n_cols), categorical_idx))
+
+    for new_pos, orig_pos in enumerate(sorted_cat):
+        col_idx_map[orig_pos] = new_pos
+
+    # Numerics land after the last categorical
+    offset = len(sorted_cat)
+    for new_pos, orig_pos in enumerate(sorted_num):
+        col_idx_map[orig_pos] = offset + new_pos
+
+    # 4. Compare using the Map
     for col_name in X.columns:
-        # col_name should already be a numeric index but using get_loc for safety
-        col_idx = X.columns.get_loc(col_name)
+        # Where the column in the Input?
+        original_idx = X.columns.get_loc(col_name)
+
+        # Where did this column end up in the Growth Truth Output?
+        shuffled_idx = col_idx_map[original_idx]
+
         original_col = X[col_name].to_numpy()
-        output_col = X_out[:, col_idx]
-        gt_col = ground_truth[:, col_idx]
-        if col_idx not in categorical_idx:
+        output_col = X_out[:, shuffled_idx]
+        gt_col = ground_truth[:, shuffled_idx]
+
+        if original_idx not in categorical_idx:
             # For numeric columns, values should be preserved (within float tolerance).
             # NaNs should also be in the same positions.
             np.testing.assert_allclose(
