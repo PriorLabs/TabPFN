@@ -6,7 +6,7 @@ for different versions of the model (v2, v2.5, default).
 
 from __future__ import annotations
 
-from .definitions import PreprocessorConfig
+from tabpfn.preprocessing.configs import PreprocessorConfig
 
 _V2_FEATURE_SUBSAMPLING_THRESHOLD = 1_000_000
 
