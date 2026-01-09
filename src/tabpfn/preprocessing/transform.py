@@ -48,8 +48,6 @@ def _fit_preprocessing_one(
         y_train: Training target.
         random_state: Random seed.
         cat_ix: Indices of categorical features.
-        process_idx: Which indices to consider. Only return values for these indices.
-            if None, all indices are processed, which is the default.
 
     Returns:
         Tuple containing the ensemble configuration, the fitted preprocessing pipeline,
