@@ -29,9 +29,9 @@ if TYPE_CHECKING:
     from tabpfn.finetuning.data_util import ClassifierBatch
 
 
-def compute_classification_loss(
+def _compute_classification_loss(
     *,
-    predictions_BLQ: torch.Tensor,
+    logits_BLQ: torch.Tensor,
     targets_BQ: torch.Tensor,
 ) -> torch.Tensor:
     """Compute the cross-entropy training loss.
@@ -40,13 +40,13 @@ def compute_classification_loss(
         B=batch * estimators, L=logits, Q=n_queries.
 
     Args:
-        predictions_BLQ: Raw logits of shape (B*E, L, Q).
+        logits_BLQ: Raw logits of shape (B*E, L, Q).
         targets_BQ: Integer class targets of shape (B*E, Q).
 
     Returns:
         A scalar loss tensor.
     """
-    return torch.nn.functional.cross_entropy(predictions_BLQ, targets_BQ)
+    return torch.nn.functional.cross_entropy(logits_BLQ, targets_BQ)
 
 
 class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
@@ -239,12 +239,12 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         y_query_batch = batch.y_query
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        predictions_QBEL = self.finetuned_estimator_.forward(
+        logits_QBEL = self.finetuned_estimator_.forward(
             X_query_batch,
             return_raw_logits=True,
         )
 
-        Q, B, E, L = predictions_QBEL.shape
+        Q, B, E, L = logits_QBEL.shape
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E
@@ -252,13 +252,13 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
         # Reshape for CE loss: treat estimator dim as batch dim
         # permute to shape (B, E, L, Q) then reshape to (B*E, L, Q)
-        predictions_BLQ = predictions_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
+        logits_BLQ = logits_QBEL.permute(1, 2, 3, 0).reshape(B * E, L, Q)
         targets_BQ = y_query_batch.repeat(B * self.n_estimators_finetune, 1).to(
             self.device
         )
 
-        return compute_classification_loss(
-            predictions_BLQ=predictions_BLQ,
+        return _compute_classification_loss(
+            logits_BLQ=logits_BLQ,
             targets_BQ=targets_BQ,
         )
 
