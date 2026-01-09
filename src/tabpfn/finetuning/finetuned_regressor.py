@@ -36,8 +36,8 @@ def _compute_regression_loss(  # noqa: C901
     targets_BQ: torch.Tensor,
     bardist_loss_fn: Any,
     ce_loss_weight: float = 1.0,
-    rps_loss_weight: float = 0.0,
-    rls_loss_weight: float = 0.0,
+    crps_loss_weight: float = 0.0,
+    crls_loss_weight: float = 0.0,
     mse_loss_weight: float = 0.0,
     mse_loss_clip: float | None = None,
     mae_loss_weight: float = 0.0,
@@ -56,10 +56,11 @@ def _compute_regression_loss(  # noqa: C901
             predictions.
         ce_loss_weight: Weight for the bar distribution negative log-likelihood term
             (cross-entropy-like). Set to 0.0 to disable.
-        rps_loss_weight: Weight for a ranked probability score (RPS) term computed on
-            ordered bar probabilities (squared CDF error). Set to 0.0 to disable.
-        rls_loss_weight: Weight for a ranked logarithmic score (RLS) term computed on
-            ordered bar probabilities (logarithmic score on cumulative
+        crps_loss_weight: Weight for a continuous ranked probability score (CRPS) term
+            computed on ordered bar probabilities (squared CDF error). Set to 0.0 to
+            disable.
+        crls_loss_weight: Weight for a continuous ranked logarithmic score (CRLS) term
+            computed on ordered bar probabilities (logarithmic score on cumulative
             probabilities). Set to 0.0 to disable.
         mse_loss_weight: Weight for an auxiliary MSE term computed on the mean decoded
             prediction. Set to 0.0 to disable.
@@ -73,8 +74,8 @@ def _compute_regression_loss(  # noqa: C901
     """
     weights_to_validate = {
         "ce_loss_weight": ce_loss_weight,
-        "rps_loss_weight": rps_loss_weight,
-        "rls_loss_weight": rls_loss_weight,
+        "crps_loss_weight": crps_loss_weight,
+        "crls_loss_weight": crls_loss_weight,
         "mse_loss_weight": mse_loss_weight,
         "mae_loss_weight": mae_loss_weight,
     }
@@ -89,23 +90,23 @@ def _compute_regression_loss(  # noqa: C901
         ce_losses_BQ = bardist_loss_fn(logits_BQL, targets_BQ)
         total_loss = total_loss + ce_loss_weight * ce_losses_BQ.mean()
 
-    if rps_loss_weight > 0.0:
-        rps_loss = _ranked_probability_score_loss_from_bar_logits(
+    if crps_loss_weight > 0.0:
+        crps_loss = _ranked_probability_score_loss_from_bar_logits(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
-            loss_type="rps",
+            loss_type="crps",
         )
-        total_loss = total_loss + rps_loss_weight * rps_loss
+        total_loss = total_loss + crps_loss_weight * crps_loss
 
-    if rls_loss_weight > 0.0:
-        rls_loss = _ranked_probability_score_loss_from_bar_logits(
+    if crls_loss_weight > 0.0:
+        crls_loss = _ranked_probability_score_loss_from_bar_logits(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
-            loss_type="rls",
+            loss_type="crls",
         )
-        total_loss = total_loss + rls_loss_weight * rls_loss
+        total_loss = total_loss + crls_loss_weight * crls_loss
 
     if mse_loss_weight > 0.0 or mae_loss_weight > 0.0:
         predictions_mean_BQ = bardist_loss_fn.mean(logits_BQL)
@@ -135,7 +136,7 @@ def _ranked_probability_score_loss_from_bar_logits(
     logits_BQL: torch.Tensor,
     targets_BQ: torch.Tensor,
     bardist_loss_fn: Any,
-    loss_type: Literal["rps", "rls"] = "rps",
+    loss_type: Literal["crps", "crls"] = "crps",
 ) -> torch.Tensor:
     """Compute a ranked-probability loss from bar distribution logits.
 
@@ -143,13 +144,16 @@ def _ranked_probability_score_loss_from_bar_logits(
     cumulative distribution function (CDF), using the bar bins as ordered
     categories. Definitions taken from https://scoringrules.readthedocs.io/en/latest/theory.html
 
-        RPS (squared): sum_k=1^K w_k (CDF(k) - y_k)^2
-        RLS (log):     -sum_k=1^K w_k log(|CDF(k) + y_k - 1|)
+        CRPS (squared): sum_k=1^K w_k (CDF(k) - y_k)^2
+        CRLS (log):     -sum_k=1^K w_k log(|CDF(k) + y_k - 1|)
 
     where K is the number of bins, w_k is the width of bin k, CDF(k) is the predicted
     cumulative probability up to bin k, and y_k is the target cumulative
     probability up to bin k.
     The weighting uses bar/bin widths of the bar distribution.
+
+    Note that this is the RPS/RLS loss weighted by the bar/bin widths, so we refer
+    to it as 'Continuous' RPS/CRLS loss, i.e. CRPS/CRLS loss.
 
     Shapes suffixes:
         B=batch * estimators, L=logits, Q=n_queries.
@@ -159,8 +163,8 @@ def _ranked_probability_score_loss_from_bar_logits(
         targets_BQ: Targets of shape (B, Q)
         bardist_loss_fn: The BarDistribution instance used for bin mapping and
             bucket index mapping.
-        loss_type: Which variant to compute. "rps" uses squared CDF differences,
-            "rls" uses a log score applied to the cumulative probabilities.
+        loss_type: Which variant to compute. "crps" uses squared CDF differences,
+            "crls" uses a log score applied to the cumulative probabilities.
 
     Returns:
         A scalar mean loss.
@@ -190,7 +194,7 @@ def _ranked_probability_score_loss_from_bar_logits(
         probs_BQL.dtype
     )
 
-    if loss_type == "rps":
+    if loss_type == "crps":
         cdf_diff_BQL = pred_cdf_BQL - target_cdf_BQL
         cdf_term_losses_BQL = cdf_diff_BQL.square()
     else:
@@ -203,12 +207,12 @@ def _ranked_probability_score_loss_from_bar_logits(
         ) * (-torch.log1p(-cdf))
 
     weighted_term_losses_BQL = cdf_term_losses_BQL * bucket_widths_L.view(1, 1, -1)
-    rps_losses_BQ = weighted_term_losses_BQL.sum(dim=-1)
+    crps_losses_BQ = weighted_term_losses_BQL.sum(dim=-1)
 
     if ignore_loss_mask_BQ.any():
-        rps_losses_BQ[ignore_loss_mask_BQ] = 0.0
+        crps_losses_BQ[ignore_loss_mask_BQ] = 0.0
 
-    return rps_losses_BQ.mean()
+    return crps_losses_BQ.mean()
 
 
 class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
@@ -277,11 +281,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             underlying `TabPFNRegressor`, such as `n_estimators`.
         ce_loss_weight: Weight for the bar distribution negative log-likelihood term
             (cross-entropy-like). Defaults to 0.0.
-        rps_loss_weight: Weight for the ranked probability score (RPS) term computed
-            on ordered bar probabilities (squared CDF error). Defaults to 1.0.
-        rls_loss_weight: Weight for the ranked logarithmic score (RLS) term computed
-            on ordered bar probabilities (log score on cumulative probabilities).
-            Defaults to 0.0.
+        crps_loss_weight: Weight for the continuous ranked probability score (CRPS) term
+            computed on ordered bar probabilities (squared CDF error). Defaults to 1.0.
+        crls_loss_weight: Weight for the continuous ranked logarithmic score (CRLS) term
+            computed on ordered bar probabilities (log score on cumulative
+            probabilities). Defaults to 0.0.
         mse_loss_weight: Weight for an auxiliary MSE loss term added to the
             bar distribution loss. Set to 0.0 to disable. Defaults to 1.0.
         mse_loss_clip: Optional upper bound for the auxiliary MSE loss term.
@@ -317,8 +321,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         save_checkpoint_interval: int | None = 10,
         extra_regressor_kwargs: dict[str, Any] | None = None,
         ce_loss_weight: float = 0.0,
-        rps_loss_weight: float = 1.0,
-        rls_loss_weight: float = 0.0,
+        crps_loss_weight: float = 1.0,
+        crls_loss_weight: float = 0.0,
         mse_loss_weight: float = 1.0,
         mse_loss_clip: float | None = None,
         mae_loss_weight: float = 0.0,
@@ -348,8 +352,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.ce_loss_weight = ce_loss_weight
-        self.rps_loss_weight = rps_loss_weight
-        self.rls_loss_weight = rls_loss_weight
+        self.crps_loss_weight = crps_loss_weight
+        self.crls_loss_weight = crls_loss_weight
         self.mse_loss_weight = mse_loss_weight
         self.mse_loss_clip = mse_loss_clip
         self.mae_loss_weight = mae_loss_weight
@@ -439,8 +443,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
             ce_loss_weight=self.ce_loss_weight,
-            rps_loss_weight=self.rps_loss_weight,
-            rls_loss_weight=self.rls_loss_weight,
+            crps_loss_weight=self.crps_loss_weight,
+            crls_loss_weight=self.crls_loss_weight,
             mse_loss_weight=self.mse_loss_weight,
             mse_loss_clip=self.mse_loss_clip,
             mae_loss_weight=self.mae_loss_weight,
