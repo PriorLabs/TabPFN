@@ -174,7 +174,6 @@ def _try_huggingface_downloads(
         model_name: Optional specific model name to download.
         suppress_warnings: Whether to suppress HF token warnings.
     """
-    """Try to download models and config using the HuggingFace Hub API."""
     try:
         from huggingface_hub import hf_hub_download  # noqa: PLC0415
 
@@ -188,7 +187,7 @@ def _try_huggingface_downloads(
             "Please install huggingface_hub: pip install huggingface-hub",
         ) from e
 
-    if model_name:
+    if model_name is not None:
         if model_name not in source.filenames:
             raise ValueError(
                 f"Model {model_name} not found in available models: {source.filenames}",
@@ -355,6 +354,18 @@ def download_model(
         _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
         return "ok"
     except Exception as e:  # noqa: BLE001
+        if version == ModelVersion.V2_5:
+            filename_for_logs = model_name or model_source.default_filename
+            errors.append(
+                RuntimeError(
+                    _format_v2_5_huggingface_download_error_message(
+                        filename=filename_for_logs,
+                        underlying_error=e,
+                    )
+                )
+            )
+            return errors
+
         logger.warning("HuggingFace download failed.")
         errors.append(e)
 
@@ -367,11 +378,6 @@ def download_model(
         except Exception as e:  # noqa: BLE001
             logger.warning(f"Direct URL downloads failed: {e!s}")
             errors.append(e)
-    else:
-        logger.warning(
-            "For commercial usage, we provide alternative download options for v2.5, "
-            "please reach out to us at sales@priorlabs.ai."
-        )
 
     return errors
 
@@ -398,6 +404,23 @@ def download_all_models(to: Path) -> None:
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
+
+
+def _format_v2_5_huggingface_download_error_message(
+    *,
+    filename: str,
+    underlying_error: Exception,
+) -> str:
+    """Return a clear error message for v2.5 Hugging Face download failures."""
+    underlying_error_summary = (
+        f"{type(underlying_error).__name__}: {underlying_error!s}".strip()
+    )
+    return (
+        f"Failed to download TabPFN v2.5 model '{filename}' from Hugging Face.\n\n"
+        f"Underlying error:\n{underlying_error_summary}\n\n"
+        "For commercial usage, we provide alternative download options for v2.5; "
+        "please reach out to us at sales@priorlabs.ai."
+    )
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
