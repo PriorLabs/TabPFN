@@ -33,6 +33,7 @@ from tabpfn.architectures.base.bar_distribution import (
     FullSupportBarDistribution,
 )
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.settings import settings
@@ -243,29 +244,10 @@ def _try_huggingface_downloads(
 
         except (GatedRepoError, HfHubHTTPError) as e:
             # Check if this is an authentication/gating error
-            is_auth_error = False
             if isinstance(e, GatedRepoError) or (
                 isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
             ):
-                is_auth_error = True
-
-            if is_auth_error:
-                auth_message = (
-                    f"Authentication error downloading from '{source.repo_id}'.\n"
-                    "This model is gated and requires you to accept its terms.\n\n"
-                    "Please follow these steps:\n"
-                    f"1. Visit https://huggingface.co/{source.repo_id} in your "
-                    f"browser and"
-                    f" accept the terms of use.\n"
-                    "2. Log in to your Hugging Face account via"
-                    " the command line by running:\n"
-                    "   hf auth login\n"
-                    "(Alternatively, you can set the HF_TOKEN environment variable"
-                    " with a read token).\n\n"
-                    "For detailed instructions, see "
-                    "https://docs.priorlabs.ai/how-to-access-gated-models"
-                )
-                raise RuntimeError(auth_message)  # noqa: B904
+                raise TabPFNHuggingFaceGatedRepoError(source.repo_id)  # noqa: B904
             raise e
 
 
@@ -354,14 +336,20 @@ def download_model(
         _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
         return "ok"
     except Exception as e:  # noqa: BLE001
-        if version == ModelVersion.V2_5:
+        if isinstance(
+            e, TabPFNHuggingFaceGatedRepoError
+        ) and not _version_has_direct_download_option(version):
             filename_for_logs = model_name or model_source.default_filename
+            # We wrap the HF error in the RuntimeError with a commercial message
+            # to make it easier for the user to see the instructions about
+            # authenticating with HuggingFace.
             errors.append(
                 RuntimeError(
-                    _format_v2_5_huggingface_download_error_message(
-                        filename=filename_for_logs,
-                        underlying_error=e,
-                    )
+                    f"Failed to download TabPFN {version} model '{filename_for_logs}'."
+                    f"\n\nDetails and instructions:\n{e!s}\n\n"
+                    f"For commercial usage, we provide alternative download options "
+                    f"for TabPFN {version}; please reach out to us at "
+                    "sales@priorlabs.ai."
                 )
             )
             return errors
@@ -371,7 +359,7 @@ def download_model(
 
     # For Version 2.5 we require gating, which we don't have in place for direct
     # downloads.
-    if version == ModelVersion.V2:
+    if _version_has_direct_download_option(version):
         try:
             _try_direct_downloads(to, model_source, model_name)
             return "ok"
@@ -406,21 +394,9 @@ def download_all_models(to: Path) -> None:
             )
 
 
-def _format_v2_5_huggingface_download_error_message(
-    *,
-    filename: str,
-    underlying_error: Exception,
-) -> str:
-    """Return a clear error message for v2.5 Hugging Face download failures."""
-    underlying_error_summary = (
-        f"{type(underlying_error).__name__}: {underlying_error!s}".strip()
-    )
-    return (
-        f"Failed to download TabPFN v2.5 model '{filename}' from Hugging Face.\n\n"
-        f"Underlying error:\n{underlying_error_summary}\n\n"
-        "For commercial usage, we provide alternative download options for v2.5; "
-        "please reach out to us at sales@priorlabs.ai."
-    )
+def _version_has_direct_download_option(version: ModelVersion) -> bool:
+    """Determine if a version has a direct download option."""
+    return version == ModelVersion.V2
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
