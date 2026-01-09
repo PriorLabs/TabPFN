@@ -27,7 +27,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
 from tabpfn.preprocessing.clean import fix_dtypes
-from tabpfn.validation import validate_X_predict
+from tabpfn.validation import ensure_compatible_input_sklearn_X_predict
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -96,7 +96,7 @@ def get_embeddings(
         RegressorEnsembleConfig,
     )
 
-    X = validate_X_predict(X, model)
+    X = ensure_compatible_input_sklearn_X_predict(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 

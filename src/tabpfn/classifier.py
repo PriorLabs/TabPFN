@@ -79,10 +79,10 @@ from tabpfn.utils import (
     infer_random_state,
 )
 from tabpfn.validation import (
-    validate_differentiable_inputs,
-    validate_inputs,
+    ensure_compatible_differentiable_inputs,
+    ensure_compatible_input_sklearn_X_predict,
+    ensure_compatible_inputs,
     validate_num_classes,
-    validate_X_predict,
 )
 
 if TYPE_CHECKING:
@@ -550,10 +550,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], torch.Tensor, torch.Tensor]:
         """Initialize the model for differentiable input."""
-        X, y = validate_differentiable_inputs(
+        X, y = ensure_compatible_differentiable_inputs(
             X=X,
             y=y,
-            inference_config=self.inference_config_,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
             devices=self.devices_,
         )
@@ -600,7 +601,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
         # NumPy arrays. In a follow-up PR, we will fix this.
-        X, y, feature_names, n_features = validate_inputs(
+        X, y, feature_names, n_features = ensure_compatible_inputs(
             X,
             y,
             estimator=self,
@@ -993,7 +994,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = validate_X_predict(X, self)
+            X = ensure_compatible_input_sklearn_X_predict(X, self)
             # TODO: The below steps should be handled by a "data sanitizer object"
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             X = process_text_na_dataframe(

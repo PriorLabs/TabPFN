@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.preprocessing.tag import infer_categorical_features
+from tabpfn.preprocessing.type_detection import infer_categorical_features
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

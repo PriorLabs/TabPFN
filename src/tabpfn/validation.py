@@ -26,34 +26,9 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
-    from tabpfn.inference_config import InferenceConfig
 
 
-def validate_differentiable_inputs(
-    X: torch.Tensor,
-    y: torch.Tensor,
-    *,
-    inference_config: InferenceConfig,
-    ignore_pretraining_limits: bool,
-    devices: tuple[torch.device, ...],
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Validate and convert inputs to compatible format for differentiable input."""
-    X, y = _validate_Xy_fit_differentiable_input(
-        X,
-        y,
-        max_num_samples=inference_config.MAX_NUMBER_OF_SAMPLES,
-        max_num_features=inference_config.MAX_NUMBER_OF_FEATURES,
-        ignore_pretraining_limits=ignore_pretraining_limits,
-    )
-    _check_cpu_warning_for_num_samples(
-        devices=devices,
-        num_samples=X.shape[0],
-        allow_cpu_override=ignore_pretraining_limits,
-    )
-    return X, y
-
-
-def validate_inputs(
+def ensure_compatible_inputs(
     X: XType,
     y: YType,
     *,
@@ -65,16 +40,20 @@ def validate_inputs(
     devices: tuple[torch.device, ...],
 ) -> tuple[np.ndarray, np.ndarray, list[str] | None, int]:
     """Validate and convert inputs to compatible format."""
-    X, y, feature_names_in, n_features_in = validate_Xy_fit(
+    X, y, feature_names_in, n_features_in = ensure_compatible_inputs_sklearn(
         X,
         y,
         estimator=estimator,
         ensure_y_numeric=ensure_y_numeric,
+    )
+    _validate_dataset_size(
+        num_features=X.shape[1],
+        num_samples=X.shape[0],
         max_num_samples=max_num_samples,
         max_num_features=max_num_features,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    _check_cpu_warning_for_num_samples(
+    _validate_num_samples_for_cpu(
         devices=devices,
         num_samples=X.shape[0],
         allow_cpu_override=ignore_pretraining_limits,
@@ -82,33 +61,71 @@ def validate_inputs(
     return X, y, feature_names_in, n_features_in
 
 
-def validate_num_classes(
-    num_classes: int,
-    max_num_classes: int,
-) -> None:
-    """Validate the number of classes.
+def ensure_compatible_input_sklearn_X_predict(
+    X: XType,
+    estimator: TabPFNRegressor | TabPFNClassifier,
+) -> np.ndarray:
+    """Validate and convert the input data for prediction.
 
-    Raises a TabPFNValidationError if the number of classes exceeds the maximum
-    number of classes officially supported by TabPFN.
+    Note that this also changes the type of X to np.ndarray.
     """
-    if num_classes > max_num_classes:
-        raise TabPFNValidationError(
-            f"Number of classes `{num_classes}` exceeds the maximum number of "
-            f"classes `{max_num_classes}` officially supported by TabPFN.",
+    result = validate_data(
+        estimator,
+        X=X,
+        # NOTE: Important that reset is False, i.e. doesn't reset estimator
+        reset=False,
+        # Parameters to `check_X_y()`
+        accept_sparse=False,
+        dtype=None,
+        ensure_all_finite="allow-nan",
+        estimator=estimator,
+    )
+    return typing.cast("np.ndarray", result)
+
+
+def ensure_compatible_differentiable_inputs(
+    X: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    max_num_samples: int,
+    max_num_features: int,
+    ignore_pretraining_limits: bool,
+    devices: tuple[torch.device, ...],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Validate and convert inputs to compatible format for differentiable input."""
+    if len(X) != len(y):
+        raise ValueError(
+            f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
         )
+    if len(X.shape) != 2:
+        raise ValueError(
+            f"The input data X is not a 2D array. Got shape: {X.shape}",
+        )
+    _validate_dataset_size(
+        num_features=X.shape[1],
+        num_samples=X.shape[0],
+        max_num_samples=max_num_samples,
+        max_num_features=max_num_features,
+        ignore_pretraining_limits=ignore_pretraining_limits,
+    )
+    _validate_num_samples_for_cpu(
+        devices=devices,
+        num_samples=X.shape[0],
+        allow_cpu_override=ignore_pretraining_limits,
+    )
+    return X, y
 
 
-def validate_Xy_fit(
+def ensure_compatible_inputs_sklearn(
     X: XType,
     y: YType,
     estimator: TabPFNRegressor | TabPFNClassifier,
     *,
-    max_num_features: int,
-    max_num_samples: int,
     ensure_y_numeric: bool = False,
-    ignore_pretraining_limits: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting with standard input.
+
+    Note that this also changes the type of X and y to np.ndarray.
 
     Args:
         X: The input data.
@@ -139,14 +156,6 @@ def validate_Xy_fit(
         estimator=estimator,
     )
 
-    _validate_dataset_size(
-        num_features=X.shape[1],
-        num_samples=X.shape[0],
-        max_num_features=max_num_features,
-        max_num_samples=max_num_samples,
-        ignore_pretraining_limits=ignore_pretraining_limits,
-    )
-
     if is_classifier(estimator):
         check_classification_targets(y)
         # Annoyingly, the `ensure_all_finite` above only applies to `X` and
@@ -169,67 +178,27 @@ def validate_Xy_fit(
     return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
 
 
-def validate_X_predict(
-    X: XType,
-    estimator: TabPFNRegressor | TabPFNClassifier,
-) -> np.ndarray:
-    """Validate the input data for prediction."""
-    result = validate_data(
-        estimator,
-        X=X,
-        # NOTE: Important that reset is False, i.e. doesn't reset estimator
-        reset=False,
-        # Parameters to `check_X_y()`
-        accept_sparse=False,
-        dtype=None,
-        ensure_all_finite="allow-nan",
-        estimator=estimator,
-    )
-    return typing.cast("np.ndarray", result)
+def validate_num_classes(
+    num_classes: int,
+    max_num_classes: int,
+) -> None:
+    """Validate the number of classes.
 
-
-def _validate_Xy_fit_differentiable_input(
-    X: torch.Tensor,
-    y: torch.Tensor,
-    *,
-    max_num_features: int,
-    max_num_samples: int,
-    ignore_pretraining_limits: bool = False,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Validate the input data for fitting with differentiable input.
-
-    Args:
-        X: The input data.
-        y: The target data.
-        max_num_features: The maximum number of features to allow.
-        max_num_samples: The maximum number of samples to allow.
-        ignore_pretraining_limits: Whether to ignore the pretraining limits.
+    Raises a TabPFNValidationError if the number of classes exceeds the maximum
+    number of classes officially supported by TabPFN.
     """
-    if len(X) != len(y):
-        raise ValueError(
-            f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
+    if num_classes > max_num_classes:
+        raise TabPFNValidationError(
+            f"Number of classes `{num_classes}` exceeds the maximum number of "
+            f"classes `{max_num_classes}` officially supported by TabPFN.",
         )
-    if len(X.shape) != 2:
-        raise ValueError(
-            f"The input data X is not a 2D array. Got shape: {X.shape}",
-        )
-
-    _validate_dataset_size(
-        num_features=X.shape[1],
-        num_samples=X.shape[0],
-        max_num_features=max_num_features,
-        max_num_samples=max_num_samples,
-        ignore_pretraining_limits=ignore_pretraining_limits,
-    )
-
-    return X, y
 
 
 def _validate_dataset_size(
     num_features: int,
     num_samples: int,
-    max_num_features: int,
     max_num_samples: int,
+    max_num_features: int,
     *,
     ignore_pretraining_limits: bool = False,
 ) -> None:
@@ -243,13 +212,6 @@ def _validate_dataset_size(
     if ignore_pretraining_limits:
         return
 
-    if num_features > max_num_features:
-        raise TabPFNValidationError(
-            f"Number of features `{num_features}` in the input data is greater than "
-            f"the maximum number of features `{max_num_features}` officially "
-            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
-            "to override this error!",
-        )
     if num_samples > max_num_samples:
         raise TabPFNValidationError(
             f"Number of samples `{num_samples:,}` in the input data is greater than "
@@ -257,9 +219,16 @@ def _validate_dataset_size(
             f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
             f"error!",
         )
+    if num_features > max_num_features:
+        raise TabPFNValidationError(
+            f"Number of features `{num_features}` in the input data is greater than "
+            f"the maximum number of features `{max_num_features}` officially "
+            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
+            "to override this error!",
+        )
 
 
-def _check_cpu_warning_for_num_samples(
+def _validate_num_samples_for_cpu(
     devices: Sequence[torch.device],
     num_samples: int,
     *,

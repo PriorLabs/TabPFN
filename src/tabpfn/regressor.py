@@ -74,8 +74,8 @@ from tabpfn.utils import (
     translate_probs_across_borders,
 )
 from tabpfn.validation import (
-    validate_inputs,
-    validate_X_predict,
+    ensure_compatible_input_sklearn_X_predict,
+    ensure_compatible_inputs,
 )
 
 if TYPE_CHECKING:
@@ -587,7 +587,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
         # NumPy arrays. In a follow-up PR, we will fix this.
-        X, y, feature_names, n_features = validate_inputs(
+        X, y, feature_names, n_features = ensure_compatible_inputs(
             X,
             y,
             estimator=self,
@@ -894,7 +894,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X = validate_X_predict(X, self)
+        X = ensure_compatible_input_sklearn_X_predict(X, self)
 
         check_is_fitted(self)
 
