@@ -162,8 +162,8 @@ def ensure_compatible_inputs_sklearn(
         # there is no way to specify this for `y`. The validation check above
         # will also only check for NaNs in `y` if `multi_output=True` which is
         # something we don't want. Hence, we run another check on `y` here.
-        # However we also have to consider if ther dtype is a string type,
-        # then
+        # However, we also have to consider that if the dtype is a string type,
+        # then we still want to run finite checks without forcing a numeric dtype.
         y = check_array(
             y,
             accept_sparse=False,

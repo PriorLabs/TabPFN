@@ -41,7 +41,7 @@ def fix_dtypes(  # noqa: D103
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
         elif X.dtype.kind in OBJECT_DTYPE_KINDS:
-            # If numpy and object dype, we rely on pandas to handle introspection
+            # If numpy and object dtype, we rely on pandas to handle introspection
             # of columns and rows to determine the dtypes.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
