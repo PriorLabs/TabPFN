@@ -268,102 +268,102 @@ def determine_precision(
 
 def create_inference_engine(  # noqa: PLR0913
     *,
+    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
     X_train: np.ndarray,
     y_train: np.ndarray,
-    models: list[Architecture],
-    ensemble_configs: Any,
     cat_ix: list[int],
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
+    ensemble_configs: Any,
+    models: list[Architecture],
     devices_: Sequence[torch.device],
-    rng: np.random.Generator,
-    n_preprocessing_jobs: int,
     byte_size: int,
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: bool | Literal["auto"] | float | int,
+    rng: np.random.Generator,
+    n_preprocessing_jobs: int,
     use_autocast_: bool,
     inference_mode: bool = True,
 ) -> InferenceEngine:
-    """Creates the appropriate TabPFN inference engine based on `fit_mode`.
+    """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
     Each execution mode will perform slightly different operations based on the mode
-    specified by the user. In the case where preprocessors will be fit after `prepare`,
-    we will use them to further transform the associated borders with each ensemble
-    config member.
+    specified by the user. In the case where preprocessors will be fit during
+    initialization, we will use them to further transform the associated borders with
+    each ensemble config member.
 
     Args:
+        fit_mode: Determines how we prepare inference (pre-cache or not).
         X_train: Training features
         y_train: Training target
-        models: The loaded TabPFN models.
-        ensemble_configs: The ensemble configurations to create multiple "prompts".
         cat_ix: Indices of inferred categorical features.
-        fit_mode: Determines how we prepare inference (pre-cache or not).
+        ensemble_configs: The ensemble configurations to create multiple "prompts".
+        models: The loaded TabPFN models.
         devices_: The devices for inference.
-        rng: Numpy random generator.
-        n_preprocessing_jobs: Number of parallel CPU workers to use for the
-            preprocessing.
         byte_size: Byte size for the chosen inference precision.
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
+        rng: Numpy random generator.
+        n_preprocessing_jobs: Number of parallel CPU workers to use for the
+            preprocessing.
         use_autocast_: Whether we use torch.autocast for inference.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
     """
     if fit_mode == "low_memory":
-        return InferenceEngineOnDemand.prepare(
+        return InferenceEngineOnDemand(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
-            rng=rng,
             models=models,
             devices=devices_,
-            n_preprocessing_jobs=n_preprocessing_jobs,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            rng=rng,
+            n_preprocessing_jobs=n_preprocessing_jobs,
         )
     if fit_mode == "fit_preprocessors":
-        return InferenceEngineCachePreprocessing.prepare(
+        return InferenceEngineCachePreprocessing(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
             ensemble_configs=ensemble_configs,
             models=models,
             devices=devices_,
-            n_preprocessing_jobs=n_preprocessing_jobs,
-            rng=rng,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            rng=rng,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             inference_mode=inference_mode,
         )
     if fit_mode == "fit_with_cache":
-        return InferenceEngineCacheKV.prepare(
+        return InferenceEngineCacheKV(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            models=models,
             ensemble_configs=ensemble_configs,
-            n_preprocessing_jobs=n_preprocessing_jobs,
+            models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
-            rng=rng,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            rng=rng,
+            n_preprocessing_jobs=n_preprocessing_jobs,
             autocast=use_autocast_,
         )
     if fit_mode == "batched":
-        return InferenceEngineBatchedNoPreprocessing.prepare(
-            X_trains=X_train,
-            y_trains=y_train,
-            cat_ix=cat_ix,
+        return InferenceEngineBatchedNoPreprocessing(
+            X_trains=X_train,  # pyright: ignore[reportArgumentType]
+            y_trains=y_train,  # pyright: ignore[reportArgumentType]
+            cat_ix=cat_ix,  # pyright: ignore[reportArgumentType]
+            ensemble_configs=ensemble_configs,
             models=models,
             devices=devices_,
-            ensemble_configs=ensemble_configs,
-            force_inference_dtype=forced_inference_dtype_,
-            inference_mode=inference_mode,
-            save_peak_mem=memory_saving_mode,
             dtype_byte_size=byte_size,
+            force_inference_dtype=forced_inference_dtype_,
+            save_peak_mem=memory_saving_mode,
+            inference_mode=inference_mode,
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")

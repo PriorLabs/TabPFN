@@ -90,7 +90,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
     X_test = rng.standard_normal(size=(2, n_features))
 
-    engine = InferenceEngineCachePreprocessing.prepare(
+    engine = InferenceEngineCachePreprocessing(
         X_train,
         y_train,
         cat_ix=[] * n_train,
@@ -140,7 +140,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
 
     num_models = 3
     models = [TestModel() for _ in range(num_models)]
-    engine = InferenceEngineOnDemand.prepare(
+    engine = InferenceEngineOnDemand(
         X_train,
         y_train,
         cat_ix=[] * n_train,
