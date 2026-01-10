@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
 
 
-def ensure_compatible_inputs(
+def ensure_compatible_fit_inputs(
     X: XType,
     y: YType,
     *,
@@ -40,7 +40,7 @@ def ensure_compatible_inputs(
     devices: tuple[torch.device, ...],
 ) -> tuple[np.ndarray, np.ndarray, list[str] | None, int]:
     """Validate and convert inputs to compatible format."""
-    X, y, feature_names_in, n_features_in = ensure_compatible_inputs_sklearn(
+    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
         X,
         y,
         estimator=estimator,
@@ -61,7 +61,7 @@ def ensure_compatible_inputs(
     return X, y, feature_names_in, n_features_in
 
 
-def ensure_compatible_input_sklearn_X_predict(
+def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
@@ -116,7 +116,7 @@ def ensure_compatible_differentiable_inputs(
     return X, y
 
 
-def ensure_compatible_inputs_sklearn(
+def ensure_compatible_fit_inputs_sklearn(
     X: XType,
     y: YType,
     estimator: TabPFNRegressor | TabPFNClassifier,

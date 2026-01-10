@@ -39,7 +39,7 @@ from tabpfn.finetuning.train_util import (
     save_checkpoint,
 )
 from tabpfn.utils import infer_devices
-from tabpfn.validation import ensure_compatible_inputs_sklearn
+from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +436,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
-        X, y, _, _ = ensure_compatible_inputs_sklearn(
+        X, y, _, _ = ensure_compatible_fit_inputs_sklearn(
             X,
             y,
             estimator=self.finetuned_estimator_,

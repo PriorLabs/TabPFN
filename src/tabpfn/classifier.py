@@ -80,8 +80,8 @@ from tabpfn.utils import (
 )
 from tabpfn.validation import (
     ensure_compatible_differentiable_inputs,
-    ensure_compatible_input_sklearn_X_predict,
-    ensure_compatible_inputs,
+    ensure_compatible_fit_inputs,
+    ensure_compatible_predict_input_sklearn,
     validate_num_classes,
 )
 
@@ -601,7 +601,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
         # NumPy arrays. In a follow-up PR, we will fix this.
-        X, y, feature_names, n_features = ensure_compatible_inputs(
+        X, y, feature_names, n_features = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -994,7 +994,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = ensure_compatible_input_sklearn_X_predict(X, self)
+            X = ensure_compatible_predict_input_sklearn(X, self)
             # TODO: The below steps should be handled by a "data sanitizer object"
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             X = process_text_na_dataframe(

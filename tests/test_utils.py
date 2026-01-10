@@ -19,7 +19,7 @@ from tabpfn.utils import (
     balance_probas_by_class_counts,
     infer_devices,
 )
-from tabpfn.validation import ensure_compatible_inputs_sklearn
+from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 
 def test_infer_categorical_with_str_and_nan_provided_included():
@@ -279,14 +279,11 @@ def prepared_tabpfn_data(request):
 
     cls = TabPFNClassifier()
 
-    X, y, feature_names_in, n_features_in = ensure_compatible_inputs_sklearn(
+    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
         temp_df,
         y,
         estimator=cls,
         ensure_y_numeric=False,
-        max_num_samples=InferenceConfig.MAX_NUMBER_OF_SAMPLES,
-        max_num_features=InferenceConfig.MAX_NUMBER_OF_FEATURES,
-        ignore_pretraining_limits=False,
     )
 
     if feature_names_in is not None:
