@@ -8,37 +8,33 @@ import contextlib
 import os
 import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Literal, Union
 
 import numpy as np
 import numpy.typing as npt
-import pandas as pd
 import torch
 from sklearn.base import (
     TransformerMixin,
     check_is_fitted,
-    is_classifier,
 )
-from sklearn.utils.multiclass import check_classification_targets
 
 from tabpfn.architectures.base.encoders import (
     MulticlassClassificationTargetEncoder,
     SequentialEncoder,
 )
 from tabpfn.constants import (
-    NA_PLACEHOLDER,
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
-from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
-    from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.interface import Architecture
-    from tabpfn.classifier import TabPFNClassifier, XType, YType
+    from tabpfn.classifier import TabPFNClassifier, XType
     from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
@@ -100,7 +96,7 @@ def get_embeddings(
         RegressorEnsembleConfig,
     )
 
-    X = validate_X_predict(X, model)
+    X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.preprocessor_.transform(X)
 
@@ -345,254 +341,6 @@ def infer_fp16_inference_mode(
     raise ValueError(f"Unrecognized argument '{enable}'")
 
 
-# https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
-NUMERIC_DTYPE_KINDS = "?bBiufm"
-OBJECT_DTYPE_KINDS = "OV"
-STRING_DTYPE_KINDS = "SaU"
-UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
-
-
-def fix_dtypes(  # noqa: D103
-    X: pd.DataFrame | np.ndarray,
-    cat_indices: Sequence[int | str] | None,
-    numeric_dtype: Literal["float32", "float64"] = "float64",
-) -> pd.DataFrame:
-    if isinstance(X, pd.DataFrame):
-        # This will help us get better dtype inference later
-        convert_dtype = True
-    elif isinstance(X, np.ndarray):
-        if X.dtype.kind in NUMERIC_DTYPE_KINDS:
-            # It's a numeric type, just wrap the array in pandas with the correct dtype
-            X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
-            convert_dtype = False
-        elif X.dtype.kind in OBJECT_DTYPE_KINDS:
-            # If numpy and object dype, we rely on pandas to handle introspection
-            # of columns and rows to determine the dtypes.
-            X = pd.DataFrame(X, copy=True)
-            convert_dtype = True
-        elif X.dtype.kind in STRING_DTYPE_KINDS:
-            raise ValueError(
-                f"String dtypes are not supported. Got dtype: {X.dtype}",
-            )
-        else:
-            raise ValueError(f"Invalid dtype for X: {X.dtype}")
-    else:
-        raise ValueError(f"Invalid type for X: {type(X)}")
-
-    if cat_indices is not None:
-        # So annoyingly, things like AutoML Benchmark may sometimes provide
-        # numeric indices for categoricals, while providing named columns in the
-        # dataframe. Equally, dataframes loaded from something like a csv may just have
-        # integer column names, and so it makes sense to access them just like you would
-        # string columns.
-        # Hence, we check if the types match and decide whether to use `iloc` to select
-        # columns, or use the indices as column names...
-        is_numeric_indices = all(isinstance(i, (int, np.integer)) for i in cat_indices)
-        columns_are_numeric = all(
-            isinstance(col, (int, np.integer)) for col in X.columns.tolist()
-        )
-        use_iloc = is_numeric_indices and not columns_are_numeric
-        if use_iloc:
-            X.iloc[:, cat_indices] = X.iloc[:, cat_indices].astype("category")
-        else:
-            X[cat_indices] = X[cat_indices].astype("category")
-
-    # Alright, pandas can have a few things go wrong.
-    #
-    # 1. Of course, object dtypes, `convert_dtypes()` will handle this for us if
-    #   possible. This will raise later if can't convert.
-    # 2. String dtypes can still exist, OrdinalEncoder will do something but
-    #   it's not ideal. We should probably check unique counts at the expense of doing
-    #   so.
-    # 3. For all dtypes relating to timeseries and other _exotic_ types not supported by
-    #   numpy, we leave them be and let the pipeline error out where it will.
-    # 4. Pandas will convert dtypes to Int64Dtype/Float64Dtype, which include
-    #   `pd.NA`. Sklearn's Ordinal encoder treats this differently than `np.nan`.
-    #   We can fix this one by converting all numeric columns to float64, which uses
-    #   `np.nan` instead of `pd.NA`.
-    #
-    if convert_dtype:
-        X = X.convert_dtypes()
-
-    integer_columns = X.select_dtypes(include=["number"]).columns
-    if len(integer_columns) > 0:
-        X[integer_columns] = X[integer_columns].astype(numeric_dtype)
-    return X
-
-
-def validate_Xy_fit(
-    X: XType,
-    y: YType,
-    estimator: TabPFNRegressor | TabPFNClassifier,
-    *,
-    max_num_features: int,
-    max_num_samples: int,
-    ensure_y_numeric: bool = False,
-    ignore_pretraining_limits: bool = False,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
-    """Validate the input data for fitting.
-
-    Args:
-        X: The input data.
-        y: The target data.
-        estimator: The estimator to validate the data for.
-        max_num_features: The maximum number of features to allow.
-            Ignored if `ignore_pretraining_limits` is True.
-        max_num_samples: The maximum number of samples to allow.
-            Ignored if `ignore_pretraining_limits` is True.
-        ensure_y_numeric: Whether to ensure the target data is numeric.
-        ignore_pretraining_limits: Whether to ignore the pretraining limits.
-
-    Returns:
-        A tuple of the validated input data X, target data y, feature names,
-        and number of features.
-    """
-    # Calls `validate_data()` with specification
-
-    # Checks that we do not call validate_data() in case
-    # the Prompttuning is enabled, since it is not differentiable.
-    # TODO: update then Prompttuning is enabled for diffable models
-    if not is_classifier(estimator) or (
-        is_classifier(estimator) and not estimator.differentiable_input
-    ):
-        X, y = validate_data(
-            estimator,
-            X=X,
-            y=y,
-            # Parameters to `check_X_y()`
-            accept_sparse=False,
-            dtype=None,  # This is handled later in `fit()`
-            ensure_all_finite="allow-nan",
-            ensure_min_samples=2,
-            ensure_min_features=1,
-            y_numeric=ensure_y_numeric,
-            estimator=estimator,
-        )
-    else:  # Quick check for tensor input for diffable classifier
-        assert isinstance(X, torch.Tensor)
-        assert isinstance(y, torch.Tensor)
-        assert len(X) == len(y)
-        assert len(X.shape) == 2
-        estimator.n_features_in_ = X.shape[1]
-
-    if X.shape[1] > max_num_features and not ignore_pretraining_limits:
-        raise ValueError(
-            f"Number of features {X.shape[1]} in the input data is greater than "
-            f"the maximum number of features {max_num_features} officially "
-            "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
-            "to override this error!",
-        )
-    if X.shape[0] > max_num_samples and not ignore_pretraining_limits:
-        raise ValueError(
-            f"Number of samples {X.shape[0]} in the input data is greater than "
-            f"the maximum number of samples {max_num_samples} officially supported"
-            f" by TabPFN. Set `ignore_pretraining_limits=True` to override this "
-            f"error!",
-        )
-
-    if is_classifier(estimator) and not estimator.differentiable_input:
-        check_classification_targets(y)
-        # Annoyingly, the `ensure_all_finite` above only applies to `X` and
-        # there is no way to specify this for `y`. The validation check above
-        # will also only check for NaNs in `y` if `multi_output=True` which is
-        # something we don't want. Hence, we run another check on `y` here.
-        # However we also have to consider if ther dtype is a string type,
-        # then
-        y = check_array(
-            y,
-            accept_sparse=False,
-            ensure_all_finite=True,
-            dtype=None,  # type: ignore
-            ensure_2d=False,
-        )
-
-    # NOTE: Theoretically we don't need to return the feature names and number,
-    # but it makes it clearer in the calling code that these variables now exist
-    # and can be set on the estimator.
-
-    return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
-
-
-def validate_X_predict(
-    X: XType,
-    estimator: TabPFNRegressor | TabPFNClassifier,
-) -> np.ndarray:
-    """Validate the input data for prediction."""
-    result = validate_data(
-        estimator,
-        X=X,
-        # NOTE: Important that reset is False, i.e. doesn't reset estimator
-        reset=False,
-        # Parameters to `check_X_y()`
-        accept_sparse=False,
-        dtype=None,
-        ensure_all_finite="allow-nan",
-        estimator=estimator,
-    )
-    return typing.cast("np.ndarray", result)
-
-
-def infer_categorical_features(
-    X: np.ndarray,
-    *,
-    provided: Sequence[int] | None,
-    min_samples_for_inference: int,
-    max_unique_for_category: int,
-    min_unique_for_numerical: int,
-) -> list[int]:
-    """Infer the categorical features from the given data.
-
-    !!! note
-
-        This function may infer particular columns to not be categorical
-        as defined by what suits the model predictions and it's pre-training.
-
-    Args:
-        X: The data to infer the categorical features from.
-        provided: Any user provided indices of what is considered categorical.
-        min_samples_for_inference:
-            The minimum number of samples required
-            for automatic inference of features which were not provided
-            as categorical.
-        max_unique_for_category:
-            The maximum number of unique values for a
-            feature to be considered categorical.
-        min_unique_for_numerical:
-            The minimum number of unique values for a
-            feature to be considered numerical.
-
-    Returns:
-        The indices of inferred categorical features.
-    """
-    # We presume everything is numerical and go from there
-    maybe_categoricals = () if provided is None else provided
-    large_enough_x_to_infer_categorical = X.shape[0] > min_samples_for_inference
-    indices = []
-
-    for ix, col in enumerate(X.T):
-        # Calculate total distinct values once, treating NaN as a category.
-        try:
-            s = pd.Series(col)
-            # counts NaN/None as a category
-            num_distinct = s.nunique(dropna=False)
-        except TypeError as e:
-            # e.g. "unhashable type: 'dict'" when object arrays contain dicts
-            raise TypeError(
-                "argument must be a string or a number"
-                "(columns must only contain strings or numbers)"
-            ) from e
-        if ix in maybe_categoricals:
-            if num_distinct <= max_unique_for_category:
-                indices.append(ix)
-        elif (
-            large_enough_x_to_infer_categorical
-            and num_distinct < min_unique_for_numerical
-        ):
-            indices.append(ix)
-
-    return indices
-
-
 def infer_random_state(
     random_state: int | np.random.RandomState | np.random.Generator | None,
 ) -> tuple[int, np.random.Generator]:
@@ -620,43 +368,6 @@ def infer_random_state(
         raise ValueError(f"Invalid random_state {random_state}")
 
     return static_seed, np_rng
-
-
-def process_text_na_dataframe(
-    X: pd.DataFrame,
-    placeholder: str = NA_PLACEHOLDER,
-    ord_encoder: ColumnTransformer | None = None,
-    *,
-    fit_encoder: bool = False,
-) -> np.ndarray:
-    """Convert `X` to float64, replacing NA with NaN in string cells.
-
-    If `ord_encoder` is not None, then it will be used to encode `X` before the
-    conversion to float64.
-
-    Note that this function sometimes mutates its input.
-    """
-    # Replace NAN values in X, for dtypes, which the OrdinalEncoder cannot handle
-    # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
-    string_cols = X.select_dtypes(include=["string", "object"]).columns
-    if len(string_cols) > 0:
-        X[string_cols] = X[string_cols].fillna(placeholder)
-
-    if fit_encoder and ord_encoder is not None:
-        X_encoded = ord_encoder.fit_transform(X)
-    elif ord_encoder is not None:
-        X_encoded = ord_encoder.transform(X)
-    else:
-        X_encoded = X
-
-    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
-    placeholder_mask = X[string_cols] == placeholder
-    X_encoded[:, string_cols_ix] = np.where(
-        placeholder_mask,
-        np.nan,
-        X_encoded[:, string_cols_ix],
-    )
-    return X_encoded.astype(np.float64)
 
 
 def _map_to_bucket_ix(y: torch.Tensor, borders: torch.Tensor) -> torch.Tensor:

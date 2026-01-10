@@ -40,7 +40,6 @@ from tabpfn_common_utils.telemetry import track_model_call
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
-    check_cpu_warning,
     create_inference_engine,
     determine_precision,
     estimator_to_device,
@@ -61,22 +60,22 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     RegressorEnsembleConfig,
     generate_regression_ensemble_configs,
+    tag_features_and_sanitize_data,
 )
+from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.utils import (
     DevicesSpecification,
-    fix_dtypes,
     get_embeddings,
-    infer_categorical_features,
     infer_random_state,
-    process_text_na_dataframe,
     transform_borders_one,
     translate_probs_across_borders,
-    validate_X_predict,
-    validate_Xy_fit,
+)
+from tabpfn.validation import (
+    ensure_compatible_fit_inputs,
+    ensure_compatible_predict_input_sklearn,
 )
 
 if TYPE_CHECKING:
@@ -574,59 +573,45 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Initializes the model, returning byte_size and RNG object."""
         return initialize_model_variables_helper(self, "regressor")
 
-    def _initialize_dataset_preprocessing(
-        self, X: XType, y: YType, rng: np.random.Generator
-    ) -> tuple[list[RegressorEnsembleConfig], XType, YType, FullSupportBarDistribution]:
-        """Prepare ensemble configs and validate X, y for one dataset/chunk.
-        Handle the preprocessing of the input (X and y). We also return the
-        BarDistribution here, since it is vital for computing the standardized
-        target variable in the DatasetCollectionWithPreprocessing class.
-        Sets self.inferred_categorical_indices_.
-        """
-        if self.differentiable_input:
-            raise ValueError(
-                "Differentiable input is not supported for regressors yet."
-            )
-
-        X, y, feature_names_in, n_features_in = validate_Xy_fit(
+    def _initialize_for_standard_input(
+        self,
+        X: XType,
+        y: YType,
+        rng: np.random.Generator,
+    ) -> tuple[
+        list[RegressorEnsembleConfig],
+        np.ndarray,
+        np.ndarray,
+        FullSupportBarDistribution,
+    ]:
+        # TODO: Fix the types later.
+        # In the following code, we have multiple conversions between DataFrames and
+        # NumPy arrays. In a follow-up PR, we will fix this.
+        X, y, feature_names, n_features = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
-            ensure_y_numeric=True,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
+            ensure_y_numeric=True,
+            devices=self.devices_,
         )
+        # Set class variables for sklearn compatibility
+        self.feature_names_in_ = feature_names
+        self.n_features_in_ = n_features
 
-        assert isinstance(X, np.ndarray)
-        check_cpu_warning(
-            self.devices_, X, allow_cpu_override=self.ignore_pretraining_limits
+        X, ordinal_encoder, inferred_categorical_indices = (
+            tag_features_and_sanitize_data(
+                X=X,
+                provided_categorical_indices=self.categorical_features_indices,
+                min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+                max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+                min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+            )
         )
-
-        if feature_names_in is not None:
-            self.feature_names_in_ = feature_names_in
-        self.n_features_in_ = n_features_in
-
-        self.inferred_categorical_indices_ = infer_categorical_features(
-            X=X,
-            provided=self.categorical_features_indices,
-            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-        )
-
-        # Will convert inferred categorical indices to category dtype,
-        # to be picked up by the ord_encoder, as well
-        # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-        X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
-        # Ensure categories are ordinally encoded
-        ord_encoder = get_ordinal_encoder()
-        X = process_text_na_dataframe(
-            X,
-            ord_encoder=ord_encoder,
-            fit_encoder=True,  # type: ignore
-        )
-        self.preprocessor_ = ord_encoder
+        self.preprocessor_ = ordinal_encoder
+        self.inferred_categorical_indices_ = inferred_categorical_indices
 
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
             num_examples=y.shape[0],  # Use length of validated y
@@ -660,6 +645,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         assert len(ensemble_configs) == self.n_estimators
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
+
+    def _initialize_dataset_preprocessing(
+        self,
+        X: XType,
+        y: YType,
+        rng: np.random.Generator,
+    ) -> tuple[list[RegressorEnsembleConfig], XType, YType, FullSupportBarDistribution]:
+        """Prepare ensemble configs and validate X, y for one dataset/chunk.
+        Handle the preprocessing of the input (X and y). We also return the
+        BarDistribution here, since it is vital for computing the standardized
+        target variable in the DatasetCollectionWithPreprocessing class.
+        Sets self.inferred_categorical_indices_.
+        """
+        if self.differentiable_input:
+            raise ValueError(
+                "Differentiable input is not supported for regressors yet."
+            )
+        return self._initialize_for_standard_input(X=X, y=y, rng=rng)
 
     @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
@@ -736,8 +739,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
-        ensemble_configs: list[RegressorEnsembleConfig]
-
         if self.fit_mode == "batched":
             logging.warning(
                 "The model was in 'batched' mode, likely after finetuning. "
@@ -746,16 +747,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if not hasattr(self, "models_") or not self.differentiable_input:
-            byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y, self.znorm_space_bardist_ = (
-                self._initialize_dataset_preprocessing(X, y, rng)
-            )
-        else:  # already fitted and prompt_tuning mode: no cat. features
+        is_differentiable_input_and_already_fitted = (
+            self.differentiable_input and hasattr(self, "models_")
+        )
+        if is_differentiable_input_and_already_fitted:
             _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
+            ensemble_configs = self.ensemble_configs_  # Reuse from first fit
+        else:
+            byte_size, rng = self._initialize_model_variables()
+            ensemble_configs, X, y, znorm_space_bardist = (
+                self._initialize_dataset_preprocessing(X, y, rng)
+            )
+            self.znorm_space_bardist_ = znorm_space_bardist
+            self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
 
         assert len(ensemble_configs) == self.n_estimators
 
@@ -781,6 +788,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return self
 
         mean, std = np.mean(y), np.std(y)
+        # TODO: y_train_std_ and y_train_mean_ don't seem to be used anywhere else.
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
@@ -886,7 +894,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X = validate_X_predict(X, self)
+        X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
 
@@ -902,8 +910,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
+        # TODO: The below steps should be handled by a "data sanitizer object"
         X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
-        X = process_text_na_dataframe(X, ord_encoder=self.preprocessor_)  # type: ignore
+        X = process_text_na_dataframe(
+            X,
+            ord_encoder=getattr(self, "preprocessor_", None),
+        )
 
         # Runs over iteration engine
         (

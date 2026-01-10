@@ -12,15 +12,14 @@ from torch.torch_version import TorchVersion
 from tabpfn import TabPFNClassifier
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.inference_config import InferenceConfig
+from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.type_detection import infer_categorical_features
 from tabpfn.utils import (
     balance_probas_by_class_counts,
-    fix_dtypes,
-    infer_categorical_features,
     infer_devices,
-    process_text_na_dataframe,
-    validate_Xy_fit,
 )
+from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 
 def test_infer_categorical_with_str_and_nan_provided_included():
@@ -280,14 +279,11 @@ def prepared_tabpfn_data(request):
 
     cls = TabPFNClassifier()
 
-    X, y, feature_names_in, n_features_in = validate_Xy_fit(
+    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
         temp_df,
         y,
         estimator=cls,
         ensure_y_numeric=False,
-        max_num_samples=InferenceConfig.MAX_NUMBER_OF_SAMPLES,
-        max_num_features=InferenceConfig.MAX_NUMBER_OF_FEATURES,
-        ignore_pretraining_limits=False,
     )
 
     if feature_names_in is not None:

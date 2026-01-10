@@ -23,6 +23,7 @@ from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
+from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 
 from .utils import (
@@ -562,7 +563,7 @@ def test_cpu_large_dataset_warning_override():
     model.fit(X_large, y_large)
 
     # Mock the settings to allow large datasets to avoid RuntimeError
-    with mock.patch("tabpfn.base.settings.tabpfn.allow_cpu_large_dataset", new=True):
+    with mock.patch.object(settings.tabpfn, "allow_cpu_large_dataset", new=True):
         model = TabPFNRegressor(device="cpu", ignore_pretraining_limits=False)
         model.fit(X_large, y_large)
 

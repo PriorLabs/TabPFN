@@ -38,7 +38,8 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
-from tabpfn.utils import infer_devices, validate_Xy_fit
+from tabpfn.utils import infer_devices
+from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 logger = logging.getLogger(__name__)
 
@@ -435,14 +436,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
-        X, y, _, _ = validate_Xy_fit(
+        X, y, _, _ = ensure_compatible_fit_inputs_sklearn(
             X,
             y,
             estimator=self.finetuned_estimator_,
             ensure_y_numeric=self._model_type == "regressor",
-            max_num_samples=-1,  # ignored if ignore_pretraining_limits is True
-            max_num_features=-1,  # ignored if ignore_pretraining_limits is True
-            ignore_pretraining_limits=True,
         )
 
         self.X_ = X

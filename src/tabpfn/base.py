@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import pathlib
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any, Literal, Union
 
@@ -29,7 +28,6 @@ from tabpfn.inference import (
     InferenceEngineOnDemand,
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
-from tabpfn.settings import settings
 from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
@@ -40,7 +38,6 @@ from tabpfn.utils import (
 
 if TYPE_CHECKING:
     import numpy as np
-    import pandas as pd
 
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
@@ -370,50 +367,6 @@ def create_inference_engine(  # noqa: PLR0913
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
-
-
-def check_cpu_warning(
-    devices: Sequence[torch.device],
-    X: np.ndarray | torch.Tensor | pd.DataFrame,
-    *,
-    allow_cpu_override: bool = False,
-) -> None:
-    """Check if using CPU with large datasets and warn or error appropriately.
-
-    Args:
-        devices: The torch devices being used
-        X: The input data (NumPy array, Pandas DataFrame, or Torch Tensor)
-        allow_cpu_override: If True, allow CPU usage with large datasets.
-    """
-    allow_cpu_override = allow_cpu_override or settings.tabpfn.allow_cpu_large_dataset
-
-    if allow_cpu_override:
-        return
-
-    # Determine number of samples
-    try:
-        num_samples = X.shape[0]
-    except AttributeError:
-        return
-
-    if any(device.type == "cpu" for device in devices):
-        if num_samples > 1000:
-            raise RuntimeError(
-                "Running on CPU with more than 1000 samples is not allowed "
-                "by default due to slow performance.\n"
-                "To override this behavior, set the environment variable "
-                "TABPFN_ALLOW_CPU_LARGE_DATASET=1 or "
-                "set ignore_pretraining_limits=True.\n"
-                "Alternatively, consider using a GPU or the tabpfn-client API: "
-                "https://github.com/PriorLabs/tabpfn-client"
-            )
-        if num_samples > 200:
-            warnings.warn(
-                "Running on CPU with more than 200 samples may be slow.\n"
-                "Consider using a GPU or the tabpfn-client API: "
-                "https://github.com/PriorLabs/tabpfn-client",
-                stacklevel=2,
-            )
 
 
 def initialize_model_variables_helper(
