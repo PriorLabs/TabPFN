@@ -815,15 +815,36 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y=y,
         )
 
+        # Initialize a TabPFNEnsembleProcessor object that does:
+        # - uses GLOBAL data information like data slicing (sample/feature subsampling)
+        #   per ensemble member to define the pipelines for each ensemble member
+        # - produces multiple TabPFNEnsembleMemberProcessor objects
+        #   for each ensemble member
+        # - Args: rng, n_preprocessing_jobs, ensemble_configs (maybe directly from
+        #   inference_config!)
+
+        # TabPFNEnsembleMemberProcessor  / TabPFNDataProcessor
+        # - keeps track of state like class permutation, target transform, etc.
+        #   to be re-used after model forward
+        # - random state seeded by TabPFNEnsembleProcessor
+        # (rethink name...ensemble member processor seems very inference like.
+        #  But this should also be used in training / model). TabPFNDataProcessor (?)
+
+        # These TabPFN processors can take a `DatasetView` object as input (?)
+
         self.executor_ = create_inference_engine(
-            X_train=X,
-            y_train=y,
+            X_train=X,  # -> dataset
+            y_train=y,  # -> dataset
             models=self.models_,
-            ensemble_configs=ensemble_configs,
-            cat_ix=self.inferred_categorical_indices_,
+            ensemble_configs=ensemble_configs,  # -> preprocessor
+            cat_ix=self.inferred_categorical_indices_,  # -> dataset
+            # decides on what engine to create (make first argument
             fit_mode=self.fit_mode,
             devices_=self.devices_,
+            # -> only used for preprocessing (OnDemand mode re-uses same rng,
+            # preprocessor needs to know about engine)
             rng=rng,
+            # -> only used for preprocessing
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
