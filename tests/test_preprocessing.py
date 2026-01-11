@@ -16,7 +16,7 @@ from sklearn.preprocessing import (
     PowerTransformer,
 )
 
-from tabpfn import preprocessing
+from tabpfn.preprocessing import steps
 from tabpfn.preprocessing.ensemble import _get_subsample_indices_for_estimators
 from tabpfn.preprocessing.steps import (
     AdaptiveQuantileTransformer,
@@ -230,7 +230,7 @@ def _get_preprocessing_steps() -> list[
 ]:
     defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
         cls
-        for cls in preprocessing.__dict__.values()
+        for cls in steps.__dict__.values()
         if (
             isinstance(cls, type)
             and issubclass(cls, FeaturePreprocessingTransformerStep)
