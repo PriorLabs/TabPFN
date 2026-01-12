@@ -9,8 +9,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from pandas import Series
-from pandas.api.types import is_numeric_dtype
-from pandas.io.sql import is_string_dtype
+from pandas.api.types import is_numeric_dtype, is_string_dtype
 
 if TYPE_CHECKING:
     import numpy as np
@@ -204,10 +203,10 @@ def _detect_feature_type(
         # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
     if _detect_categorical(
-        num_distinct,
-        reported_categorical,
-        max_unique_for_category,
-        min_unique_for_numerical,
+        num_distinct=num_distinct,
+        reported_categorical=reported_categorical,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
         large_enough_x_to_infer_categorical=large_enough_x_to_infer_categorical,
     ):
         return FeatureType.CATEGORICAL
