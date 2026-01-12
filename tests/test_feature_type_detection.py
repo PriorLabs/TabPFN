@@ -72,6 +72,31 @@ def test__detect_textual_feature():
     assert result == FeatureType.TEXT
 
 
+def test__detect_long_texts():
+    s = pd.Series(
+        [
+            "This is a long text",
+            "Another long text here",
+            "Yet another different text",
+            "More text content",
+            "Even more text",
+            "Text continues",
+            "More strings",
+            "Additional text",
+            "More content",
+            "Final text",
+            "Extra text",
+            "Last one",
+        ]
+    )
+    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    assert result == FeatureType.TEXT
+    result = _for_test_detect_with_defaults(s, max_unique_for_category=10)
+    assert result == FeatureType.CATEGORICAL
+    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
+    assert result == FeatureType.CATEGORICAL
+
+
 def test__detect_for_boolean():
     s = pd.Series([True, False, True, False])
     result = _for_test_detect_with_defaults(s)
@@ -124,3 +149,9 @@ def test__detect_for_series_with_nan_and_floats():
     s = pd.Series([np.nan, 1.0, np.nan, 1.0])
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureType.CATEGORICAL
+
+
+def test__detect_for_series_with_few_null_types():
+    s = pd.Series([np.nan, None, np.nan, None])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT

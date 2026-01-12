@@ -188,7 +188,7 @@ def _detect_feature_type(
 ) -> FeatureType:
     # Calculate total distinct values once, treating NaN as a category.
     nunique = s.nunique(dropna=False)
-    if nunique == 1:
+    if nunique <= 1:
         # Either all values are missing, or all values are the same.
         # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
