@@ -149,6 +149,7 @@ def detect_feature_types(
     x_num = X[:, type2idx[FeatureType.NUMERICAL]]
     x_cat = X[:, type2idx[FeatureType.CATEGORICAL]]
     x_text = X[:, type2idx[FeatureType.TEXTUAL]]
+    # Dropping constant features here
     return DatasetView(x_num, x_cat, x_text)
 
 
@@ -182,21 +183,21 @@ def _detect_feature_type(
     min_unique_for_numerical: int,
     large_enough_x_to_infer_categorical: bool,
 ) -> FeatureType:
-    # Calculate total distinct values once, treating NaN as a category.
-    # TODO: detect whether it's a constant feature
-    # TODO: first, check if the feature is numeric or not
     s = _array_to_series(col)
-    if _detect_constant(s):
+    # Calculate total distinct values once, treating NaN as a category.
+    num_distinct = s.nunique(dropna=False)
+    if num_distinct == 1:
+        # Either all values are missing, or all values are the same. If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
     if _detect_categorical(
-        s,
+        num_distinct,
         reported_categorical,
         max_unique_for_category,
         min_unique_for_numerical,
         large_enough_x_to_infer_categorical,
     ):
         return FeatureType.CATEGORICAL
-    if _detect_textual(s, max_unique_for_category=max_unique_for_category):
+    if _detect_textual(s, num_distinct=num_distinct, max_unique_for_category=max_unique_for_category):
         return FeatureType.TEXTUAL
     if is_numeric_dtype(s.dtype):
         return FeatureType.NUMERICAL
@@ -217,7 +218,7 @@ def _array_to_series(col: np.ndarray) -> Series:
 
 
 def _detect_categorical(
-    s: Series,
+    num_distinct: int,
     reported_categorical: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
@@ -227,7 +228,6 @@ def _detect_categorical(
     - Feature reported to be categorical are treated as such, as long as they aren't too-highly cardinal.
     - For non-reported numerical ones, we infer them as such if they are sufficiently low-cardinal.
     """
-    num_distinct = s.nunique(dropna=False)
     if reported_categorical:
         if num_distinct <= max_unique_for_category:
             return True
@@ -238,18 +238,10 @@ def _detect_categorical(
     return False
 
 
-def _detect_constant(s: Series) -> bool:
-    """A constant feature means that either all values are missing, or all values are the same. If there's a single value but also missing ones, it's not a constant feature."""
-    if s.isna().all():
-        return True
-    return s.nunique(dropna=False) == 1
-
-
-def _detect_textual(s: Series, max_unique_for_category: int) -> bool:
+def _detect_textual(s: Series, num_distinct: int, max_unique_for_category: int) -> bool:
     """A textual feature means that the feature is a string or a category."""
     if not is_string_dtype(s.dtype):
         return False
-    num_distinct = s.nunique(dropna=False)
     if num_distinct <= max_unique_for_category:
         raise ValueError(
             f"A feature with low cardinality should have been detected as categorical. Got {num_distinct} unique values!"
