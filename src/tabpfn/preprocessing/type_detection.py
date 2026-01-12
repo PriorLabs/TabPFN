@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 
-# TODO: 'infer_categorical_features' should be deprecated, to use the new 'detect_feature_types'.
+# TODO: 'infer_categorical_features' should be deprecated, to use 'detect_feature_types'.
 def infer_categorical_features(
     X: np.ndarray,
     *,
@@ -80,7 +80,7 @@ def infer_categorical_features(
     return indices
 
 
-# TODO: Maybe 'DatasetView' and 'FeatureType' belong to a more generic file with the main objects?
+# TODO: Maybe 'DatasetView' and 'FeatureType' belong to a file with different objects?
 @dataclass(frozen=True)
 class DatasetView:
     x_num: XType
