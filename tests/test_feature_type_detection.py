@@ -157,6 +157,8 @@ def test__detect_text_as_object():
     s = pd.Series(["a", "b", "c", "e", "f"], dtype=object)
     s = s.astype(object)
     result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    assert result == FeatureType.TEXT
+    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
     assert result == FeatureType.CATEGORICAL
 
 
