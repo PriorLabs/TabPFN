@@ -112,10 +112,8 @@ class FeatureTypeDetector:
     # and storing it. Transform should be a no-op.
 
 
-# TODO: this functio should basically be the 'fit' function of a
-# FeatureTypeDetector class that wraps "FeaturePreprocessingTransformerStep"
-# or sort.
-# This
+# TODO: this function should be the 'fit' function of a FeatureTypeDetector class
+# that inherits from "FeaturePreprocessingTransformerStep" or sort.
 def detect_feature_types(
     X: np.ndarray,
     *,
