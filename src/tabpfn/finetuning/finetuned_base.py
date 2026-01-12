@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import time
 import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -79,6 +80,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         device: The device to run the model on. Defaults to "cuda".
         epochs: The total number of passes through the fine-tuning data.
             Defaults to 30.
+        time_limit: Time limit in seconds for fine-tuning.
+            If None, no time limit is applied. Defaults to None.
         learning_rate: The learning rate for the AdamW optimizer. A small value
             is crucial for stable fine-tuning. Defaults to 1e-5.
         weight_decay: The weight decay for the AdamW optimizer. Defaults to 0.01.
@@ -135,6 +138,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         *,
         device: str = "cuda",
         epochs: int = 30,
+        time_limit: int | None = None,
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         validation_split_ratio: float = 0.1,
@@ -157,6 +161,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         super().__init__()
         self.device = device
         self.epochs = epochs
+        self.time_limit = time_limit
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.validation_split_ratio = validation_split_ratio
@@ -340,6 +345,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         else:
             test_size = self.validation_split_ratio
 
+        # test_size should be greater or equal to the number of classes
+        if self._model_type == "classifier":
+            n_classes = len(np.unique(y))
+            test_size = max(test_size, n_classes)
+
+
         return train_test_split(  # type: ignore[return-value]
             X,
             y,
@@ -349,13 +360,20 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         )
 
     def fit(
-        self, X: XType, y: YType, output_dir: Path | None = None
+        self,
+        X: XType,
+        y: YType,
+        X_val: XType | None = None,
+        y_val: YType | None = None,
+        output_dir: Path | None = None,
     ) -> FinetunedTabPFNBase:
         """Fine-tune the TabPFN model on the provided training data.
 
         Args:
             X: The training input samples of shape (n_samples, n_features).
             y: The target values of shape (n_samples,).
+            X_val: Optional validation input samples.
+            y_val: Optional validation target values.
             output_dir: Directory path for saving checkpoints. If None, no
                 checkpointing is performed and progress will be lost if
                 training is interrupted.
@@ -373,18 +391,22 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         else:
             output_dir.mkdir(parents=True, exist_ok=True)
 
-        return self._fit(X=X, y=y, output_dir=output_dir)
+        return self._fit(X=X, y=y, X_val=X_val, y_val=y_val, output_dir=output_dir)
 
     def _fit(  # noqa: C901,PLR0912
         self,
         X: XType,
         y: YType,
+        X_val: XType | None = None,
+        y_val: YType | None = None,
         output_dir: Path | None = None,
     ) -> FinetunedTabPFNBase:
         """Internal implementation of fit that runs the finetuning loop."""
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
+        start_time = time.monotonic()
 
+        model_path = self._estimator_kwargs.pop("model_path", None)
         inference_config = copy.deepcopy(
             self._estimator_kwargs.get("inference_config", {})
         )
@@ -401,6 +423,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             base_estimator_config,
             self.n_estimators_finetune,
         )
+        if model_path is not None:
+            finetuning_estimator_config["model_path"] = model_path
 
         # Configs used for validation-time evaluation and final inference.
         validation_eval_config = self._build_eval_config(
@@ -445,8 +469,16 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         self.X_ = X
         self.y_ = y
-
-        X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
+        if X_val is not None and y_val is not None:
+            X_train, y_train = X, y
+            X_val, y_val, _, _ = ensure_compatible_fit_inputs_sklearn(
+                X_val,
+                y_val,
+                estimator=self.finetuned_estimator_,
+                ensure_y_numeric=self._model_type == "regressor",
+            )
+        else:
+            X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
 
         # Calculate the context size used during finetuning.
         n_finetune_ctx_plus_query_samples = min(
@@ -479,6 +511,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         scheduler: LambdaLR | None = None
 
+        max_data_size = n_finetune_ctx_plus_query_samples
+        # finetuning_query_size should be greater or equal to the number of classes
+        finetuning_query_size = int(max_data_size * self.finetune_ctx_query_split_ratio)
+        if self._model_type == "classifier":
+            n_classes = len(np.unique(y_train))
+            finetuning_query_size = max(finetuning_query_size, n_classes)
+
         for epoch in range(epoch_to_start_from, self.epochs):
             # Per-epoch aggregates for cleaner learning curves.
             epoch_loss_sum = 0.0
@@ -487,7 +526,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             # Regenerate datasets each epoch with a different random_state
             training_splitter = partial(
                 train_test_split,
-                test_size=self.finetune_ctx_query_split_ratio,
+                test_size=finetuning_query_size,
                 random_state=self.random_state + epoch,
             )
 
@@ -496,7 +535,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 X_raw=X_train,
                 y_raw=y_train,
                 split_fn=training_splitter,
-                max_data_size=n_finetune_ctx_plus_query_samples,
+                max_data_size=max_data_size,
                 model_type=self._model_type,
                 equal_split_size=False,
                 seed=self.random_state + epoch,
@@ -660,6 +699,23 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     )
                     if best_model is not None:
                         self.finetuned_estimator_ = best_model
+                    break
+
+            if self.time_limit is not None:
+                elapsed_time = time.monotonic() - start_time
+                if elapsed_time > self.time_limit:
+                    logger.info(
+                        "🛑 Time limit of %d seconds reached. Stopping training.",
+                        self.time_limit,
+                    )
+                    break
+
+                n_epochs_run = epoch + 1 - epoch_to_start_from
+                if elapsed_time + (elapsed_time // n_epochs_run) > self.time_limit:
+                    logger.info(
+                        "🛑 Not enough time remaining for another epoch. Stopping "
+                        "training.",
+                    )
                     break
 
         if self.early_stopping and best_model is not None:

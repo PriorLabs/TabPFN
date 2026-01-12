@@ -225,6 +225,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         device: The device to run the model on. Defaults to "cuda".
         epochs: The total number of passes through the fine-tuning data.
             Defaults to 30.
+        time_limit: Time limit in seconds for fine-tuning.
+            If None, no time limit is applied. Defaults to None.
         learning_rate: The learning rate for the AdamW optimizer. A small value
             is crucial for stable fine-tuning. Defaults to 1e-5.
         weight_decay: The weight decay for the AdamW optimizer. Defaults to 0.01.
@@ -279,6 +281,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
         extra_regressor_kwargs: Additional keyword arguments to pass to the
             underlying `TabPFNRegressor`, such as `n_estimators`.
+        eval_metric: The evaluation metric to use for early stopping and
+            monitoring.
+            For regression, the default is "mse".
+            Other metrics are not currently supported.
         ce_loss_weight: Weight for the bar distribution negative log-likelihood term
             (cross-entropy-like). Defaults to 0.0.
         crps_loss_weight: Weight for the continuous ranked probability score (CRPS) term
@@ -301,6 +307,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         *,
         device: str = "cuda",
         epochs: int = 30,
+        time_limit: int | None = None,
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         validation_split_ratio: float = 0.1,
@@ -327,10 +334,12 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         mse_loss_clip: float | None = None,
         mae_loss_weight: float = 0.0,
         mae_loss_clip: float | None = None,
+        eval_metric: Literal["mse"] | None = None,
     ):
         super().__init__(
             device=device,
             epochs=epochs,
+            time_limit=time_limit,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             validation_split_ratio=validation_split_ratio,
@@ -351,6 +360,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             save_checkpoint_interval=save_checkpoint_interval,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
+        self.eval_metric = eval_metric
         self.ce_loss_weight = ce_loss_weight
         self.crps_loss_weight = crps_loss_weight
         self.crls_loss_weight = crls_loss_weight
@@ -518,13 +528,20 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
 
     @override
     def fit(
-        self, X: XType, y: YType, output_dir: Path | None = None
+        self,
+        X: XType,
+        y: YType,
+        X_val: XType | None = None,
+        y_val: YType | None = None,
+        output_dir: Path | None = None,
     ) -> FinetunedTabPFNRegressor:
         """Fine-tune the TabPFN model on the provided training data.
 
         Args:
             X: The training input samples of shape (n_samples, n_features).
             y: The target values of shape (n_samples,).
+            X_val: Optional validation input samples.
+            y_val: Optional validation target values.
             output_dir: Directory path for saving checkpoints. If None, no
                 checkpointing is performed and progress will be lost if
                 training is interrupted.
@@ -532,7 +549,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         Returns:
             The fitted instance itself.
         """
-        super().fit(X, y, output_dir)
+        if self.eval_metric is None:
+            self.eval_metric = "mse"
+
+        super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
         return self
 
     @override

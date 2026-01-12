@@ -59,6 +59,8 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         device: The device to run the model on. Defaults to "cuda".
         epochs: The total number of passes through the fine-tuning data.
             Defaults to 30.
+        time_limit: Time limit in seconds for fine-tuning.
+            If None, no time limit is applied. Defaults to None.
         learning_rate: The learning rate for the AdamW optimizer. A small value
             is crucial for stable fine-tuning. Defaults to 1e-5.
         weight_decay: The weight decay for the AdamW optimizer. Defaults to 0.01.
@@ -113,6 +115,9 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
         extra_classifier_kwargs: Additional keyword arguments to pass to the
             underlying `TabPFNClassifier`, such as `n_estimators`.
+        eval_metric: The primary metric to monitor during fine-tuning.
+            For classification, this is ROC AUC by default.
+            The choices are: "roc_auc", "log_loss"
     """
 
     def __init__(  # noqa: PLR0913
@@ -120,6 +125,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         *,
         device: str = "cuda",
         epochs: int = 30,
+        time_limit: int | None = None,
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         validation_split_ratio: float = 0.1,
@@ -139,10 +145,12 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         extra_classifier_kwargs: dict[str, Any] | None = None,
+        eval_metric: Literal["roc_auc", "log_loss"] | None = None,
     ):
         super().__init__(
             device=device,
             epochs=epochs,
+            time_limit=time_limit,
             learning_rate=learning_rate,
             weight_decay=weight_decay,
             validation_split_ratio=validation_split_ratio,
@@ -163,6 +171,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             save_checkpoint_interval=save_checkpoint_interval,
         )
         self.extra_classifier_kwargs = extra_classifier_kwargs
+        self.eval_metric = eval_metric
 
     @property
     @override
@@ -290,9 +299,16 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             logger.warning(f"An error occurred during evaluation: {e}")
             roc_auc, log_loss_score = np.nan, np.nan
 
+        if self.eval_metric == "roc_auc":
+            primary_metric = roc_auc
+        elif self.eval_metric == "log_loss":
+            primary_metric = -log_loss_score
+        else:
+            raise ValueError(f"Unsupported eval_metric: {self.eval_metric}")
+
         return EvalResult(
-            primary=roc_auc,  # pyright: ignore[reportArgumentType]
-            secondary={"log_loss": log_loss_score},
+            primary=primary_metric,  # pyright: ignore[reportArgumentType]
+            secondary={"log_loss": log_loss_score, "roc_auc": roc_auc},
         )
 
     @override
@@ -309,8 +325,9 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
     def _get_checkpoint_metrics(self, eval_result: EvalResult) -> dict[str, float]:
         """Return metrics for checkpoint saving."""
         return {
-            "roc_auc": eval_result.primary,
+            "primary_metric": eval_result.primary,
             "log_loss": eval_result.secondary.get("log_loss", np.nan),
+            "roc_auc": eval_result.secondary.get("roc_auc", np.nan),
         }
 
     @override
@@ -318,10 +335,10 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:
         """Log evaluation results for classification."""
-        log_loss_score = eval_result.secondary.get("log_loss", np.nan)
         logger.info(
-            f"📊 Epoch {epoch + 1} Evaluation | Val ROC: {eval_result.primary:.4f}, "
-            f"Val Log Loss: {log_loss_score:.4f}, Train Loss: {mean_train_loss:.4f}"
+            f"📊 Epoch {epoch + 1} Evaluation | Val {self.eval_metric}: {eval_result.primary:.4f}, "
+            f"\t Train Loss: {mean_train_loss:.4f}"
+            f"\t Secondary Metrics: {eval_result.secondary}",
         )
 
     @override
@@ -340,13 +357,20 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
     @override
     def fit(
-        self, X: XType, y: YType, output_dir: Path | None = None
+        self,
+        X: XType,
+        y: YType,
+        X_val: XType | None = None,
+        y_val: YType | None = None,
+        output_dir: Path | None = None,
     ) -> FinetunedTabPFNClassifier:
         """Fine-tune the TabPFN model on the provided training data.
 
         Args:
             X: The training input samples of shape (n_samples, n_features).
             y: The target values of shape (n_samples,).
+            X_val: Optional validation input samples.
+            y_val: Optional validation target values.
             output_dir: Directory path for saving checkpoints. If None, no
                 checkpointing is performed and progress will be lost if
                 training is interrupted.
@@ -354,7 +378,10 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         Returns:
             The fitted instance itself.
         """
-        super().fit(X, y, output_dir)
+        if self.eval_metric is None:
+            self.eval_metric = "roc_auc"
+
+        super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
         return self
 
     def predict_proba(self, X: XType) -> np.ndarray:
