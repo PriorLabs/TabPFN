@@ -33,17 +33,17 @@ def test__dataset_view_end_to_end():
     df = pd.DataFrame(
         {
             "num": [1.0, 2.0, 3.0, 4.0, 5.0],
-            "cat": ["a", "b", "c", "d", "e"],
-            "cat_num": [0, 1, 2, 3, 4],
+            "cat": ["a", "b", "c", "a", "b"],
+            "cat_num": [0, 1, 2, 1, 2],
             "text": ["longer", "texts", "appear", "here", "yay"],
             "const": [1.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
     view = detect_feature_types(
         df,
-        min_samples_for_inference=3,
-        max_unique_for_category=2,
-        min_unique_for_numerical=3,
+        min_samples_for_inference=1,
+        max_unique_for_category=3,
+        min_unique_for_numerical=5,
     )
     assert view.feature_type_to_columns[FeatureType.NUMERICAL] == ["num"]
     assert view.feature_type_to_columns[FeatureType.CATEGORICAL] == ["cat", "cat_num"]

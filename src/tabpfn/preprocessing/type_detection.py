@@ -165,7 +165,7 @@ def _detect_feature_type_to_columns(
     feature_type_to_columns = defaultdict(list)
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     for idx, col in enumerate(X.columns):
-        feat = X.iloc[col]
+        feat = X.loc[:, col]
         reported_categorical = idx in (reported_categorical_indices or ())
         feat_type = _detect_feature_type(
             s=feat,
