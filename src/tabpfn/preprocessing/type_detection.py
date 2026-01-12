@@ -79,6 +79,8 @@ def infer_categorical_features(
     return indices
 
 
+
+# TODO: Maybe 'DatasetView' and 'FeatureType' belong to a more generic file with the main objects?
 @dataclass(frozen=True)
 class DatasetView:
     x_num: XType
@@ -93,7 +95,20 @@ class FeatureType(str, Enum):
     CONSTANT = "constant"
     MISSING = "missing"
 
+FeatureTypeIndices = dict[FeatureType, list[int]]
 
+
+# This should inheric from FeaturePreprocessingTransformerStep-like object
+class FeatureTypeDetector:
+
+    feature_type_indices_: FeatureTypeIndices
+    
+    # TODO: fit, transform etc. the fit should be calling `detect_feature_types` and storing it. Transform should be a no-op.
+
+
+
+# TODO: this functio should basically be the 'fit' function of a FeatureTypeDetector class that wraps "FeaturePreprocessingTransformerStep" or sort.
+# This 
 def detect_feature_types(X: np.ndarray,     
     *,
     min_samples_for_inference: int,
@@ -124,16 +139,21 @@ def detect_feature_types(X: np.ndarray,
     Returns:
         A DatasetView object with the features types.
     """
+    type2idx = _get_feature_type_indices(X, min_samples_for_inference=min_samples_for_inference, max_unique_for_category=max_unique_for_category, min_unique_for_numerical=min_unique_for_numerical, reported_categorical_indices=reported_categorical_indices)
+    x_num = X[:, type2idx[FeatureType.NUMERICAL]]
+    x_cat = X[:, type2idx[FeatureType.CATEGORICAL]]
+    x_text = X[:, type2idx[FeatureType.TEXTUAL]]
+    return DatasetView(x_num, x_cat, x_text)
+
+
+def _get_feature_type_indices(X: np.ndarray, *, min_samples_for_inference: int, max_unique_for_category: int, min_unique_for_numerical: int, reported_categorical_indices: Sequence[int] | None = None) -> FeatureTypeIndices:
     type2idx = defaultdict(list)
     large_enough_x_to_infer = X.shape[0] > min_samples_for_inference
     for idx, col in enumerate(X.T):
         reported_categorical = idx in (reported_categorical_indices or ())
         feat_type = _detect_feature_type(X[:, col], reported_categorical=reported_categorical, max_unique_for_category=max_unique_for_category, min_unique_for_numerical=min_unique_for_numerical, large_enough_x_to_infer_categorical=large_enough_x_to_infer)
         type2idx[feat_type].append(idx)
-    x_num = X[:, type2idx[FeatureType.NUMERICAL]]
-    x_cat = X[:, type2idx[FeatureType.CATEGORICAL]]
-    x_text = X[:, type2idx[FeatureType.TEXTUAL]]
-    return DatasetView(x_num, x_cat, x_text)
+    return type2idx
 
 
 
