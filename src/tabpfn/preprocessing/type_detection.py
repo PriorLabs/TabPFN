@@ -247,6 +247,6 @@ def _detect_textual(s: Series, num_distinct: int, max_unique_for_category: int) 
         return False
     if num_distinct <= max_unique_for_category:
         raise ValueError(
-            f"A feature with low cardinality should have been detected as categorical. Got {num_distinct} unique values!"
+            f"Got {num_distinct=}, this should have been categorical."
         )
     return True
