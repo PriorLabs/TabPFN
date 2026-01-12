@@ -10,6 +10,8 @@ from __future__ import annotations
 import pathlib
 from enum import Enum
 from typing import Any, Literal, Union
+from pandas import DataFrame
+from torch import Tensor
 from typing_extensions import TypeAlias
 
 import joblib
@@ -20,7 +22,7 @@ TaskType: TypeAlias = Literal["multiclass", "regression"]
 TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 
 # TODO
-XType: TypeAlias = Any
+XType: TypeAlias = Union[np.ndarray, DataFrame, Tensor]          # TODO: it makes sense to be more specific here than "Any", I guess?
 SampleWeightType: TypeAlias = Any
 YType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
