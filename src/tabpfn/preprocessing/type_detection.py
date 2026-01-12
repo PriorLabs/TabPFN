@@ -12,11 +12,10 @@ from pandas import Series
 from pandas.api.types import is_numeric_dtype
 from pandas.io.sql import is_string_dtype
 
-
-from tabpfn.constants import XType
-
 if TYPE_CHECKING:
     import numpy as np
+
+    from tabpfn.constants import XType
 
 
 # TODO: 'infer_categorical_features' should be deprecated, to use the new 'detect_feature_types'.
@@ -81,7 +80,6 @@ def infer_categorical_features(
     return indices
 
 
-
 # TODO: Maybe 'DatasetView' and 'FeatureType' belong to a more generic file with the main objects?
 @dataclass(frozen=True)
 class DatasetView:
@@ -96,26 +94,27 @@ class FeatureType(str, Enum):
     TEXTUAL = "textual"
     CONSTANT = "constant"
 
+
 FeatureTypeIndices = dict[FeatureType, list[int]]
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
 class FeatureTypeDetector:
-
     feature_type_indices_: FeatureTypeIndices
-    
+
     # TODO: fit, transform etc. the fit should be calling `detect_feature_types` and storing it. Transform should be a no-op.
 
 
-
 # TODO: this functio should basically be the 'fit' function of a FeatureTypeDetector class that wraps "FeaturePreprocessingTransformerStep" or sort.
-# This 
-def detect_feature_types(X: np.ndarray,     
+# This
+def detect_feature_types(
+    X: np.ndarray,
     *,
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
-    reported_categorical_indices: Sequence[int] | None = None,) -> DatasetView:
+    reported_categorical_indices: Sequence[int] | None = None,
+) -> DatasetView:
     """Infer the features types from the given data, based on heuristics and user-provided indices for categorical features.
 
     !!! note
@@ -140,40 +139,68 @@ def detect_feature_types(X: np.ndarray,
     Returns:
         A DatasetView object with the features types.
     """
-    type2idx = _get_feature_type_indices(X, min_samples_for_inference=min_samples_for_inference, max_unique_for_category=max_unique_for_category, min_unique_for_numerical=min_unique_for_numerical, reported_categorical_indices=reported_categorical_indices)
+    type2idx = _get_feature_type_indices(
+        X,
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        reported_categorical_indices=reported_categorical_indices,
+    )
     x_num = X[:, type2idx[FeatureType.NUMERICAL]]
     x_cat = X[:, type2idx[FeatureType.CATEGORICAL]]
     x_text = X[:, type2idx[FeatureType.TEXTUAL]]
     return DatasetView(x_num, x_cat, x_text)
 
 
-def _get_feature_type_indices(X: np.ndarray, *, min_samples_for_inference: int, max_unique_for_category: int, min_unique_for_numerical: int, reported_categorical_indices: Sequence[int] | None = None) -> FeatureTypeIndices:
+def _get_feature_type_indices(
+    X: np.ndarray,
+    *,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    reported_categorical_indices: Sequence[int] | None = None,
+) -> FeatureTypeIndices:
     type2idx = defaultdict(list)
     large_enough_x_to_infer = X.shape[0] > min_samples_for_inference
     for idx, col in enumerate(X.T):
         reported_categorical = idx in (reported_categorical_indices or ())
-        feat_type = _detect_feature_type(X[:, col], reported_categorical=reported_categorical, max_unique_for_category=max_unique_for_category, min_unique_for_numerical=min_unique_for_numerical, large_enough_x_to_infer_categorical=large_enough_x_to_infer)
+        feat_type = _detect_feature_type(
+            X[:, col],
+            reported_categorical=reported_categorical,
+            max_unique_for_category=max_unique_for_category,
+            min_unique_for_numerical=min_unique_for_numerical,
+            large_enough_x_to_infer_categorical=large_enough_x_to_infer,
+        )
         type2idx[feat_type].append(idx)
     return type2idx
 
 
-
-def _detect_feature_type(col: np.ndarray, reported_categorical: bool, max_unique_for_category: int, min_unique_for_numerical: int, large_enough_x_to_infer_categorical: bool) -> FeatureType:
+def _detect_feature_type(
+    col: np.ndarray,
+    reported_categorical: bool,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    large_enough_x_to_infer_categorical: bool,
+) -> FeatureType:
     # Calculate total distinct values once, treating NaN as a category.
     # TODO: detect whether it's a constant feature
     # TODO: first, check if the feature is numeric or not
     s = _array_to_series(col)
     if _detect_constant(s):
         return FeatureType.CONSTANT
-    elif _detect_categorical(s, reported_categorical, max_unique_for_category, min_unique_for_numerical, large_enough_x_to_infer_categorical):
+    if _detect_categorical(
+        s,
+        reported_categorical,
+        max_unique_for_category,
+        min_unique_for_numerical,
+        large_enough_x_to_infer_categorical,
+    ):
         return FeatureType.CATEGORICAL
-    elif _detect_textual(s, max_unique_for_category=max_unique_for_category):
+    if _detect_textual(s, max_unique_for_category=max_unique_for_category):
         return FeatureType.TEXTUAL
-    elif is_numeric_dtype(s.dtype):
+    if is_numeric_dtype(s.dtype):
         return FeatureType.NUMERICAL
-    else:
-        raise TypeError(f"Unknown feature type: {s.dtype}: {s.unique()}")
-
+    raise TypeError(f"Unknown feature type: {s.dtype}: {s.unique()}")
 
 
 def _array_to_series(col: np.ndarray) -> Series:
@@ -188,7 +215,14 @@ def _array_to_series(col: np.ndarray) -> Series:
             "(columns must only contain strings or numbers)"
         ) from e
 
-def _detect_categorical(s: Series, reported_categorical: int, max_unique_for_category: int, min_unique_for_numerical: int, large_enough_x_to_infer_categorical: bool) -> bool:
+
+def _detect_categorical(
+    s: Series,
+    reported_categorical: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    large_enough_x_to_infer_categorical: bool,
+) -> bool:
     """Detecting if a numerical feature is categorical depending on heuristics:
     - Feature reported to be categorical are treated as such, as long as they aren't too-highly cardinal.
     - For non-reported numerical ones, we infer them as such if they are sufficiently low-cardinal.
@@ -198,19 +232,17 @@ def _detect_categorical(s: Series, reported_categorical: int, max_unique_for_cat
         if num_distinct <= max_unique_for_category:
             return True
     elif (
-        large_enough_x_to_infer_categorical
-        and num_distinct < min_unique_for_numerical
+        large_enough_x_to_infer_categorical and num_distinct < min_unique_for_numerical
     ):
         return True
     return False
 
+
 def _detect_constant(s: Series) -> bool:
     """A constant feature means that either all values are missing, or all values are the same. If there's a single value but also missing ones, it's not a constant feature."""
-    if s.isnull().all():
+    if s.isna().all():
         return True
-    if s.nunique(dropna=False) == 1:
-        return True
-    return False
+    return s.nunique(dropna=False) == 1
 
 
 def _detect_textual(s: Series, max_unique_for_category: int) -> bool:
@@ -219,5 +251,7 @@ def _detect_textual(s: Series, max_unique_for_category: int) -> bool:
         return False
     num_distinct = s.nunique(dropna=False)
     if num_distinct <= max_unique_for_category:
-        raise ValueError(f"A feature with low cardinality should have been detected as categorical. Got {num_distinct} unique values!")
+        raise ValueError(
+            f"A feature with low cardinality should have been detected as categorical. Got {num_distinct} unique values!"
+        )
     return True

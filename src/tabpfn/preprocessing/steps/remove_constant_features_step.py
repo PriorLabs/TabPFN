@@ -12,6 +12,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     FeaturePreprocessingTransformerStep,
 )
 
+
 # TODO: (1) this should be part of the FeatureTypeDetector. (2) Unclear if this differs from RemoveEmptyFeaturesEncoderStep
 class RemoveConstantFeaturesStep(FeaturePreprocessingTransformerStep):
     """Remove features that are constant in the training data."""
