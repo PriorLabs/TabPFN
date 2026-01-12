@@ -44,7 +44,8 @@ authors = [
   { name = "Philipp Jund" },
   { name = "Brendan Roof" },
   { name = "Dominik Safaric" },
-  { name = "Benjamin Jaeger" }
+  { name = "Benjamin Jaeger" },
+  { name = "Alan Arazi" }
 ]
 
 readme = "README.md"
