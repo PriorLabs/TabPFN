@@ -680,7 +680,7 @@ class NanHandlingEncoderStep(SeqEncStep):
         return x, nans_indicator
 
 
-# TODO: This functioality is now handled by the FeatureTypeDetector, and we would like to remove it.
+# TODO: This functionality would be soon handled by the FeatureTypeDetector, so we would like to remove it in the close future.
 class RemoveEmptyFeaturesEncoderStep(SeqEncStep):
     """Encoder step to remove empty (constant) features."""
 
