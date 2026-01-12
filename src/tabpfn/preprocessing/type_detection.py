@@ -9,6 +9,8 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from pandas import Series
+from pandas.api.types import is_numeric_dtype
+from pandas.io.sql import is_string_dtype
 
 
 from tabpfn.constants import XType
@@ -158,16 +160,19 @@ def _get_feature_type_indices(X: np.ndarray, *, min_samples_for_inference: int, 
 
 def _detect_feature_type(col: np.ndarray, reported_categorical: bool, max_unique_for_category: int, min_unique_for_numerical: int, large_enough_x_to_infer_categorical: bool) -> FeatureType:
     # Calculate total distinct values once, treating NaN as a category.
-
     # TODO: detect whether it's a constant feature
     # TODO: first, check if the feature is numeric or not
-
     s = _array_to_series(col)
     if _detect_constant(s):
         return FeatureType.CONSTANT
     elif _detect_categorical(s, reported_categorical, max_unique_for_category, min_unique_for_numerical, large_enough_x_to_infer_categorical):
         return FeatureType.CATEGORICAL
-    return FeatureType.NUMERICAL
+    elif _detect_textual(s, max_unique_for_category=max_unique_for_category):
+        return FeatureType.TEXTUAL
+    elif is_numeric_dtype(s.dtype):
+        return FeatureType.NUMERICAL
+    else:
+        raise TypeError(f"Unknown feature type: {s.dtype}: {s.unique()}")
 
 
 
@@ -206,3 +211,13 @@ def _detect_constant(s: Series) -> bool:
     if s.nunique(dropna=False) == 1:
         return True
     return False
+
+
+def _detect_textual(s: Series, max_unique_for_category: int) -> bool:
+    """A textual feature means that the feature is a string or a category."""
+    if not is_string_dtype(s.dtype):
+        return False
+    num_distinct = s.nunique(dropna=False)
+    if num_distinct <= max_unique_for_category:
+        raise ValueError(f"A feature with low cardinality should have been detected as categorical. Got {num_distinct} unique values!")
+    return True
