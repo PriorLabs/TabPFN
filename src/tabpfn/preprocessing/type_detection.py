@@ -124,7 +124,7 @@ def detect_feature_types(
 
     Args:
         X: The data to infer the categorical features from.
-        provided: Any user provided indices of what is considered categorical.
+        reported_categorical_indices: Any user provided indices of what is considered categorical.
         min_samples_for_inference:
             The minimum number of samples required
             for automatic inference of features which were not provided
