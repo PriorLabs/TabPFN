@@ -237,10 +237,10 @@ def _array_to_series(col: np.ndarray) -> Series:
 
 def _detect_categorical(
     num_distinct: int,
-    reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     *,
+    reported_categorical: bool,
     large_enough_x_to_infer_categorical: bool,
 ) -> bool:
     """Detecting if a numerical feature is categorical depending on heuristics:
