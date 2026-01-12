@@ -94,7 +94,7 @@ class FeatureType(str, Enum):
 
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
-    TEXTUAL = "textual"
+    TEXT = "text"
     CONSTANT = "constant"
 
 
@@ -147,21 +147,21 @@ def detect_feature_types(
     Returns:
         A DatasetView object with the features types.
     """
-    type2idx = _get_feature_type_indices(
+    feature_type_to_columns = _detect_feature_type_to_columns(
         X,
         min_samples_for_inference=min_samples_for_inference,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
         reported_categorical_indices=reported_categorical_indices,
     )
-    x_num = X[type2idx[FeatureType.NUMERICAL]]
-    x_cat = X[type2idx[FeatureType.CATEGORICAL]]
-    x_text = X[type2idx[FeatureType.TEXTUAL]]
+    x_num = X[feature_type_to_columns[FeatureType.NUMERICAL]]
+    x_cat = X[feature_type_to_columns[FeatureType.CATEGORICAL]]
+    x_text = X[feature_type_to_columns[FeatureType.TEXT]]
     # Dropping constant features here
     return DatasetView(x_num=x_num, x_cat=x_cat, x_text=x_text)
 
 
-def _get_feature_type_indices(
+def _detect_feature_type_to_columns(
     X: pd.DataFrame,
     *,
     min_samples_for_inference: int,
@@ -169,7 +169,7 @@ def _get_feature_type_indices(
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
 ) -> FeatureTypeColumns:
-    feature_type_indices = defaultdict(list)
+    feature_type_to_columns = defaultdict(list)
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     for idx, col in enumerate(X.columns):
         feat = X.iloc[col]
@@ -181,8 +181,8 @@ def _get_feature_type_indices(
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        feature_type_indices[feat_type].append(col)
-    return feature_type_indices
+        feature_type_to_columns[feat_type].append(col)
+    return feature_type_to_columns
 
 
 def _detect_feature_type(
@@ -210,7 +210,7 @@ def _detect_feature_type(
     if _detect_textual(
         s, nunique=nunique, max_unique_for_category=max_unique_for_category
     ):
-        return FeatureType.TEXTUAL
+        return FeatureType.TEXT
     if pd.api.types.is_numeric_dtype(s.dtype):
         return FeatureType.NUMERICAL
     raise TabPFNUserError(
