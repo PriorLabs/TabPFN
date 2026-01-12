@@ -192,26 +192,27 @@ def _detect_feature_type(
         # Either all values are missing, or all values are the same.
         # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
-    if _detect_categorical(
-        nunique=nunique,
-        reported_categorical=reported_categorical,
-        max_unique_for_category=max_unique_for_category,
-        min_unique_for_numerical=min_unique_for_numerical,
-        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-    ):
-        return FeatureType.CATEGORICAL
-    if _detect_textual(
-        s, nunique=nunique, max_unique_for_category=max_unique_for_category
-    ):
-        return FeatureType.TEXT
+
     if pd.api.types.is_numeric_dtype(s.dtype):
+        if _detect_numeric_as_categorical(
+            nunique=nunique,
+            reported_categorical=reported_categorical,
+            max_unique_for_category=max_unique_for_category,
+            min_unique_for_numerical=min_unique_for_numerical,
+            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        ):
+            return FeatureType.CATEGORICAL
         return FeatureType.NUMERICAL
+    if pd.api.types.is_string_dtype(s.dtype):
+        if nunique <= max_unique_for_category:
+            return FeatureType.CATEGORICAL
+        return FeatureType.TEXT
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
 
 
-def _detect_categorical(
+def _detect_numeric_as_categorical(
     nunique: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
@@ -231,12 +232,3 @@ def _detect_categorical(
     elif big_enough_n_to_infer_cat and nunique < min_unique_for_numerical:
         return True
     return False
-
-
-def _detect_textual(s: pd.Series, nunique: int, max_unique_for_category: int) -> bool:
-    """A textual feature means that the feature is a string or a category."""
-    if not pd.api.types.is_string_dtype(s.dtype):
-        return False
-    if nunique <= max_unique_for_category:
-        raise ValueError(f"Got {nunique=}, this should have been categorical.")
-    return True

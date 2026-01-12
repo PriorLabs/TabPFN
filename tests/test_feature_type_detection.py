@@ -34,3 +34,31 @@ def test__categorical_series():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureType.CATEGORICAL
+
+
+def test__numerical_reported_as_categorical():
+    s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+    result = _for_test_detect_with_defaults(s, reported_categorical=True)
+    assert result == FeatureType.CATEGORICAL
+
+
+def test__numerical_reported_as_categorical_but_too_many_unique_values():
+    s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0])
+    result = _for_test_detect_with_defaults(
+        s, reported_categorical=True, max_unique_for_category=9
+    )
+    assert result == FeatureType.NUMERICAL
+
+
+def test__detected_categorical_without_reporting():
+    s = pd.Series([1.0, 2.0, 3.0, 4.0])
+    result = _for_test_detect_with_defaults(
+        s, reported_categorical=False, min_unique_for_numerical=5
+    )
+    assert result == FeatureType.CATEGORICAL
+
+
+def test__detect_textual_feature():
+    s = pd.Series(["a", "b", "c", "a", "b", "c"])
+    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    assert result == FeatureType.TEXT
