@@ -93,7 +93,6 @@ class FeatureType(str, Enum):
     CATEGORICAL = "categorical"
     TEXTUAL = "textual"
     CONSTANT = "constant"
-    MISSING = "missing"
 
 FeatureTypeIndices = dict[FeatureType, list[int]]
 
@@ -164,7 +163,9 @@ def _detect_feature_type(col: np.ndarray, reported_categorical: bool, max_unique
     # TODO: first, check if the feature is numeric or not
 
     s = _array_to_series(col)
-    if _detect_categorical(s, reported_categorical, max_unique_for_category, min_unique_for_numerical, large_enough_x_to_infer_categorical):
+    if _detect_constant(s):
+        return FeatureType.CONSTANT
+    elif _detect_categorical(s, reported_categorical, max_unique_for_category, min_unique_for_numerical, large_enough_x_to_infer_categorical):
         return FeatureType.CATEGORICAL
     return FeatureType.NUMERICAL
 
@@ -195,5 +196,13 @@ def _detect_categorical(s: Series, reported_categorical: int, max_unique_for_cat
         large_enough_x_to_infer_categorical
         and num_distinct < min_unique_for_numerical
     ):
+        return True
+    return False
+
+def _detect_constant(s: Series) -> bool:
+    """A constant feature means that either all values are missing, or all values are the same. If there's a single value but also missing ones, it's not a constant feature."""
+    if s.isnull().all():
+        return True
+    if s.nunique(dropna=False) == 1:
         return True
     return False
