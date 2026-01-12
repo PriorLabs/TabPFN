@@ -100,7 +100,7 @@ def detect_feature_types(X: np.ndarray,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,) -> DatasetView:
-    """Infer the categorical features from the given data.
+    """Infer the features types from the given data, based on heuristics and user-provided indices for categorical features.
 
     !!! note
 
