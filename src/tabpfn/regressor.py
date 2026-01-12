@@ -63,6 +63,7 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -442,7 +443,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode: Literal["low_memory", "fit_preprocessors", "batched"] = fit_mode
-        self.memory_saving_mode = memory_saving_mode
+        self.memory_saving_mode: bool | Literal["auto"] | float | int = (
+            memory_saving_mode
+        )
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -669,15 +672,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         X_preprocessed: list[torch.Tensor],
         y_preprocessed: list[torch.Tensor],  # These y are standardized
-        cat_ix: list[list[int]],
+        cat_ix: list[list[list[int]]],
         configs: list[list[EnsembleConfig]],  # Should be RegressorEnsembleConfig
         *,
         no_refit: bool = True,
     ) -> TabPFNRegressor:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
-        get_preprocessed_datasets. This function sets the fit_mode attribute
-        to "batched" internally.
+        get_preprocessed_datasets. This function always uses the "batched" fit_mode.
 
         Args:
             X_preprocessed: The input features obtained from the preprocessed Dataset
@@ -699,30 +701,26 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, rng = self._initialize_model_variables()
+            byte_size, _ = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-            rng = None
 
-        # Create the inference engine
-        self.executor_ = create_inference_engine(
-            X_train=X_preprocessed,
-            y_train=y_preprocessed,
-            models=self.models_,
-            ensemble_configs=configs,
+        # Directly create the inference engine here without using
+        # inference engine factory method because it's easier with type
+        # checking.
+        self.executor_ = InferenceEngineBatchedNoPreprocessing(
+            X_trains=X_preprocessed,
+            y_trains=y_preprocessed,
             cat_ix=cat_ix,
-            fit_mode="batched",
-            devices_=self.devices_,
-            rng=rng,
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
-            byte_size=byte_size,
-            forced_inference_dtype_=self.forced_inference_dtype_,
-            memory_saving_mode=self.memory_saving_mode,
-            use_autocast_=self.use_autocast_,
-            inference_mode=not self.differentiable_input,  # False if differentiable
-            # needed (prompt tune)
+            ensemble_configs=configs,
+            models=self.models_,
+            devices=self.devices_,
+            dtype_byte_size=byte_size,
+            force_inference_dtype=self.forced_inference_dtype_,
+            save_peak_mem=self.memory_saving_mode,
+            inference_mode=not self.differentiable_input,
         )
 
         return self
@@ -796,17 +794,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
 
-        # Create the inference engine
+        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+            configs=ensemble_configs,
+            rng=rng or np.random.default_rng(),
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
+        )
+
         self.executor_ = create_inference_engine(
+            fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            models=self.models_,
-            ensemble_configs=ensemble_configs,
             cat_ix=self.inferred_categorical_indices_,
-            fit_mode=self.fit_mode,
+            ensemble_preprocessor=ensemble_preprocessor,
+            models=self.models_,
             devices_=self.devices_,
-            rng=rng,
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
