@@ -89,6 +89,7 @@ class DatasetView:
 
 
 class FeatureType(str, Enum):
+    """The type of a feature."""
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
     TEXTUAL = "textual"
