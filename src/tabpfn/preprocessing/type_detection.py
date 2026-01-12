@@ -84,9 +84,8 @@ def infer_categorical_features(
 class DatasetView:
     """A view of a dataset split by feature types."""
 
-    x_num: pd.DataFrame
-    x_cat: pd.DataFrame
-    x_text: pd.DataFrame
+    X: pd.DataFrame
+    feature_type_to_columns: FeatureTypeColumns
 
 
 class FeatureType(str, Enum):
@@ -111,8 +110,6 @@ class FeatureTypeDetector:
     # and storing it. Transform should be a no-op.
 
 
-# TODO: this function should be the 'fit' function of a FeatureTypeDetector class
-# that inherits from "FeaturePreprocessingTransformerStep" or sort.
 def detect_feature_types(
     X: pd.DataFrame,
     *,
@@ -154,11 +151,7 @@ def detect_feature_types(
         min_unique_for_numerical=min_unique_for_numerical,
         reported_categorical_indices=reported_categorical_indices,
     )
-    x_num = X[feature_type_to_columns[FeatureType.NUMERICAL]]
-    x_cat = X[feature_type_to_columns[FeatureType.CATEGORICAL]]
-    x_text = X[feature_type_to_columns[FeatureType.TEXT]]
-    # Dropping constant features here
-    return DatasetView(x_num=x_num, x_cat=x_cat, x_text=x_text)
+    return DatasetView(X=X, feature_type_to_columns=feature_type_to_columns)
 
 
 def _detect_feature_type_to_columns(
