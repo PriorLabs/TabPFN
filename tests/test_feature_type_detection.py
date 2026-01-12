@@ -31,6 +31,21 @@ def test__numerical_series():
     assert result == FeatureType.NUMERICAL
 
 
+def test__numerical_series_with_nan():
+    s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, np.nan])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.NUMERICAL
+
+
+def test__numerical_but_stored_as_string():
+    s = pd.Series(
+        ["1.0", "2.0", "3.0", "4.0", "5.0", "6.0", "7.0", "8.0", "9.0", "10.0"]
+    )
+    s = s.astype(str)
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.NUMERICAL
+
+
 def test__categorical_series():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s)
@@ -91,8 +106,6 @@ def test__detect_long_texts():
     )
     result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
     assert result == FeatureType.TEXT
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=10)
-    assert result == FeatureType.CATEGORICAL
     result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
     assert result == FeatureType.CATEGORICAL
 

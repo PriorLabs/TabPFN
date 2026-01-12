@@ -193,7 +193,7 @@ def _detect_feature_type(
         # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
 
-    if pd.api.types.is_numeric_dtype(s.dtype):
+    if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
             nunique=nunique,
             reported_categorical=reported_categorical,
@@ -210,6 +210,14 @@ def _detect_feature_type(
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
+
+
+def _is_numeric_pandas_series(s: pd.Series) -> bool:
+    if pd.api.types.is_numeric_dtype(s.dtype):
+        return True
+    if all(isinstance(x, (int, float)) for x in s):
+        return True
+    return bool(all(isinstance(x, str) and x.isdigit() for x in s))
 
 
 def _detect_numeric_as_categorical(
