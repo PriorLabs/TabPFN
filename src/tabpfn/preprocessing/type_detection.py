@@ -197,7 +197,9 @@ def _detect_feature_type(
         large_enough_x_to_infer_categorical,
     ):
         return FeatureType.CATEGORICAL
-    if _detect_textual(s, num_distinct=num_distinct, max_unique_for_category=max_unique_for_category):
+    if _detect_textual(
+        s, num_distinct=num_distinct, max_unique_for_category=max_unique_for_category
+    ):
         return FeatureType.TEXTUAL
     if is_numeric_dtype(s.dtype):
         return FeatureType.NUMERICAL
