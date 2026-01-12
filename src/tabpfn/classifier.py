@@ -72,6 +72,7 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -680,15 +681,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X_preprocessed: list[torch.Tensor],
         y_preprocessed: list[torch.Tensor],
-        cat_ix: list[list[int]],
+        cat_ix: list[list[list[int]]],
         configs: list[list[EnsembleConfig]],
         *,
         no_refit: bool = True,
     ) -> TabPFNClassifier:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
-        get_preprocessed_datasets. This function sets the fit_mode attribute
-        to "batched" internally.
+        get_preprocessed_datasets. This function always uses the "batched" fit_mode.
 
         Args:
             X_preprocessed: The input features obtained from the preprocessed Dataset
@@ -710,28 +710,25 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, rng = self._initialize_model_variables()
+            byte_size, _ = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
-            rng = None
 
-        # Create the inference engine
-        self.executor_ = create_inference_engine(
-            X_train=X_preprocessed,
-            y_train=y_preprocessed,
-            models=self.models_,
-            ensemble_configs=configs,
+        # Directly create the inference engine here without using
+        # inference engine factory method because it's easier with type
+        # checking.
+        self.executor_ = InferenceEngineBatchedNoPreprocessing(
+            X_trains=X_preprocessed,
+            y_trains=y_preprocessed,
             cat_ix=cat_ix,
-            fit_mode="batched",
-            devices_=self.devices_,
-            rng=rng,
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
-            byte_size=byte_size,
-            forced_inference_dtype_=self.forced_inference_dtype_,
-            memory_saving_mode=self.memory_saving_mode,
-            use_autocast_=self.use_autocast_,
+            ensemble_configs=configs,
+            models=self.models_,
+            devices=self.devices_,
+            dtype_byte_size=byte_size,
+            force_inference_dtype=self.forced_inference_dtype_,
+            save_peak_mem=self.memory_saving_mode,
             inference_mode=not self.differentiable_input,
         )
 
@@ -815,37 +812,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y=y,
         )
 
-        # Initialize a TabPFNEnsembleProcessor object that does:
-        # - uses GLOBAL data information like data slicing (sample/feature subsampling)
-        #   per ensemble member to define the pipelines for each ensemble member
-        # - produces multiple TabPFNEnsembleMemberProcessor objects
-        #   for each ensemble member
-        # - Args: rng, n_preprocessing_jobs, ensemble_configs (maybe directly from
-        #   inference_config!)
-
-        # TabPFNEnsembleMemberProcessor  / TabPFNDataProcessor
-        # - keeps track of state like class permutation, target transform, etc.
-        #   to be re-used after model forward
-        # - random state seeded by TabPFNEnsembleProcessor
-        # (rethink name...ensemble member processor seems very inference like.
-        #  But this should also be used in training / model). TabPFNDataProcessor (?)
-
-        # These TabPFN processors can take a `DatasetView` object as input (?)
+        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
+            configs=ensemble_configs,
+            rng=rng,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
+        )
 
         self.executor_ = create_inference_engine(
-            X_train=X,  # -> dataset
-            y_train=y,  # -> dataset
-            models=self.models_,
-            ensemble_configs=ensemble_configs,  # -> preprocessor
-            cat_ix=self.inferred_categorical_indices_,  # -> dataset
-            # decides on what engine to create (make first argument
             fit_mode=self.fit_mode,
+            X_train=X,
+            y_train=y,
+            cat_ix=self.inferred_categorical_indices_,
+            models=self.models_,
+            ensemble_preprocessor=self.ensemble_preprocessor_,
             devices_=self.devices_,
-            # -> only used for preprocessing (OnDemand mode re-uses same rng,
-            # preprocessor needs to know about engine)
-            rng=rng,
-            # -> only used for preprocessing
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
             byte_size=byte_size,
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,

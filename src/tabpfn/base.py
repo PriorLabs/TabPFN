@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pathlib
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Literal, Union
 
 import torch
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
 
@@ -272,14 +273,12 @@ def create_inference_engine(  # noqa: PLR0913
     X_train: np.ndarray,
     y_train: np.ndarray,
     cat_ix: list[int],
-    ensemble_configs: Any,
+    ensemble_preprocessor: TabPFNEnsemblePreprocessor,
     models: list[Architecture],
     devices_: Sequence[torch.device],
     byte_size: int,
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: bool | Literal["auto"] | float | int,
-    rng: np.random.Generator,
-    n_preprocessing_jobs: int,
     use_autocast_: bool,
     inference_mode: bool = True,
 ) -> InferenceEngine:
@@ -295,15 +294,12 @@ def create_inference_engine(  # noqa: PLR0913
         X_train: Training features
         y_train: Training target
         cat_ix: Indices of inferred categorical features.
-        ensemble_configs: The ensemble configurations to create multiple "prompts".
+        ensemble_preprocessor: The ensemble preprocessor to use.
         models: The loaded TabPFN models.
         devices_: The devices for inference.
         byte_size: Byte size for the chosen inference precision.
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
-        rng: Numpy random generator.
-        n_preprocessing_jobs: Number of parallel CPU workers to use for the
-            preprocessing.
         use_autocast_: Whether we use torch.autocast for inference.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
@@ -313,28 +309,24 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
             inference_mode=inference_mode,
         )
     if fit_mode == "fit_with_cache":
@@ -342,14 +334,12 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
             autocast=use_autocast_,
         )
     if fit_mode == "batched":
@@ -357,7 +347,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_trains=X_train,  # pyright: ignore[reportArgumentType]
             y_trains=y_train,  # pyright: ignore[reportArgumentType]
             cat_ix=cat_ix,  # pyright: ignore[reportArgumentType]
-            ensemble_configs=ensemble_configs,
+            ensemble_configs=ensemble_preprocessor.configs,  # pyright: ignore[reportArgumentType]
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
