@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from tabpfn.preprocessing.type_detection import FeatureType, _detect_feature_type
@@ -57,8 +58,69 @@ def test__detected_categorical_without_reporting():
     )
     assert result == FeatureType.CATEGORICAL
 
+    # Even with floats, this should be categorical
+    s = pd.Series([3.43, 3.54, 3.43, 3.53, 3.43, 3.54, 657.3])
+    result = _for_test_detect_with_defaults(
+        s, reported_categorical=False, min_unique_for_numerical=5
+    )
+    assert result == FeatureType.CATEGORICAL
+
 
 def test__detect_textual_feature():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
     assert result == FeatureType.TEXT
+
+
+def test__detect_for_boolean():
+    s = pd.Series([True, False, True, False])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CATEGORICAL
+
+
+def test__detect_for_boolean_with_floats():
+    s = pd.Series([1.0, 0.0, 1.0, 0.0])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CATEGORICAL
+
+
+def test__detect_for_boolean_with_strings():
+    s = pd.Series(["True", "False", "True", "False"])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CATEGORICAL
+
+
+def test__detect_for_constant():
+    s = pd.Series([1.0, 1.0, 1.0, 1.0])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT
+
+
+def test__detect_for_constant_with_strings():
+    s = pd.Series(["a", "a", "a", "a"])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT
+
+
+def test__detect_for_constant_with_booleans():
+    s = pd.Series([True, True, True, True])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT
+
+
+def test__detect_for_empty_series():
+    s = pd.Series([])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT
+
+
+def test__detect_for_series_with_nan():
+    s = pd.Series([np.nan, np.nan, np.nan, np.nan])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CONSTANT
+
+
+def test__detect_for_series_with_nan_and_floats():
+    s = pd.Series([np.nan, 1.0, np.nan, 1.0])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureType.CATEGORICAL
