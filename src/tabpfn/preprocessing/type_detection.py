@@ -18,7 +18,8 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 
-# TODO: 'infer_categorical_features' should be deprecated, to use 'detect_feature_types'.
+# TODO: 'infer_categorical_features' should be deprecated,
+# to use 'detect_feature_types'.
 def infer_categorical_features(
     X: np.ndarray,
     *,
@@ -83,6 +84,8 @@ def infer_categorical_features(
 # TODO: Maybe 'DatasetView' and 'FeatureType' belong to a file with different objects?
 @dataclass(frozen=True)
 class DatasetView:
+    """A view of a dataset split by feature types."""
+
     x_num: XType
     x_cat: XType
     x_text: XType
@@ -90,6 +93,7 @@ class DatasetView:
 
 class FeatureType(str, Enum):
     """The type of a feature."""
+
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
     TEXTUAL = "textual"
@@ -101,12 +105,17 @@ FeatureTypeIndices = dict[FeatureType, list[int]]
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
 class FeatureTypeDetector:
+    """Detector for feature types."""
+
     feature_type_indices_: FeatureTypeIndices
 
-    # TODO: fit, transform etc. the fit should be calling `detect_feature_types` and storing it. Transform should be a no-op.
+    # TODO: fit, transform etc. the fit should be calling `detect_feature_types`
+    # and storing it. Transform should be a no-op.
 
 
-# TODO: this functio should basically be the 'fit' function of a FeatureTypeDetector class that wraps "FeaturePreprocessingTransformerStep" or sort.
+# TODO: this functio should basically be the 'fit' function of a
+# FeatureTypeDetector class that wraps "FeaturePreprocessingTransformerStep"
+# or sort.
 # This
 def detect_feature_types(
     X: np.ndarray,
@@ -116,7 +125,8 @@ def detect_feature_types(
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
 ) -> DatasetView:
-    """Infer the features types from the given data, based on heuristics and user-provided indices for categorical features.
+    """Infer the features types from the given data, based on heuristics
+    and user-provided indices for categorical features.
 
     !!! note
 
@@ -125,7 +135,8 @@ def detect_feature_types(
 
     Args:
         X: The data to infer the categorical features from.
-        reported_categorical_indices: Any user provided indices of what is considered categorical.
+        reported_categorical_indices: Any user provided indices of what is
+            considered categorical.
         min_samples_for_inference:
             The minimum number of samples required
             for automatic inference of features which were not provided
@@ -179,6 +190,7 @@ def _get_feature_type_indices(
 
 def _detect_feature_type(
     col: np.ndarray,
+    *,
     reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
@@ -188,14 +200,15 @@ def _detect_feature_type(
     # Calculate total distinct values once, treating NaN as a category.
     num_distinct = s.nunique(dropna=False)
     if num_distinct == 1:
-        # Either all values are missing, or all values are the same. If there's a single value but also missing ones, it's not constant
+        # Either all values are missing, or all values are the same.
+        # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
     if _detect_categorical(
         num_distinct,
         reported_categorical,
         max_unique_for_category,
         min_unique_for_numerical,
-        large_enough_x_to_infer_categorical,
+        large_enough_x_to_infer_categorical=large_enough_x_to_infer_categorical,
     ):
         return FeatureType.CATEGORICAL
     if _detect_textual(
@@ -208,8 +221,10 @@ def _detect_feature_type(
 
 
 def _array_to_series(col: np.ndarray) -> Series:
-    # TODO (1): the last part here looks like something that should be part of the validation.
-    # TODO (2): what is the point of casting it to a series? wouldn't numpy have built in functions for this?
+    # TODO (1): the last part here looks like something that should be part
+    # of the validation.
+    # TODO (2): what is the point of casting it to a series?
+    # wouldn't numpy have built in functions for this?
     try:
         return Series(col)
     except TypeError as e:
@@ -225,11 +240,14 @@ def _detect_categorical(
     reported_categorical: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
+    *,
     large_enough_x_to_infer_categorical: bool,
 ) -> bool:
     """Detecting if a numerical feature is categorical depending on heuristics:
-    - Feature reported to be categorical are treated as such, as long as they aren't too-highly cardinal.
-    - For non-reported numerical ones, we infer them as such if they are sufficiently low-cardinal.
+    - Feature reported as categoricals are treated as such, as long as they
+      aren't highly cardinal.
+    - For non-reported numerical ones, we infer them as such if they are
+      sufficiently low-cardinal.
     """
     if reported_categorical:
         if num_distinct <= max_unique_for_category:
@@ -246,7 +264,5 @@ def _detect_textual(s: Series, num_distinct: int, max_unique_for_category: int) 
     if not is_string_dtype(s.dtype):
         return False
     if num_distinct <= max_unique_for_category:
-        raise ValueError(
-            f"Got {num_distinct=}, this should have been categorical."
-        )
+        raise ValueError(f"Got {num_distinct=}, this should have been categorical.")
     return True
