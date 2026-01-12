@@ -8,13 +8,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING
 
-from pandas import Series
-from pandas.api.types import is_numeric_dtype, is_string_dtype
+import pandas as pd
+
+from tabpfn.errors import TabPFNUserError
 
 if TYPE_CHECKING:
     import numpy as np
-
-    from tabpfn.constants import XType
 
 
 # TODO: 'infer_categorical_features' should be deprecated,
@@ -59,7 +58,7 @@ def infer_categorical_features(
     for ix, col in enumerate(X.T):
         # Calculate total distinct values once, treating NaN as a category.
         try:
-            s = Series(col)
+            s = pd.Series(col)
             # counts NaN/None as a category
             num_distinct = s.nunique(dropna=False)
         except TypeError as e:
@@ -85,9 +84,9 @@ def infer_categorical_features(
 class DatasetView:
     """A view of a dataset split by feature types."""
 
-    x_num: XType
-    x_cat: XType
-    x_text: XType
+    x_num: pd.DataFrame
+    x_cat: pd.DataFrame
+    x_text: pd.DataFrame
 
 
 class FeatureType(str, Enum):
@@ -99,14 +98,14 @@ class FeatureType(str, Enum):
     CONSTANT = "constant"
 
 
-FeatureTypeIndices = dict[FeatureType, list[int]]
+FeatureTypeColumns = dict[FeatureType, list[str]]
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
 class FeatureTypeDetector:
     """Detector for feature types."""
 
-    feature_type_indices_: FeatureTypeIndices
+    feature_type_indices_: FeatureTypeColumns
 
     # TODO: fit, transform etc. the fit should be calling `detect_feature_types`
     # and storing it. Transform should be a no-op.
@@ -115,7 +114,7 @@ class FeatureTypeDetector:
 # TODO: this function should be the 'fit' function of a FeatureTypeDetector class
 # that inherits from "FeaturePreprocessingTransformerStep" or sort.
 def detect_feature_types(
-    X: np.ndarray,
+    X: pd.DataFrame,
     *,
     min_samples_for_inference: int,
     max_unique_for_category: int,
@@ -155,90 +154,77 @@ def detect_feature_types(
         min_unique_for_numerical=min_unique_for_numerical,
         reported_categorical_indices=reported_categorical_indices,
     )
-    x_num = X[:, type2idx[FeatureType.NUMERICAL]]
-    x_cat = X[:, type2idx[FeatureType.CATEGORICAL]]
-    x_text = X[:, type2idx[FeatureType.TEXTUAL]]
+    x_num = X[type2idx[FeatureType.NUMERICAL]]
+    x_cat = X[type2idx[FeatureType.CATEGORICAL]]
+    x_text = X[type2idx[FeatureType.TEXTUAL]]
     # Dropping constant features here
-    return DatasetView(x_num, x_cat, x_text)
+    return DatasetView(x_num=x_num, x_cat=x_cat, x_text=x_text)
 
 
 def _get_feature_type_indices(
-    X: np.ndarray,
+    X: pd.DataFrame,
     *,
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> FeatureTypeIndices:
-    type2idx = defaultdict(list)
-    large_enough_x_to_infer = X.shape[0] > min_samples_for_inference
-    for idx, col in enumerate(X.T):
+) -> FeatureTypeColumns:
+    feature_type_indices = defaultdict(list)
+    big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
+    for idx, col in enumerate(X.columns):
+        feat = X.iloc[col]
         reported_categorical = idx in (reported_categorical_indices or ())
         feat_type = _detect_feature_type(
-            X[:, col],
+            s=feat,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
-            large_enough_x_to_infer_categorical=large_enough_x_to_infer,
+            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        type2idx[feat_type].append(idx)
-    return type2idx
+        feature_type_indices[feat_type].append(col)
+    return feature_type_indices
 
 
 def _detect_feature_type(
-    col: np.ndarray,
+    s: pd.Series,
     *,
     reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
-    large_enough_x_to_infer_categorical: bool,
+    big_enough_n_to_infer_cat: bool,
 ) -> FeatureType:
-    s = _array_to_series(col)
     # Calculate total distinct values once, treating NaN as a category.
-    num_distinct = s.nunique(dropna=False)
-    if num_distinct == 1:
+    nunique = s.nunique(dropna=False)
+    if nunique == 1:
         # Either all values are missing, or all values are the same.
         # If there's a single value but also missing ones, it's not constant
         return FeatureType.CONSTANT
     if _detect_categorical(
-        num_distinct=num_distinct,
+        nunique=nunique,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
-        large_enough_x_to_infer_categorical=large_enough_x_to_infer_categorical,
+        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     ):
         return FeatureType.CATEGORICAL
     if _detect_textual(
-        s, num_distinct=num_distinct, max_unique_for_category=max_unique_for_category
+        s, nunique=nunique, max_unique_for_category=max_unique_for_category
     ):
         return FeatureType.TEXTUAL
-    if is_numeric_dtype(s.dtype):
+    if pd.api.types.is_numeric_dtype(s.dtype):
         return FeatureType.NUMERICAL
-    raise TypeError(f"Unknown feature type: {s.dtype}: {s.unique()}")
-
-
-def _array_to_series(col: np.ndarray) -> Series:
-    # TODO (1): the last part here looks like something that should be part
-    # of the validation.
-    # TODO (2): what is the point of casting it to a series?
-    # wouldn't numpy have built in functions for this?
-    try:
-        return Series(col)
-    except TypeError as e:
-        # e.g. "unhashable type: 'dict'" when object arrays contain dicts
-        raise TypeError(
-            "argument must be a string or a number"
-            "(columns must only contain strings or numbers)"
-        ) from e
+    raise TabPFNUserError(
+        f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
+    )
 
 
 def _detect_categorical(
-    num_distinct: int,
+    nunique: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     *,
     reported_categorical: bool,
-    large_enough_x_to_infer_categorical: bool,
+    big_enough_n_to_infer_cat: bool,
 ) -> bool:
     """Detecting if a numerical feature is categorical depending on heuristics:
     - Feature reported as categoricals are treated as such, as long as they
@@ -247,19 +233,17 @@ def _detect_categorical(
       sufficiently low-cardinal.
     """
     if reported_categorical:
-        if num_distinct <= max_unique_for_category:
+        if nunique <= max_unique_for_category:
             return True
-    elif (
-        large_enough_x_to_infer_categorical and num_distinct < min_unique_for_numerical
-    ):
+    elif big_enough_n_to_infer_cat and nunique < min_unique_for_numerical:
         return True
     return False
 
 
-def _detect_textual(s: Series, num_distinct: int, max_unique_for_category: int) -> bool:
+def _detect_textual(s: pd.Series, nunique: int, max_unique_for_category: int) -> bool:
     """A textual feature means that the feature is a string or a category."""
-    if not is_string_dtype(s.dtype):
+    if not pd.api.types.is_string_dtype(s.dtype):
         return False
-    if num_distinct <= max_unique_for_category:
-        raise ValueError(f"Got {num_distinct=}, this should have been categorical.")
+    if nunique <= max_unique_for_category:
+        raise ValueError(f"Got {nunique=}, this should have been categorical.")
     return True
