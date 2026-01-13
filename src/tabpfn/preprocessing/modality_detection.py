@@ -19,7 +19,7 @@ class DatasetView:
     """A view of a dataset split by feature modalities."""
 
     X: pd.DataFrame
-    feature_modalities_to_columns: FeatureModalitiesColumns
+    columns_by_modality: FeatureModalitiesColumns
 
 
 class FeatureModality(str, Enum):
@@ -85,14 +85,14 @@ def detect_feature_modalities(
     Returns:
         A DatasetView object with the features modalities.
     """
-    feature_modalities_to_columns = _detect_feature_modalities_to_columns(
+    columns_by_modality = _detect_feature_modalities_to_columns(
         X,
         min_samples_for_inference=min_samples_for_inference,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
         reported_categorical_indices=reported_categorical_indices,
     )
-    return DatasetView(X=X, feature_modalities_to_columns=feature_modalities_to_columns)
+    return DatasetView(X=X, columns_by_modality=columns_by_modality)
 
 
 def _detect_feature_modalities_to_columns(
