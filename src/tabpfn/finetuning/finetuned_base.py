@@ -503,9 +503,18 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         use_amp = self.device.startswith("cuda") and torch.cuda.is_available()
         scaler = GradScaler() if use_amp else None  # type: ignore
 
-        logger.info("--- 🚀 Starting Fine-tuning ---")
+        logger.info("--- 🚀 Eval default model ---")
+        eval_result = self._evaluate_model(
+            validation_eval_config,
+            X_train,  # pyright: ignore[reportArgumentType]
+            y_train,  # pyright: ignore[reportArgumentType]
+            X_val,  # pyright: ignore[reportArgumentType]
+            y_val,  # pyright: ignore[reportArgumentType]
+        )
+        self._log_epoch_evaluation(0, eval_result, -1)
+        best_metric: float = eval_result.primary
 
-        best_metric: float = self._get_initial_best_metric()
+        logger.info("--- 🚀 Starting Fine-tuning ---")
         patience_counter = 0
         best_model = None
 
