@@ -329,12 +329,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Split data into train/validation sets with task-specific options."""
         n_samples = len(y)
-        desired_val_size = int(n_samples * self.validation_split_ratio)
+        test_size = int(n_samples * self.validation_split_ratio)
 
-        if desired_val_size > MAX_VALIDATION_SAMPLES:
-            test_size = MAX_VALIDATION_SAMPLES
+        if test_size > MAX_VALIDATION_SAMPLES:
             warnings.warn(
-                f"Validation set size would be {desired_val_size:,} samples "
+                f"Validation set size would be {test_size:,} samples "
                 f"based on validation_split_ratio="
                 f"{self.validation_split_ratio:.2f}, but limiting to "
                 f"{MAX_VALIDATION_SAMPLES:,} samples to avoid excessive "
@@ -342,14 +341,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 UserWarning,
                 stacklevel=3,
             )
-        else:
-            test_size = self.validation_split_ratio
+            test_size = MAX_VALIDATION_SAMPLES
 
         # test_size should be greater or equal to the number of classes
         if self._model_type == "classifier":
             n_classes = len(np.unique(y))
             test_size = max(test_size, n_classes)
-
 
         return train_test_split(  # type: ignore[return-value]
             X,
@@ -406,12 +403,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         train_size = X.shape[0]
         start_time = time.monotonic()
 
-        model_path = self._estimator_kwargs.pop("model_path", None)
+        _estimator_kwargs = copy.deepcopy(self._estimator_kwargs)
+        model_path = _estimator_kwargs.pop("model_path", None)
         inference_config = copy.deepcopy(
-            self._estimator_kwargs.get("inference_config", {})
+            _estimator_kwargs.get("inference_config", {})
         )
         base_estimator_config: dict[str, Any] = {
-            **self._estimator_kwargs,
+            **_estimator_kwargs,
             "ignore_pretraining_limits": True,
             "device": self.device,
             "random_state": self.random_state,
@@ -511,7 +509,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             X_val,  # pyright: ignore[reportArgumentType]
             y_val,  # pyright: ignore[reportArgumentType]
         )
-        self._log_epoch_evaluation(0, eval_result, -1)
+        self._log_epoch_evaluation(-1, eval_result, mean_train_loss=None)
         best_metric: float = eval_result.primary
 
         logger.info("--- 🚀 Starting Fine-tuning ---")
@@ -720,7 +718,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     break
 
                 n_epochs_run = epoch + 1 - epoch_to_start_from
-                if elapsed_time + (elapsed_time // n_epochs_run) > self.time_limit:
+                if elapsed_time + (elapsed_time / n_epochs_run) > self.time_limit:
                     logger.info(
                         "🛑 Not enough time remaining for another epoch. Stopping "
                         "training.",

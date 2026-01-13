@@ -335,10 +335,12 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:
         """Log evaluation results for classification."""
+        mean_train_loss = "N/A" if mean_train_loss is None else f"{mean_train_loss:.4f}"
+        metric = eval_result.primary
         logger.info(
-            f"📊 Epoch {epoch + 1} Evaluation | Val {self.eval_metric}: {eval_result.primary:.4f}, "
-            f"\t Train Loss: {mean_train_loss:.4f}"
-            f"\t Secondary Metrics: {eval_result.secondary}",
+            f"📊 Epoch {epoch + 1} Evaluation | Val {self.eval_metric}: {metric:.4f}"
+            f"\n\t Train Loss: {mean_train_loss}"
+            f"\n\t Secondary Metrics: {eval_result.secondary}",
         )
 
     @override
