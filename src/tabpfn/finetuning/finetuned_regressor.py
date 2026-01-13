@@ -507,9 +507,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:
         """Log evaluation results for regression."""
+        mean_train_loss = "N/A" if mean_train_loss is None else f"{mean_train_loss:.4f}"
         logger.info(
             f"📊 Epoch {epoch + 1} Evaluation | Val MSE: {eval_result.primary:.4f}, "
-            f"Train Loss: {mean_train_loss:.4f}"
+            f"Train Loss: {mean_train_loss}"
         )
 
     @override
