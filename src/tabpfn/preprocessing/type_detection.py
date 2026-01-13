@@ -11,8 +11,6 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-# TODO: 'infer_categorical_features' should be deprecated,
-# to use 'detect_feature_types'.
 def infer_categorical_features(
     X: np.ndarray,
     *,
