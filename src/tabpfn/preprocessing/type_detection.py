@@ -104,7 +104,7 @@ FeatureTypeColumns = dict[FeatureType, list[str]]
 class FeatureTypeDetector:
     """Detector for feature types."""
 
-    feature_type_indices_: FeatureTypeColumns
+    feature_type_columns: FeatureTypeColumns
 
     # TODO: fit, transform etc. the fit should be calling `detect_feature_types`
     # and storing it. Transform should be a no-op.
