@@ -89,7 +89,7 @@ def main() -> None:
 
     # Instantiate the wrapper with your desired hyperparameters
     finetuned_reg = FinetunedTabPFNRegressor(
-        device="cuda" if torch.cuda.is_available() else "cpu",
+        device="cuda",
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
         random_state=RANDOM_STATE,
@@ -115,4 +115,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    if not torch.cuda.is_available():
+        raise RuntimeError(
+            "CUDA is not available. Please run the script on a CUDA-enabled GPU."
+        )
     main()
