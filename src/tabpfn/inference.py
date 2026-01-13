@@ -9,7 +9,7 @@ from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import joblib
@@ -18,6 +18,7 @@ import torch
 
 from tabpfn.architectures.base.memory import (
     DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
+    MemorySavingMode,
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
@@ -63,7 +64,7 @@ class InferenceEngine(ABC):
     def __init__(
         self,
         *,
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
     ) -> None:
@@ -76,7 +77,7 @@ class InferenceEngine(ABC):
                 dtype. Otherwise, the default dtype will be used.
         """
         super().__init__()
-        self.save_peak_mem: bool | Literal["auto"] | float | int = save_peak_mem
+        self.save_peak_mem = save_peak_mem
         self.dtype_byte_size = dtype_byte_size
         self.force_inference_dtype = force_inference_dtype
 
@@ -197,7 +198,7 @@ class SingleDeviceInferenceEngine(InferenceEngine):
         self,
         *,
         models: list[Architecture],
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
     ) -> None:
@@ -235,7 +236,7 @@ class MultiDeviceInferenceEngine(InferenceEngine):
         self,
         *,
         model_caches: list[_PerDeviceModelCache],
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
     ) -> None:
@@ -295,7 +296,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         devices: Sequence[torch.device],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -313,7 +314,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             save_peak_mem: Whether to save peak memory usage.
         """
         # We save it as a static seed to be reproducible across predicts
-        static_seed = ensemble_preprocessor.get_static_seed()
+        static_seed = ensemble_preprocessor.next_static_seed()
 
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -436,7 +437,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         devices: Sequence[torch.device],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         inference_mode: bool,
     ) -> None:
         """Initialize the batched inference engine without preprocessing.
@@ -542,7 +543,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         devices: Sequence[torch.device],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         no_preprocessing: bool = False,
     ) -> None:
@@ -700,7 +701,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         devices: Sequence[torch.device],
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
-        save_peak_mem: bool | Literal["auto"] | float | int,
+        save_peak_mem: MemorySavingMode,
         autocast: bool,
         only_return_standard_out: bool = True,
     ) -> None:

@@ -442,10 +442,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inference_precision: torch.dtype | Literal["autocast", "auto"] = (
             inference_precision
         )
-        self.fit_mode: Literal["low_memory", "fit_preprocessors", "batched"] = fit_mode
-        self.memory_saving_mode: bool | Literal["auto"] | float | int = (
-            memory_saving_mode
-        )
+        self.fit_mode: Literal[
+            "low_memory",
+            "fit_preprocessors",
+            "fit_with_cache",
+            "batched",
+        ] = fit_mode
+        self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -796,7 +799,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
-            rng=rng or np.random.default_rng(),
+            rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )
 

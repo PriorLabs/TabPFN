@@ -84,8 +84,13 @@ class TabPFNEnsemblePreprocessor:
         # 2. Run pipeline.num_added_features() for each ensemble member
         # 3. Create feature slices
 
-    def get_static_seed(self) -> int:
-        """Get the static seed for the ensemble data processor."""
+    def next_static_seed(self) -> int:
+        """Get a static seed for the ensemble data processor.
+
+        This can be used to redo the preprocessing with the same random state
+        during the fit_transform*() methods. Currently it is only used
+        in the InferenceEngineOnDemand class.
+        """
         return self.rng.integers(0, int(np.iinfo(np.int32).max))
 
     def fit_transform_ensemble_members_iterator(

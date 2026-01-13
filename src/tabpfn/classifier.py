@@ -452,9 +452,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode = fit_mode
-        self.memory_saving_mode: bool | Literal["auto"] | float | int = (
-            memory_saving_mode
-        )
+        self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input

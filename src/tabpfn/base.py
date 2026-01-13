@@ -16,8 +16,6 @@ from sklearn.base import (
 )
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-
 # --- TabPFN imports ---
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
@@ -46,8 +44,9 @@ from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 if TYPE_CHECKING:
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
-    from tabpfn.classifier import TabPFNClassifier, XType
+    from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
@@ -284,7 +283,7 @@ def create_inference_engine(  # noqa: PLR0913
     devices_: Sequence[torch.device],
     byte_size: int,
     forced_inference_dtype_: torch.dtype | None,
-    memory_saving_mode: bool | Literal["auto"] | float | int,
+    memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
     inference_mode: bool = True,
 ) -> InferenceEngine:
