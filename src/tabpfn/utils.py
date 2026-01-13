@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import typing
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal, Union
 
@@ -15,7 +14,6 @@ import numpy.typing as npt
 import torch
 from sklearn.base import (
     TransformerMixin,
-    check_is_fitted,
 )
 
 from tabpfn.architectures.base.encoders import (
@@ -26,16 +24,12 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
-from tabpfn.preprocessing.clean import fix_dtypes
-from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.interface import Architecture
-    from tabpfn.classifier import TabPFNClassifier, XType
-    from tabpfn.regressor import TabPFNRegressor
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
@@ -55,67 +49,6 @@ def get_autocast_context(
     if device.type == "mps":
         return contextlib.nullcontext()
     return torch.autocast(device.type, enabled=enabled)
-
-
-def get_embeddings(
-    model: TabPFNClassifier | TabPFNRegressor,
-    X: XType,
-    data_source: Literal["train", "test"] = "test",
-) -> np.ndarray:
-    """Extract embeddings from a fitted TabPFN model.
-
-    Args:
-        model : TabPFNClassifier | TabPFNRegressor
-            The fitted classifier or regressor.
-        X : XType
-            The input data.
-        data_source : {"train", "test"}, default="test"
-            Select the transformer output to return. Use ``"train"`` to obtain
-            embeddings from the training tokens and ``"test"`` for the test tokens.
-
-    Returns:
-        np.ndarray
-            The computed embeddings for each fitted estimator.
-            When ``n_estimators > 1`` the returned array has shape
-            ``(n_estimators, n_samples, embedding_dim)``. You can average over the
-            first axis or reshape to concatenate the estimators, e.g.:
-
-                emb = get_embeddings(model, X)
-                emb_avg = emb.mean(axis=0)
-                emb_concat = emb.reshape(emb.shape[1], -1)
-    """
-    check_is_fitted(model)
-
-    data_map = {"train": "train_embeddings", "test": "test_embeddings"}
-
-    selected_data = data_map[data_source]
-
-    # Avoid circular imports
-    from tabpfn.preprocessing import (  # noqa: PLC0415
-        ClassifierEnsembleConfig,
-        RegressorEnsembleConfig,
-    )
-
-    X = ensure_compatible_predict_input_sklearn(X, model)
-    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
-    X = model.preprocessor_.transform(X)
-
-    embeddings: list[np.ndarray] = []
-
-    # Cast executor to Any to bypass the iter_outputs signature check
-    for output, config in model.executor_.iter_outputs(
-        X,
-        autocast=model.use_autocast_,
-        only_return_standard_out=False,
-    ):
-        # Cast output to Any to allow dict-like access
-        output_dict = typing.cast("dict[str, torch.Tensor]", output)
-        embed = output_dict[selected_data].squeeze(1)
-        assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
-        assert embed.ndim == 2
-        embeddings.append(embed.squeeze().cpu().numpy())
-
-    return np.array(embeddings)
 
 
 def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
