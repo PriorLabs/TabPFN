@@ -405,9 +405,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         _estimator_kwargs = copy.deepcopy(self._estimator_kwargs)
         model_path = _estimator_kwargs.pop("model_path", None)
-        inference_config = copy.deepcopy(
-            _estimator_kwargs.get("inference_config", {})
-        )
+        inference_config = copy.deepcopy(_estimator_kwargs.get("inference_config", {}))
         base_estimator_config: dict[str, Any] = {
             **_estimator_kwargs,
             "ignore_pretraining_limits": True,
