@@ -331,6 +331,18 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         }
 
     @override
+    def _get_valid_finetuning_query_size(
+        self, *, query_size: int, y_train: np.ndarray
+    ) -> int:
+        """Calculate a valid finetuning query size."""
+        # finetuning_query_size should be greater or equal to the number of classes
+        assert y_train is not None, (
+            "y_train required to compute finetuning query size for classification."
+        )
+        n_classes = len(np.unique(y_train))
+        return max(query_size, n_classes)
+
+    @override
     def _log_epoch_evaluation(
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:

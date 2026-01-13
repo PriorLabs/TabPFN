@@ -503,6 +503,16 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return {"mse": eval_result.primary}
 
     @override
+    def _get_valid_finetuning_query_size(
+        self,
+        *,
+        query_size: int,
+        **kwargs: Any,
+    ) -> int:
+        """Calculate a valid finetuning query size."""
+        return query_size
+
+    @override
     def _log_epoch_evaluation(
         self, epoch: int, eval_result: EvalResult, mean_train_loss: float | None
     ) -> None:

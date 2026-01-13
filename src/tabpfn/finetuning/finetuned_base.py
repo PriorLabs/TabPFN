@@ -356,21 +356,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             stratify=y if self._model_type == "classifier" else None,
         )
 
+    @abstractmethod
     def _get_valid_finetuning_query_size(
-        self, *, n_finetune_ctx_plus_query_samples: int, y_train: np.ndarray | None
+        self, *, query_size: int, y_train: np.ndarray | None
     ) -> int:
         """Calculate a valid finetuning query size."""
-        # finetuning_query_size should be greater or equal to the number of classes
-        finetuning_query_size = int(
-            n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
-        )
-        if self._model_type == "classifier":
-            assert y_train is not None, (
-                "y_train required to compute finetuning query size for classification."
-            )
-            n_classes = len(np.unique(y_train))
-            finetuning_query_size = max(finetuning_query_size, n_classes)
-        return finetuning_query_size
+        ...
 
     def fit(
         self,
@@ -533,7 +524,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         scheduler: LambdaLR | None = None
 
         finetuning_query_size = self._get_valid_finetuning_query_size(
-            n_finetune_ctx_plus_query_samples=n_finetune_ctx_plus_query_samples,
+            query_size=int(
+                n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
+            ),
             y_train=y_train,
         )
         for epoch in range(epoch_to_start_from, self.epochs):
