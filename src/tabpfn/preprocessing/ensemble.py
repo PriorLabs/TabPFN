@@ -97,12 +97,6 @@ class TabPFNEnsemblePreprocessor:
         override_random_state: int | np.random.Generator | None = None,
     ) -> Iterator[TabPFNPreprocessedEnsembleMember]:
         """Get an iterator over the fit and transform data."""
-        assert isinstance(self.configs[0], EnsembleConfig), (
-            "configs must be a list of EnsembleConfig"
-        )
-        # TODO: Move entire preprocessing pipeline to pd.DataFrame
-        assert isinstance(X_train, np.ndarray), "X_train must be a numpy array"
-        assert isinstance(y_train, np.ndarray), "y_train must be a numpy array"
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.configs,
             X_train=X_train,
