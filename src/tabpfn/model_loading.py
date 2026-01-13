@@ -264,7 +264,9 @@ def _try_huggingface_downloads(
                     "(Alternatively, you can set the HF_TOKEN environment variable"
                     " with a read token).\n\n"
                     "For detailed instructions, see "
-                    "https://docs.priorlabs.ai/how-to-access-gated-models"
+                    "https://docs.priorlabs.ai/how-to-access-gated-models\n"
+                    "Alternative: use the TabPFN API instead:\n"
+                    "https://docs.priorlabs.ai/quickstart#tabpfn-api"
                 )
                 raise RuntimeError(auth_message)  # noqa: B904
             raise e
