@@ -593,11 +593,6 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         *,
         autocast: bool,
         only_return_standard_out: bool = True,
-        # Return ensemble_member_processor instead of EnsembleConfig (?)
-        # Classifier needs class permutation, regressor needs target transform!
-        # Both can be stored inside the ensemble_member_preprocessor
-        # (much better name than ensemble_configs)
-        # "Ensemble config" can become an "inference_config"
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         devices = self.get_devices()
 
