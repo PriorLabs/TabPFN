@@ -356,6 +356,22 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             stratify=y if self._model_type == "classifier" else None,
         )
 
+    def _get_valid_finetuning_query_size(
+        self, *, n_finetune_ctx_plus_query_samples: int, y_train: np.ndarray | None
+    ) -> int:
+        """Calculate a valid finetuning query size."""
+        # finetuning_query_size should be greater or equal to the number of classes
+        finetuning_query_size = int(
+            n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
+        )
+        if self._model_type == "classifier":
+            assert y_train is not None, (
+                "y_train required to compute finetuning query size for classification."
+            )
+            n_classes = len(np.unique(y_train))
+            finetuning_query_size = max(finetuning_query_size, n_classes)
+        return finetuning_query_size
+
     def fit(
         self,
         X: XType,
@@ -516,13 +532,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         scheduler: LambdaLR | None = None
 
-        max_data_size = n_finetune_ctx_plus_query_samples
-        # finetuning_query_size should be greater or equal to the number of classes
-        finetuning_query_size = int(max_data_size * self.finetune_ctx_query_split_ratio)
-        if self._model_type == "classifier":
-            n_classes = len(np.unique(y_train))
-            finetuning_query_size = max(finetuning_query_size, n_classes)
-
+        finetuning_query_size = self._get_valid_finetuning_query_size(
+            n_finetune_ctx_plus_query_samples=n_finetune_ctx_plus_query_samples,
+            y_train=y_train,
+        )
         for epoch in range(epoch_to_start_from, self.epochs):
             # Per-epoch aggregates for cleaner learning curves.
             epoch_loss_sum = 0.0
@@ -540,7 +553,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 X_raw=X_train,
                 y_raw=y_train,
                 split_fn=training_splitter,
-                max_data_size=max_data_size,
+                max_data_size=n_finetune_ctx_plus_query_samples,
                 model_type=self._model_type,
                 equal_split_size=False,
                 seed=self.random_state + epoch,
