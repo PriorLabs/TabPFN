@@ -54,6 +54,16 @@ def _for_test_detect_with_defaults(
     )
 
 
+def _for_test_detect_modality(
+    series_data: list[Any], test_name: str, expected: FeatureModality
+) -> None:
+    s = pd.Series(series_data)
+    result = _for_test_detect_with_defaults(s)
+    if result != expected:
+        error = f"Expected {expected} but got {result} for {test_name}: {series_data}"
+        raise AssertionError(error)
+
+
 @pytest.mark.parametrize(
     ("series_data", "test_name"),
     [
@@ -71,11 +81,7 @@ def _for_test_detect_with_defaults(
     ],
 )
 def test__detect_for_constant(series_data: list[Any], test_name: str) -> None:
-    s = pd.Series(series_data)
-    result = _for_test_detect_with_defaults(s)
-    if result != FeatureModality.CONSTANT:
-        error = f"Expected CONSTANT but got {result} for {test_name}: {series_data}"
-        raise AssertionError(error)
+    return _for_test_detect_modality(series_data, test_name, FeatureModality.CONSTANT)
 
 
 @pytest.mark.parametrize(
@@ -89,11 +95,9 @@ def test__detect_for_constant(series_data: list[Any], test_name: str) -> None:
     ],
 )
 def test__detect_for_categorical(series_data: list[Any], test_name: str) -> None:
-    s = pd.Series(series_data)
-    result = _for_test_detect_with_defaults(s)
-    if result != FeatureModality.CATEGORICAL:
-        error = f"Expected CATEGORICAL but got {result} for {test_name}: {series_data}"
-        raise AssertionError(error)
+    return _for_test_detect_modality(
+        series_data, test_name, FeatureModality.CATEGORICAL
+    )
 
 
 def test__numerical_series():
