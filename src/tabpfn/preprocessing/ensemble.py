@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -15,18 +16,132 @@ from tabpfn.constants import (
 )
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
+    EnsembleConfig,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     import numpy.typing as npt
+    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
+    from tabpfn.preprocessing.steps import SequentialFeatureTransformer
 
 T = TypeVar("T")
+
+
+@dataclasses.dataclass
+class TabPFNPreprocessedEnsembleMember:
+    """Holds preprocessed data, config, preprocessor for a single ensemble member."""
+
+    config: EnsembleConfig
+    preprocessor: SequentialFeatureTransformer
+    X_train: np.ndarray | torch.Tensor
+    y_train: np.ndarray | torch.Tensor
+    cat_ix: list[int]
+
+    def transform_X_test(
+        self, X: np.ndarray | torch.Tensor
+    ) -> np.ndarray | torch.Tensor:
+        """Transform the test data."""
+        return self.preprocessor.transform(X).X
+
+
+class TabPFNEnsemblePreprocessor:
+    """Generates pipelines and preprocesses the ensemble members.
+
+    This class has two main functionalities:
+    1. Can parallelize the preprocessing of multiple ensemble members
+    2. Can use global data information and pipelines to perform balanced data slicing
+       (e.g. sample/feature subsampling) per ensemble member.
+    """
+
+    def __init__(
+        self,
+        *,
+        configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
+        rng: np.random.Generator,
+        n_preprocessing_jobs: int,
+    ) -> None:
+        """Init.
+
+        Args:
+            configs: List of ensemble configurations.
+            rng: Random number generator.
+            n_preprocessing_jobs: Number of preprocessing jobs to use.
+        """
+        super().__init__()
+        self.configs = configs
+        self.rng = rng
+        self.n_preprocessing_jobs = n_preprocessing_jobs
+
+        # TODO:
+        # 1. Create pipeline in init for balanced feature subsampling
+        # 2. Run pipeline.num_added_features() for each ensemble member
+        # 3. Create feature slices
+
+    def next_static_seed(self) -> int:
+        """Get a static seed for the ensemble data processor.
+
+        This can be used to redo the preprocessing with the same random state
+        during the fit_transform*() methods. Currently it is only used
+        in the InferenceEngineOnDemand class.
+        """
+        return self.rng.integers(0, int(np.iinfo(np.int32).max))
+
+    def fit_transform_ensemble_members_iterator(
+        self,
+        X_train: np.ndarray | torch.Tensor,
+        y_train: np.ndarray | torch.Tensor,
+        cat_ix: list[int],
+        parallel_mode: Literal["block", "as-ready", "in-order"],
+        override_random_state: int | np.random.Generator | None = None,
+    ) -> Iterator[TabPFNPreprocessedEnsembleMember]:
+        """Get an iterator over the fit and transform data."""
+        preprocessed_data_iterator = fit_preprocessing(
+            configs=self.configs,
+            X_train=X_train,
+            y_train=y_train,
+            cat_ix=cat_ix,
+            random_state=override_random_state or self.rng,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
+            parallel_mode=parallel_mode,
+        )
+
+        for (
+            config,
+            preprocessor,
+            X_train_preprocessed,
+            y_train_preprocessed,
+            cat_ix_preprocessed,
+        ) in preprocessed_data_iterator:
+            yield TabPFNPreprocessedEnsembleMember(
+                config=config,
+                preprocessor=preprocessor,
+                X_train=X_train_preprocessed,
+                y_train=y_train_preprocessed,
+                cat_ix=cat_ix_preprocessed,
+            )
+
+    def fit_transform_ensemble_members(
+        self,
+        X_train: np.ndarray | torch.Tensor,
+        y_train: np.ndarray | torch.Tensor,
+        cat_ix: list[int],
+    ) -> list[TabPFNPreprocessedEnsembleMember]:
+        """Fit and transform the ensemble members."""
+        return list(
+            self.fit_transform_ensemble_members_iterator(
+                X_train=X_train,
+                y_train=y_train,
+                cat_ix=cat_ix,
+                parallel_mode="block",
+            )
+        )
 
 
 def _balance(x: Iterable[T], n: int) -> list[T]:

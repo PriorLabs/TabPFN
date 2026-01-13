@@ -5,19 +5,23 @@
 from __future__ import annotations
 
 import pathlib
+import typing
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Literal, Union
+from typing import TYPE_CHECKING, Literal, Union
 
+import numpy as np
 import torch
+from sklearn.base import (
+    check_is_fitted,
+)
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
-
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 
 # --- TabPFN imports ---
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
     ModelPath,
+    XType,
 )
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference import (
@@ -28,6 +32,7 @@ from tabpfn.inference import (
     InferenceEngineOnDemand,
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
+from tabpfn.preprocessing.clean import fix_dtypes
 from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
@@ -35,14 +40,15 @@ from tabpfn.utils import (
     infer_random_state,
     update_encoder_params,
 )
+from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 if TYPE_CHECKING:
-    import numpy as np
-
     from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
 
@@ -272,14 +278,12 @@ def create_inference_engine(  # noqa: PLR0913
     X_train: np.ndarray,
     y_train: np.ndarray,
     cat_ix: list[int],
-    ensemble_configs: Any,
+    ensemble_preprocessor: TabPFNEnsemblePreprocessor,
     models: list[Architecture],
     devices_: Sequence[torch.device],
     byte_size: int,
     forced_inference_dtype_: torch.dtype | None,
-    memory_saving_mode: bool | Literal["auto"] | float | int,
-    rng: np.random.Generator,
-    n_preprocessing_jobs: int,
+    memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
     inference_mode: bool = True,
 ) -> InferenceEngine:
@@ -295,15 +299,12 @@ def create_inference_engine(  # noqa: PLR0913
         X_train: Training features
         y_train: Training target
         cat_ix: Indices of inferred categorical features.
-        ensemble_configs: The ensemble configurations to create multiple "prompts".
+        ensemble_preprocessor: The ensemble preprocessor to use.
         models: The loaded TabPFN models.
         devices_: The devices for inference.
         byte_size: Byte size for the chosen inference precision.
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
-        rng: Numpy random generator.
-        n_preprocessing_jobs: Number of parallel CPU workers to use for the
-            preprocessing.
         use_autocast_: Whether we use torch.autocast for inference.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
@@ -313,28 +314,24 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
             inference_mode=inference_mode,
         )
     if fit_mode == "fit_with_cache":
@@ -342,14 +339,12 @@ def create_inference_engine(  # noqa: PLR0913
             X_train=X_train,
             y_train=y_train,
             cat_ix=cat_ix,
-            ensemble_configs=ensemble_configs,
+            ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
-            rng=rng,
-            n_preprocessing_jobs=n_preprocessing_jobs,
             autocast=use_autocast_,
         )
     if fit_mode == "batched":
@@ -357,7 +352,7 @@ def create_inference_engine(  # noqa: PLR0913
             X_trains=X_train,  # pyright: ignore[reportArgumentType]
             y_trains=y_train,  # pyright: ignore[reportArgumentType]
             cat_ix=cat_ix,  # pyright: ignore[reportArgumentType]
-            ensemble_configs=ensemble_configs,
+            ensemble_configs=ensemble_preprocessor.configs,  # pyright: ignore[reportArgumentType]
             models=models,
             devices=devices_,
             dtype_byte_size=byte_size,
@@ -450,3 +445,64 @@ def initialize_telemetry() -> None:
     """
     ping()
     capture_session()
+
+
+def get_embeddings(
+    model: TabPFNClassifier | TabPFNRegressor,
+    X: XType,
+    data_source: Literal["train", "test"] = "test",
+) -> np.ndarray:
+    """Extract embeddings from a fitted TabPFN model.
+
+    Args:
+        model : TabPFNClassifier | TabPFNRegressor
+            The fitted classifier or regressor.
+        X : XType
+            The input data.
+        data_source : {"train", "test"}, default="test"
+            Select the transformer output to return. Use ``"train"`` to obtain
+            embeddings from the training tokens and ``"test"`` for the test tokens.
+
+    Returns:
+        np.ndarray
+            The computed embeddings for each fitted estimator.
+            When ``n_estimators > 1`` the returned array has shape
+            ``(n_estimators, n_samples, embedding_dim)``. You can average over the
+            first axis or reshape to concatenate the estimators, e.g.:
+
+                emb = get_embeddings(model, X)
+                emb_avg = emb.mean(axis=0)
+                emb_concat = emb.reshape(emb.shape[1], -1)
+    """
+    check_is_fitted(model)
+
+    data_map = {"train": "train_embeddings", "test": "test_embeddings"}
+
+    selected_data = data_map[data_source]
+
+    # Avoid circular imports
+    from tabpfn.preprocessing import (  # noqa: PLC0415
+        ClassifierEnsembleConfig,
+        RegressorEnsembleConfig,
+    )
+
+    X = ensure_compatible_predict_input_sklearn(X, model)
+    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    X = model.preprocessor_.transform(X)
+
+    embeddings: list[np.ndarray] = []
+
+    # Cast executor to Any to bypass the iter_outputs signature check
+    for output, config in model.executor_.iter_outputs(
+        X,
+        autocast=model.use_autocast_,
+        only_return_standard_out=False,
+    ):
+        # Cast output to Any to allow dict-like access
+        output_dict = typing.cast("dict[str, torch.Tensor]", output)
+        embed = output_dict[selected_data].squeeze(1)
+        assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
+        assert embed.ndim == 2
+        embeddings.append(embed.squeeze().cpu().numpy())
+
+    return np.array(embeddings)

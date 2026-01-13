@@ -18,6 +18,7 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     generate_classification_ensemble_configs,
 )
+from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 
 
 class TestModel(Architecture):
@@ -90,22 +91,25 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
     X_test = rng.standard_normal(size=(2, n_features))
 
-    engine = InferenceEngineCachePreprocessing(
-        X_train,
-        y_train,
-        cat_ix=[] * n_train,
-        models=[TestModel()],
-        devices=[torch.device("cpu")],
-        ensemble_configs=_create_test_ensemble_configs(
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
             n_configs=5,
-            n_classes=n_classes,
+            n_classes=3,
             num_models=1,
         ),
+        rng=rng,
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
         n_preprocessing_jobs=5,
-        rng=rng,
+    )
+    engine = InferenceEngineCachePreprocessing(
+        X_train,
+        y_train,
+        cat_ix=[] * n_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[TestModel()],
+        devices=[torch.device("cpu")],
         dtype_byte_size=4,
         force_inference_dtype=None,
         save_peak_mem=True,
@@ -140,22 +144,25 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
 
     num_models = 3
     models = [TestModel() for _ in range(num_models)]
-    engine = InferenceEngineOnDemand(
-        X_train,
-        y_train,
-        cat_ix=[] * n_train,
-        models=models,
-        devices=[torch.device("cpu")],
-        ensemble_configs=_create_test_ensemble_configs(
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
             n_configs=5,
             n_classes=3,
             num_models=num_models,
         ),
+        rng=rng,
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
         n_preprocessing_jobs=5,
-        rng=rng,
+    )
+    engine = InferenceEngineOnDemand(
+        X_train,
+        y_train,
+        cat_ix=[] * n_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=models,
+        devices=[torch.device("cpu")],
         dtype_byte_size=4,
         force_inference_dtype=None,
         save_peak_mem=True,

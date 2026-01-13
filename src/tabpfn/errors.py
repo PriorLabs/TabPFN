@@ -1,4 +1,4 @@
-"""A collection of random utilities for the TabPFN models."""
+"""Custom exception classes for TabPFN."""
 
 #  Copyright (c) Prior Labs GmbH 2025.
 

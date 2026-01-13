@@ -38,7 +38,7 @@ def ensure_compatible_fit_inputs(
     ignore_pretraining_limits: bool,
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
-) -> tuple[np.ndarray, np.ndarray, list[str] | None, int]:
+) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate and convert inputs to compatible format."""
     X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
         X,
@@ -119,8 +119,8 @@ def ensure_compatible_differentiable_inputs(
 def ensure_compatible_fit_inputs_sklearn(
     X: XType,
     y: YType,
-    estimator: TabPFNRegressor | TabPFNClassifier,
     *,
+    estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting with standard input.
@@ -131,12 +131,7 @@ def ensure_compatible_fit_inputs_sklearn(
         X: The input data.
         y: The target data.
         estimator: The estimator to validate the data for.
-        max_num_features: The maximum number of features to allow.
-            Ignored if `ignore_pretraining_limits` is True.
-        max_num_samples: The maximum number of samples to allow.
-            Ignored if `ignore_pretraining_limits` is True.
         ensure_y_numeric: Whether to ensure the target data is numeric.
-        ignore_pretraining_limits: Whether to ignore the pretraining limits.
 
     Returns:
         A tuple of the validated input data X, target data y, feature names,
