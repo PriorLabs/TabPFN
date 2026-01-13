@@ -43,6 +43,7 @@ from tabpfn.base import (
     create_inference_engine,
     determine_precision,
     estimator_to_device,
+    get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
 )
@@ -69,7 +70,6 @@ from tabpfn.preprocessing.steps import (
 )
 from tabpfn.utils import (
     DevicesSpecification,
-    get_embeddings,
     infer_random_state,
     transform_borders_one,
     translate_probs_across_borders,
