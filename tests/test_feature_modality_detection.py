@@ -15,23 +15,6 @@ from tabpfn.preprocessing.modality_detection import (
 )
 
 
-def _for_test_detect_with_defaults(
-    s: pd.Series,
-    max_unique_for_category: int = 10,
-    min_unique_for_numerical: int = 5,
-    *,
-    reported_categorical: bool = False,
-    big_enough_n_to_infer_cat: bool = True,
-) -> FeatureModality:
-    return _detect_feature_modality(
-        s,
-        reported_categorical=reported_categorical,
-        max_unique_for_category=max_unique_for_category,
-        min_unique_for_numerical=min_unique_for_numerical,
-        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-    )
-
-
 def test__dataset_view_end_to_end():
     df = pd.DataFrame(
         {
@@ -52,6 +35,65 @@ def test__dataset_view_end_to_end():
     assert view.columns_by_modality[FeatureModality.CATEGORICAL] == ["cat", "cat_num"]
     assert view.columns_by_modality[FeatureModality.TEXT] == ["text"]
     assert view.columns_by_modality[FeatureModality.CONSTANT] == ["const"]
+
+
+def _for_test_detect_with_defaults(
+    s: pd.Series,
+    max_unique_for_category: int = 10,
+    min_unique_for_numerical: int = 5,
+    *,
+    reported_categorical: bool = False,
+    big_enough_n_to_infer_cat: bool = True,
+) -> FeatureModality:
+    return _detect_feature_modality(
+        s,
+        reported_categorical=reported_categorical,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+    )
+
+
+@pytest.mark.parametrize(
+    ("series_data", "test_name"),
+    [
+        ([1.0, 1.0, 1.0, 1.0], "multiple floats"),
+        ([1.0], "single float"),
+        ([np.nan], "single NaN"),
+        ([None], "single None"),
+        (["a"], "single string"),
+        ([True], "single boolean"),
+        (["a", "a", "a", "a"], "multiple strings"),
+        ([True, True, True, True], "multiple booleans"),
+        ([], "empty"),
+        ([np.nan, np.nan, np.nan, np.nan], "multiple NaN values"),
+        ([np.nan, None, np.nan, None], "mixed NaN and None values"),
+    ],
+)
+def test__detect_for_constant(series_data: list[Any], test_name: str) -> None:
+    s = pd.Series(series_data)
+    result = _for_test_detect_with_defaults(s)
+    if result != FeatureModality.CONSTANT:
+        error = f"Expected CONSTANT but got {result} for {test_name}: {series_data}"
+        raise AssertionError(error)
+
+
+@pytest.mark.parametrize(
+    ("series_data", "test_name"),
+    [
+        (["a", "b", "c", "a", "b", "c", "c"], "multiple strings"),
+        ([True, False, False, False], "multiple booleans"),
+        (["True", "False", "True", "False"], "multiple boolean-like strings"),
+        ([1.0, 0.0, 0.0, 1.0, 0.0], "multiple floats"),
+        ([np.nan, 1.0, np.nan, 1.0], "constant value with missing ones"),
+    ],
+)
+def test__detect_for_categorical(series_data: list[Any], test_name: str) -> None:
+    s = pd.Series(series_data)
+    result = _for_test_detect_with_defaults(s)
+    if result != FeatureModality.CATEGORICAL:
+        error = f"Expected CATEGORICAL but got {result} for {test_name}: {series_data}"
+        raise AssertionError(error)
 
 
 def test__numerical_series():
@@ -163,51 +205,3 @@ def test__detect_text_as_object():
     assert result == FeatureModality.TEXT
     result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
     assert result == FeatureModality.CATEGORICAL
-
-
-def test__detect_for_boolean():
-    s = pd.Series([True, False, True, False])
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
-
-
-def test__detect_for_boolean_with_floats():
-    s = pd.Series([1.0, 0.0, 1.0, 0.0])
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
-
-
-def test__detect_for_boolean_with_strings():
-    s = pd.Series(["True", "False", "True", "False"])
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
-
-
-def test__detect_for_series_with_nan_and_floats_not_constant():
-    s = pd.Series([np.nan, 1.0, np.nan, 1.0])
-    result = _for_test_detect_with_defaults(s)
-    assert result == FeatureModality.CATEGORICAL
-
-
-@pytest.mark.parametrize(
-    ("series_data", "test_name"),
-    [
-        ([1.0, 1.0, 1.0, 1.0], "multiple floats"),
-        ([1.0], "single float"),
-        ([np.nan], "single NaN"),
-        ([None], "single None"),
-        (["a"], "single string"),
-        ([True], "single boolean"),
-        (["a", "a", "a", "a"], "multiple strings"),
-        ([True, True, True, True], "multiple booleans"),
-        ([], "empty"),
-        ([np.nan, np.nan, np.nan, np.nan], "multiple NaN values"),
-        ([np.nan, None, np.nan, None], "mixed NaN and None values"),
-    ],
-)
-def test__detect_for_constant(series_data: list[Any], test_name: str) -> None:
-    s = pd.Series(series_data)
-    result = _for_test_detect_with_defaults(s)
-    if result != FeatureModality.CONSTANT:
-        error = f"Expected CONSTANT but got {result} for {test_name}: {series_data}"
-        raise AssertionError(error)
