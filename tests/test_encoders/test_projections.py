@@ -123,7 +123,7 @@ def test_combination():
     x[6:, 2, 2] = 100.0
     out = encoder({"main": x}, single_eval_pos=5)["main"]
     assert (out[:, 0, :] == out_ref[:, 0, :]).all(), (
-        "Changing one batch should not affeect the others."
+        "Changing one batch should not affect the others."
     )
     assert (out[0:5, 2, 2] == out_ref[0:5, 2, 2]).all(), (
         "Changing unnormalized part of the batch should not affect the others."

@@ -86,7 +86,7 @@ class InputNormalizationEncoderStep(SeqEncStep):
 
         if self.normalize_x:
             (
-                x,
+                _,
                 (
                     self.mean_for_normalization,
                     self.std_for_normalization,

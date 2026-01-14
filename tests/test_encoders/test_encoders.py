@@ -57,7 +57,7 @@ def test_input_normalization():
     x[:, 2, 6:] = 100.0
     out = encoder({"main": x}, single_eval_pos=5)["main"]
     assert (out[:, 0, :] == out_ref[:, 0, :]).all(), (
-        "Changing one batch should not affeect the others."
+        "Changing one batch should not affect the others."
     )
     assert (out[:, 2, 0:5] == out_ref[:, 2, 0:5]).all(), (
         "Changing unnormalized part of the batch should not affect the others."
