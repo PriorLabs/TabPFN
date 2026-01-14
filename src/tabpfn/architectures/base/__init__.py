@@ -11,11 +11,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from tabpfn.architectures.base.config import ModelConfig
-from tabpfn.architectures.base.encoders import (
+from tabpfn.architectures.base.transformer import PerFeatureTransformer
+from tabpfn.architectures.encoders import (
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
-    MulticlassClassificationTargetEncoder,
+    MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
@@ -23,7 +24,6 @@ from tabpfn.architectures.base.encoders import (
     SequentialEncoder,
     VariableNumFeaturesEncoderStep,
 )
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
 
 if TYPE_CHECKING:
     from torch import nn
@@ -213,7 +213,7 @@ def get_y_encoder(
         inputs_to_merge += [{"name": "nan_indicators", "dim": num_inputs}]
 
     if max_num_classes >= 2:
-        steps += [MulticlassClassificationTargetEncoder()]
+        steps += [MulticlassClassificationTargetEncoderStep()]
 
     steps += [
         LinearInputEncoderStep(

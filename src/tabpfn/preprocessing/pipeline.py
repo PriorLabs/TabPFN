@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from tabpfn.preprocessing.pipeline_interfaces import (
+    FeaturePreprocessingTransformerStep,
+    SequentialFeatureTransformer,
+)
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
     DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
-    FeaturePreprocessingTransformerStep,
     NanHandlingPolynomialFeaturesStep,
     RemoveConstantFeaturesStep,
     ReshapeFeatureDistributionsStep,
-    SequentialFeatureTransformer,
     ShuffleFeaturesStep,
 )
 

@@ -16,8 +16,8 @@ from sklearn.base import (
     TransformerMixin,
 )
 
-from tabpfn.architectures.base.encoders import (
-    MulticlassClassificationTargetEncoder,
+from tabpfn.architectures.encoders import (
+    MulticlassClassificationTargetEncoderStep,
     SequentialEncoder,
 )
 from tabpfn.constants import (
@@ -416,7 +416,7 @@ def update_encoder_params(
         if differentiable_input:
             diffable_steps = []  # only differentiable encoder steps.
             for module in model.y_encoder:
-                if isinstance(module, MulticlassClassificationTargetEncoder):
+                if isinstance(module, MulticlassClassificationTargetEncoderStep):
                     pass
                 else:
                     diffable_steps.append(module)

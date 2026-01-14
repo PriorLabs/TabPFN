@@ -12,10 +12,6 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
-    from tabpfn.preprocessing.steps.preprocessing_helpers import (
-        SequentialFeatureTransformer,
-    )
-
 
 @dataclass(frozen=True, eq=True)
 class PreprocessorConfig:
@@ -149,15 +145,6 @@ class EnsembleConfig:
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
-
-    # TODO(prep-refactor): remove this function
-    def to_pipeline(
-        self, *, random_state: int | np.random.Generator | None = None
-    ) -> SequentialFeatureTransformer:
-        """Convert the ensemble configuration to a preprocessing pipeline."""
-        from .pipeline import build_pipeline  # noqa: PLC0415
-
-        return build_pipeline(self, random_state=random_state)
 
 
 @dataclass

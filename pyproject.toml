@@ -345,7 +345,7 @@ disable_error_code = ["var-annotated"]
 [[tool.mypy.overrides]]
 module = [
   "tabpfn.architectures.base.multi_head_attention",
-  "tabpfn.architectures.base.encoders"
+  "tabpfn.architectures.encoders"
 ]
 ignore_errors = true
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.architectures.base import encoders
+from tabpfn.architectures import encoders
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 
