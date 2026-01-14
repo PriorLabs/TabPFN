@@ -69,17 +69,20 @@ def ensure_compatible_predict_input_sklearn(
 
     Note that this also changes the type of X to np.ndarray.
     """
-    result = validate_data(
-        estimator,
-        X=X,
-        # NOTE: Important that reset is False, i.e. doesn't reset estimator
-        reset=False,
-        # Parameters to `check_X_y()`
-        accept_sparse=False,
-        dtype=None,
-        ensure_all_finite="allow-nan",
-        estimator=estimator,
-    )
+    try:
+        result = validate_data(
+            estimator,
+            X=X,
+            # NOTE: Important that reset is False, i.e. doesn't reset estimator
+            reset=False,
+            # Parameters to `check_X_y()`
+            accept_sparse=False,
+            dtype=None,
+            ensure_all_finite="allow-nan",
+            estimator=estimator,
+        )
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
     return typing.cast("np.ndarray", result)
 
 
@@ -137,19 +140,22 @@ def ensure_compatible_fit_inputs_sklearn(
         A tuple of the validated input data X, target data y, feature names,
         and number of features.
     """
-    X, y = validate_data(
-        estimator,
-        X=X,
-        y=y,
-        # Parameters to `check_X_y()`
-        accept_sparse=False,
-        dtype=None,  # This is handled later in `fit()`
-        ensure_all_finite="allow-nan",
-        ensure_min_samples=2,
-        ensure_min_features=1,
-        y_numeric=ensure_y_numeric,
-        estimator=estimator,
-    )
+    try:
+        X, y = validate_data(
+            estimator,
+            X=X,
+            y=y,
+            # Parameters to `check_X_y()`
+            accept_sparse=False,
+            dtype=None,  # This is handled later in `fit()`
+            ensure_all_finite="allow-nan",
+            ensure_min_samples=2,
+            ensure_min_features=1,
+            y_numeric=ensure_y_numeric,
+            estimator=estimator,
+        )
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
 
     if is_classifier(estimator):
         check_classification_targets(y)
