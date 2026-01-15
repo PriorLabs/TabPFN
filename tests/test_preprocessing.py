@@ -18,10 +18,10 @@ from sklearn.preprocessing import (
 
 from tabpfn.preprocessing import steps
 from tabpfn.preprocessing.ensemble import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.pipeline_interfaces import FeaturePreprocessingTransformerStep
 from tabpfn.preprocessing.steps import (
     AdaptiveQuantileTransformer,
     DifferentiableZNormStep,
-    FeaturePreprocessingTransformerStep,
     KDITransformerWithNaN,
     ReshapeFeatureDistributionsStep,
     SafePowerTransformer,

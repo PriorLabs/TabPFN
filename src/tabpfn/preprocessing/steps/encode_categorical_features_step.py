@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
+from tabpfn.preprocessing.pipeline_interfaces import (
     FeaturePreprocessingTransformerStep,
     TransformResult,
 )

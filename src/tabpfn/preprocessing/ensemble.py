@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
-    from tabpfn.preprocessing.steps import SequentialFeatureTransformer
+    from tabpfn.preprocessing.pipeline_interfaces import SequentialFeatureTransformer
 
 T = TypeVar("T")
 

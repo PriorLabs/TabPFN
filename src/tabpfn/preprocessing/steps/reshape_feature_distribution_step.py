@@ -21,16 +21,16 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
+from tabpfn.preprocessing.pipeline_interfaces import (
+    FeaturePreprocessingTransformerStep,
+    TransformResult,
+)
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )
 from tabpfn.preprocessing.steps.kdi_transformer import (
     KDITransformerWithNaN,
     get_all_kdi_transformers,
-)
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
