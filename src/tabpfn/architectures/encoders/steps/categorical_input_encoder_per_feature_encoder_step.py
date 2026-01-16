@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from typing import Any
+from typing_extensions import override
 
 import torch
 from torch import nn
 
-from tabpfn.architectures.encoders import SeqEncStep
+from tabpfn.architectures.encoders import GPUPreprocessingStep
 
 
-class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
+class CategoricalInputEncoderPerFeatureEncoderStep(GPUPreprocessingStep):
     """Expects input of size 1."""
 
     def __init__(
@@ -19,9 +20,14 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
         emsize: int,
         base_encoder,  # noqa: ANN001
         num_embs: int = 1_000,
-        **kwargs: Any,
+        in_keys: tuple[str, ...] = ("main",),
+        out_keys: tuple[str, ...] = ("main",),
     ):
-        super().__init__(**kwargs)
+        assert len(in_keys) == len(out_keys) == 1, (
+            f"{self.__class__.__name__} expects a single input and output key."
+        )
+
+        super().__init__(in_keys, out_keys)
         assert num_features == 1
         self.num_features = num_features
         self.emsize = emsize
@@ -29,17 +35,29 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
         self.embedding = nn.Embedding(num_embs, emsize)
         self.base_encoder = base_encoder
 
+    @override
     def _fit(
-        self, x: torch.Tensor, single_eval_pos: int, categorical_inds: list[int]
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
     ) -> None:
-        pass
+        del state, kwargs
 
+    @override
     def _transform(
         self,
-        x: torch.Tensor,
-        single_eval_pos: int,
-        categorical_inds: list[int],
-    ) -> tuple[torch.Tensor]:
+        state: dict[str, torch.Tensor],
+        single_eval_pos: int | None = None,
+        categorical_inds: list[int] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
+        del kwargs
+        if single_eval_pos is None:
+            raise ValueError(
+                f"single_eval_pos must be provided for {self.__class__.__name__}"
+            )
+
+        x = state[self.in_keys[0]]
         if categorical_inds is None:
             is_categorical = torch.zeros(x.shape[1], dtype=torch.bool, device=x.device)
         else:
@@ -75,4 +93,4 @@ class CategoricalInputEncoderPerFeatureEncoderStep(SeqEncStep):
         )
         embs[:, is_categorical] = categorical_embs.float()
         embs[:, ~is_categorical] = continuous_embs.float()
-        return (embs,)
+        return {self.out_keys[0]: embs}

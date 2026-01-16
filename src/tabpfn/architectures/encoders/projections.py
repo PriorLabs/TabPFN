@@ -2,19 +2,131 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
+from typing_extensions import override
 
 import torch
 from torch import nn
 
-from tabpfn.architectures.encoders import SeqEncStep
-
-# TODO: Remove the SeqEncStep inheritance in here and make this a
-# regular nn.Module that get's a dict of inputs and projects them up
-# according to some agreement specified in the model!
+from tabpfn.architectures.encoders import GPUPreprocessingStep
 
 
-class LinearInputEncoderStep(SeqEncStep):
+class LinearFeatureGroupProjection(nn.Module):
+    """A simple linear projection from input feature group to embedding space."""
+
+    def __init__(
+        self,
+        *,
+        num_features_per_group_with_metadata: int,
+        emsize: int,
+        replace_nan_by_zero: bool = False,
+        bias: bool = True,
+    ) -> None:
+        """Initialize the projection.
+
+        Args:
+            num_features_per_group_with_metadata: The number of input features per group
+                with additional metadata features like nan_indicators.
+            emsize: The embedding size, i.e. the number of output features.
+            replace_nan_by_zero: Whether to replace NaN values in the input by zero.
+            bias: Whether to use a bias term in the linear layer.
+        """
+        super().__init__()
+        self.layer = nn.Linear(num_features_per_group_with_metadata, emsize, bias=bias)
+        self.replace_nan_by_zero = replace_nan_by_zero
+
+    @override
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Project input tensor to embedding space.
+
+        Args:
+            x: Input tensor with last dimension size
+            `num_features_per_group_with_metadata`.
+
+        Returns:
+            Projected tensor with last dimension size `emsize`.
+        """
+        if self.replace_nan_by_zero:
+            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
+        x = x.to(self.layer.weight.dtype)  # Why is this necessary?
+        return self.layer(x)
+
+
+class MLPFeatureGroupProjection(nn.Module):
+    """An MLP projection from input feature group to embedding space."""
+
+    def __init__(
+        self,
+        *,
+        num_features_per_group_with_metadata: int,
+        emsize: int,
+        hidden_dim: int | None = None,
+        activation: str = "gelu",
+        num_layers: int = 2,
+        replace_nan_by_zero: bool = False,
+        bias: bool = True,
+    ) -> None:
+        """Initialize the projection.
+
+        Args:
+            num_features_per_group_with_metadata: The number of input features per group
+                with additional metadata features like nan_indicators.
+            emsize: The embedding size, i.e. the number of output features.
+            hidden_dim: The hidden dimension of the MLP. If None, defaults to emsize.
+            activation: The activation function to use. Either "gelu" or "relu".
+            num_layers: The number of layers in the MLP (minimum 2).
+            replace_nan_by_zero: Whether to replace NaN values in the input by zero.
+            bias: Whether to use a bias term in the linear layers.
+        """
+        super().__init__()
+        if hidden_dim is None:
+            hidden_dim = emsize
+        if num_layers < 2:
+            raise ValueError("num_layers must be at least 2 for an MLP projection")
+
+        self.replace_nan_by_zero = replace_nan_by_zero
+
+        if activation == "gelu":
+            act_fn: nn.Module = nn.GELU()
+        elif activation == "relu":
+            act_fn = nn.ReLU()
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+
+        layers: list[nn.Module] = []
+        layers.append(
+            nn.Linear(num_features_per_group_with_metadata, hidden_dim, bias=bias)
+        )
+        layers.append(act_fn)
+
+        for _ in range(num_layers - 2):
+            layers.append(nn.Linear(hidden_dim, hidden_dim, bias=bias))
+            layers.append(act_fn)
+
+        layers.append(nn.Linear(hidden_dim, emsize, bias=bias))
+        self.mlp = nn.Sequential(*layers)
+
+    @override
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Project input tensor to embedding space.
+
+        Args:
+            x: Input tensor with last dimension size
+            `num_features_per_group_with_metadata`.
+
+        Returns:
+            Projected tensor with last dimension size `emsize`.
+        """
+        if self.replace_nan_by_zero:
+            x = torch.nan_to_num(x, nan=0.0)  # type: ignore
+        first_layer = cast("nn.Linear", self.mlp[0])
+        x = x.to(first_layer.weight.dtype)  # Why is this necessary?
+        return self.mlp(x)
+
+
+# The following is kept for backwards compatibility with old TabPFN
+# encoder pipelines that included the projections.
+class LinearInputEncoderStep(GPUPreprocessingStep):
     """A simple linear input encoder step."""
 
     def __init__(
@@ -42,20 +154,33 @@ class LinearInputEncoderStep(SeqEncStep):
         self.layer = nn.Linear(num_features, emsize, bias=bias)
         self.replace_nan_by_zero = replace_nan_by_zero
 
-    def _fit(self, *x: torch.Tensor, **kwargs: Any) -> None:
+    @override
+    def _fit(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> None:
         """Fit the encoder step. Does nothing for LinearInputEncoderStep."""
+        del state, kwargs
 
-    def _transform(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:  # noqa: ARG002
+    @override
+    def _transform(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
         """Apply the linear transformation to the input.
 
         Args:
-            *x: The input tensors to concatenate and transform.
+            state: Input state dictionary.
+            single_eval_pos: Unused.
             **kwargs: Unused keyword arguments.
 
         Returns:
-            A tuple containing the transformed tensor.
+            Dictionary mapping `out_keys` to projected tensors.
         """
-        x = torch.cat(x, dim=-1)
+        del kwargs
+        x = torch.cat([state[key] for key in self.in_keys], dim=-1)
         if self.replace_nan_by_zero:
             x = torch.nan_to_num(x, nan=0.0)  # type: ignore
 
@@ -63,10 +188,10 @@ class LinearInputEncoderStep(SeqEncStep):
         # Since this layer gets input from the outside we verify the dtype
         x = x.to(self.layer.weight.dtype)
 
-        return (self.layer(x),)
+        return {self.out_keys[0]: self.layer(x)}
 
 
-class MLPInputEncoderStep(SeqEncStep):
+class MLPInputEncoderStep(GPUPreprocessingStep):
     """An MLP-based input encoder step."""
 
     def __init__(
@@ -128,24 +253,36 @@ class MLPInputEncoderStep(SeqEncStep):
 
         self.mlp = nn.Sequential(*layers)
 
-    def _fit(self, *x: torch.Tensor, **kwargs: Any) -> None:
+    @override
+    def _fit(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> None:
         """Fit the encoder step. Does nothing for MLPInputEncoderStep."""
+        del state, kwargs
 
-    def _transform(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:  # noqa: ARG002
+    @override
+    def _transform(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
         """Apply the MLP transformation to the input.
 
         Args:
-            *x: The input tensors to concatenate and transform.
+            state: Input state dictionary.
             **kwargs: Unused keyword arguments.
 
         Returns:
-            A tuple containing the transformed tensor.
+            Dictionary mapping `out_keys` to projected tensors.
         """
-        x = torch.cat(x, dim=-1)
+        del kwargs
+        x = torch.cat([state[key] for key in self.in_keys], dim=-1)
         if self.replace_nan_by_zero:
             x = torch.nan_to_num(x, nan=0.0)  # type: ignore
 
         # Ensure input tensor dtype matches the first layer's weight dtype
         x = x.to(self.mlp[0].weight.dtype)
 
-        return (self.mlp(x),)
+        return {self.out_keys[0]: self.mlp(x)}

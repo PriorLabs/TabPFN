@@ -17,8 +17,8 @@ from sklearn.base import (
 )
 
 from tabpfn.architectures.encoders import (
+    GPUPreprocessingPipeline,
     MulticlassClassificationTargetEncoderStep,
-    SequentialEncoder,
 )
 from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
@@ -421,7 +421,9 @@ def update_encoder_params(
                 else:
                     diffable_steps.append(module)
 
-            model.y_encoder = SequentialEncoder(*diffable_steps)
+            model.y_encoder = GPUPreprocessingPipeline(
+                steps=diffable_steps, output_key="output"
+            )
 
 
 def transform_borders_one(

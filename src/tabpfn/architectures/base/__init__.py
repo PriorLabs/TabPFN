@@ -13,21 +13,18 @@ from typing import TYPE_CHECKING, Any, Literal
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.encoders import (
+    GPUPreprocessingPipeline,
+    GPUPreprocessingStep,
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
-    RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    SeqEncStep,
-    SequentialEncoder,
     VariableNumFeaturesEncoderStep,
 )
 
 if TYPE_CHECKING:
-    from torch import nn
-
     from tabpfn.architectures.interface import ArchitectureConfig
 
 
@@ -127,15 +124,13 @@ def get_encoder(  # noqa: PLR0913
     encoder_type: Literal["linear", "mlp"] = "linear",
     encoder_mlp_hidden_dim: int | None = None,
     encoder_mlp_num_layers: int = 2,
-) -> nn.Module:
+) -> GPUPreprocessingPipeline:
+    del remove_duplicate_features
     inputs_to_merge = {"main": {"dim": num_features}}
 
-    encoder_steps: list[SeqEncStep] = []
+    encoder_steps: list[GPUPreprocessingStep] = []
     if remove_empty_features:
         encoder_steps += [RemoveEmptyFeaturesEncoderStep()]
-
-    if remove_duplicate_features:
-        encoder_steps += [RemoveDuplicateFeaturesEncoderStep()]
 
     encoder_steps += [NanHandlingEncoderStep(keep_nans=nan_handling_enabled)]
 
@@ -146,8 +141,8 @@ def get_encoder(  # noqa: PLR0913
             VariableNumFeaturesEncoderStep(
                 num_features=num_features,
                 normalize_by_used_features=False,
-                in_keys=["nan_indicators"],
-                out_keys=["nan_indicators"],
+                in_keys=("nan_indicators",),
+                out_keys=("nan_indicators",),
             ),
         ]
 
@@ -196,7 +191,7 @@ def get_encoder(  # noqa: PLR0913
             f"Invalid encoder type: {encoder_type} (expected 'linear' or 'mlp')"
         )
 
-    return SequentialEncoder(*encoder_steps, output_key="output")
+    return GPUPreprocessingPipeline(encoder_steps, output_key="output")
 
 
 def get_y_encoder(
@@ -205,8 +200,8 @@ def get_y_encoder(
     embedding_size: int,
     nan_handling_y_encoder: bool,
     max_num_classes: int,
-) -> nn.Module:
-    steps: list[SeqEncStep] = []
+) -> GPUPreprocessingPipeline:
+    steps: list[GPUPreprocessingStep] = []
     inputs_to_merge = [{"name": "main", "dim": num_inputs}]
     if nan_handling_y_encoder:
         steps += [NanHandlingEncoderStep()]
@@ -223,4 +218,4 @@ def get_y_encoder(
             out_keys=("output",),
         ),
     ]
-    return SequentialEncoder(*steps, output_key="output")
+    return GPUPreprocessingPipeline(steps, output_key="output")

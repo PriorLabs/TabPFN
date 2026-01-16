@@ -20,9 +20,9 @@ from torch.utils.checkpoint import checkpoint
 from tabpfn.architectures.base.layer import PerFeatureEncoderLayer
 from tabpfn.architectures.base.thinking_tokens import AddThinkingTokens
 from tabpfn.architectures.encoders import (
+    GPUPreprocessingPipeline,
     LinearInputEncoderStep,
     NanHandlingEncoderStep,
-    SequentialEncoder,
 )
 from tabpfn.architectures.interface import Architecture
 from tabpfn.errors import TabPFNValidationError
@@ -155,29 +155,36 @@ class PerFeatureTransformer(Architecture):
         super().__init__()
 
         if encoder is None:
-            encoder = SequentialEncoder(
-                LinearInputEncoderStep(
-                    num_features=1,
-                    emsize=config.emsize,
-                    replace_nan_by_zero=False,
-                    bias=True,
-                    in_keys=("main",),
-                    out_keys=("output",),
-                ),
+            encoder = GPUPreprocessingPipeline(
+                steps=[
+                    LinearInputEncoderStep(
+                        num_features=1,
+                        emsize=config.emsize,
+                        replace_nan_by_zero=False,
+                        bias=True,
+                        in_keys=("main",),
+                        out_keys=("output",),
+                    )
+                ],
+                output_key="output",
             )
 
         if y_encoder is None:
-            y_encoder = SequentialEncoder(
-                NanHandlingEncoderStep(),
-                LinearInputEncoderStep(
-                    num_features=2,
-                    emsize=config.emsize,
-                    replace_nan_by_zero=False,
-                    bias=True,
-                    out_keys=("output",),
-                    in_keys=("main", "nan_indicators"),
-                ),
+            y_encoder = GPUPreprocessingPipeline(
+                steps=[
+                    NanHandlingEncoderStep(),
+                    LinearInputEncoderStep(
+                        num_features=2,
+                        emsize=config.emsize,
+                        replace_nan_by_zero=False,
+                        bias=True,
+                        out_keys=("output",),
+                        in_keys=("main", "nan_indicators"),
+                    ),
+                ],
+                output_key="output",
             )
+
         self.encoder = encoder
         self.y_encoder = y_encoder
         self.ninp = config.emsize
@@ -465,7 +472,7 @@ class PerFeatureTransformer(Architecture):
         extra_encoders_args = {}
         if categorical_inds_to_use is not None and isinstance(
             self.encoder,
-            SequentialEncoder,
+            GPUPreprocessingPipeline,
         ):
             # Transform cat. features accordingly to correspond to following to merge
             # of batch and feature_group dimensions below (i.e., concat lists)
