@@ -34,7 +34,11 @@ from tabpfn.finetuning.finetuned_regressor import (
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
 
-from .utils import get_pytest_devices
+from .utils import (
+    get_pytest_devices,
+    get_pytest_devices_with_mps_marked_slow,
+    mark_mps_configs_as_slow,
+)
 
 rng = np.random.default_rng(42)
 
@@ -142,12 +146,12 @@ def variable_synthetic_regression_dataset_collection() -> list[
 
 @pytest.mark.parametrize(
     ("device", "early_stopping", "use_lr_scheduler"),
-    [
+    mark_mps_configs_as_slow(
         (device, early_stopping, use_lr_scheduler)
         for device in devices
         for early_stopping in [True, False]
         for use_lr_scheduler in [True, False]
-    ],
+    ),
 )
 def test__finetuned_tabpfn_regressor__fit_and_predict(
     device: str,
@@ -203,7 +207,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
     assert np.isfinite(predictions).all()
 
 
-@pytest.mark.parametrize("device", devices)
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
 def test__regressor_checkpoint_contains_mse_metric(
     device: str,
     tmp_path: Path,

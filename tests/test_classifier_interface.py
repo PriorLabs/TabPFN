@@ -143,6 +143,7 @@ non_default_model_paths = list(
 )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ("device", "model_path"),
     mark_mps_configs_as_slow(itertools.product(devices, non_default_model_paths)),
