@@ -115,7 +115,7 @@ empty_parameter_set_mark = "xfail"  # Prevents user error of an empty `parametri
 log_cli = false
 log_level = "DEBUG"
 xfail_strict = true
-addopts = "--durations=10 -vv"
+addopts = "--durations=10 -vv -n auto"
 markers = [
     "slow: slow tests that we run only on merge, rather than in PRs"
 ]
