@@ -1,0 +1,58 @@
+name: Tag Release Branch on PR Merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    if: |
+      github.event.pull_request.merged == true &&
+      startsWith(github.event.pull_request.head.ref, 'release/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN }} 
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Extract version from pyproject.toml
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          s = Path("pyproject.toml").read_text(encoding="utf-8")
+          m = re.search(r'(?ms)^\[project\]\s*\n.*?^\s*version\s*=\s*"([^"]+)"', s)
+          if not m:
+            raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          version = m.group(1).strip()
+          Path("version.txt").write_text(version, encoding="utf-8")
+          print(f"VERSION: {version}")
+          PY
+          echo "VERSION=$(cat version.txt)" >> $GITHUB_ENV
+
+      - name: Create and push tag (if missing)
+        run: |
+          TAG="v${VERSION}"
+
+          git fetch --tags
+
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists. Nothing to do."
+            exit 0
+          fi
+
+          git tag "$TAG"
+          git push origin "$TAG"
