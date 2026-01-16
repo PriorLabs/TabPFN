@@ -35,11 +35,14 @@ from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
 
-from .utils import get_pytest_devices
+from .utils import get_pytest_devices, mark_mps_configs_as_slow
 
 rng = np.random.default_rng(42)
 
 devices = get_pytest_devices()
+devices_mps_slow = [
+    pytest.param(d, marks=pytest.mark.slow) if d == "mps" else d for d in devices
+]
 
 FitMode = Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"]
 
@@ -287,7 +290,7 @@ def variable_synthetic_dataset_collection() -> list[tuple[np.ndarray, np.ndarray
 
 @pytest.mark.parametrize(
     ("device", "early_stopping", "use_lr_scheduler"),
-    finetuned_combinations,
+    mark_mps_configs_as_slow(finetuned_combinations),
 )
 def test_finetuned_tabpfn_classifier_fit_and_predict(
     device: str,
@@ -359,7 +362,7 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
 # =============================================================================
 
 
-@pytest.mark.parametrize("device", devices)
+@pytest.mark.parametrize("device", devices_mps_slow)
 def test_checkpoint_saving_and_loading(
     device: str,
     tmp_path: Path,
@@ -438,7 +441,7 @@ def test_checkpoint_saving_and_loading(
     assert best_checkpoint["epoch"] > 0
 
 
-@pytest.mark.parametrize("device", devices)
+@pytest.mark.parametrize("device", devices_mps_slow)
 def test_checkpoint_resumption(
     device: str,
     tmp_path: Path,
@@ -577,7 +580,7 @@ def test_checkpoint_epoch_offset_extraction(tmp_path: Path) -> None:
     assert epoch == 15
 
 
-@pytest.mark.parametrize("device", devices)
+@pytest.mark.parametrize("device", devices_mps_slow)
 def test_checkpoint_interval_configuration(
     device: str,
     tmp_path: Path,
@@ -641,7 +644,7 @@ def test_checkpoint_interval_configuration(
     assert best_checkpoint_path.exists(), "Best checkpoint should exist"
 
 
-@pytest.mark.parametrize("device", devices)
+@pytest.mark.parametrize("device", devices_mps_slow)
 def test_best_checkpoint_saving(
     device: str,
     tmp_path: Path,

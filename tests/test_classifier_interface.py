@@ -115,6 +115,7 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     assert model.predict(X).shape == (X.shape[0],)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("device", [d for d in devices if d == "mps"])
 def test__fit_predict__mps_smoke_test__outputs_correct_shape(
     device: str, X_y: tuple[np.ndarray, np.ndarray]
