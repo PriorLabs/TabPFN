@@ -45,7 +45,7 @@ device_pairs = [
     ("task_type", "saving_device", "loading_device"),
     [
         pytest.param(task_type, saving_device, loading_device, marks=pytest.mark.slow)
-        if saving_device == "mps"
+        if "mps" in (saving_device, loading_device)
         else (task_type, saving_device, loading_device)
         for task_type in ["regression", "classification"]
         for (saving_device, loading_device) in device_pairs

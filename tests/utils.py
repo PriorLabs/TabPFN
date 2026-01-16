@@ -30,6 +30,23 @@ def get_pytest_devices() -> list[str]:
     return devices
 
 
+def get_pytest_devices_with_mps_marked_slow() -> list:
+    """Return pytest devices with MPS marked as slow.
+
+    Use this for single-device parametrization where MPS tests should be skipped in PRs.
+
+    Example:
+    ```
+    @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
+    def test_my_function(device: str) -> None: ...
+    ```
+    """
+    return [
+        pytest.param(d, marks=pytest.mark.slow) if d == "mps" else d
+        for d in get_pytest_devices()
+    ]
+
+
 @functools.cache
 def is_cpu_float16_supported() -> bool:
     """Check if this version of PyTorch supports CPU float16 operations."""

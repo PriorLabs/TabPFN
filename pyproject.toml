@@ -79,8 +79,6 @@ dev = [
   "pre-commit>=4.3.0",
   "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
   "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
-  # Test
-  "pytest-xdist>=3.8.0",
   # Changelog
   "towncrier>=24.8.0",
   # Docs
@@ -104,6 +102,7 @@ ci = [
   "onnx>=1.19.0",  # We run onnx export in the tests, but not in the production package.
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
+  "pytest-xdist>=3.8.0",
 ]
 
 [tool.setuptools.package-data]

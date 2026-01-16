@@ -34,14 +34,15 @@ from tabpfn.finetuning.finetuned_regressor import (
 from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
 
-from .utils import get_pytest_devices, mark_mps_configs_as_slow
+from .utils import (
+    get_pytest_devices,
+    get_pytest_devices_with_mps_marked_slow,
+    mark_mps_configs_as_slow,
+)
 
 rng = np.random.default_rng(42)
 
 devices = get_pytest_devices()
-devices_mps_slow = [
-    pytest.param(d, marks=pytest.mark.slow) if d == "mps" else d for d in devices
-]
 
 
 def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]:
@@ -206,7 +207,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
     assert np.isfinite(predictions).all()
 
 
-@pytest.mark.parametrize("device", devices_mps_slow)
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
 def test__regressor_checkpoint_contains_mse_metric(
     device: str,
     tmp_path: Path,

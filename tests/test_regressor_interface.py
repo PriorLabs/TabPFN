@@ -109,7 +109,6 @@ def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     assert quantiles[0].shape == (X.shape[0],), "Predictions shape is incorrect"
 
 
-@pytest.mark.slow
 @pytest.mark.parametrize("device", [d for d in devices if d == "mps"])
 def test__fit_predict__mps_smoke_test__outputs_correct_shape(
     device: str, X_y: tuple[np.ndarray, np.ndarray]
