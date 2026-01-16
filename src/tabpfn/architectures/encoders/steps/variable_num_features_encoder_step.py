@@ -67,10 +67,12 @@ class VariableNumFeaturesEncoderStep(GPUPreprocessingStep):
         # have constant features. Constant features could have been added
         # from padding to feature group size.
         sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        # move to cpu to avoid dangling GPU memory, tested in
+        # test__to__after_fit_and_predict__no_tensors_left_on_old_device
         self.number_of_used_features_ = torch.clip(
             sel.sum(-1).unsqueeze(-1),
             min=1,
-        )
+        ).cpu()
         self.padding_features_ = -x.shape[-1] % self.num_features_per_group
 
     @override
@@ -104,7 +106,9 @@ class VariableNumFeaturesEncoderStep(GPUPreprocessingStep):
             x = torch.nn.functional.pad(x, pad=(0, self.padding_features_), value=0)
 
         if self.normalize_by_used_features:
-            scale = self.num_features_per_group / self.number_of_used_features_
+            scale = self.num_features_per_group / self.number_of_used_features_.to(
+                x.device
+            )
             x = x * torch.sqrt(scale) if self.normalize_by_sqrt else x * scale
 
         return {self.out_keys[0]: x}
