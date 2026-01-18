@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal, overload
@@ -367,3 +370,73 @@ def test__prepend_cache_path__multiple_paths__filename_unchanged() -> None:
     full_paths = model_loading.prepend_cache_path(["my_dir/my_path.test", "another"])
     assert Path(full_paths[0]).name == "my_path.test"
     assert Path(full_paths[1]).name == "another"
+
+
+@patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
+def test_parallel_model_download(tmp_path: Path) -> None:
+    """Test that parallel model downloads are properly synchronized by the file lock.
+
+    This test verifies that when multiple threads attempt to download the same
+    non-existent model simultaneously, only one download proceeds while the others
+    wait for the lock.
+    """
+    # Track download attempts
+    concurrent_downloads: int = 0
+    download_lock = threading.Lock()
+
+    def mock_download_model(to: Path, **kwargs) -> Literal["ok"] | list[Exception]:
+        """Mock download that tracks concurrent access."""
+        nonlocal concurrent_downloads
+        with download_lock:
+            concurrent_downloads = concurrent_downloads + 1
+
+        # Simulate a slow download to ensure overlap if locking doesn't work
+        time.sleep(1)
+        # Create a fake checkpoint to simulate a successful download
+        architecture_config = {"max_num_classes": 10, "num_buckets": 100}
+        fake_checkpoint = {
+            "state_dict": {},
+            "config": architecture_config,
+            "architecture_name": "fake_arch",
+        }
+
+        # Write the fake checkpoint
+        torch.save(fake_checkpoint, to)
+        return "ok"
+
+    def attempt_load_model() -> bool:
+        """Attempt to load a model, returning success status."""
+        try:
+            # Use the same model path for all threads to test locking
+            shared_checkpoint_path: Path = tmp_path / "shared_model.ckpt"
+
+            _, _, _, _ = model_loading.load_model_criterion_config(
+                model_path=shared_checkpoint_path,
+                check_bar_distribution_criterion=False,
+                cache_trainset_representation=False,
+                which="classifier",
+                version="v2",
+                download_if_not_exists=True,
+            )
+            return True
+        except _:
+            return False
+
+    with patch.object(model_loading, "download_model", side_effect=mock_download_model):
+        num_threads = 5
+        results: list[tuple[int, bool]] = []
+        with ThreadPoolExecutor(max_workers=num_threads) as executor:
+            futures = [executor.submit(attempt_load_model) for _ in range(num_threads)]
+
+            for future in as_completed(futures):
+                results.append(future.result())
+
+    # Verify that all threads completed successfully
+    assert len(results) == num_threads
+    assert all(results), "Some threads failed to load model"
+
+    # asserts only one download happened across 5 thread.
+    assert concurrent_downloads == 1, (
+        f"Expected at most 1 concurrent download, got {concurrent_downloads}. "
+        "The file lock is not working correctly."
+    )

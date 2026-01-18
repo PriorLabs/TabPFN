@@ -17,6 +17,7 @@ import warnings
 import zipfile
 from dataclasses import asdict, dataclass
 from enum import Enum
+from filelock import FileLock
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
@@ -452,6 +453,14 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
     )
     return use_instead_path
 
+def _get_download_lock() -> FileLock:
+    lock_path = get_cache_dir() / ".download.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(lock_path, timeout=-1)
+
+# download lock instance.
+_download_lock: FileLock = _get_download_lock()
+
 
 P = TypeVar("P", bound=Union[str, list[str]])
 
@@ -501,6 +510,7 @@ def load_model_criterion_config(
 ]: ...
 
 
+@_download_lock
 def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
