@@ -12,10 +12,12 @@ import torch
 from torch import nn
 
 
-# Note that inheriting from nn.Sequential is purely for backwards compatibility
-# with TabPFN checkpoints that have keys like `encoder.5.layer.weight` in the
-# state_dict.
-class GPUPreprocessingPipeline(torch.nn.Sequential):
+# Note that inheriting from nn.Sequential is not strictly necessary, because
+# we don't want to include learnable parameters in this pipeline.
+# Because previous TabPFN checkpoints used nn.Sequential and contain
+# keys like `encoder.5.layer.weight` in the state_dict, we keep the inheritance
+# for now.
+class TorchPreprocessingPipeline(torch.nn.Sequential):
     """Container for a sequence of GPU preprocessing steps.
 
     These transformations can alter feature sets or values or add
@@ -26,17 +28,12 @@ class GPUPreprocessingPipeline(torch.nn.Sequential):
 
     def __init__(
         self,
-        steps: list[GPUPreprocessingStep] | None = None,
+        steps: list[TorchPreprocessingStep],
         # output_key is set for backwards compatibility
         # with encoders that still have the projections in this pipeline.
         output_key: str | None = None,
     ):
-        # TODO: Add type template for steps.
-        # TODO: Validate steps.
-
-        self.steps = steps if steps is not None else []
-        # Purely for backwards compatibility with TabPFN checkpoints.
-        super().__init__(*self.steps)
+        super().__init__(*steps)
         self.output_key = output_key
 
         # If we are in backwards compatibility mode, we expect the last step to
@@ -47,7 +44,7 @@ class GPUPreprocessingPipeline(torch.nn.Sequential):
                 s.__class__.__name__
                 # Avoid circular import by checking the class name instead of importing
                 in ("LinearInputEncoderStep", "MLPInputEncoderStep")
-                for s in self.steps
+                for s in self
             ), "output_key is only supported for LinearInputEncoderStep"
 
     @override
@@ -57,7 +54,7 @@ class GPUPreprocessingPipeline(torch.nn.Sequential):
         single_eval_pos: int | None = None,
         **kwargs: Any,
     ) -> dict[str, torch.Tensor] | torch.Tensor:
-        """Fit the preprocessing pipeline on training data.
+        """Fit and transform the preprocessing pipeline on input data.
 
         Args:
             input: The input tensor or dictionary of tensors in the case of
@@ -72,10 +69,11 @@ class GPUPreprocessingPipeline(torch.nn.Sequential):
 
         Returns:
             A dictionary of tensors with all keys created in the pipeline or
-            (for backwards compatibility only) the output tensor of the last step.
+            (for backwards compatibility only) the output tensor specified by
+            the `output_key` parameter of the last step.
         """
         x = {"main": input} if isinstance(input, torch.Tensor) else input
-        for module in self.steps:
+        for module in self:
             x = module(x, single_eval_pos=single_eval_pos, **kwargs)
 
         # For backwards compatibility
@@ -85,10 +83,10 @@ class GPUPreprocessingPipeline(torch.nn.Sequential):
         return x
 
 
-class GPUPreprocessingStep(abc.ABC, nn.Module):
+class TorchPreprocessingStep(abc.ABC, nn.Module):
     """Abstract base class for sequential encoder steps.
 
-    GPUPreprocessingStep is a wrapper around a module that defines the expected
+    TorchPreprocessingStep is a wrapper around a module that defines the expected
     input keys and the produced output keys. The outputs are assigned to the output keys
     in the order specified by `out_keys`.
 

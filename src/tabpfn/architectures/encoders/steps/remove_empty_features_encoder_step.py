@@ -9,12 +9,12 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 from ._ops import select_features
 
 
-class RemoveEmptyFeaturesEncoderStep(GPUPreprocessingStep):
+class RemoveEmptyFeaturesEncoderStep(TorchPreprocessingStep):
     """Encoder step to remove empty (constant) features."""
 
     def __init__(

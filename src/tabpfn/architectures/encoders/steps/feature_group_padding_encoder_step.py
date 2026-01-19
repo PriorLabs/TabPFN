@@ -7,10 +7,10 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class FeatureGroupPaddingAndReshapeStep(GPUPreprocessingStep):
+class FeatureGroupPaddingAndReshapeStep(TorchPreprocessingStep):
     """Encodes and reshapes feature dimension.
 
     Pads feature dimension with zeros so it is divisible by `num_features_per_group`.

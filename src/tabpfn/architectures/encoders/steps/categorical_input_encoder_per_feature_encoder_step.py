@@ -8,10 +8,14 @@ from typing_extensions import override
 import torch
 from torch import nn
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class CategoricalInputEncoderPerFeatureEncoderStep(GPUPreprocessingStep):
+# TODO: This step currently has learnable parameters, which means it breaks
+# the contract with the TorchPreprocessingStep base class. However, it's currently
+# not in use. When it is used, it should become its own nn.Module and be part of
+# the embedders rather than the preprocessing pipeline in the model.
+class CategoricalInputEncoderPerFeatureEncoderStep(TorchPreprocessingStep):
     """Expects input of size 1."""
 
     def __init__(
@@ -48,7 +52,7 @@ class CategoricalInputEncoderPerFeatureEncoderStep(GPUPreprocessingStep):
         self,
         state: dict[str, torch.Tensor],
         single_eval_pos: int | None = None,
-        categorical_inds: list[int] | None = None,
+        categorical_inds: list[list[int]] | None = None,
         **kwargs: Any,
     ) -> dict[str, torch.Tensor]:
         del kwargs

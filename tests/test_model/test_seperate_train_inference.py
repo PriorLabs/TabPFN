@@ -27,7 +27,7 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
             num_buckets=1000,
             feature_positional_embedding=None,
         ),
-        encoder=encoders.GPUPreprocessingPipeline(
+        encoder=encoders.TorchPreprocessingPipeline(
             steps=[
                 encoders.InputNormalizationEncoderStep(
                     normalize_on_train_only=True,

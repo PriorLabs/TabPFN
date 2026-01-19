@@ -1,11 +1,11 @@
 from .pipeline_interfaces import (
-    GPUPreprocessingPipeline,
-    GPUPreprocessingStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
 )
 from .projections import (
-    LinearFeatureGroupProjection,
+    LinearFeatureGroupEmbedder,
     LinearInputEncoderStep,
-    MLPFeatureGroupProjection,
+    MLPFeatureGroupEmbedder,
     MLPInputEncoderStep,
 )
 from .steps import (
@@ -23,15 +23,15 @@ __all__ = (
     "CategoricalInputEncoderPerFeatureEncoderStep",
     "FeatureGroupPaddingAndReshapeStep",
     "FrequencyFeatureEncoderStep",
-    "GPUPreprocessingPipeline",
-    "GPUPreprocessingStep",
     "InputNormalizationEncoderStep",
-    "LinearFeatureGroupProjection",
+    "LinearFeatureGroupEmbedder",
     "LinearInputEncoderStep",
-    "MLPFeatureGroupProjection",
+    "MLPFeatureGroupEmbedder",
     "MLPInputEncoderStep",
     "MulticlassClassificationTargetEncoderStep",
     "NanHandlingEncoderStep",
     "RemoveEmptyFeaturesEncoderStep",
+    "TorchPreprocessingPipeline",
+    "TorchPreprocessingStep",
     "VariableNumFeaturesEncoderStep",
 )

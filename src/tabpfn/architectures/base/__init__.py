@@ -13,15 +13,18 @@ from typing import TYPE_CHECKING, Any, Literal
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.encoders import (
-    GPUPreprocessingPipeline,
-    GPUPreprocessingStep,
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
     VariableNumFeaturesEncoderStep,
+)
+from tabpfn.architectures.encoders.steps.remove_duplicate_features_encoder_step import (
+    RemoveDuplicateFeaturesEncoderStep,
 )
 
 if TYPE_CHECKING:
@@ -124,13 +127,19 @@ def get_encoder(  # noqa: PLR0913
     encoder_type: Literal["linear", "mlp"] = "linear",
     encoder_mlp_hidden_dim: int | None = None,
     encoder_mlp_num_layers: int = 2,
-) -> GPUPreprocessingPipeline:
-    del remove_duplicate_features
+) -> TorchPreprocessingPipeline:
     inputs_to_merge = {"main": {"dim": num_features}}
 
-    encoder_steps: list[GPUPreprocessingStep] = []
+    encoder_steps: list[TorchPreprocessingStep] = []
     if remove_empty_features:
         encoder_steps += [RemoveEmptyFeaturesEncoderStep()]
+
+    if remove_duplicate_features:
+        # TODO: This is a No-op currently. We cannot remove it
+        # because loading the state_dict of the model depends on it being present,
+        # currently. Fix this by making the state_dict loading agnostic of the
+        # presence of this step.
+        encoder_steps += [RemoveDuplicateFeaturesEncoderStep()]
 
     encoder_steps += [NanHandlingEncoderStep(keep_nans=nan_handling_enabled)]
 
@@ -191,7 +200,7 @@ def get_encoder(  # noqa: PLR0913
             f"Invalid encoder type: {encoder_type} (expected 'linear' or 'mlp')"
         )
 
-    return GPUPreprocessingPipeline(encoder_steps, output_key="output")
+    return TorchPreprocessingPipeline(encoder_steps, output_key="output")
 
 
 def get_y_encoder(
@@ -200,8 +209,8 @@ def get_y_encoder(
     embedding_size: int,
     nan_handling_y_encoder: bool,
     max_num_classes: int,
-) -> GPUPreprocessingPipeline:
-    steps: list[GPUPreprocessingStep] = []
+) -> TorchPreprocessingPipeline:
+    steps: list[TorchPreprocessingStep] = []
     inputs_to_merge = [{"name": "main", "dim": num_inputs}]
     if nan_handling_y_encoder:
         steps += [NanHandlingEncoderStep()]
@@ -218,4 +227,4 @@ def get_y_encoder(
             out_keys=("output",),
         ),
     ]
-    return GPUPreprocessingPipeline(steps, output_key="output")
+    return TorchPreprocessingPipeline(steps, output_key="output")

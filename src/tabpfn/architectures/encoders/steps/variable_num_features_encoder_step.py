@@ -7,10 +7,10 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class VariableNumFeaturesEncoderStep(GPUPreprocessingStep):
+class VariableNumFeaturesEncoderStep(TorchPreprocessingStep):
     """Encoder step to handle variable number of features.
 
     Transforms the input to a fixed number of features by appending zeros.

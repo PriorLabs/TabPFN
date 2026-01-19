@@ -7,14 +7,14 @@ import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
-    GPUPreprocessingPipeline,
     InputNormalizationEncoderStep,
-    LinearFeatureGroupProjection,
+    LinearFeatureGroupEmbedder,
     LinearInputEncoderStep,
-    MLPFeatureGroupProjection,
+    MLPFeatureGroupEmbedder,
     MLPInputEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
+    TorchPreprocessingPipeline,
     VariableNumFeaturesEncoderStep,
 )
 
@@ -24,7 +24,7 @@ def test_linear_encoder():
     x = torch.randn([N, B, F])
     x2 = torch.randn([N, B, F])
 
-    encoder = GPUPreprocessingPipeline(
+    encoder = TorchPreprocessingPipeline(
         steps=[
             LinearInputEncoderStep(
                 num_features=F * 2, emsize=F, in_keys=("main", "features_2")
@@ -39,7 +39,7 @@ def test_linear_encoder():
 def test_linear_projection_forward():
     N, B, num_features, emsize = 10, 3, 7, 5
     x = torch.randn([N, B, num_features])
-    projection = LinearFeatureGroupProjection(
+    projection = LinearFeatureGroupEmbedder(
         num_features_per_group_with_metadata=num_features, emsize=emsize
     )
     out = projection(x)
@@ -54,7 +54,7 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
     x = torch.randn([N, B, F])
 
     # Test basic MLP encoder with default hidden_dim (should equal emsize)
-    encoder = GPUPreprocessingPipeline(
+    encoder = TorchPreprocessingPipeline(
         steps=[
             MLPInputEncoderStep(
                 num_features=F,
@@ -72,7 +72,7 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
 
     # Test with explicit hidden_dim
     hidden_dim = 16
-    encoder = GPUPreprocessingPipeline(
+    encoder = TorchPreprocessingPipeline(
         steps=[
             MLPInputEncoderStep(
                 num_features=F,
@@ -94,7 +94,7 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
 def test_mlp_projection_forward(num_layers):
     N, B, num_features, emsize = 10, 3, 4, 8
     x = torch.randn([N, B, num_features])
-    projection = MLPFeatureGroupProjection(
+    projection = MLPFeatureGroupEmbedder(
         num_features_per_group_with_metadata=num_features,
         emsize=emsize,
         num_layers=num_layers,
@@ -110,7 +110,7 @@ def test_combination():
     x[:, 2, 1] = 1.0
     domain_indicator = torch.randn([N, B, 1])
 
-    encoder = GPUPreprocessingPipeline(
+    encoder = TorchPreprocessingPipeline(
         steps=[
             RemoveEmptyFeaturesEncoderStep(
                 in_keys=("main",),

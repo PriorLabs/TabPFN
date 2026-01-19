@@ -11,14 +11,14 @@ from tabpfn.architectures.encoders import (
     CategoricalInputEncoderPerFeatureEncoderStep,
     FeatureGroupPaddingAndReshapeStep,
     FrequencyFeatureEncoderStep,
-    GPUPreprocessingPipeline,
-    GPUPreprocessingStep,
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
     VariableNumFeaturesEncoderStep,
     steps,
 )
@@ -51,7 +51,9 @@ def test_input_normalization():
         "remove_outliers": False,
     }
 
-    encoder = GPUPreprocessingPipeline(steps=[InputNormalizationEncoderStep(**kwargs)])
+    encoder = TorchPreprocessingPipeline(
+        steps=[InputNormalizationEncoderStep(**kwargs)]
+    )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert torch.isclose(out.var(dim=0), torch.tensor([1.0]), atol=1e-05).all(), (
@@ -91,7 +93,9 @@ def test_remove_empty_feats():
 
     kwargs = {}
 
-    encoder = GPUPreprocessingPipeline(steps=[RemoveEmptyFeaturesEncoderStep(**kwargs)])
+    encoder = TorchPreprocessingPipeline(
+        steps=[RemoveEmptyFeaturesEncoderStep(**kwargs)]
+    )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert (out == x).all(), "Should not change anything if no empty columns."
@@ -121,7 +125,9 @@ def test_variable_num_features():
 
     kwargs = {"num_features": fixed_out, "normalize_by_used_features": True}
 
-    encoder = GPUPreprocessingPipeline(steps=[VariableNumFeaturesEncoderStep(**kwargs)])
+    encoder = TorchPreprocessingPipeline(
+        steps=[VariableNumFeaturesEncoderStep(**kwargs)]
+    )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert out.shape[-1] == fixed_out, (
@@ -141,7 +147,9 @@ def test_variable_num_features():
     Constant feature should not count towards number of feats."""
 
     kwargs["normalize_by_used_features"] = False
-    encoder = GPUPreprocessingPipeline(steps=[VariableNumFeaturesEncoderStep(**kwargs)])
+    encoder = TorchPreprocessingPipeline(
+        steps=[VariableNumFeaturesEncoderStep(**kwargs)]
+    )
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert (out[:, :, : x.shape[-1]] == x).all(), (
         "Features should be unchanged when not normalizing."
@@ -156,7 +164,7 @@ def test_nan_handling_encoder():
     x[0, 1, 0] = np.nan
     x[:, 2, 1] = np.nan
 
-    encoder = GPUPreprocessingPipeline(steps=[NanHandlingEncoderStep()])
+    encoder = TorchPreprocessingPipeline(steps=[NanHandlingEncoderStep()])
 
     out = encoder({"main": x}, single_eval_pos=-1)
     _, nan_indicators = out["main"], out["nan_indicators"]
@@ -187,12 +195,12 @@ def test_interface():
     test examples.These tests are only rough and do not test all hyperparameter
     settings and only test the "main" input, e.g. not "nan_indicators".
     """
-    # iterate over all subclasses of GPUPreprocessingStep and test if they work
+    # iterate over all subclasses of TorchPreprocessingStep and test if they work
     for name, cls in steps.__dict__.items():
         if (
             isinstance(cls, type)
-            and issubclass(cls, GPUPreprocessingStep)
-            and cls is not GPUPreprocessingStep
+            and issubclass(cls, TorchPreprocessingStep)
+            and cls is not TorchPreprocessingStep
         ):
             num_features = 4
             if cls is LinearInputEncoderStep or cls is MLPInputEncoderStep:

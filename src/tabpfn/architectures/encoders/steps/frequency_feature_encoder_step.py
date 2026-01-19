@@ -7,10 +7,10 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class FrequencyFeatureEncoderStep(GPUPreprocessingStep):
+class FrequencyFeatureEncoderStep(TorchPreprocessingStep):
     """Encoder step to add frequency-based features to the input."""
 
     def __init__(

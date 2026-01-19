@@ -17,8 +17,8 @@ from sklearn.base import (
 )
 
 from tabpfn.architectures.encoders import (
-    GPUPreprocessingPipeline,
     MulticlassClassificationTargetEncoderStep,
+    TorchPreprocessingPipeline,
 )
 from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
@@ -360,7 +360,6 @@ def translate_probs_across_borders(
 def update_encoder_params(
     models: list[Architecture],
     remove_outliers_std: float | None,
-    seed: int | None,
     *,
     differentiable_input: bool = False,
 ) -> None:
@@ -375,7 +374,6 @@ def update_encoder_params(
     Args:
         models: The models to update.
         remove_outliers_std: The standard deviation to remove outliers.
-        seed: The seed to use, if any.
         inplace: Whether to do the operation inplace.
         differentiable_input: Whether the entire model including forward pass should
             be differentiable with pt autograd. This disables non-differentiable
@@ -410,9 +408,6 @@ def update_encoder_params(
         if norm_layer.remove_outliers:
             norm_layer.remove_outliers_sigma = remove_outliers_std
 
-        norm_layer.seed = seed
-        norm_layer.reset_seed()
-
         if differentiable_input:
             diffable_steps = []  # only differentiable encoder steps.
             for module in model.y_encoder:
@@ -421,7 +416,7 @@ def update_encoder_params(
                 else:
                     diffable_steps.append(module)
 
-            model.y_encoder = GPUPreprocessingPipeline(
+            model.y_encoder = TorchPreprocessingPipeline(
                 steps=diffable_steps, output_key="output"
             )
 

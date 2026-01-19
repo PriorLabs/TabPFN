@@ -20,9 +20,9 @@ from torch.utils.checkpoint import checkpoint
 from tabpfn.architectures.base.layer import PerFeatureEncoderLayer
 from tabpfn.architectures.base.thinking_tokens import AddThinkingTokens
 from tabpfn.architectures.encoders import (
-    GPUPreprocessingPipeline,
     LinearInputEncoderStep,
     NanHandlingEncoderStep,
+    TorchPreprocessingPipeline,
 )
 from tabpfn.architectures.interface import Architecture
 from tabpfn.errors import TabPFNValidationError
@@ -155,7 +155,7 @@ class PerFeatureTransformer(Architecture):
         super().__init__()
 
         if encoder is None:
-            encoder = GPUPreprocessingPipeline(
+            encoder = TorchPreprocessingPipeline(
                 steps=[
                     LinearInputEncoderStep(
                         num_features=1,
@@ -170,7 +170,7 @@ class PerFeatureTransformer(Architecture):
             )
 
         if y_encoder is None:
-            y_encoder = GPUPreprocessingPipeline(
+            y_encoder = TorchPreprocessingPipeline(
                 steps=[
                     NanHandlingEncoderStep(),
                     LinearInputEncoderStep(
@@ -472,7 +472,7 @@ class PerFeatureTransformer(Architecture):
         extra_encoders_args = {}
         if categorical_inds_to_use is not None and isinstance(
             self.encoder,
-            GPUPreprocessingPipeline,
+            TorchPreprocessingPipeline,
         ):
             # Transform cat. features accordingly to correspond to following to merge
             # of batch and feature_group dimensions below (i.e., concat lists)

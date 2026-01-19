@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from typing_extensions import override
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 from ._ops import (
     normalize_data,
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import torch
 
 
-class InputNormalizationEncoderStep(GPUPreprocessingStep):
+class InputNormalizationEncoderStep(TorchPreprocessingStep):
     """Encoder step to normalize the input in different ways.
 
     Can be used to normalize the input to a ranking, remove outliers,
@@ -31,7 +31,6 @@ class InputNormalizationEncoderStep(GPUPreprocessingStep):
         normalize_x: bool,
         remove_outliers: bool,
         remove_outliers_sigma: float = 4.0,
-        seed: int = 0,
         in_keys: tuple[str, ...] = ("main",),
         out_keys: tuple[str, ...] = ("main",),
     ):
@@ -45,7 +44,6 @@ class InputNormalizationEncoderStep(GPUPreprocessingStep):
             remove_outliers: Whether to remove outliers from the input.
             remove_outliers_sigma: The number of standard deviations to use for outlier
             removal.
-            seed: Random seed for reproducibility.
             in_keys: The keys of the input tensors.
             out_keys: The keys to assign the output tensors to.
         """
@@ -58,15 +56,10 @@ class InputNormalizationEncoderStep(GPUPreprocessingStep):
         self.normalize_x = normalize_x
         self.remove_outliers = remove_outliers
         self.remove_outliers_sigma = remove_outliers_sigma
-        self.seed = seed
-        self.reset_seed()
         self.register_buffer("lower_for_outlier_removal", None, persistent=False)
         self.register_buffer("upper_for_outlier_removal", None, persistent=False)
         self.register_buffer("mean_for_normalization", None, persistent=False)
         self.register_buffer("std_for_normalization", None, persistent=False)
-
-    def reset_seed(self) -> None:
-        """Reset the random seed."""
 
     @override
     def _fit(

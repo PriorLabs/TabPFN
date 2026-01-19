@@ -7,12 +7,12 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 from ._ops import torch_nanmean
 
 
-class NanHandlingEncoderStep(GPUPreprocessingStep):
+class NanHandlingEncoderStep(TorchPreprocessingStep):
     """Encoder step to handle NaN and infinite values in the input."""
 
     nan_indicator = -2.0

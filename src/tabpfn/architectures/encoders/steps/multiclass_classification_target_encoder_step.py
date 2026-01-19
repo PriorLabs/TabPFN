@@ -7,10 +7,10 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class MulticlassClassificationTargetEncoderStep(GPUPreprocessingStep):
+class MulticlassClassificationTargetEncoderStep(TorchPreprocessingStep):
     """Encoder step to encode multiclass classification targets."""
 
     def __init__(

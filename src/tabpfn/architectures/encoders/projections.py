@@ -8,10 +8,10 @@ from typing_extensions import override
 import torch
 from torch import nn
 
-from tabpfn.architectures.encoders import GPUPreprocessingStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class LinearFeatureGroupProjection(nn.Module):
+class LinearFeatureGroupEmbedder(nn.Module):
     """A simple linear projection from input feature group to embedding space."""
 
     def __init__(
@@ -52,7 +52,7 @@ class LinearFeatureGroupProjection(nn.Module):
         return self.layer(x)
 
 
-class MLPFeatureGroupProjection(nn.Module):
+class MLPFeatureGroupEmbedder(nn.Module):
     """An MLP projection from input feature group to embedding space."""
 
     def __init__(
@@ -126,7 +126,7 @@ class MLPFeatureGroupProjection(nn.Module):
 
 # The following is kept for backwards compatibility with old TabPFN
 # encoder pipelines that included the projections.
-class LinearInputEncoderStep(GPUPreprocessingStep):
+class LinearInputEncoderStep(TorchPreprocessingStep):
     """A simple linear input encoder step."""
 
     def __init__(
@@ -191,7 +191,7 @@ class LinearInputEncoderStep(GPUPreprocessingStep):
         return {self.out_keys[0]: self.layer(x)}
 
 
-class MLPInputEncoderStep(GPUPreprocessingStep):
+class MLPInputEncoderStep(TorchPreprocessingStep):
     """An MLP-based input encoder step."""
 
     def __init__(
