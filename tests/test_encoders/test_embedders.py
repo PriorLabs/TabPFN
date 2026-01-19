@@ -12,6 +12,7 @@ from tabpfn.architectures.encoders import (
 def test_linear_embedder_forward():
     N, B, num_features, emsize = 10, 3, 7, 5
     x = torch.randn([N, B, num_features])
+    x[0, 0, 0] = torch.nan
     projection = LinearFeatureGroupEmbedder(
         num_features_per_group_with_metadata=num_features, emsize=emsize
     )
@@ -23,6 +24,7 @@ def test_linear_embedder_forward():
 def test_mlp_projection_forward(num_layers: int):
     N, B, num_features, emsize = 10, 3, 4, 8
     x = torch.randn([N, B, num_features])
+    x[0, 0, 0] = torch.nan
     projection = MLPFeatureGroupEmbedder(
         num_features_per_group_with_metadata=num_features,
         emsize=emsize,
