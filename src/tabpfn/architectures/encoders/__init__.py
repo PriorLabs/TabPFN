@@ -1,18 +1,18 @@
+from .embedders import (
+    LinearFeatureGroupEmbedder,
+    MLPFeatureGroupEmbedder,
+)
 from .pipeline_interfaces import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
-)
-from .projections import (
-    LinearFeatureGroupEmbedder,
-    LinearInputEncoderStep,
-    MLPFeatureGroupEmbedder,
-    MLPInputEncoderStep,
 )
 from .steps import (
     CategoricalInputEncoderPerFeatureEncoderStep,
     FeatureGroupPaddingAndReshapeStep,
     FrequencyFeatureEncoderStep,
     InputNormalizationEncoderStep,
+    LinearInputEncoderStep,
+    MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
