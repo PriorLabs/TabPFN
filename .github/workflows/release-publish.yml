@@ -12,6 +12,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: release
     outputs:
       version: ${{ steps.ver.outputs.version }}
     steps:

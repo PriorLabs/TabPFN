@@ -6,8 +6,11 @@ on:
       version:
         description: "Version to release (e.g. 6.3.2)"
         required: true
+      base_ref:
+        description: "Commit SHA to release from"
+        required: true
       base_branch:
-        description: "Branch to release from"
+        description: "Branch to open the PR against"
         required: false
         default: "main"
 
@@ -18,7 +21,15 @@ permissions:
 jobs:
   release_pr:
     runs-on: ubuntu-latest
+    environment: release
     steps:
+      - name: Guard base_ref, must be a full 40-char commit SHA
+        run: |
+          echo "${{ inputs.base_ref }}" | grep -Eq '^[0-9a-f]{40}$' || {
+              echo "base_ref must be a full 40-char commit SHA (got: ${{ inputs.base_ref }})"
+              exit 1
+          }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -38,13 +49,14 @@ jobs:
       - name: Set variables
         run: |
           echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          echo "BASE_REF=${{ inputs.base_ref }}" >> $GITHUB_ENV
           echo "BASE_BRANCH=${{ inputs.base_branch }}" >> $GITHUB_ENV
           echo "RELEASE_BRANCH=release/v${{ inputs.version }}" >> $GITHUB_ENV
 
-      - name: Create release branch
+      - name: Create release branch from base ref
         run: |
-          git checkout "${BASE_BRANCH}"
-          git pull --ff-only
+          git fetch --all --tags
+          git checkout --detach "${BASE_REF}"
           git checkout -b "${RELEASE_BRANCH}"
 
       - name: Bump version in pyproject.toml
@@ -93,7 +105,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr create \
-            --base "${BASE_BRANCH}" \
-            --head "${RELEASE_BRANCH}" \
-            --title "Release v${VERSION}" \
-            --body "Automated release PR for v${VERSION}."
+          --base "${BASE_BRANCH}" \
+          --head "${RELEASE_BRANCH}" \
+          --title "Release v${VERSION}" \
+          --body "Automated release PR for v${VERSION}." \
+          --reviewer "PriorLabs/release-maintainers"

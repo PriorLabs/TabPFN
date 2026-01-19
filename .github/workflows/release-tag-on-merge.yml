@@ -13,6 +13,7 @@ jobs:
       github.event.pull_request.merged == true &&
       startsWith(github.event.pull_request.head.ref, 'release/v')
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@v4
