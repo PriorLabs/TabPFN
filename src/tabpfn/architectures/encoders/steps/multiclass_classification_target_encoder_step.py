@@ -34,6 +34,8 @@ class MulticlassClassificationTargetEncoderStep(TorchPreprocessingStep):
             self.unique_ys_ = [fn(t) for t in self.unique_ys_]
         return self
 
+    # torch.unique breaks the graph, so we disable compilation for this method.
+    @torch.compiler.disable
     @override
     def _fit(
         self,
@@ -63,6 +65,9 @@ class MulticlassClassificationTargetEncoderStep(TorchPreprocessingStep):
             unique_ys = torch.unique(y)
         return (y.unsqueeze(-1) > unique_ys).sum(axis=-1)  # type: ignore
 
+    # data-dependent control flow in .any() breaks the graph, so we disable compilation
+    # for this method.
+    @torch.compiler.disable
     @override
     def _transform(
         self,

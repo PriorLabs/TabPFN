@@ -93,16 +93,13 @@ class FeatureGroupPaddingAndReshapeStep(TorchPreprocessingStep):
             # C = original number of columns before padding and grouping
             Ri, B, C = x_RiBC.shape
             num_padding_features = (-C) % self.num_features_per_group
-            if num_padding_features == 0:
-                outputs[out_key] = x_RiBC
-                continue
-
-            # C (columns) now padded
-            x_RiBC = torch.nn.functional.pad(
-                x_RiBC,
-                pad=(0, num_padding_features),
-                value=0,
-            )
+            if num_padding_features > 0:
+                # C (columns) now padded
+                x_RiBC = torch.nn.functional.pad(
+                    x_RiBC,
+                    pad=(0, num_padding_features),
+                    value=0,
+                )
 
             num_padded_columns = x_RiBC.shape[-1]
             assert num_padded_columns % self.num_features_per_group == 0

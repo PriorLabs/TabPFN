@@ -47,6 +47,9 @@ class TorchPreprocessingPipeline(torch.nn.Sequential):
                 for s in self
             ), "output_key is only supported for LinearInputEncoderStep"
 
+    # For now, we disable compilation for the preprocessing pipeline because
+    # there are multiple data-dependent control flows in the steps that break the graph.
+    @torch.compiler.disable
     @override
     def forward(
         self,

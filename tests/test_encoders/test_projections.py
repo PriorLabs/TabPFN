@@ -8,9 +8,7 @@ import torch
 
 from tabpfn.architectures.encoders import (
     InputNormalizationEncoderStep,
-    LinearFeatureGroupEmbedder,
     LinearInputEncoderStep,
-    MLPFeatureGroupEmbedder,
     MLPInputEncoderStep,
     NanHandlingEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
@@ -36,18 +34,8 @@ def test_linear_encoder():
     assert out.shape[-1] == F, "Output should have the requested number of features."
 
 
-def test_linear_projection_forward():
-    N, B, num_features, emsize = 10, 3, 7, 5
-    x = torch.randn([N, B, num_features])
-    projection = LinearFeatureGroupEmbedder(
-        num_features_per_group_with_metadata=num_features, emsize=emsize
-    )
-    out = projection(x)
-    assert out.shape == (N, B, emsize)
-
-
 @pytest.mark.parametrize("num_layers", [2, 3])
-def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
+def test__MLPInputEncoderStep__embed_each_input_cell(num_layers: int):
     """Test MLP encoder input/output dimensions."""
     N, B, F = 10, 3, 4
     emsize = 8
@@ -88,19 +76,6 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
         B,
         emsize,
     ), f"Output shape should be ({N}, {B}, {emsize}), got {out.shape}"
-
-
-@pytest.mark.parametrize("num_layers", [2, 3])
-def test_mlp_projection_forward(num_layers):
-    N, B, num_features, emsize = 10, 3, 4, 8
-    x = torch.randn([N, B, num_features])
-    projection = MLPFeatureGroupEmbedder(
-        num_features_per_group_with_metadata=num_features,
-        emsize=emsize,
-        num_layers=num_layers,
-    )
-    out = projection(x)
-    assert out.shape == (N, B, emsize)
 
 
 def test_combination():
