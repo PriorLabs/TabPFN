@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
@@ -24,7 +25,7 @@ from tabpfn.architectures.encoders import (
 )
 
 
-def test_feature_group_padding_and_reshape_step():
+def test__feature_group_padding_and_reshape_encoder():
     N, B, F = 4, 2, 8
     x = torch.rand([N, B, F])
 
@@ -40,7 +41,7 @@ def test_feature_group_padding_and_reshape_step():
     assert (out[:, 0, -1, -4:] == 0).all()
 
 
-def test_input_normalization():
+def test__input_normalization_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
@@ -87,7 +88,7 @@ def test_input_normalization():
     )
 
 
-def test_remove_empty_feats():
+def test__remove_empty_features_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
@@ -119,7 +120,7 @@ def test_remove_empty_feats():
     )
 
 
-def test_variable_num_features():
+def test__variable_num_features_encoder():
     N, B, F, fixed_out = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
@@ -156,7 +157,7 @@ def test_variable_num_features():
     )
 
 
-def test_nan_handling_encoder():
+def test__nan_handling_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.randn([N, B, F])
     x[1, 0, 2] = np.inf
@@ -181,7 +182,7 @@ def test_nan_handling_encoder():
     assert out["main"].mean() > -1.0
 
 
-def test_multiclass_encoder():
+def test__multiclass_target_encoder():
     enc = MulticlassClassificationTargetEncoderStep()
     y = torch.tensor([[0, 1, 2, 1, 0], [0, 2, 2, 0, 0]]).T.unsqueeze(-1)
     solution = torch.tensor([[0, 1, 2, 1, 0], [0, 1, 1, 0, 0]]).T.unsqueeze(-1)
@@ -189,7 +190,7 @@ def test_multiclass_encoder():
     assert (y_enc == solution).all(), f"y_enc: {y_enc}, solution: {solution}"
 
 
-def test_interface():
+def test__steps():
     """Test if all encoders can be instantiated and whether they
     treat the test set independently,without interedependency between
     test examples.These tests are only rough and do not test all hyperparameter
@@ -254,3 +255,10 @@ def test_interface():
                 torch.flip(transformed_x2["main"], (0,))
                 == transformed_x2_inverted["main"]
             ).all(), f"{name} does not work with inverted examples"
+
+
+def test__torch_preprocessing_step__raises_exceptions_on_invalid_input_keys():
+    """Test TorchPreprocessingPipeline interface."""
+    encoder = RemoveEmptyFeaturesEncoderStep(in_keys=("main",), out_keys=("main",))
+    with pytest.raises(KeyError, match="missing input tensor in dict"):
+        encoder({"not_main": torch.randn([10, 3, 4])})

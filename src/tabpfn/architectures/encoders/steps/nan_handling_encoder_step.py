@@ -38,7 +38,12 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
         if len(out_keys) > 1 and not keep_nans:
             raise ValueError(
                 f"{self.__class__.__name__} expects a single output key if keep_nans is"
-                " False"
+                f" False, got `{len(out_keys)}`."
+            )
+        if keep_nans and len(out_keys) < 2:
+            raise ValueError(
+                f"{self.__class__.__name__} expects at least two output keys if "
+                f"keep_nans is True, got `{len(out_keys)}`."
             )
 
         super().__init__(in_keys, out_keys)
@@ -55,7 +60,7 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
         """Compute the feature means on the training set for replacing NaNs.
 
         Args:
-            x: The input tensor.
+            state: The dictionary containing the input tensors.
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments (unused).
         """

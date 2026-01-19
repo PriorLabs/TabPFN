@@ -57,7 +57,7 @@ class VariableNumFeaturesEncoderStep(TorchPreprocessingStep):
         """Compute the number of used features on the training set.
 
         Args:
-            x: The input tensor.
+            state: The state dict containing the input tensors.
             **kwargs: Additional keyword arguments (unused).
         """
         del kwargs

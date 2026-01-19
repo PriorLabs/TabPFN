@@ -124,7 +124,7 @@ class InputNormalizationEncoderStep(TorchPreprocessingStep):
             **kwargs: Additional keyword arguments (unused).
 
         Returns:
-            A tuple containing the normalized tensor.
+            A dict mapping `out_keys[0]` to the normalized tensor.
         """
         del kwargs
         if single_eval_pos is None:

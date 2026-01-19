@@ -65,7 +65,8 @@ class RemoveEmptyFeaturesEncoderStep(TorchPreprocessingStep):
             **kwargs: Additional keyword arguments (unused).
 
         Returns:
-            A tuple containing the transformed tensor with empty features removed.
+            A dict mapping `out_keys[0]` to the transformed tensor with empty features
+            removed.
         """
         del kwargs
         # Ensure that the mask is a bool, because the buffer may get converted to a

@@ -150,8 +150,8 @@ class TorchPreprocessingStep(abc.ABC, nn.Module):
         missing = [k for k in self.in_keys if k not in state]
         if missing:
             raise KeyError(
-                f"{self.__class__.__name__} missing input keys {missing}. "
-                f"Available keys: {list(state.keys())}"
+                f"{self.__class__.__name__}: missing input tensor in dict `{missing}`. "
+                f"Available keys in state: `{list(state.keys())}`"
             )
 
     def _validate_output_keys(self, outputs: dict) -> None:
@@ -159,7 +159,16 @@ class TorchPreprocessingStep(abc.ABC, nn.Module):
         unexpected = set(outputs.keys()) - set(self.out_keys)
         if unexpected:
             raise KeyError(
-                f"Unexpected output keys: `{unexpected}` in `{self.__class__.__name__}`"
+                f"{self.__class__.__name__}: unexpected output tensor in dict "
+                f"`{unexpected}`. Available keys in state: "
+                f"`{list(outputs.keys())}`"
+            )
+
+        missing = [k for k in self.out_keys if k not in outputs]
+        if missing:
+            raise KeyError(
+                f"{self.__class__.__name__}: missing output tensor in dict "
+                f"`{missing}`. Available keys in state: `{list(outputs.keys())}`"
             )
 
     @override

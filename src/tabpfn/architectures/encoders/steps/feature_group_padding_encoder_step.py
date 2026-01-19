@@ -78,13 +78,6 @@ class FeatureGroupPaddingAndReshapeStep(TorchPreprocessingStep):
             A dict mapping each `out_key` to the padded tensor.
         """
         del kwargs
-
-        if len(self.in_keys) != len(self.out_keys):
-            raise ValueError(
-                f"{self.__class__.__name__} requires in_keys and out_keys to have the "
-                f"same length, got {len(self.in_keys)} and {len(self.out_keys)}."
-            )
-
         outputs: dict[str, torch.Tensor] = {}
         for in_key, out_key in zip(self.in_keys, self.out_keys):
             x_RiBC = state[in_key]
