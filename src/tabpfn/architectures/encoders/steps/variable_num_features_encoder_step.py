@@ -97,6 +97,16 @@ class VariableNumFeaturesEncoderStep(TorchPreprocessingStep):
         del kwargs
         x = state[self.in_keys[0]]
 
+        if x.shape[-1] == 0:
+            return {
+                self.out_keys[0]: torch.zeros(
+                    *x.shape[:-1],
+                    self.num_features_per_group,
+                    device=x.device,
+                    dtype=x.dtype,
+                )
+            }
+
         assert self.number_of_used_features_ is not None, (
             "number_of_used_features_ is not set. This step must be fitted before "
             "calling _transform."
