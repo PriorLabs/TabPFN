@@ -388,7 +388,7 @@ def test_parallel_model_download(tmp_path: Path) -> None:
         """Mock download that tracks concurrent access."""
         nonlocal concurrent_downloads
         with download_lock:
-            concurrent_downloads = concurrent_downloads + 1
+            concurrent_downloads = +1
 
         # Simulate a slow download to ensure overlap if locking doesn't work
         time.sleep(1)
@@ -424,7 +424,7 @@ def test_parallel_model_download(tmp_path: Path) -> None:
 
     with patch.object(model_loading, "download_model", side_effect=mock_download_model):
         num_threads = 5
-        results: list[tuple[int, bool]] = []
+        results: list[bool] = []
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures = [executor.submit(attempt_load_model) for _ in range(num_threads)]
 
