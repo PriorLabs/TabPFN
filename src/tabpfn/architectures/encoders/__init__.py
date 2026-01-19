@@ -15,6 +15,7 @@ from .steps import (
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     VariableNumFeaturesEncoderStep,
 )
@@ -30,6 +31,7 @@ __all__ = (
     "MLPInputEncoderStep",
     "MulticlassClassificationTargetEncoderStep",
     "NanHandlingEncoderStep",
+    "RemoveDuplicateFeaturesEncoderStep",
     "RemoveEmptyFeaturesEncoderStep",
     "TorchPreprocessingPipeline",
     "TorchPreprocessingStep",

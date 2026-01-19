@@ -12,6 +12,7 @@ from .multiclass_classification_target_encoder_step import (
     MulticlassClassificationTargetEncoderStep,
 )
 from .nan_handling_encoder_step import NanHandlingEncoderStep
+from .remove_duplicate_features_encoder_step import RemoveDuplicateFeaturesEncoderStep
 from .remove_empty_features_encoder_step import RemoveEmptyFeaturesEncoderStep
 from .variable_num_features_encoder_step import VariableNumFeaturesEncoderStep
 
@@ -24,6 +25,7 @@ __all__ = [
     "MLPInputEncoderStep",
     "MulticlassClassificationTargetEncoderStep",
     "NanHandlingEncoderStep",
+    "RemoveDuplicateFeaturesEncoderStep",
     "RemoveEmptyFeaturesEncoderStep",
     "VariableNumFeaturesEncoderStep",
 ]

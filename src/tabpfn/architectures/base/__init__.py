@@ -18,13 +18,11 @@ from tabpfn.architectures.encoders import (
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
     VariableNumFeaturesEncoderStep,
-)
-from tabpfn.architectures.encoders.steps.remove_duplicate_features_encoder_step import (
-    RemoveDuplicateFeaturesEncoderStep,
 )
 
 if TYPE_CHECKING:
