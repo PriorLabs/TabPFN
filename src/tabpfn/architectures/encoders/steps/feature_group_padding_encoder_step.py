@@ -41,8 +41,9 @@ class FeatureGroupPaddingAndReshapeStep(TorchPreprocessingStep):
             in_keys: The keys of the input tensors.
             out_keys: The keys to assign the output tensors to.
         """
-        assert len(in_keys) == len(out_keys) == 1, (
-            f"{self.__class__.__name__} expects a single input and output key."
+        assert len(in_keys) == len(out_keys), (
+            f"{self.__class__.__name__} expects the same number of input and output "
+            f"keys. Got {len(in_keys)=} and {len(out_keys)=}."
         )
 
         super().__init__(in_keys, out_keys)

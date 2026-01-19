@@ -138,11 +138,10 @@ class TorchPreprocessingStep(abc.ABC, nn.Module):
 
         Args:
             state: The dictionary containing the input tensors.
-            single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments passed to the encoder step.
 
         Returns:
-            The transformed output tensor or a tuple of output tensors.
+            The transformed output dictionary.
         """
         ...
 
