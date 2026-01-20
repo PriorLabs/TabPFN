@@ -8,7 +8,6 @@ from .pipeline_interfaces import (
 )
 from .steps import (
     CategoricalInputEncoderPerFeatureEncoderStep,
-    FeatureGroupPaddingAndReshapeStep,
     FrequencyFeatureEncoderStep,
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
@@ -22,7 +21,6 @@ from .steps import (
 
 __all__ = (
     "CategoricalInputEncoderPerFeatureEncoderStep",
-    "FeatureGroupPaddingAndReshapeStep",
     "FrequencyFeatureEncoderStep",
     "InputNormalizationEncoderStep",
     "LinearFeatureGroupEmbedder",

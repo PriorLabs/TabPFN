@@ -10,7 +10,6 @@ import torch
 
 from tabpfn.architectures.encoders import (
     CategoricalInputEncoderPerFeatureEncoderStep,
-    FeatureGroupPaddingAndReshapeStep,
     FrequencyFeatureEncoderStep,
     InputNormalizationEncoderStep,
     LinearInputEncoderStep,
@@ -23,22 +22,6 @@ from tabpfn.architectures.encoders import (
     VariableNumFeaturesEncoderStep,
     steps,
 )
-
-
-def test__feature_group_padding_and_reshape_encoder():
-    N, B, F = 4, 2, 8
-    x = torch.rand([N, B, F])
-
-    num_features_per_group = 6
-    encoder = FeatureGroupPaddingAndReshapeStep(
-        num_features_per_group=num_features_per_group
-    )
-    out = encoder({"main": x})["main"]
-
-    num_feature_groups = 2
-    expected_shape = (N, B, num_feature_groups, num_features_per_group)
-    assert out.shape == expected_shape
-    assert (out[:, 0, -1, -4:] == 0).all()
 
 
 def test__input_normalization_encoder():
@@ -206,8 +189,6 @@ def test__steps():
             num_features = 4
             if cls is LinearInputEncoderStep or cls is MLPInputEncoderStep:
                 encoder = cls(num_features=num_features, emsize=16)
-            elif cls is FeatureGroupPaddingAndReshapeStep:
-                encoder = FeatureGroupPaddingAndReshapeStep(num_features_per_group=4)
             elif cls is VariableNumFeaturesEncoderStep:
                 encoder = cls(num_features=num_features)
             elif cls is InputNormalizationEncoderStep:

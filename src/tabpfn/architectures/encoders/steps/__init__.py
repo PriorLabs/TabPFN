@@ -1,7 +1,6 @@
 from .categorical_input_encoder_per_feature_encoder_step import (
     CategoricalInputEncoderPerFeatureEncoderStep,
 )
-from .feature_group_padding_encoder_step import FeatureGroupPaddingAndReshapeStep
 from .feature_group_projections_encoder_step import (
     LinearInputEncoderStep,
     MLPInputEncoderStep,
@@ -18,7 +17,6 @@ from .variable_num_features_encoder_step import VariableNumFeaturesEncoderStep
 
 __all__ = [
     "CategoricalInputEncoderPerFeatureEncoderStep",
-    "FeatureGroupPaddingAndReshapeStep",
     "FrequencyFeatureEncoderStep",
     "InputNormalizationEncoderStep",
     "LinearInputEncoderStep",
