@@ -22,6 +22,7 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
         num_features_per_group: int,
         *,
         normalize_by_sqrt: bool = True,
+        normalize_by_used_features: bool = True,
         in_keys: tuple[str, ...] = ("main",),
         out_keys: tuple[str, ...] = ("main",),
     ):
@@ -31,6 +32,9 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
             num_features_per_group: The number of features to transform the input to.
             normalize_by_sqrt: Legacy option to normalize by sqrt instead of the number
                 of used features.
+            normalize_by_used_features: Whether to normalize by the number of used
+                features. No-op if this is False. This flag is deprecated and will be
+                removed in the future.
             in_keys: The keys of the input tensors.
             out_keys: The keys to assign the output tensors to.
         """
@@ -41,6 +45,7 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
         super().__init__(in_keys, out_keys)
         self.num_features_per_group = num_features_per_group
         self.normalize_by_sqrt = normalize_by_sqrt
+        self.normalize_by_used_features = normalize_by_used_features
         self.number_of_used_features_: torch.Tensor | None = None
 
     @override
@@ -56,6 +61,9 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
             **kwargs: Additional keyword arguments (unused).
         """
         del kwargs
+        if not self.normalize_by_used_features:
+            return
+
         x = state[self.in_keys[0]]
 
         if x.shape[-1] % self.num_features_per_group != 0:
@@ -99,6 +107,8 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
         """
         del kwargs
         x = state[self.in_keys[0]]
+        if not self.normalize_by_used_features:
+            return {self.out_keys[0]: state[self.in_keys[0]]}
 
         if x.shape[-1] == 0:
             return {
