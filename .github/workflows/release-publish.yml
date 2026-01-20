@@ -1,0 +1,191 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    environment: release
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: ver
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Verify tag matches pyproject.toml version
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          python - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          v_tag = os.environ["VERSION"]
+          s = Path("pyproject.toml").read_text(encoding="utf-8")
+          m = re.search(r'(?ms)^\[project\]\s*\n.*?^\s*version\s*=\s*"([^"]+)"', s)
+          if not m:
+              raise SystemExit("Could not find [project].version in pyproject.toml")
+          v_file = m.group(1).strip()
+          if v_tag != v_file:
+              raise SystemExit(f"Version mismatch: tag={v_tag} pyproject={v_file}")
+          print("OK: tag matches pyproject version:", v_tag)
+          PY
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Install build tool
+        run: uv tool install build
+
+      - name: Clean previous builds
+        run: git clean -xfd dist build *.egg-info || true
+
+      - name: Build package
+        run: uv tool run --from build pyproject-build 
+
+      - name: Extract release notes from CHANGELOG.md
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          python - <<'PY'
+          import os, re, pathlib
+
+          v = os.environ["VERSION"]
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+
+          # Matches: ## [X.Y.Z] - YYYY-MM-DD
+          pat = rf"(?ms)^##\s+\[{re.escape(v)}\]\s+-\s+\d{{4}}-\d{{2}}-\d{{2}}\s*\n(.*?)(?=^##\s+\[|\Z)"
+          m = re.search(pat, text)
+          if not m:
+              raise SystemExit(f"Could not find Towncrier section for version {v} in CHANGELOG.md")
+
+          notes = m.group(1).strip() + "\n"
+          pathlib.Path("release_notes.md").write_text(notes, encoding="utf-8")
+          print("Wrote to release_notes.md")
+          PY
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
+
+      - name: Upload release notes
+        uses: actions/upload-artifact@v4
+        with:
+          name: release_notes
+          path: release_notes.md
+          retention-days: 7
+
+  publish-testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref_name, 'v')
+    environment:
+      name: testpypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          print-hash: true
+          skip-existing: true
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Wait for TestPyPI propagation
+        run: |
+          echo "⏳ Waiting for package to be available on TestPyPI..."
+          sleep 30
+
+      - name: Test installation from TestPyPI
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          echo "🧪 Testing installation of tabpfn==${VERSION} from TestPyPI..."
+
+          TEST_DIR=$(mktemp -d)
+          cd "$TEST_DIR"
+
+          uv venv
+          source .venv/bin/activate
+
+          uv pip install \
+            --index-url https://test.pypi.org/simple/ \
+            --extra-index-url https://pypi.org/simple/ \
+            --index-strategy unsafe-best-match \
+            tabpfn==${VERSION}
+
+          echo "✅ Installation test completed."
+
+  publish-pypi:
+    needs: [build, publish-testpypi]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref_name, 'v')
+    environment:
+      name: pypi
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1.12.4
+        with:
+          print-hash: true
+          skip-existing: true
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: release_notes
+          path: .
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          # Create release if it doesn't exist; if it exists, just fail fast
+          gh release create "v$VERSION" \
+            --title "v$VERSION" \
+            --notes-file release_notes.md
