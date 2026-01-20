@@ -395,11 +395,11 @@ def update_encoder_params(
 
         # TODO: maybe check that norm_layer even exists
         norm_layer = next(
-            e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
+            e for e in encoder if "FeatureTransformEncoderStep" in str(e.__class__)
         )
         if not hasattr(norm_layer, "remove_outliers"):
             raise ValueError(
-                "InputNormalizationEncoderStep does not have a remove_outliers "
+                "FeatureTransformEncoderStep does not have a remove_outliers "
                 "attribute, this will break the TabPFN sklearn wrapper."
             )
         norm_layer.remove_outliers = (remove_outliers_std is not None) and (

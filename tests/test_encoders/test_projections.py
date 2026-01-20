@@ -7,13 +7,13 @@ import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
-    InputNormalizationEncoderStep,
+    FeatureTransformEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     TorchPreprocessingPipeline,
-    VariableNumFeaturesEncoderStep,
 )
 
 
@@ -79,7 +79,7 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers: int):
 
 
 def test_combination():
-    N, B, F, fixed_out = 10, 3, 4, 5
+    N, B, F, fixed_out = 10, 3, 5, 5
     x = torch.randn([N, B, F])
     x[:, 0, 1] = 1.0
     x[:, 2, 1] = 1.0
@@ -95,7 +95,7 @@ def test_combination():
                 in_keys=("main",),
                 out_keys=("main", "nan_indicators"),
             ),
-            InputNormalizationEncoderStep(
+            FeatureTransformEncoderStep(
                 normalize_on_train_only=True,
                 normalize_to_ranking=False,
                 normalize_x=True,
@@ -103,16 +103,10 @@ def test_combination():
                 in_keys=("main",),
                 out_keys=("main",),
             ),
-            VariableNumFeaturesEncoderStep(
-                num_features=fixed_out,
+            NormalizeFeatureGroupsEncoderStep(
+                num_features_per_group=fixed_out,
                 in_keys=("main",),
                 out_keys=("main",),
-            ),
-            VariableNumFeaturesEncoderStep(
-                num_features=fixed_out,
-                normalize_by_used_features=False,
-                in_keys=("nan_indicators",),
-                out_keys=("nan_indicators",),
             ),
             LinearInputEncoderStep(
                 num_features=fixed_out * 2,

@@ -1,37 +1,29 @@
-from .embedders import (
-    LinearFeatureGroupEmbedder,
-    MLPFeatureGroupEmbedder,
-)
 from .pipeline_interfaces import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
 )
 from .steps import (
-    CategoricalInputEncoderPerFeatureEncoderStep,
+    FeatureTransformEncoderStep,
     FrequencyFeatureEncoderStep,
-    InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    VariableNumFeaturesEncoderStep,
 )
 
 __all__ = (
-    "CategoricalInputEncoderPerFeatureEncoderStep",
+    "FeatureTransformEncoderStep",
     "FrequencyFeatureEncoderStep",
-    "InputNormalizationEncoderStep",
-    "LinearFeatureGroupEmbedder",
     "LinearInputEncoderStep",
-    "MLPFeatureGroupEmbedder",
     "MLPInputEncoderStep",
     "MulticlassClassificationTargetEncoderStep",
     "NanHandlingEncoderStep",
+    "NormalizeFeatureGroupsEncoderStep",
     "RemoveDuplicateFeaturesEncoderStep",
     "RemoveEmptyFeaturesEncoderStep",
     "TorchPreprocessingPipeline",
     "TorchPreprocessingStep",
-    "VariableNumFeaturesEncoderStep",
 )

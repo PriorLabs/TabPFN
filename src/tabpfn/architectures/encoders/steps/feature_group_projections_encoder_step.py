@@ -1,8 +1,8 @@
 """DEPRECATED: Projections from cell-level tensors to embedding space.
 
-Please use the standalone modules
-`LinearFeatureGroupEmbedder` and `MLPFeatureGroupEmbedder` instead
-in your architectures.
+Please use the standalone modules like `nn.Linear` or an MLP module
+to project the feature groups to the embedding space instead of using
+this in the preprocessing pipeline.
 """
 
 from __future__ import annotations

@@ -9,17 +9,16 @@ import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
-    CategoricalInputEncoderPerFeatureEncoderStep,
+    FeatureTransformEncoderStep,
     FrequencyFeatureEncoderStep,
-    InputNormalizationEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
-    VariableNumFeaturesEncoderStep,
     steps,
 )
 
@@ -35,9 +34,7 @@ def test__input_normalization_encoder():
         "remove_outliers": False,
     }
 
-    encoder = TorchPreprocessingPipeline(
-        steps=[InputNormalizationEncoderStep(**kwargs)]
-    )
+    encoder = TorchPreprocessingPipeline(steps=[FeatureTransformEncoderStep(**kwargs)])
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert torch.isclose(out.var(dim=0), torch.tensor([1.0]), atol=1e-05).all(), (
@@ -107,10 +104,10 @@ def test__variable_num_features_encoder():
     N, B, F, fixed_out = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
-    kwargs = {"num_features": fixed_out, "normalize_by_used_features": True}
+    kwargs = {"num_features_per_group": fixed_out}
 
     encoder = TorchPreprocessingPipeline(
-        steps=[VariableNumFeaturesEncoderStep(**kwargs)]
+        steps=[NormalizeFeatureGroupsEncoderStep(**kwargs)]
     )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
@@ -129,15 +126,6 @@ def test__variable_num_features_encoder():
         torch.tensor(math.sqrt(fixed_out / (F - 1))),
     ).all(), """Normalization is not correct.
     Constant feature should not count towards number of feats."""
-
-    kwargs["normalize_by_used_features"] = False
-    encoder = TorchPreprocessingPipeline(
-        steps=[VariableNumFeaturesEncoderStep(**kwargs)]
-    )
-    out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (out[:, :, : x.shape[-1]] == x).all(), (
-        "Features should be unchanged when not normalizing."
-    )
 
 
 def test__nan_handling_encoder():
@@ -189,10 +177,10 @@ def test__steps():
             num_features = 4
             if cls is LinearInputEncoderStep or cls is MLPInputEncoderStep:
                 encoder = cls(num_features=num_features, emsize=16)
-            elif cls is VariableNumFeaturesEncoderStep:
-                encoder = cls(num_features=num_features)
-            elif cls is InputNormalizationEncoderStep:
-                encoder = InputNormalizationEncoderStep(
+            elif cls is NormalizeFeatureGroupsEncoderStep:
+                encoder = cls(num_features_per_group=num_features)
+            elif cls is FeatureTransformEncoderStep:
+                encoder = FeatureTransformEncoderStep(
                     normalize_on_train_only=True,
                     normalize_to_ranking=False,
                     normalize_x=True,
@@ -202,8 +190,6 @@ def test__steps():
                 encoder = FrequencyFeatureEncoderStep(
                     num_features=num_features, num_frequencies=4
                 )
-            elif cls is CategoricalInputEncoderPerFeatureEncoderStep:
-                continue
             elif cls is MulticlassClassificationTargetEncoderStep:
                 num_features = 1
                 encoder = MulticlassClassificationTargetEncoderStep()

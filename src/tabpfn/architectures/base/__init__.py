@@ -13,16 +13,16 @@ from typing import TYPE_CHECKING, Any, Literal
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.encoders import (
-    InputNormalizationEncoderStep,
+    FeatureTransformEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
-    VariableNumFeaturesEncoderStep,
 )
 
 if TYPE_CHECKING:
@@ -78,7 +78,7 @@ def get_architecture(
         config=config,
         # Things that were explicitly passed inside `build_model()`
         encoder=get_encoder(
-            num_features=config.features_per_group,
+            num_features_per_group=config.features_per_group,
             embedding_size=config.emsize,
             remove_empty_features=config.remove_empty_features,
             remove_duplicate_features=config.remove_duplicate_features,
@@ -111,7 +111,7 @@ def get_architecture(
 
 def get_encoder(  # noqa: PLR0913
     *,
-    num_features: int,
+    num_features_per_group: int,
     embedding_size: int,
     remove_empty_features: bool,
     remove_duplicate_features: bool,
@@ -126,7 +126,7 @@ def get_encoder(  # noqa: PLR0913
     encoder_mlp_hidden_dim: int | None = None,
     encoder_mlp_num_layers: int = 2,
 ) -> TorchPreprocessingPipeline:
-    inputs_to_merge = {"main": {"dim": num_features}}
+    inputs_to_merge = {"main": {"dim": num_features_per_group}}
 
     encoder_steps: list[TorchPreprocessingStep] = []
     if remove_empty_features:
@@ -142,19 +142,10 @@ def get_encoder(  # noqa: PLR0913
     encoder_steps += [NanHandlingEncoderStep(keep_nans=nan_handling_enabled)]
 
     if nan_handling_enabled:
-        inputs_to_merge["nan_indicators"] = {"dim": num_features}
-
-        encoder_steps += [
-            VariableNumFeaturesEncoderStep(
-                num_features=num_features,
-                normalize_by_used_features=False,
-                in_keys=("nan_indicators",),
-                out_keys=("nan_indicators",),
-            ),
-        ]
+        inputs_to_merge["nan_indicators"] = {"dim": num_features_per_group}
 
     encoder_steps += [
-        InputNormalizationEncoderStep(
+        FeatureTransformEncoderStep(
             normalize_on_train_only=normalize_on_train_only,
             normalize_to_ranking=normalize_to_ranking,
             normalize_x=normalize_x,
@@ -162,12 +153,12 @@ def get_encoder(  # noqa: PLR0913
         ),
     ]
 
-    encoder_steps += [
-        VariableNumFeaturesEncoderStep(
-            num_features=num_features,
-            normalize_by_used_features=normalize_by_used_features,
-        ),
-    ]
+    if normalize_by_used_features:
+        encoder_steps += [
+            NormalizeFeatureGroupsEncoderStep(
+                num_features_per_group=num_features_per_group,
+            ),
+        ]
 
     num_input_features = sum(i["dim"] for i in inputs_to_merge.values())
     if encoder_type == "mlp":

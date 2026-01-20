@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import torch
 
 
-class InputNormalizationEncoderStep(TorchPreprocessingStep):
+class FeatureTransformEncoderStep(TorchPreprocessingStep):
     """Encoder step to normalize the input in different ways.
 
     Can be used to normalize the input to a ranking, remove outliers,
@@ -34,7 +34,7 @@ class InputNormalizationEncoderStep(TorchPreprocessingStep):
         in_keys: tuple[str, ...] = ("main",),
         out_keys: tuple[str, ...] = ("main",),
     ):
-        """Initialize the InputNormalizationEncoderStep.
+        """Init.
 
         Args:
             normalize_on_train_only: Whether to compute normalization only on the
@@ -78,7 +78,7 @@ class InputNormalizationEncoderStep(TorchPreprocessingStep):
         del kwargs
         if single_eval_pos is None:
             raise ValueError(
-                "single_eval_pos must be provided for InputNormalizationEncoderStep"
+                "single_eval_pos must be provided for FeatureTransformEncoderStep"
             )
 
         x = state[self.in_keys[0]]
@@ -129,7 +129,7 @@ class InputNormalizationEncoderStep(TorchPreprocessingStep):
         del kwargs
         if single_eval_pos is None:
             raise ValueError(
-                "single_eval_pos must be provided for InputNormalizationEncoderStep"
+                "single_eval_pos must be provided for FeatureTransformEncoderStep"
             )
 
         x = state[self.in_keys[0]]

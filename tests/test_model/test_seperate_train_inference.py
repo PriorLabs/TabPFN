@@ -29,7 +29,7 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
         ),
         encoder=encoders.TorchPreprocessingPipeline(
             steps=[
-                encoders.InputNormalizationEncoderStep(
+                encoders.FeatureTransformEncoderStep(
                     normalize_on_train_only=True,
                     normalize_to_ranking=False,
                     normalize_x=True,
