@@ -48,7 +48,7 @@ class RemoveEmptyFeaturesEncoderStep(TorchPreprocessingStep):
         """
         del kwargs
         x = state[self.in_keys[0]]
-        self.column_selection_mask_ = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.column_selection_mask = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
 
     @override
     def _transform(
@@ -72,7 +72,7 @@ class RemoveEmptyFeaturesEncoderStep(TorchPreprocessingStep):
         orig_last_dim = x.shape[-1]
         # Ensure that the mask is a bool, because the buffer may get converted to a
         # a float if .to() is called on the containing module.
-        x = select_features(x, self.column_selection_mask_.type(torch.bool))
+        x = select_features(x, self.column_selection_mask.type(torch.bool))
 
         potential_padding = -x.shape[-1] % orig_last_dim
         x = torch.nn.functional.pad(x, pad=(0, potential_padding), value=0)

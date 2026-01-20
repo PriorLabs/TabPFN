@@ -78,11 +78,11 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
         # Checks for constant features to scale features in group that
         # have constant features. Constant features could have been added
         # from padding to feature group size.
-        sel = (x[1:] == x[0]).sum(0) != (x.shape[0] - 1)
+        self.non_constants_mask_ = ((x[1:] == x[0]).sum(0) != (x.shape[0] - 1)).cpu()
         # move to cpu to avoid dangling GPU memory, tested in
         # test__to__after_fit_and_predict__no_tensors_left_on_old_device
         self.number_of_used_features_ = torch.clip(
-            sel.sum(-1).unsqueeze(-1),
+            self.non_constants_mask_.sum(-1).unsqueeze(-1),
             min=1,
         ).cpu()
 
@@ -127,5 +127,8 @@ class NormalizeFeatureGroupsEncoderStep(TorchPreprocessingStep):
 
         scale = self.num_features_per_group / self.number_of_used_features_.to(x.device)
         x = x * torch.sqrt(scale) if self.normalize_by_sqrt else x * scale
+
+        # Set constant features to 0 to avoid scaling them
+        x[:, ~self.non_constants_mask_] = 0
 
         return {self.out_keys[0]: x}

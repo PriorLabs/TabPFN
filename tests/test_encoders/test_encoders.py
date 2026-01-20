@@ -101,7 +101,7 @@ def test__remove_empty_features_encoder():
 
 
 def test__variable_num_features_encoder():
-    N, B, F, fixed_out = 10, 3, 4, 5
+    N, B, F, fixed_out = 10, 3, 5, 5
     x = torch.rand([N, B, F])
 
     kwargs = {"num_features_per_group": fixed_out}
