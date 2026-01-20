@@ -18,7 +18,7 @@ from sklearn.base import (
 
 from tabpfn.architectures.encoders import (
     MulticlassClassificationTargetEncoderStep,
-    SequentialEncoder,
+    TorchPreprocessingPipeline,
 )
 from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
@@ -360,7 +360,6 @@ def translate_probs_across_borders(
 def update_encoder_params(
     models: list[Architecture],
     remove_outliers_std: float | None,
-    seed: int | None,
     *,
     differentiable_input: bool = False,
 ) -> None:
@@ -375,7 +374,6 @@ def update_encoder_params(
     Args:
         models: The models to update.
         remove_outliers_std: The standard deviation to remove outliers.
-        seed: The seed to use, if any.
         inplace: Whether to do the operation inplace.
         differentiable_input: Whether the entire model including forward pass should
             be differentiable with pt autograd. This disables non-differentiable
@@ -397,11 +395,11 @@ def update_encoder_params(
 
         # TODO: maybe check that norm_layer even exists
         norm_layer = next(
-            e for e in encoder if "InputNormalizationEncoderStep" in str(e.__class__)
+            e for e in encoder if "FeatureTransformEncoderStep" in str(e.__class__)
         )
         if not hasattr(norm_layer, "remove_outliers"):
             raise ValueError(
-                "InputNormalizationEncoderStep does not have a remove_outliers "
+                "FeatureTransformEncoderStep does not have a remove_outliers "
                 "attribute, this will break the TabPFN sklearn wrapper."
             )
         norm_layer.remove_outliers = (remove_outliers_std is not None) and (
@@ -409,9 +407,6 @@ def update_encoder_params(
         )
         if norm_layer.remove_outliers:
             norm_layer.remove_outliers_sigma = remove_outliers_std
-
-        norm_layer.seed = seed
-        norm_layer.reset_seed()
 
         if differentiable_input:
             diffable_steps = []  # only differentiable encoder steps.
@@ -421,7 +416,9 @@ def update_encoder_params(
                 else:
                     diffable_steps.append(module)
 
-            model.y_encoder = SequentialEncoder(*diffable_steps)
+            model.y_encoder = TorchPreprocessingPipeline(
+                steps=diffable_steps, output_key="output"
+            )
 
 
 def transform_borders_one(

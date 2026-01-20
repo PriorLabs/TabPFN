@@ -206,6 +206,9 @@ def normalize_data(
         if std_only:
             mean = torch.zeros_like(mean)
 
+    assert mean is not None
+    assert std is not None
+
     # Add epsilon for numerical stability
     data = (data - mean) / (std + 1e-16)
 
@@ -287,6 +290,9 @@ def remove_outliers(
         )
         cut_off = data_std * n_sigma
         lower, upper = data_mean - cut_off, data_mean + cut_off
+
+    assert lower is not None
+    assert upper is not None
 
     X = torch.maximum(-torch.log(1 + torch.abs(X)) + lower, X)
     X = torch.minimum(torch.log(1 + torch.abs(X)) + upper, X)

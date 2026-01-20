@@ -4,91 +4,99 @@
 
 from __future__ import annotations
 
+import abc
 from typing import Any
+from typing_extensions import override
 
 import torch
 from torch import nn
 
 
-class InputEncoder(nn.Module):
-    """Base class for input encoders.
+# Note that inheriting from nn.Sequential is not strictly necessary, because
+# we don't want to include learnable parameters in this pipeline.
+# Because previous TabPFN checkpoints used nn.Sequential and contain
+# keys like `encoder.5.layer.weight` in the state_dict, we keep the inheritance
+# for now.
+class TorchPreprocessingPipeline(torch.nn.Sequential):
+    """Container for a sequence of GPU preprocessing steps.
 
-    All input encoders should subclass this class and implement the `forward` method.
+    These transformations can alter feature sets or values or add
+    additional "encoding" like nan indicators to the input.
+    These steps must be non-learnable (i.e., no trainable weights or model
+    parameters) and strictly used for data preparation.
     """
 
-    def __init__(self):
-        super().__init__()
-
-    def forward(self, x: torch.Tensor, single_eval_pos: int) -> torch.Tensor:
-        """Encode the input tensor.
-
-        Args:
-            x: The input tensor to encode.
-            single_eval_pos: The position to use for single evaluation.
-
-        Returns:
-            The encoded tensor.
-        """
-        raise NotImplementedError
-
-
-class SequentialEncoder(nn.Sequential, InputEncoder):
-    """An encoder that applies a sequence of encoder steps.
-
-    SequentialEncoder allows building an encoder from a sequence of EncoderSteps.
-    The input is passed through each step in the provided order.
-    """
-
-    def __init__(self, *args: SeqEncStep, output_key: str = "output", **kwargs: Any):
-        """Initialize the SequentialEncoder.
-
-        Args:
-            *args: A list of SeqEncStep instances to apply in order.
-            output_key:
-                The key to use for the output of the encoder in the state dict.
-                Defaults to "output", i.e. `state["output"]` will be returned.
-            **kwargs: Additional keyword arguments passed to `nn.Sequential`.
-        """
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        steps: list[TorchPreprocessingStep],
+        # output_key is set for backwards compatibility
+        # with encoders that still have the projections in this pipeline.
+        output_key: str | None = None,
+    ):
+        super().__init__(*steps)
         self.output_key = output_key
 
-    def forward(self, input: dict, **kwargs: Any) -> torch.Tensor:
-        """Apply the sequence of encoder steps to the input.
+        # If we are in backwards compatibility mode, we expect the last step to
+        # be a LinearInputEncoderStep or MLPInputEncoderStep that combine
+        # the entries of the state dict parsed through the encoder.
+        if self.output_key is not None:
+            assert any(
+                s.__class__.__name__
+                # Avoid circular import by checking the class name instead of importing
+                in ("LinearInputEncoderStep", "MLPInputEncoderStep")
+                for s in self
+            ), "output_key is only supported for LinearInputEncoderStep"
+
+    # For now, we disable compilation for the preprocessing pipeline because
+    # there are multiple data-dependent control flows in the steps that break the graph.
+    @torch.compiler.disable
+    @override
+    def forward(
+        self,
+        input: dict[str, torch.Tensor] | torch.Tensor,
+        single_eval_pos: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor] | torch.Tensor:
+        """Fit and transform the preprocessing pipeline on input data.
 
         Args:
-            input:
-                The input state dictionary.
-                If the input is not a dict and the first layer expects one input key,
-                the input tensor is mapped to the key expected by the first layer.
-            **kwargs: Additional keyword arguments passed to each encoder step.
+            input: The input tensor or dictionary of tensors in the case of
+                multiple modalities. If a tensor is provided, it is wrapped in a
+                dictionary with the key "main". The tensor must have the shape
+                [R, B * G, F] with
+                R = number of rows (train + test),
+                B = batch size
+                G = number of feature groups
+                F = number of features per group
+            single_eval_pos: The position to use to split train and test data.
+            **kwargs: Additional keyword arguments passed to the encoder step.
 
         Returns:
-            The output of the final encoder step.
+            A dictionary of tensors with all keys created in the pipeline or
+            (for backwards compatibility only) the output tensor specified by
+            the `output_key` parameter of the last step.
         """
-        # If the input is not a dict and the first layer expects one input, mapping the
-        #   input to the first input key must be correct
-        if not isinstance(input, dict) and len(self[0].in_keys) == 1:
-            input = {self[0].in_keys[0]: input}  # noqa: A001
-
+        x = {"main": input} if isinstance(input, torch.Tensor) else input
         for module in self:
-            input = module(input, **kwargs)  # noqa: A001
+            x = module(x, single_eval_pos=single_eval_pos, **kwargs)
 
-        return input[self.output_key] if self.output_key is not None else input
+        # For backwards compatibility
+        if self.output_key is not None:
+            return x[self.output_key]
+
+        return x
 
 
-class SeqEncStep(nn.Module):
+class TorchPreprocessingStep(abc.ABC, nn.Module):
     """Abstract base class for sequential encoder steps.
 
-    SeqEncStep is a wrapper around a module that defines the expected input keys
-    and the produced output keys. The outputs are assigned to the output keys
+    TorchPreprocessingStep is a wrapper around a module that defines the expected
+    input keys and the produced output keys. The outputs are assigned to the output keys
     in the order specified by `out_keys`.
 
-    Subclasses should either implement `_forward` or `_fit` and `_transform`.
-    Subclasses that transform `x` should always use `_fit` and `_transform`,
-    creating any state that depends on the train set in `_fit` and using it in
-    `_transform`. This allows fitting on data first and doing inference later
-    without refitting.
-    Subclasses that work with `y` can alternatively use `_forward` instead.
+    Subclasses should create any state that depends on the train set in
+    `_fit` and using it in `_transform`. This allows fitting on data first
+    and doing inference later without refitting.
     """
 
     def __init__(
@@ -96,7 +104,7 @@ class SeqEncStep(nn.Module):
         in_keys: tuple[str, ...] = ("main",),
         out_keys: tuple[str, ...] = ("main",),
     ):
-        """Initialize the SeqEncStep.
+        """Init.
 
         Args:
             in_keys: The keys of the input tensors.
@@ -106,61 +114,70 @@ class SeqEncStep(nn.Module):
         self.in_keys = in_keys
         self.out_keys = out_keys
 
-    # Either implement _forward:
-
-    def _forward(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:
-        """Forward pass of the encoder step.
-
-        Implement this if not implementing _fit and _transform.
-
-        Args:
-            *x: The input tensors. A single tensor or a tuple of tensors.
-            **kwargs: Additional keyword arguments passed to the encoder step.
-
-        Returns:
-            The output tensor or a tuple of output tensors.
-        """
-        raise NotImplementedError()
-
-    # Or implement _fit and _transform:
-
+    @abc.abstractmethod
     def _fit(
         self,
-        *x: torch.Tensor,
-        single_eval_pos: int | None = None,
+        state: dict[str, torch.Tensor],
         **kwargs: Any,
     ) -> None:
         """Fit the encoder step on the training set.
 
         Args:
-            *x: The input tensors. A single tensor or a tuple of tensors.
+            state: The dictionary containing the input tensors.
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments passed to the encoder step.
         """
-        raise NotImplementedError
+        ...
 
+    @abc.abstractmethod
     def _transform(
         self,
-        *x: torch.Tensor,
-        single_eval_pos: int | None = None,
+        state: dict[str, torch.Tensor],
         **kwargs: Any,
-    ) -> tuple[torch.Tensor | None, ...]:
+    ) -> dict[str, torch.Tensor]:
         """Transform the data using the fitted encoder step.
 
         Args:
-            *x: The input tensors. A single tensor or a tuple of tensors.
-            single_eval_pos: The position to use for single evaluation.
+            state: The dictionary containing the input tensors.
             **kwargs: Additional keyword arguments passed to the encoder step.
 
         Returns:
-            The transformed output tensor or a tuple of output tensors.
+            The transformed output dictionary.
         """
-        raise NotImplementedError
+        ...
 
+    def _validate_input_keys(self, state: dict) -> None:
+        """Raise KeyError if expected input keys are missing from state."""
+        missing = [k for k in self.in_keys if k not in state]
+        if missing:
+            raise KeyError(
+                f"{self.__class__.__name__}: missing input tensor in dict `{missing}`. "
+                f"Available keys in state: `{list(state.keys())}`"
+            )
+
+    def _validate_output_keys(self, outputs: dict) -> None:
+        """Raise KeyError if unexpected output keys are present in outputs."""
+        unexpected = set(outputs.keys()) - set(self.out_keys)
+        if unexpected:
+            raise KeyError(
+                f"{self.__class__.__name__}: unexpected output tensor in dict "
+                f"`{unexpected}`. Available keys in state: "
+                f"`{list(outputs.keys())}`"
+            )
+
+        missing = [k for k in self.out_keys if k not in outputs]
+        if missing:
+            raise KeyError(
+                f"{self.__class__.__name__}: missing output tensor in dict "
+                f"`{missing}`. Available keys in state: `{list(outputs.keys())}`"
+            )
+
+    @override
     def forward(
         self,
         state: dict,
         *,
+        single_eval_pos: int | None = None,
         cache_trainset_representation: bool = False,
         **kwargs: Any,
     ) -> dict:
@@ -174,26 +191,19 @@ class SeqEncStep(nn.Module):
             **kwargs: Additional keyword arguments passed to the encoder step.
 
         Returns:
-            The updated state dictionary with the output tensors assigned to the output
-            keys.
+            The updated state dictionary with the output tensor or a tuple of
+            output tensors.
         """
-        args = [state[in_key] for in_key in self.in_keys]
-        if hasattr(self, "_fit"):
-            if kwargs["single_eval_pos"] or not cache_trainset_representation:
-                self._fit(*args, **kwargs)
-            out = self._transform(*args, **kwargs)
-        else:
-            assert not cache_trainset_representation
-            out = self._forward(*args, **kwargs)
-            # TODO: I think nothing is using _forward now
+        self._validate_input_keys(state)
 
-        assert isinstance(
-            out,
-            tuple,
-        ), (
-            f"out is not a tuple: {out}, type: {type(out)}, class: "
-            f"{self.__class__.__name__}"
-        )
-        assert len(out) == len(self.out_keys)
-        state.update({out_key: out[i] for i, out_key in enumerate(self.out_keys)})
+        do_fit = (
+            single_eval_pos is not None and single_eval_pos > 0
+        ) or not cache_trainset_representation
+        if do_fit:
+            self._fit(state, single_eval_pos=single_eval_pos, **kwargs)
+        outputs = self._transform(state, single_eval_pos=single_eval_pos, **kwargs)
+
+        self._validate_output_keys(outputs)
+
+        state.update(outputs)
         return state

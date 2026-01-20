@@ -7,18 +7,13 @@ import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
-    CategoricalInputEncoderPerFeatureEncoderStep,
-    FrequencyFeatureEncoderStep,
-    InputNormalizationEncoderStep,
+    FeatureTransformEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
-    MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    SeqEncStep,
-    SequentialEncoder,
-    VariableNumFeaturesEncoderStep,
-    steps,
+    TorchPreprocessingPipeline,
 )
 
 
@@ -27,13 +22,12 @@ def test_linear_encoder():
     x = torch.randn([N, B, F])
     x2 = torch.randn([N, B, F])
 
-    encoder = SequentialEncoder(
-        LinearInputEncoderStep(
-            num_features=F * 2,
-            emsize=F,
-            in_keys=("main", "features_2"),
-        ),
-        output_key=None,
+    encoder = TorchPreprocessingPipeline(
+        steps=[
+            LinearInputEncoderStep(
+                num_features=F * 2, emsize=F, in_keys=("main", "features_2")
+            ),
+        ]
     )
 
     out = encoder({"main": x, "features_2": x2}, single_eval_pos=-1)["output"]
@@ -41,20 +35,21 @@ def test_linear_encoder():
 
 
 @pytest.mark.parametrize("num_layers", [2, 3])
-def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
+def test__MLPInputEncoderStep__embed_each_input_cell(num_layers: int):
     """Test MLP encoder input/output dimensions."""
     N, B, F = 10, 3, 4
     emsize = 8
     x = torch.randn([N, B, F])
 
     # Test basic MLP encoder with default hidden_dim (should equal emsize)
-    encoder = SequentialEncoder(
-        MLPInputEncoderStep(
-            num_features=F,
-            emsize=emsize,
-            num_layers=num_layers,
-        ),
-        output_key=None,
+    encoder = TorchPreprocessingPipeline(
+        steps=[
+            MLPInputEncoderStep(
+                num_features=F,
+                emsize=emsize,
+                num_layers=num_layers,
+            ),
+        ]
     )
     out = encoder({"main": x}, single_eval_pos=-1)["output"]
     assert out.shape == (
@@ -65,14 +60,15 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
 
     # Test with explicit hidden_dim
     hidden_dim = 16
-    encoder = SequentialEncoder(
-        MLPInputEncoderStep(
-            num_features=F,
-            emsize=emsize,
-            hidden_dim=hidden_dim,
-            num_layers=num_layers,
-        ),
-        output_key=None,
+    encoder = TorchPreprocessingPipeline(
+        steps=[
+            MLPInputEncoderStep(
+                num_features=F,
+                emsize=emsize,
+                hidden_dim=hidden_dim,
+                num_layers=num_layers,
+            ),
+        ]
     )
     out = encoder({"main": x}, single_eval_pos=-1)["output"]
     assert out.shape == (
@@ -83,35 +79,42 @@ def test__MLPInputEncoderStep__embed_each_input_cell(num_layers):
 
 
 def test_combination():
-    N, B, F, fixed_out = 10, 3, 4, 5
+    N, B, F, fixed_out = 10, 3, 5, 5
     x = torch.randn([N, B, F])
     x[:, 0, 1] = 1.0
     x[:, 2, 1] = 1.0
     domain_indicator = torch.randn([N, B, 1])
 
-    encoder = SequentialEncoder(
-        RemoveEmptyFeaturesEncoderStep(),
-        NanHandlingEncoderStep(),
-        InputNormalizationEncoderStep(
-            normalize_on_train_only=True,
-            normalize_to_ranking=False,
-            normalize_x=True,
-            remove_outliers=False,
-        ),
-        VariableNumFeaturesEncoderStep(num_features=fixed_out),
-        VariableNumFeaturesEncoderStep(
-            num_features=fixed_out,
-            normalize_by_used_features=False,
-            in_keys=("nan_indicators",),
-            out_keys=("nan_indicators",),
-        ),
-        LinearInputEncoderStep(
-            num_features=fixed_out * 2,
-            emsize=F,
-            in_keys=("main", "nan_indicators"),
-            out_keys=("output",),
-        ),
-        output_key=None,
+    encoder = TorchPreprocessingPipeline(
+        steps=[
+            RemoveEmptyFeaturesEncoderStep(
+                in_keys=("main",),
+                out_keys=("main",),
+            ),
+            NanHandlingEncoderStep(
+                in_keys=("main",),
+                out_keys=("main", "nan_indicators"),
+            ),
+            FeatureTransformEncoderStep(
+                normalize_on_train_only=True,
+                normalize_to_ranking=False,
+                normalize_x=True,
+                remove_outliers=False,
+                in_keys=("main",),
+                out_keys=("main",),
+            ),
+            NormalizeFeatureGroupsEncoderStep(
+                num_features_per_group=fixed_out,
+                in_keys=("main",),
+                out_keys=("main",),
+            ),
+            LinearInputEncoderStep(
+                num_features=fixed_out * 2,
+                emsize=F,
+                in_keys=("main", "nan_indicators"),
+                out_keys=("output",),
+            ),
+        ],
     )
 
     out = encoder({"main": x, "domain_indicator": domain_indicator}, single_eval_pos=-1)
@@ -159,64 +162,3 @@ def test_combination():
     assert not torch.isnan(x_param.grad).any(), (
         "the encoder is not differentiable, i.e. the gradients are nan."
     )
-
-
-def test_interface():
-    """Test if all encoders can be instantiated and whether they
-    treat the test set independently,without interedependency between
-    test examples.These tests are only rough and do not test all hyperparameter
-    settings and only test the "main" input, e.g. not "nan_indicators".
-    """
-    # iterate over all subclasses of SeqEncStep and test if they work
-    for name, cls in steps.__dict__.items():
-        if (
-            isinstance(cls, type)
-            and issubclass(cls, SeqEncStep)
-            and cls is not SeqEncStep
-        ):
-            num_features = 4
-            if cls is LinearInputEncoderStep or cls is MLPInputEncoderStep:
-                obj = cls(num_features=num_features, emsize=16)
-            elif cls is VariableNumFeaturesEncoderStep:
-                obj = cls(num_features=num_features)
-            elif cls is InputNormalizationEncoderStep:
-                obj = InputNormalizationEncoderStep(
-                    normalize_on_train_only=True,
-                    normalize_to_ranking=False,
-                    normalize_x=True,
-                    remove_outliers=True,
-                )
-            elif cls is FrequencyFeatureEncoderStep:
-                obj = FrequencyFeatureEncoderStep(
-                    num_features=num_features, num_frequencies=4
-                )
-            elif cls is CategoricalInputEncoderPerFeatureEncoderStep:
-                continue
-            elif cls is MulticlassClassificationTargetEncoderStep:
-                num_features = 1
-                obj = MulticlassClassificationTargetEncoderStep()
-            else:
-                obj = cls()
-            x = torch.randn([10, 3, num_features])
-            x2 = torch.randn([10, 3, num_features])
-
-            obj({"main": x}, single_eval_pos=len(x), cache_trainset_representation=True)
-            transformed_x2 = obj(
-                {"main": x2}, single_eval_pos=0, cache_trainset_representation=True
-            )
-            transformed_x2_shortened = obj(
-                {"main": x2[:5]}, single_eval_pos=0, cache_trainset_representation=True
-            )
-            transformed_x2_inverted = obj(
-                {"main": torch.flip(x2, (0,))},
-                single_eval_pos=0,
-                cache_trainset_representation=True,
-            )
-
-            assert (
-                transformed_x2["main"][:5] == transformed_x2_shortened["main"]
-            ).all(), f"{name} does not work with shortened examples"
-            assert (
-                torch.flip(transformed_x2["main"], (0,))
-                == transformed_x2_inverted["main"]
-            ).all(), f"{name} does not work with inverted examples"

@@ -1,20 +1,22 @@
-"""Projections from cell-level tensors to embedding space."""
+"""DEPRECATED: Projections from cell-level tensors to embedding space.
+
+Please use the standalone modules like `nn.Linear` or an MLP module
+to project the feature groups to the embedding space instead of using
+this in the preprocessing pipeline.
+"""
 
 from __future__ import annotations
 
 from typing import Any
+from typing_extensions import override
 
 import torch
 from torch import nn
 
-from tabpfn.architectures.encoders import SeqEncStep
-
-# TODO: Remove the SeqEncStep inheritance in here and make this a
-# regular nn.Module that get's a dict of inputs and projects them up
-# according to some agreement specified in the model!
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 
-class LinearInputEncoderStep(SeqEncStep):
+class LinearInputEncoderStep(TorchPreprocessingStep):
     """A simple linear input encoder step."""
 
     def __init__(
@@ -42,20 +44,33 @@ class LinearInputEncoderStep(SeqEncStep):
         self.layer = nn.Linear(num_features, emsize, bias=bias)
         self.replace_nan_by_zero = replace_nan_by_zero
 
-    def _fit(self, *x: torch.Tensor, **kwargs: Any) -> None:
+    @override
+    def _fit(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> None:
         """Fit the encoder step. Does nothing for LinearInputEncoderStep."""
+        del state, kwargs
 
-    def _transform(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:  # noqa: ARG002
+    @override
+    def _transform(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
         """Apply the linear transformation to the input.
 
         Args:
-            *x: The input tensors to concatenate and transform.
+            state: Input state dictionary.
+            single_eval_pos: Unused.
             **kwargs: Unused keyword arguments.
 
         Returns:
-            A tuple containing the transformed tensor.
+            Dictionary mapping `out_keys` to projected tensors.
         """
-        x = torch.cat(x, dim=-1)
+        del kwargs
+        x = torch.cat([state[key] for key in self.in_keys], dim=-1)
         if self.replace_nan_by_zero:
             x = torch.nan_to_num(x, nan=0.0)  # type: ignore
 
@@ -63,10 +78,10 @@ class LinearInputEncoderStep(SeqEncStep):
         # Since this layer gets input from the outside we verify the dtype
         x = x.to(self.layer.weight.dtype)
 
-        return (self.layer(x),)
+        return {self.out_keys[0]: self.layer(x)}
 
 
-class MLPInputEncoderStep(SeqEncStep):
+class MLPInputEncoderStep(TorchPreprocessingStep):
     """An MLP-based input encoder step."""
 
     def __init__(
@@ -128,24 +143,36 @@ class MLPInputEncoderStep(SeqEncStep):
 
         self.mlp = nn.Sequential(*layers)
 
-    def _fit(self, *x: torch.Tensor, **kwargs: Any) -> None:
+    @override
+    def _fit(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> None:
         """Fit the encoder step. Does nothing for MLPInputEncoderStep."""
+        del state, kwargs
 
-    def _transform(self, *x: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor]:  # noqa: ARG002
+    @override
+    def _transform(
+        self,
+        state: dict[str, torch.Tensor],
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
         """Apply the MLP transformation to the input.
 
         Args:
-            *x: The input tensors to concatenate and transform.
+            state: Input state dictionary.
             **kwargs: Unused keyword arguments.
 
         Returns:
-            A tuple containing the transformed tensor.
+            Dictionary mapping `out_keys` to projected tensors.
         """
-        x = torch.cat(x, dim=-1)
+        del kwargs
+        x = torch.cat([state[key] for key in self.in_keys], dim=-1)
         if self.replace_nan_by_zero:
             x = torch.nan_to_num(x, nan=0.0)  # type: ignore
 
         # Ensure input tensor dtype matches the first layer's weight dtype
         x = x.to(self.mlp[0].weight.dtype)
 
-        return (self.mlp(x),)
+        return {self.out_keys[0]: self.mlp(x)}

@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
+from typing_extensions import override
 
-from tabpfn.architectures.encoders import SeqEncStep
+from tabpfn.architectures.encoders import TorchPreprocessingStep
 
 from ._ops import (
     normalize_data,
@@ -15,7 +16,7 @@ if TYPE_CHECKING:
     import torch
 
 
-class InputNormalizationEncoderStep(SeqEncStep):
+class FeatureTransformEncoderStep(TorchPreprocessingStep):
     """Encoder step to normalize the input in different ways.
 
     Can be used to normalize the input to a ranking, remove outliers,
@@ -30,10 +31,10 @@ class InputNormalizationEncoderStep(SeqEncStep):
         normalize_x: bool,
         remove_outliers: bool,
         remove_outliers_sigma: float = 4.0,
-        seed: int = 0,
-        **kwargs: Any,
+        in_keys: tuple[str, ...] = ("main",),
+        out_keys: tuple[str, ...] = ("main",),
     ):
-        """Initialize the InputNormalizationEncoderStep.
+        """Init.
 
         Args:
             normalize_on_train_only: Whether to compute normalization only on the
@@ -43,33 +44,44 @@ class InputNormalizationEncoderStep(SeqEncStep):
             remove_outliers: Whether to remove outliers from the input.
             remove_outliers_sigma: The number of standard deviations to use for outlier
             removal.
-            seed: Random seed for reproducibility.
-            **kwargs: Keyword arguments passed to the parent SeqEncStep.
+            in_keys: The keys of the input tensors.
+            out_keys: The keys to assign the output tensors to.
         """
-        super().__init__(**kwargs)
+        assert len(in_keys) == len(out_keys) == 1, (
+            f"{self.__class__.__name__} expects a single input and output key."
+        )
+        super().__init__(in_keys, out_keys)
         self.normalize_on_train_only = normalize_on_train_only
         self.normalize_to_ranking = normalize_to_ranking
         self.normalize_x = normalize_x
         self.remove_outliers = remove_outliers
         self.remove_outliers_sigma = remove_outliers_sigma
-        self.seed = seed
-        self.reset_seed()
         self.register_buffer("lower_for_outlier_removal", None, persistent=False)
         self.register_buffer("upper_for_outlier_removal", None, persistent=False)
         self.register_buffer("mean_for_normalization", None, persistent=False)
         self.register_buffer("std_for_normalization", None, persistent=False)
 
-    def reset_seed(self) -> None:
-        """Reset the random seed."""
-
-    def _fit(self, x: torch.Tensor, single_eval_pos: int, **kwargs: Any) -> None:  # noqa: ARG002
+    @override
+    def _fit(
+        self,
+        state: dict[str, torch.Tensor],
+        single_eval_pos: int | None = None,
+        **kwargs: Any,
+    ) -> None:
         """Compute the normalization statistics on the training set.
 
         Args:
-            x: The input tensor.
+            state: The state dict containing the input tensor under `in_keys[0]`.
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments (unused).
         """
+        del kwargs
+        if single_eval_pos is None:
+            raise ValueError(
+                "single_eval_pos must be provided for FeatureTransformEncoderStep"
+            )
+
+        x = state[self.in_keys[0]]
         normalize_position = single_eval_pos if self.normalize_on_train_only else -1
         if self.remove_outliers and not self.normalize_to_ranking:
             (
@@ -97,22 +109,30 @@ class InputNormalizationEncoderStep(SeqEncStep):
                 return_scaling=True,
             )
 
+    @override
     def _transform(
         self,
-        x: torch.Tensor,
-        single_eval_pos: int,
-        **kwargs: Any,  # noqa: ARG002
-    ) -> tuple[torch.Tensor]:
+        state: dict[str, torch.Tensor],
+        single_eval_pos: int | None = None,
+        **kwargs: Any,
+    ) -> dict[str, torch.Tensor]:
         """Normalize the input tensor.
 
         Args:
-            x: The input tensor.
+            state: The state dict containing the input tensor under `in_keys[0]`.
             single_eval_pos: The position to use for single evaluation.
             **kwargs: Additional keyword arguments (unused).
 
         Returns:
-            A tuple containing the normalized tensor.
+            A dict mapping `out_keys[0]` to the normalized tensor.
         """
+        del kwargs
+        if single_eval_pos is None:
+            raise ValueError(
+                "single_eval_pos must be provided for FeatureTransformEncoderStep"
+            )
+
+        x = state[self.in_keys[0]]
         normalize_position = single_eval_pos if self.normalize_on_train_only else -1
 
         if self.normalize_to_ranking:
@@ -141,4 +161,4 @@ class InputNormalizationEncoderStep(SeqEncStep):
                 mean=self.mean_for_normalization,
                 std=self.std_for_normalization,
             )
-        return (x,)
+        return {self.out_keys[0]: x}

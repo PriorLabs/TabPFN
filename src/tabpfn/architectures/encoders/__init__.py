@@ -1,35 +1,29 @@
 from .pipeline_interfaces import (
-    InputEncoder,
-    SeqEncStep,
-    SequentialEncoder,
-)
-from .projections import (
-    LinearInputEncoderStep,
-    MLPInputEncoderStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
 )
 from .steps import (
-    CategoricalInputEncoderPerFeatureEncoderStep,
+    FeatureTransformEncoderStep,
     FrequencyFeatureEncoderStep,
-    InputNormalizationEncoderStep,
+    LinearInputEncoderStep,
+    MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    VariableNumFeaturesEncoderStep,
 )
 
 __all__ = (
-    "CategoricalInputEncoderPerFeatureEncoderStep",
+    "FeatureTransformEncoderStep",
     "FrequencyFeatureEncoderStep",
-    "InputEncoder",
-    "InputNormalizationEncoderStep",
     "LinearInputEncoderStep",
     "MLPInputEncoderStep",
     "MulticlassClassificationTargetEncoderStep",
     "NanHandlingEncoderStep",
+    "NormalizeFeatureGroupsEncoderStep",
     "RemoveDuplicateFeaturesEncoderStep",
     "RemoveEmptyFeaturesEncoderStep",
-    "SeqEncStep",
-    "SequentialEncoder",
-    "VariableNumFeaturesEncoderStep",
+    "TorchPreprocessingPipeline",
+    "TorchPreprocessingStep",
 )

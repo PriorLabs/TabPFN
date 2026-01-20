@@ -376,7 +376,7 @@ def initialize_model_variables_helper(
         a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
         dtype, and rng is a NumPy random Generator for use during inference.
     """
-    static_seed, rng = infer_random_state(calling_instance.random_state)
+    _, rng = infer_random_state(calling_instance.random_state)
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
@@ -411,7 +411,6 @@ def initialize_model_variables_helper(
     update_encoder_params(  # Use the renamed function if available, or original one
         models=calling_instance.models_,
         remove_outliers_std=outlier_removal_std,
-        seed=static_seed,
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng

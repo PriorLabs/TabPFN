@@ -27,19 +27,22 @@ def test_separate_train_inference(multiquery_item_attention_for_test_set: bool):
             num_buckets=1000,
             feature_positional_embedding=None,
         ),
-        encoder=encoders.SequentialEncoder(
-            encoders.InputNormalizationEncoderStep(
-                normalize_on_train_only=True,
-                normalize_to_ranking=False,
-                normalize_x=True,
-                remove_outliers=True,
-            ),  # makes it more interesting
-            encoders.LinearInputEncoderStep(
-                num_features=1,
-                emsize=emsize,
-                in_keys=["main"],
-                out_keys=["output"],
-            ),
+        encoder=encoders.TorchPreprocessingPipeline(
+            steps=[
+                encoders.FeatureTransformEncoderStep(
+                    normalize_on_train_only=True,
+                    normalize_to_ranking=False,
+                    normalize_x=True,
+                    remove_outliers=True,
+                ),  # makes it more interesting
+                encoders.LinearInputEncoderStep(
+                    num_features=1,
+                    emsize=emsize,
+                    in_keys=("main",),
+                    out_keys=("output",),
+                ),
+            ],
+            output_key="output",
         ),
     )
 

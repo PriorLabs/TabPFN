@@ -5,19 +5,25 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import torch
 
 from tabpfn.architectures.encoders import (
-    InputNormalizationEncoderStep,
+    FeatureTransformEncoderStep,
+    FrequencyFeatureEncoderStep,
+    LinearInputEncoderStep,
+    MLPInputEncoderStep,
     MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    SequentialEncoder,
-    VariableNumFeaturesEncoderStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
+    steps,
 )
 
 
-def test_input_normalization():
+def test__input_normalization_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
@@ -28,9 +34,7 @@ def test_input_normalization():
         "remove_outliers": False,
     }
 
-    encoder = SequentialEncoder(
-        InputNormalizationEncoderStep(**kwargs), output_key=None
-    )
+    encoder = TorchPreprocessingPipeline(steps=[FeatureTransformEncoderStep(**kwargs)])
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
     assert torch.isclose(out.var(dim=0), torch.tensor([1.0]), atol=1e-05).all(), (
@@ -64,14 +68,14 @@ def test_input_normalization():
     )
 
 
-def test_remove_empty_feats():
+def test__remove_empty_features_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.rand([N, B, F])
 
     kwargs = {}
 
-    encoder = SequentialEncoder(
-        RemoveEmptyFeaturesEncoderStep(**kwargs), output_key=None
+    encoder = TorchPreprocessingPipeline(
+        steps=[RemoveEmptyFeaturesEncoderStep(**kwargs)]
     )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
@@ -96,14 +100,14 @@ def test_remove_empty_feats():
     )
 
 
-def test_variable_num_features():
-    N, B, F, fixed_out = 10, 3, 4, 5
+def test__variable_num_features_encoder():
+    N, B, F, fixed_out = 10, 3, 5, 5
     x = torch.rand([N, B, F])
 
-    kwargs = {"num_features": fixed_out, "normalize_by_used_features": True}
+    kwargs = {"num_features_per_group": fixed_out}
 
-    encoder = SequentialEncoder(
-        VariableNumFeaturesEncoderStep(**kwargs), output_key=None
+    encoder = TorchPreprocessingPipeline(
+        steps=[NormalizeFeatureGroupsEncoderStep(**kwargs)]
     )
 
     out = encoder({"main": x}, single_eval_pos=-1)["main"]
@@ -123,17 +127,8 @@ def test_variable_num_features():
     ).all(), """Normalization is not correct.
     Constant feature should not count towards number of feats."""
 
-    kwargs["normalize_by_used_features"] = False
-    encoder = SequentialEncoder(
-        VariableNumFeaturesEncoderStep(**kwargs), output_key=None
-    )
-    out = encoder({"main": x}, single_eval_pos=-1)["main"]
-    assert (out[:, :, : x.shape[-1]] == x).all(), (
-        "Features should be unchanged when not normalizing."
-    )
 
-
-def test_nan_handling_encoder():
+def test__nan_handling_encoder():
     N, B, F, _ = 10, 3, 4, 5
     x = torch.randn([N, B, F])
     x[1, 0, 2] = np.inf
@@ -141,7 +136,7 @@ def test_nan_handling_encoder():
     x[0, 1, 0] = np.nan
     x[:, 2, 1] = np.nan
 
-    encoder = SequentialEncoder(NanHandlingEncoderStep(), output_key=None)
+    encoder = TorchPreprocessingPipeline(steps=[NanHandlingEncoderStep()])
 
     out = encoder({"main": x}, single_eval_pos=-1)
     _, nan_indicators = out["main"], out["nan_indicators"]
@@ -158,9 +153,79 @@ def test_nan_handling_encoder():
     assert out["main"].mean() > -1.0
 
 
-def test_multiclass_encoder():
+def test__multiclass_target_encoder():
     enc = MulticlassClassificationTargetEncoderStep()
     y = torch.tensor([[0, 1, 2, 1, 0], [0, 2, 2, 0, 0]]).T.unsqueeze(-1)
     solution = torch.tensor([[0, 1, 2, 1, 0], [0, 1, 1, 0, 0]]).T.unsqueeze(-1)
     y_enc = enc({"main": y}, single_eval_pos=3)["main"]
     assert (y_enc == solution).all(), f"y_enc: {y_enc}, solution: {solution}"
+
+
+def test__steps():
+    """Test if all encoders can be instantiated and whether they
+    treat the test set independently,without interedependency between
+    test examples.These tests are only rough and do not test all hyperparameter
+    settings and only test the "main" input, e.g. not "nan_indicators".
+    """
+    # iterate over all subclasses of TorchPreprocessingStep and test if they work
+    for name, cls in steps.__dict__.items():
+        if (
+            isinstance(cls, type)
+            and issubclass(cls, TorchPreprocessingStep)
+            and cls is not TorchPreprocessingStep
+        ):
+            num_features = 4
+            if cls is LinearInputEncoderStep or cls is MLPInputEncoderStep:
+                encoder = cls(num_features=num_features, emsize=16)
+            elif cls is NormalizeFeatureGroupsEncoderStep:
+                encoder = cls(num_features_per_group=num_features)
+            elif cls is FeatureTransformEncoderStep:
+                encoder = FeatureTransformEncoderStep(
+                    normalize_on_train_only=True,
+                    normalize_to_ranking=False,
+                    normalize_x=True,
+                    remove_outliers=True,
+                )
+            elif cls is FrequencyFeatureEncoderStep:
+                encoder = FrequencyFeatureEncoderStep(
+                    num_features=num_features, num_frequencies=4
+                )
+            elif cls is MulticlassClassificationTargetEncoderStep:
+                num_features = 1
+                encoder = MulticlassClassificationTargetEncoderStep()
+            else:
+                encoder = cls()
+
+            x = torch.randn([10, 3, num_features])
+            x2 = torch.randn([10, 3, num_features])
+
+            encoder(
+                {"main": x}, single_eval_pos=len(x), cache_trainset_representation=True
+            )
+
+            transformed_x2 = encoder(
+                {"main": x2}, single_eval_pos=0, cache_trainset_representation=True
+            )
+            transformed_x2_shortened = encoder(
+                {"main": x2[:5]}, single_eval_pos=0, cache_trainset_representation=True
+            )
+            transformed_x2_inverted = encoder(
+                {"main": torch.flip(x2, (0,))},
+                single_eval_pos=0,
+                cache_trainset_representation=True,
+            )
+
+            assert (
+                transformed_x2["main"][:5] == transformed_x2_shortened["main"]
+            ).all(), f"{name} does not work with shortened examples"
+            assert (
+                torch.flip(transformed_x2["main"], (0,))
+                == transformed_x2_inverted["main"]
+            ).all(), f"{name} does not work with inverted examples"
+
+
+def test__torch_preprocessing_step__raises_exceptions_on_invalid_input_keys():
+    """Test TorchPreprocessingPipeline interface."""
+    encoder = RemoveEmptyFeaturesEncoderStep(in_keys=("main",), out_keys=("main",))
+    with pytest.raises(KeyError, match="missing input tensor in dict"):
+        encoder({"not_main": torch.randn([10, 3, 4])})
