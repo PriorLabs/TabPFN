@@ -34,17 +34,7 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
             in_keys: The keys of the input tensors. Must be a single key.
             out_keys: The keys to assign the output tensors to.
         """
-        assert len(in_keys) == 1, "NanHandlingEncoderStep expects a single input key"
-        if len(out_keys) > 1 and not keep_nans:
-            raise ValueError(
-                f"{self.__class__.__name__} expects a single output key if keep_nans is"
-                f" False, got `{len(out_keys)}`."
-            )
-        if keep_nans and len(out_keys) < 2:
-            raise ValueError(
-                f"{self.__class__.__name__} expects at least two output keys if "
-                f"keep_nans is True, got `{len(out_keys)}`."
-            )
+        self._validate_keys(in_keys=in_keys, out_keys=out_keys, keep_nans=keep_nans)
 
         super().__init__(in_keys, out_keys)
         self.keep_nans = keep_nans
@@ -115,3 +105,26 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
         if nans_indicator is not None:
             outputs[self.out_keys[1]] = nans_indicator
         return outputs
+
+    def _validate_keys(
+        self,
+        *,
+        in_keys: tuple[str, ...],
+        out_keys: tuple[str, ...],
+        keep_nans: bool,
+    ) -> None:
+        if len(in_keys) != 1:
+            raise ValueError(
+                f"{self.__class__.__name__} expects a single input key, got "
+                f"`{len(in_keys)}`."
+            )
+        if len(out_keys) > 1 and not keep_nans:
+            raise ValueError(
+                f"{self.__class__.__name__} expects a single output key if keep_nans is"
+                f" False, got `{len(out_keys)}`."
+            )
+        if keep_nans and len(out_keys) < 2:
+            raise ValueError(
+                f"{self.__class__.__name__} expects at least two output keys if "
+                f"keep_nans is True, got `{len(out_keys)}`."
+            )

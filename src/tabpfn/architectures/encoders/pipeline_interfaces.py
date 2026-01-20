@@ -63,10 +63,11 @@ class TorchPreprocessingPipeline(torch.nn.Sequential):
             input: The input tensor or dictionary of tensors in the case of
                 multiple modalities. If a tensor is provided, it is wrapped in a
                 dictionary with the key "main". The tensor must have the shape
-                [R, B, F] with
+                [R, B * G, F] with
                 R = number of rows (train + test),
-                B = batch size,
-                F = number of features.
+                B = batch size
+                G = number of feature groups
+                F = number of features per group
             single_eval_pos: The position to use to split train and test data.
             **kwargs: Additional keyword arguments passed to the encoder step.
 

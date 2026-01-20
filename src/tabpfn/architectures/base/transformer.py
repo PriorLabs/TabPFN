@@ -172,7 +172,10 @@ class PerFeatureTransformer(Architecture):
         if y_encoder is None:
             y_encoder = TorchPreprocessingPipeline(
                 steps=[
-                    NanHandlingEncoderStep(),
+                    NanHandlingEncoderStep(
+                        in_keys=("main",),
+                        out_keys=("main", "nan_indicators"),
+                    ),
                     LinearInputEncoderStep(
                         num_features=2,
                         emsize=config.emsize,
@@ -480,6 +483,7 @@ class PerFeatureTransformer(Architecture):
 
         for k in x:
             x[k] = einops.rearrange(x[k], "b s f n -> s (b f) n")
+
         embedded_x = einops.rearrange(
             self.encoder(
                 x,

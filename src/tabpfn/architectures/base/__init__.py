@@ -145,15 +145,7 @@ def get_encoder(  # noqa: PLR0913
         inputs_to_merge["nan_indicators"] = {"dim": num_features_per_group}
 
         if normalize_by_used_features:
-            # TODO: This is a no-op currently. We need it to keep the state_dict of
-            # the model compatible with previously saved checkpoints. Remove
-            # in future versions.
-            encoder_steps += [
-                NormalizeFeatureGroupsEncoderStep(
-                    num_features_per_group=num_features_per_group,
-                    normalize_by_used_features=False,
-                ),
-            ]
+            encoder_steps += [_legacy_normalize_features_no_op(num_features_per_group)]
 
     encoder_steps += [
         FeatureTransformEncoderStep(
@@ -228,3 +220,18 @@ def get_y_encoder(
         ),
     ]
     return TorchPreprocessingPipeline(steps, output_key="output")
+
+
+def _legacy_normalize_features_no_op(
+    num_features_per_group: int,
+) -> TorchPreprocessingStep:
+    """Create a no-op step to normalize features.
+
+    This is a no-op currently. We need it to keep the state_dict of
+    the model compatible with previously saved checkpoints. Remove
+    in future versions.
+    """
+    return NormalizeFeatureGroupsEncoderStep(
+        num_features_per_group=num_features_per_group,
+        normalize_by_used_features=False,
+    )
