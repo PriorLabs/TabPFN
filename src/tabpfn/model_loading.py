@@ -15,12 +15,12 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from enum import Enum
+from functools import wraps
 from importlib import import_module
 from pathlib import Path
-from collections.abc import Callable
-from functools import wraps
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
 from urllib.error import URLError
 
@@ -187,7 +187,7 @@ def _log_huggingface_download_errors(func: Callable[..., None]) -> Callable[...,
     ) -> None:
         # Extract model information
         filename = model_name or source.default_filename
-        model_name = filename.split(os.sep)[0]
+        model_name = Path(filename).parts[-1]
 
         try:
             r = func(base_path, source, model_name, suppress_warnings=suppress_warnings)
