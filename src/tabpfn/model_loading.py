@@ -187,13 +187,13 @@ def _log_huggingface_download_errors(func: Callable[..., None]) -> Callable[...,
     ) -> None:
         # Extract model information
         filename = model_name or source.default_filename
-        model_name = Path(filename).parts[-1]
+        logged_model_name = Path(filename).parts[-1]
 
         try:
             r = func(base_path, source, model_name, suppress_warnings=suppress_warnings)
 
             # Log success to the telemetry system
-            event = ModelLoadEvent(status="success", model_name=model_name)
+            event = ModelLoadEvent(status="success", model_name=logged_model_name)
             capture_event(event)
 
             return r
@@ -202,7 +202,7 @@ def _log_huggingface_download_errors(func: Callable[..., None]) -> Callable[...,
             event = ModelLoadEvent(
                 status="failed",
                 failure_reason=e.__class__.__name__,
-                model_name=model_name,
+                model_name=logged_model_name,
             )
             capture_event(event)
 
