@@ -921,27 +921,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ord_encoder=getattr(self, "preprocessor_", None),
         )
 
-        # Runs over iteration engine
-        (
-            _,
-            outputs,  # list of tensors [N_est, N_samples, N_borders] (after forward)
-            borders,  # list of numpy arrays containing borders for each estimator
-        ) = self.forward(X, use_inference_mode=True)
+        n_estimators = 0
+        averaged_logits: torch.Tensor | None = None
 
-        # --- Translate probs, average, get final logits ---
-        transformed_logits = [
-            translate_probs_across_borders(
-                logits,
-                frm=torch.as_tensor(borders_t, device=logits.device),
-                to=self.znorm_space_bardist_.borders.to(logits.device),
+        for borders_t, output in self._iter_forward_executor(
+            X, use_inference_mode=True
+        ):
+            # Transform probabilities across borders
+            transformed = translate_probs_across_borders(
+                output,
+                frm=torch.as_tensor(borders_t, device=output.device),
+                to=self.znorm_space_bardist_.borders.to(output.device),
             )
-            for logits, borders_t in zip(outputs, borders)
-        ]
-        stacked_logits = torch.stack(transformed_logits, dim=0)
+
+            if self.average_before_softmax:
+                transformed = transformed.log()
+
+            if averaged_logits is None:
+                averaged_logits = transformed
+            else:
+                averaged_logits = averaged_logits + transformed
+            n_estimators += 1
+
+        # Finalize averaging
         if self.average_before_softmax:
-            logits = stacked_logits.log().mean(dim=0).softmax(dim=-1)
+            logits = (averaged_logits / n_estimators).softmax(dim=-1)  # type: ignore
         else:
-            logits = stacked_logits.mean(dim=0)
+            logits = averaged_logits / n_estimators  # type: ignore
 
         # Post-process the logits
         logits = logits.log()
