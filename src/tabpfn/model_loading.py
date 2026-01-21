@@ -19,12 +19,18 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
+from collections.abc import Callable
+from functools import wraps
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
 from urllib.error import URLError
 
 import joblib
 import torch
-from tabpfn_common_utils.telemetry import set_model_config
+from tabpfn_common_utils.telemetry import (
+    capture_event,
+    ModelLoadEvent,
+    set_model_config,
+)
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
@@ -160,6 +166,53 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
+def _log_huggingface_download_errors(func: Callable[..., None]) -> Callable[..., None]:
+    """Decorator that catches exceptions and logs them with model information.
+
+    This is used for detecting and logging failures into our telemetry system,
+    to keep track of the most common failure reasons and improve the user experience
+    based on that information.
+
+    Args:
+        func: The function to decorate.
+    """
+
+    @wraps(func)
+    def wrapper(
+        base_path: Path,
+        source: ModelSource,
+        model_name: str | None = None,
+        *,
+        suppress_warnings: bool = True,
+    ) -> None:
+        # Extract model information
+        filename = model_name or source.default_filename
+        model_name = filename.split(os.sep)[0]
+
+        try:
+            r = func(base_path, source, model_name, suppress_warnings=suppress_warnings)
+
+            # Log success to the telemetry system
+            event = ModelLoadEvent(status="success", model_name=model_name)
+            capture_event(event)
+
+            return r
+        except Exception as e:
+            # Detect failure reason and log it using the telemetry system
+            event = ModelLoadEvent(
+                status="failed",
+                failure_reason=e.__class__.__name__,
+                model_name=model_name,
+            )
+            capture_event(event)
+
+            # Re-raise the original exception caught by the wrapper
+            raise
+
+    return wrapper
+
+
+@_log_huggingface_download_errors
 def _try_huggingface_downloads(
     base_path: Path,
     source: ModelSource,
