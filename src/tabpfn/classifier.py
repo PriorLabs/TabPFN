@@ -506,6 +506,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return cls(**options)
 
     @property
+    def estimator_type(self) -> Literal["classifier"]:
+        """The type of the model."""
+        return "classifier"
+
+    @property
     def model_(self) -> Architecture:
         """The model used for inference.
 
@@ -533,14 +538,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def __sklearn_tags__(self) -> Tags:  # type: ignore
         tags = super().__sklearn_tags__()
         tags.input_tags.allow_nan = True
-        tags.estimator_type = "classifier"
+        tags.estimator_type = self.estimator_type
         return tags
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Perform initialization of the model, return determined byte_size
         and RNG object.
         """
-        return initialize_model_variables_helper(self, "classifier")
+        return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_for_differentiable_input(
         self,
@@ -585,6 +590,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 
@@ -656,6 +664,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 

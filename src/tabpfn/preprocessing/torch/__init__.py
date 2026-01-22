@@ -5,12 +5,15 @@
 from .datamodel import (
     ColumnMetadata,
     FeatureModality,
-    PipelineOutput,
-    TransformResult,
+    TorchPreprocessingPipelineOutput,
+    TorchPreprocessingStepResult,
 )
-from .factory import PipelineConfig, create_preprocessing_pipeline
+from .factory import create_gpu_preprocessing_pipeline
 from .ops import torch_nanmean, torch_nanstd, torch_nansum
-from .pipeline_interface import TorchPreprocessingPipeline, TorchPreprocessingStep
+from .pipeline_interface import (
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
+)
 from .steps import TorchRemoveOutliersStep, TorchStandardScalerStep
 from .torch_remove_outliers import TorchRemoveOutliers
 from .torch_standard_scaler import TorchStandardScaler
@@ -18,16 +21,15 @@ from .torch_standard_scaler import TorchStandardScaler
 __all__ = [
     "ColumnMetadata",
     "FeatureModality",
-    "PipelineConfig",
-    "PipelineOutput",
     "TorchPreprocessingPipeline",
+    "TorchPreprocessingPipelineOutput",
     "TorchPreprocessingStep",
+    "TorchPreprocessingStepResult",
     "TorchRemoveOutliers",
     "TorchRemoveOutliersStep",
     "TorchStandardScaler",
     "TorchStandardScalerStep",
-    "TransformResult",
-    "create_preprocessing_pipeline",
+    "create_gpu_preprocessing_pipeline",
     "torch_nanmean",
     "torch_nanstd",
     "torch_nansum",

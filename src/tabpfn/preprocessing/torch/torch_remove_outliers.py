@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from .ops import torch_nanmean, torch_nanstd
+from tabpfn.preprocessing.torch.ops import torch_nanmean, torch_nanstd
 
 
 class TorchRemoveOutliers:
@@ -44,6 +44,11 @@ class TorchRemoveOutliers:
         Returns:
             Self for method chaining.
         """
+        if x.shape[0] <= 1:
+            self.lower_ = torch.full(x.shape[1:], float("-inf"))
+            self.upper_ = torch.full(x.shape[1:], float("inf"))
+            return self
+
         # First pass: compute initial statistics
         data_mean = torch_nanmean(x, axis=0)
         data_std = torch_nanstd(x, axis=0)
@@ -83,6 +88,9 @@ class TorchRemoveOutliers:
         Returns:
             Tensor with outliers softly clamped.
         """
+        if x.shape[0] == 1:
+            return x
+
         if self.lower_ is None or self.upper_ is None:
             raise RuntimeError("Outlier remover has not been fitted. Call fit() first.")
 

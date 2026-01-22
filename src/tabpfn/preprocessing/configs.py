@@ -135,6 +135,8 @@ class EnsembleConfig:
         feature_shift_decoder: How to shift features.
         subsample_ix: Indices of samples to use for this ensemble member.
             If `None`, no subsampling is done.
+        outlier_removal_std: Number of standard deviations from the mean to consider a
+            sample an outlier. If `None`, no outliers are removed.
     """
 
     preprocess_config: PreprocessorConfig
@@ -143,6 +145,7 @@ class EnsembleConfig:
     feature_shift_count: int
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
+    outlier_removal_std: float | None
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
 

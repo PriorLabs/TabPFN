@@ -32,7 +32,11 @@ class ColumnMetadata:
     """Maps feature modalities to column indices in the tensor."""
 
     indices_by_modality: dict[FeatureModality, list[int]] = field(default_factory=dict)
-    num_columns: int = 0
+
+    @property
+    def num_columns(self) -> int:
+        """Get the total number of columns."""
+        return sum(len(indices) for indices in self.indices_by_modality.values())
 
     def indices_for(self, modality: FeatureModality) -> list[int]:
         """Get column indices for a single modality."""
@@ -67,12 +71,11 @@ class ColumnMetadata:
 
         return ColumnMetadata(
             indices_by_modality=new_indices_by_modality,
-            num_columns=self.num_columns + num_new,
         )
 
 
 @dataclass
-class TransformResult:
+class TorchPreprocessingStepResult:
     """Result from a preprocessing step's transform.
 
     Attributes:
@@ -87,7 +90,7 @@ class TransformResult:
 
 
 @dataclass
-class PipelineOutput:
+class TorchPreprocessingPipelineOutput:
     """Output from the preprocessing pipeline.
 
     Attributes:

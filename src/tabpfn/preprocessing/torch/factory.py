@@ -5,10 +5,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-from .datamodel import FeatureModality
-from .pipeline_interface import TorchPreprocessingPipeline, TorchPreprocessingStep
-from .steps import TorchRemoveOutliersStep, TorchStandardScalerStep
+from tabpfn.preprocessing.torch.datamodel import FeatureModality
+from tabpfn.preprocessing.torch.pipeline_interface import (
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
+)
+from tabpfn.preprocessing.torch.steps import (
+    TorchRemoveOutliersStep,
+)
+
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.configs import EnsembleConfig
 
 
 @dataclass
@@ -28,38 +37,20 @@ class PipelineConfig:
     scale_categorical: bool = True
 
 
-def create_preprocessing_pipeline(
-    config: PipelineConfig,
-) -> TorchPreprocessingPipeline:
-    """Create a preprocessing pipeline based on configuration.
-
-    Args:
-        config: Configuration specifying which preprocessing steps to include.
-
-    Returns:
-        A TorchPreprocessingPipeline with the configured steps.
-    """
+def create_gpu_preprocessing_pipeline(
+    config: EnsembleConfig,
+) -> TorchPreprocessingPipeline | None:
+    """Create a GPU preprocessing pipeline based on configuration."""
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]] = []
 
-    # Outlier removal only for numerical features
-    if config.remove_outliers:
+    if config.outlier_removal_std is not None:
         steps.append(
             (
-                TorchRemoveOutliersStep(n_sigma=config.outlier_n_sigma),
+                TorchRemoveOutliersStep(n_sigma=config.outlier_removal_std),
                 {FeatureModality.NUMERICAL},
             )
         )
 
-    # Standard scaling can apply to multiple modalities
-    if config.standard_scale:
-        scale_modalities = {FeatureModality.NUMERICAL}
-        if config.scale_categorical:
-            scale_modalities.add(FeatureModality.CATEGORICAL)
-        steps.append(
-            (
-                TorchStandardScalerStep(),
-                scale_modalities,
-            )
-        )
-
-    return TorchPreprocessingPipeline(steps)
+    if len(steps) > 0:
+        return TorchPreprocessingPipeline(steps)
+    return None

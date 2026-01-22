@@ -359,7 +359,6 @@ def translate_probs_across_borders(
 
 def update_encoder_params(
     models: list[Architecture],
-    remove_outliers_std: float | None,
     *,
     differentiable_input: bool = False,
 ) -> None:
@@ -379,35 +378,7 @@ def update_encoder_params(
             be differentiable with pt autograd. This disables non-differentiable
             encoder steps.
     """
-    if remove_outliers_std is not None and remove_outliers_std <= 0:
-        raise ValueError("remove_outliers_std must be greater than 0")
-
     for model in models:
-        # TODO: find a less hacky way to change settings during training
-        # and inference
-        if not hasattr(model, "encoder"):
-            raise ValueError(
-                "Model does not have an encoder, this breaks the TabPFN sklearn "
-                "wrapper."
-            )
-
-        encoder = model.encoder
-
-        # TODO: maybe check that norm_layer even exists
-        norm_layer = next(
-            e for e in encoder if "FeatureTransformEncoderStep" in str(e.__class__)
-        )
-        if not hasattr(norm_layer, "remove_outliers"):
-            raise ValueError(
-                "FeatureTransformEncoderStep does not have a remove_outliers "
-                "attribute, this will break the TabPFN sklearn wrapper."
-            )
-        norm_layer.remove_outliers = (remove_outliers_std is not None) and (
-            remove_outliers_std > 0
-        )
-        if norm_layer.remove_outliers:
-            norm_layer.remove_outliers_sigma = remove_outliers_std
-
         if differentiable_input:
             diffable_steps = []  # only differentiable encoder steps.
             for module in model.y_encoder:

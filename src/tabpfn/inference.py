@@ -22,6 +22,11 @@ from tabpfn.architectures.base.memory import (
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
+from tabpfn.preprocessing.torch import (
+    ColumnMetadata,
+    FeatureModality,
+    TorchPreprocessingPipeline,
+)
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
@@ -374,6 +379,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 autocast=autocast,
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
             )
             for ensemble_member in ensemble_members_iterator
         )
@@ -394,6 +400,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         model_index: int,
         save_peak_mem: bool,
+        gpu_preprocessor: TorchPreprocessingPipeline | None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -410,6 +417,15 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
         )
+
+        if gpu_preprocessor is not None:
+            num_columns = X_full.shape[-1]
+            metadata = ColumnMetadata(
+                indices_by_modality={
+                    FeatureModality.NUMERICAL: list(range(num_columns))
+                },
+            )
+            X_full = gpu_preprocessor(X_full, metadata=metadata).x
 
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
             return model(
@@ -628,6 +644,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
             )
             for ensemble_member in self.ensemble_members
         )
@@ -648,6 +665,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         model_index: int,
         save_peak_mem: bool,
+        gpu_preprocessor: TorchPreprocessingPipeline | None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -664,6 +682,19 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
         )
+
+        if gpu_preprocessor is not None:
+            # TODO: Currently, we construct the metadata on the file.
+            # In a follow-up, this will become part of a DatasetView object
+            # parsed to the inference engine class.
+            num_columns = X_full.shape[-1]
+            metadata = ColumnMetadata(
+                indices_by_modality={
+                    FeatureModality.NUMERICAL: list(range(num_columns))
+                },
+            )
+            # TODO: In a follow-up, also parse the metadata (modalities) to the model
+            X_full = gpu_preprocessor(X_full, metadata=metadata).x
 
         with (
             get_autocast_context(device, enabled=autocast),
@@ -789,6 +820,13 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         for ensemble_member, model in zip(self.ensemble_members, self.models):
+            if ensemble_member.gpu_preprocessor is not None:
+                raise NotImplementedError(
+                    "GPU preprocessor not supported for cache_kv mode. The ensemble "
+                    "member was configured to use the following preprocessing pipeline:"
+                    f" {ensemble_member.gpu_preprocessor}"
+                )
+
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)

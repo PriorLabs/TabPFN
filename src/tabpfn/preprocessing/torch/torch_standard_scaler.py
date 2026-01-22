@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import torch
 
-from .ops import torch_nanmean, torch_nanstd
+from tabpfn.preprocessing.torch.ops import torch_nanmean, torch_nanstd
 
 
 class TorchStandardScaler:
