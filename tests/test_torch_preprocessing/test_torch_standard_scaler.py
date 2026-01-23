@@ -125,7 +125,7 @@ class TestTorchStandardScaler:
         mean = x.mean(dim=0)
         std = x.std(dim=0)
 
-        x_scaled = scaler(x, mean=mean, std=std)
+        x_scaled = scaler.transform(x, fitted_cache={"mean": mean, "std": std})
 
         expected = (x - mean) / (std + 1e-16)
         assert torch.allclose(x_scaled, expected)
@@ -136,11 +136,11 @@ class TestTorchStandardScaler:
         x = torch.randn(100, 10)
         mean = x.mean(dim=0)
 
-        with pytest.raises(ValueError, match="both or neither of mean"):
-            scaler(x, mean=mean, std=None)
+        with pytest.raises(ValueError, match="Invalid fitted cache"):
+            scaler.transform(x, fitted_cache={"mean": mean})
 
-        with pytest.raises(ValueError, match="both or neither of mean"):
-            scaler(x, mean=None, std=x.std(dim=0))
+        with pytest.raises(ValueError, match="Invalid fitted cache"):
+            scaler.transform(x, fitted_cache={"std": x.std(dim=0)})
 
     def test__forward__3d_tensor(self):
         """Test with 3D tensor (T, B, H) shape commonly used in TabPFN."""

@@ -26,29 +26,17 @@ class MockStep(TorchPreprocessingStep):
         """Initialize with multiplication factor."""
         super().__init__()
         self.factor = factor
-        self.fit_called = False
-        self.fitted_columns: list[int] = []
 
     @override
-    def fit(
-        self,
-        x: torch.Tensor,
-        column_indices: list[int],
-        num_train_rows: int,
-    ) -> None:
-        """Track that fit was called, then delegate to base class."""
-        self.fit_called = True
-        self.fitted_columns = column_indices
-        super().fit(x, column_indices, num_train_rows)
-
-    @override
-    def _fit(self, x: torch.Tensor) -> None:
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """No-op fit for mock."""
+        return {}
 
     @override
     def _transform(
         self,
         x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         """Multiply columns by factor."""
         return x * self.factor, None, None
@@ -58,13 +46,14 @@ def test__call__single_step_transforms_columns():
     """Test pipeline with a single step transforms the correct columns."""
     step = MockStep(factor=3.0)
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
+
+    x = torch.ones(10, 1, 3)
     metadata = ColumnMetadata(
         indices_by_modality={
             FeatureModality.NUMERICAL: [0, 2],
             FeatureModality.CATEGORICAL: [1],
         },
     )
-    x = torch.ones(10, 1, 3)
 
     result = pipeline(x, metadata, num_train_rows=5)
 
@@ -73,7 +62,6 @@ def test__call__single_step_transforms_columns():
     assert torch.allclose(result.x[:, :, 2], torch.full((10, 1), 3.0))
     # Column 1 should be unchanged
     assert torch.allclose(result.x[:, :, 1], torch.ones(10, 1))
-    assert step.fit_called
 
 
 def test__call__multiple_steps_applied_sequentially():
@@ -110,9 +98,7 @@ def test__call__step_skipped_for_empty_indices():
 
     result = pipeline(x, metadata, num_train_rows=5)
 
-    # Data should be unchanged since step was skipped
     assert torch.allclose(result.x, x)
-    assert not step.fit_called
 
 
 def test__call__2d_input_adds_and_removes_batch_dimension():
@@ -133,9 +119,13 @@ def test__call__2d_input_adds_and_removes_batch_dimension():
 
 def test__call__step_targeting_multiple_modalities():
     """Test step that targets multiple modalities at once."""
-    step = MockStep(factor=5.0)
     pipeline = TorchPreprocessingPipeline(
-        steps=[(step, {FeatureModality.NUMERICAL, FeatureModality.CATEGORICAL})]
+        steps=[
+            (
+                MockStep(factor=5.0),
+                {FeatureModality.NUMERICAL, FeatureModality.CATEGORICAL},
+            )
+        ]
     )
     metadata = ColumnMetadata(
         indices_by_modality={
@@ -152,7 +142,6 @@ def test__call__step_targeting_multiple_modalities():
     assert torch.allclose(result.x[:, :, 0], torch.full((10, 1), 5.0))
     assert torch.allclose(result.x[:, :, 1], torch.full((10, 1), 5.0))
     assert torch.allclose(result.x[:, :, 2], torch.ones(10, 1))
-    assert sorted(step.fitted_columns) == [0, 1]
 
 
 def test__call__with_real_standard_scaler_step():
@@ -187,12 +176,6 @@ def test__call__no_num_train_rows_fits_on_all_data():
 
     # Output should be zeros: (x - mean) / std = (1 - 1) / 1 = 0
     assert torch.allclose(result.x, torch.zeros((10, 1)))
-    # Mean should be 1.0 (all inputs were 1)
-    assert step._scaler.mean_ is not None
-    assert torch.allclose(step._scaler.mean_, torch.tensor([[1.0]]))
-    # Std is set to 1.0 for constant features (to avoid division by zero)
-    assert step._scaler.std_ is not None
-    assert torch.allclose(step._scaler.std_, torch.tensor([[1.0]]))
 
 
 def test__call__zero_num_train_rows():

@@ -58,14 +58,17 @@ def test__fit__two_pass_robust_statistics():
     # Data with a single extreme outlier
     x = torch.tensor([[0.0], [1.0], [2.0], [3.0], [1000.0]])
 
-    remover.fit(x)
+    fitted_cache = remover.fit(x)
+
+    lower = fitted_cache["lower"]
+    upper = fitted_cache["upper"]
 
     # The bounds should be computed from data excluding the outlier
     # With the outlier excluded, mean should be ~1.5 and std much smaller
-    assert remover.lower_ is not None
-    assert remover.upper_ is not None
+    assert lower is not None
+    assert upper is not None
     # Upper bound should be much less than 1000
-    assert remover.upper_.item() < 100.0
+    assert upper.item() < 100.0
 
 
 def test__transform__without_fit_raises():
@@ -73,8 +76,8 @@ def test__transform__without_fit_raises():
     remover = TorchRemoveOutliers()
     x = torch.randn(10, 5)
 
-    with pytest.raises(RuntimeError, match="has not been fitted"):
-        remover.transform(x)
+    with pytest.raises(ValueError, match="Invalid fitted cache"):
+        remover.transform(x, fitted_cache={})
 
 
 def test__call__with_num_train_rows():
@@ -87,26 +90,6 @@ def test__call__with_num_train_rows():
     x_transformed = remover(x, num_train_rows=50)
 
     assert x_transformed.shape == x.shape
-    # Bounds should be based on training data, so test data gets more clamped
-    assert remover.lower_ is not None
-    assert remover.upper_ is not None
-
-
-def test__call__with_precomputed_bounds():
-    """Test using pre-computed lower and upper bounds."""
-    remover = TorchRemoveOutliers()
-    x = torch.tensor([[0.0], [5.0], [10.0], [15.0]])
-    lower = torch.tensor([2.0])
-    upper = torch.tensor([12.0])
-
-    x_transformed = remover(x, lower=lower, upper=upper)
-
-    # Values inside bounds should be unchanged or close
-    assert torch.allclose(x_transformed[1], x[1], atol=0.1)
-    assert torch.allclose(x_transformed[2], x[2], atol=0.1)
-    # Values outside bounds should be clamped
-    assert x_transformed[0, 0] > x[0, 0]  # 0.0 clamped up toward 2.0
-    assert x_transformed[3, 0] < x[3, 0]  # 15.0 clamped down toward 12.0
 
 
 def test__call__partial_bounds_raises():
@@ -115,11 +98,11 @@ def test__call__partial_bounds_raises():
     x = torch.randn(10, 5)
     lower = torch.zeros(5)
 
-    with pytest.raises(ValueError, match="both or neither"):
-        remover(x, lower=lower, upper=None)
+    with pytest.raises(ValueError, match="Invalid fitted cache"):
+        remover.transform(x, fitted_cache={"lower": lower})
 
-    with pytest.raises(ValueError, match="both or neither"):
-        remover(x, lower=None, upper=lower)
+    with pytest.raises(ValueError, match="Invalid fitted cache"):
+        remover.transform(x, fitted_cache={"upper": lower})
 
 
 def test__call__3d_tensor():

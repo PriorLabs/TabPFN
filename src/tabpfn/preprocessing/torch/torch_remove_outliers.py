@@ -28,10 +28,8 @@ class TorchRemoveOutliers:
         """
         super().__init__()
         self.n_sigma = n_sigma
-        self.lower_: torch.Tensor | None = None
-        self.upper_: torch.Tensor | None = None
 
-    def fit(self, x: torch.Tensor) -> TorchRemoveOutliers:
+    def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the outlier bounds based on the training data.
 
         Uses a two-pass approach:
@@ -42,12 +40,14 @@ class TorchRemoveOutliers:
             x: Input tensor with shape [T, ...] where T is the number of rows.
 
         Returns:
-            Self for method chaining.
+            Cache dictionary with the cache for the transform step.
+                - "lower": Lower bound for each feature.
+                - "upper": Upper bound for each feature.
         """
         if x.shape[0] <= 1:
-            self.lower_ = torch.full(x.shape[1:], float("-inf"))
-            self.upper_ = torch.full(x.shape[1:], float("inf"))
-            return self
+            lower = torch.full(x.shape[1:], float("-inf"))
+            upper = torch.full(x.shape[1:], float("inf"))
+            return {"lower": lower, "upper": upper}
 
         # First pass: compute initial statistics
         data_mean = torch_nanmean(x, axis=0)
@@ -69,12 +69,16 @@ class TorchRemoveOutliers:
         data_mean = torch_nanmean(data_clean, axis=0)
         data_std = torch_nanstd(data_clean, axis=0)
         cut_off = data_std * self.n_sigma
-        self.lower_ = data_mean - cut_off
-        self.upper_ = data_mean + cut_off
+        lower = data_mean - cut_off
+        upper = data_mean + cut_off
 
-        return self
+        return {"lower": lower, "upper": upper}
 
-    def transform(self, x: torch.Tensor) -> torch.Tensor:
+    def transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
         """Apply outlier removal using the fitted bounds.
 
         Values below the lower bound are softly clamped using:
@@ -84,63 +88,49 @@ class TorchRemoveOutliers:
 
         Args:
             x: Input tensor to transform.
+            fitted_cache: Cache returned by fit.
 
         Returns:
             Tensor with outliers softly clamped.
         """
+        if "lower" not in fitted_cache or "upper" not in fitted_cache:
+            raise ValueError("Invalid fitted cache. Must contain 'lower' and 'upper'.")
+
+        lower = fitted_cache["lower"]
+        upper = fitted_cache["upper"]
+
         if x.shape[0] == 1:
             return x
 
-        if self.lower_ is None or self.upper_ is None:
-            raise RuntimeError("Outlier remover has not been fitted. Call fit() first.")
-
-        clamped_lower = torch.maximum(-torch.log(1 + torch.abs(x)) + self.lower_, x)
+        clamped_lower = torch.maximum(-torch.log(1 + torch.abs(x)) + lower, x)
         return torch.minimum(
-            torch.log(1 + torch.abs(clamped_lower)) + self.upper_, clamped_lower
+            torch.log(1 + torch.abs(clamped_lower)) + upper, clamped_lower
         )
 
     def __call__(
         self,
         x: torch.Tensor,
         num_train_rows: int | None = None,
-        lower: torch.Tensor | None = None,
-        upper: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Apply outlier removal with optional train/test splitting.
 
-        This method supports two modes:
-        1. Pre-computed bounds: If lower and upper are provided, they are used
-           directly without fitting.
-        2. Fit-then-transform: If bounds are not provided, they are computed
-           from x[:num_train_rows] (or all of x if num_train_rows is None)
-           and then applied to all of x.
+        This is a convenience method similar to `fit_transform` but with
+        train/test split handled automatically and no state being kept.
+        This can be used in the forward pass of the model during training.
 
         Args:
             x: Input tensor of shape [T, ...] where T is the number of rows.
             num_train_rows: Position to split train and test data. If provided,
                 bounds are computed only from x[:num_train_rows]. If None,
                 bounds are computed from all data.
-            lower: Pre-computed lower bound to use. If provided, upper must also
-                be provided.
-            upper: Pre-computed upper bound to use. If provided, lower must also
-                be provided.
 
         Returns:
             Tensor with outliers softly clamped.
         """
-        if (lower is None) != (upper is None):
-            raise ValueError(
-                "Either both or neither of lower and upper must be provided."
-            )
-
-        if lower is not None and upper is not None:
-            result = torch.maximum(-torch.log(1 + torch.abs(x)) + lower, x)
-            return torch.minimum(torch.log(1 + torch.abs(result)) + upper, result)
-
         if num_train_rows is not None and num_train_rows > 0:
             fit_data = x[:num_train_rows]
         else:
             fit_data = x
 
-        self.fit(fit_data)
-        return self.transform(x)
+        fitted_cache = self.fit(fit_data)
+        return self.transform(x, fitted_cache=fitted_cache)

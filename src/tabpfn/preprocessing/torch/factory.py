@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from tabpfn.preprocessing.torch.datamodel import FeatureModality
@@ -18,23 +17,6 @@ from tabpfn.preprocessing.torch.steps import (
 
 if TYPE_CHECKING:
     from tabpfn.preprocessing.configs import EnsembleConfig
-
-
-@dataclass
-class PipelineConfig:
-    """Configuration for creating a preprocessing pipeline.
-
-    Attributes:
-        remove_outliers: Whether to apply outlier removal.
-        outlier_n_sigma: Number of standard deviations for outlier threshold.
-        standard_scale: Whether to apply standard scaling.
-        scale_categorical: Whether to also scale categorical features.
-    """
-
-    remove_outliers: bool = True
-    outlier_n_sigma: float = 4.0
-    standard_scale: bool = True
-    scale_categorical: bool = True
 
 
 def create_gpu_preprocessing_pipeline(
@@ -53,4 +35,5 @@ def create_gpu_preprocessing_pipeline(
 
     if len(steps) > 0:
         return TorchPreprocessingPipeline(steps)
+
     return None

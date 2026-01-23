@@ -20,17 +20,21 @@ from tabpfn.preprocessing.torch.datamodel import (
 class TorchPreprocessingStep(abc.ABC):
     """Base class for preprocessing steps that operate on specific columns.
 
+    These steps are designed to be stateless and can be easily used in the forward pass
+    of the model during training. The fitted state is returned explicitly and can be
+    used in the transform step.
+
     Subclasses should implement `_fit` and `_transform` to define the actual
     transformation logic. The base class handles column selection, tensor
     cloning, and reassignment.
     """
 
-    def fit(
+    def fit_transform(
         self,
         x: torch.Tensor,
         column_indices: list[int],
         num_train_rows: int,
-    ) -> None:
+    ) -> TorchPreprocessingStepResult:
         """Fit on training data for the specified columns.
 
         Args:
@@ -38,26 +42,14 @@ class TorchPreprocessingStep(abc.ABC):
             column_indices: Which columns this step should fit on.
             num_train_rows: Number of training rows (fit on x[:num_train_rows]).
         """
-        x_cols = x[:num_train_rows, :, column_indices]
-        self._fit(x_cols)
+        x_cols_selected = x[:, :, column_indices]
 
-    def transform(
-        self,
-        x: torch.Tensor,
-        column_indices: list[int],
-    ) -> TorchPreprocessingStepResult:
-        """Transform the specified columns.
+        fitted_cache = self._fit(x_cols_selected[:num_train_rows])
 
-        Args:
-            x: Full input tensor [num_rows, batch_size, num_columns].
-            column_indices: Which columns this step should transform.
+        transformed, added_columns, added_modality = self._transform(
+            x_cols_selected, fitted_cache=fitted_cache
+        )
 
-        Returns:
-            TorchPreprocessingStepResult with the transformed tensor and any
-            added columns.
-        """
-        x_cols = x[:, :, column_indices]
-        transformed, added_columns, added_modality = self._transform(x_cols)
         x = x.clone()
         x[:, :, column_indices] = transformed
         return TorchPreprocessingStepResult(
@@ -68,15 +60,17 @@ class TorchPreprocessingStep(abc.ABC):
 
     @override
     def __repr__(self) -> str:
-        """Return a string representation of the step."""
         return f"{self.__class__.__name__}"
 
     @abc.abstractmethod
-    def _fit(self, x: torch.Tensor) -> None:
-        """Fit on the selected columns (training rows only).
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Fit on the selected columns (training rows only) and return a cache.
 
         Args:
             x: Tensor of selected columns [num_train_rows, batch_size, num_cols].
+
+        Returns:
+            Cache dictionary with the cache for the transform step.
         """
         ...
 
@@ -84,11 +78,13 @@ class TorchPreprocessingStep(abc.ABC):
     def _transform(
         self,
         x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
-        """Transform the selected columns.
+        """Transform the selected columns using the cache.
 
         Args:
             x: Tensor of selected columns [num_rows, batch_size, num_cols].
+            fitted_cache: Cache returned by _fit.
 
         Returns:
             Tuple of (transformed_columns, added_columns, added_modality).
@@ -98,9 +94,9 @@ class TorchPreprocessingStep(abc.ABC):
 
 
 class TorchPreprocessingPipeline:
-    """Modality-aware preprocessing pipeline.
+    """Modality-aware preprocessing pipeline with explicit state management.
 
-    This pipeline applies a sequence of preprocessing steps to a tensor,
+    This pipeline applies a sequence of stateless preprocessing steps to a tensor,
     where each step targets specific feature modalities. Steps can target
     multiple modalities at once (e.g., StandardScaler for both NUMERICAL
     and CATEGORICAL features).
@@ -117,6 +113,13 @@ class TorchPreprocessingPipeline:
                 FeatureModality values the step should be applied to.
         """
         super().__init__()
+
+        for step in steps:
+            if len(step) != 2:
+                raise ValueError(
+                    f"Each step must be a tuple of (step, modalities), but got `{step}`"
+                )
+
         self.steps = steps
 
     def __call__(
@@ -158,8 +161,11 @@ class TorchPreprocessingPipeline:
             if num_train_rows is None:
                 num_train_rows = x.shape[0]
 
-            step.fit(x, column_indices=indices, num_train_rows=num_train_rows)
-            result = step.transform(x, column_indices=indices)
+            result = step.fit_transform(
+                x,
+                column_indices=indices,
+                num_train_rows=num_train_rows,
+            )
             x = result.x
 
             if result.added_columns is not None:
@@ -176,5 +182,4 @@ class TorchPreprocessingPipeline:
 
     @override
     def __repr__(self) -> str:
-        """Return a string representation of the pipeline."""
         return f"TorchPreprocessingPipeline(steps={self.steps})"

@@ -26,17 +26,18 @@ class TorchStandardScalerStep(TorchPreprocessingStep):
         self._scaler = TorchStandardScaler()
 
     @override
-    def _fit(self, x: torch.Tensor) -> None:
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit the scaler on the selected columns."""
-        self._scaler.fit(x)
+        return self._scaler.fit(x)
 
     @override
     def _transform(
         self,
         x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         """Transform columns using the fitted scaler."""
-        return self._scaler.transform(x), None, None
+        return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
 class TorchRemoveOutliersStep(TorchPreprocessingStep):
@@ -52,14 +53,15 @@ class TorchRemoveOutliersStep(TorchPreprocessingStep):
         self._outlier_remover = TorchRemoveOutliers(n_sigma=n_sigma)
 
     @override
-    def _fit(self, x: torch.Tensor) -> None:
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit the outlier remover on the selected columns."""
-        self._outlier_remover.fit(x)
+        return self._outlier_remover.fit(x)
 
     @override
     def _transform(
         self,
         x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         """Transform columns using the fitted outlier remover."""
-        return self._outlier_remover.transform(x), None, None
+        return self._outlier_remover.transform(x, fitted_cache=fitted_cache), None, None
