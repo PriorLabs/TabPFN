@@ -14,15 +14,16 @@ from typing_extensions import TypeAlias
 
 import joblib
 import numpy as np
+import pandas as pd
 from packaging import version
 
 TaskType: TypeAlias = Literal["multiclass", "regression"]
 TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 
-# TODO
-XType: TypeAlias = Any
+XType: TypeAlias = Union[np.ndarray, pd.DataFrame]
+YType: TypeAlias = Union[np.ndarray, pd.Series]
+
 SampleWeightType: TypeAlias = Any
-YType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
 
 ModelPath: TypeAlias = Union[str, pathlib.Path]

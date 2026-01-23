@@ -357,39 +357,25 @@ def translate_probs_across_borders(
     return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
 
 
-def update_encoder_params(
+def remove_non_differentiable_preprocessing_from_models(
     models: list[Architecture],
-    *,
-    differentiable_input: bool = False,
 ) -> None:
-    """Update the loaded encoder elements and setting to be compatible with inference
-    requirements. This concerns handling outliers in the model and also removes
-    non-differentiable steps from the label encoder.
-
-    !!! warning
-
-        This only happens inplace.
+    """Remove non-differentiable encoder steps from the model.
 
     Args:
         models: The models to update.
-        remove_outliers_std: The standard deviation to remove outliers.
-        inplace: Whether to do the operation inplace.
-        differentiable_input: Whether the entire model including forward pass should
-            be differentiable with pt autograd. This disables non-differentiable
-            encoder steps.
     """
     for model in models:
-        if differentiable_input:
-            diffable_steps = []  # only differentiable encoder steps.
-            for module in model.y_encoder:
-                if isinstance(module, MulticlassClassificationTargetEncoderStep):
-                    pass
-                else:
-                    diffable_steps.append(module)
+        diffable_steps = []  # only differentiable encoder steps.
+        for module in model.y_encoder:
+            if isinstance(module, MulticlassClassificationTargetEncoderStep):
+                pass
+            else:
+                diffable_steps.append(module)
 
-            model.y_encoder = TorchPreprocessingPipeline(
-                steps=diffable_steps, output_key="output"
-            )
+        model.y_encoder = TorchPreprocessingPipeline(
+            steps=diffable_steps, output_key="output"
+        )
 
 
 def transform_borders_one(
