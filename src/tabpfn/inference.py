@@ -824,15 +824,15 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             X_test = X_test.unsqueeze(1)
             batched_cat_ix = [ensemble_member.cat_ix]
 
-            if self.force_inference_dtype is not None:
-                model.type(self.force_inference_dtype)
-                X_test = X_test.type(self.force_inference_dtype)
-
             X_test = _maybe_run_gpu_preprocessing(
                 X_test,
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
                 use_fitted_cache=True,
             )
+
+            if self.force_inference_dtype is not None:
+                model.type(self.force_inference_dtype)
+                X_test = X_test.type(self.force_inference_dtype)
 
             with (
                 get_autocast_context(self.device, enabled=autocast),
