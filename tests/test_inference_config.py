@@ -38,9 +38,7 @@ def test__override_with_user_input__dict_of_overrides__sets_values_correctly() -
         ],
         "POLYNOMIAL_FEATURES": "all",
     }
-    new_config = config.override_with_user_input_and_resolve_auto(
-        overrides, estimator_type="classifier"
-    )
+    new_config = config.override_with_user_input_and_resolve_auto(overrides)
     assert new_config is not config
     assert new_config != config
     assert isinstance(new_config.PREPROCESS_TRANSFORMS[0], PreprocessorConfig)
@@ -56,9 +54,7 @@ def test__override_with_user_input__config_override__replaces_entire_config() ->
         PREPROCESS_TRANSFORMS=[PreprocessorConfig(name="adaptive")],
         POLYNOMIAL_FEATURES="all",
     )
-    new_config = config.override_with_user_input_and_resolve_auto(
-        override_config, estimator_type="regressor"
-    )
+    new_config = config.override_with_user_input_and_resolve_auto(override_config)
     assert new_config is not config
     assert new_config != config
     assert new_config == override_config
@@ -66,8 +62,6 @@ def test__override_with_user_input__config_override__replaces_entire_config() ->
 
 def test__override_with_user_input__override_is_None__returns_copy_of_config() -> None:
     config = InferenceConfig.get_default(task_type="regression", model_version="latest")
-    new_config = config.override_with_user_input_and_resolve_auto(
-        user_config=None, estimator_type="regressor"
-    )
+    new_config = config.override_with_user_input_and_resolve_auto(user_config=None)
     assert new_config is not config
     assert new_config == config

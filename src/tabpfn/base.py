@@ -393,7 +393,6 @@ def initialize_model_variables_helper(
 
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
         user_config=calling_instance.inference_config,
-        estimator_type=model_type,
     )
 
     calling_instance.inference_config_ = inference_config

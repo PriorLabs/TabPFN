@@ -177,7 +177,6 @@ class InferenceConfig:
     def override_with_user_input_and_resolve_auto(
         self,
         user_config: dict | InferenceConfig | None,
-        estimator_type: Literal["regressor", "classifier"],
     ) -> InferenceConfig:
         """Return a new config with fields specified in `user_config` overwritten.
 
@@ -190,27 +189,14 @@ class InferenceConfig:
                 If None, then a copy of this config is returned with no fields changed.
             estimator_type: The type of estimator to resolve auto values for.
         """
-        resolved_config = self._resolve_auto_values(estimator_type=estimator_type)
-
         if user_config is None:
-            return resolved_config
+            return deepcopy(self)
         if isinstance(user_config, InferenceConfig):
             return deepcopy(user_config)
         if isinstance(user_config, dict):
-            return dataclasses.replace(resolved_config, **user_config)
+            return dataclasses.replace(self, **user_config)
         raise ValueError(
             f"{user_config=}\nUnknown user config provided, see config above."
-        )
-
-    def _resolve_auto_values(
-        self, estimator_type: Literal["regressor", "classifier"]
-    ) -> InferenceConfig:
-        """Resolve auto values."""
-        return dataclasses.replace(
-            self,
-            OUTLIER_REMOVAL_STD=self.get_resolved_outlier_removal_std(
-                estimator_type=estimator_type
-            ),
         )
 
     def get_resolved_outlier_removal_std(
