@@ -14,7 +14,7 @@ from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 if TYPE_CHECKING:
     import torch
 
-    from tabpfn.preprocessing.torch.datamodel import FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 class TorchStandardScalerStep(TorchPreprocessingStep):

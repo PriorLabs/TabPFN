@@ -7,12 +7,12 @@ from typing_extensions import override
 import pytest
 import torch
 
-from tabpfn.preprocessing.torch import TorchRemoveOutliersStep
-from tabpfn.preprocessing.torch.datamodel import (
-    ColumnMetadata,
+from tabpfn.preprocessing.datamodel import (
     FeatureModality,
 )
+from tabpfn.preprocessing.torch import TorchRemoveOutliersStep
 from tabpfn.preprocessing.torch.pipeline_interface import (
+    ColumnMetadata,
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
 )

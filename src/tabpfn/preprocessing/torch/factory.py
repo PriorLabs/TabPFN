@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from tabpfn.preprocessing.torch.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
