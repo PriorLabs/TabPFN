@@ -683,18 +683,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
         )
 
-        if gpu_preprocessor is not None:
-            # TODO: Currently, we construct the metadata on the file.
-            # In a follow-up, this will become part of a DatasetView object
-            # parsed to the inference engine class.
-            num_columns = X_full.shape[-1]
-            metadata = ColumnMetadata(
-                indices_by_modality={
-                    FeatureModality.NUMERICAL: list(range(num_columns))
-                },
-            )
-            # TODO: In a follow-up, also parse the metadata (modalities) to the model
-            X_full = gpu_preprocessor(X_full, metadata=metadata).x
+        X_full = _maybe_run_gpu_preprocessing(
+            X_full,
+            gpu_preprocessor=gpu_preprocessor,
+            num_train_rows=X_train.shape[0],
+        )
 
         with (
             get_autocast_context(device, enabled=autocast),
@@ -783,6 +776,11 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
             batched_preprocessor_cat_ix = [ensemble_member.cat_ix]
 
+            X = _maybe_run_gpu_preprocessing(
+                X,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+            )
+
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
             # at once to generate the KV cache
@@ -820,13 +818,6 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         for ensemble_member, model in zip(self.ensemble_members, self.models):
-            if ensemble_member.gpu_preprocessor is not None:
-                raise NotImplementedError(
-                    "GPU preprocessor not supported for cache_kv mode. The ensemble "
-                    "member was configured to use the following preprocessing pipeline:"
-                    f" {ensemble_member.gpu_preprocessor}"
-                )
-
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
@@ -836,6 +827,13 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             if self.force_inference_dtype is not None:
                 model.type(self.force_inference_dtype)
                 X_test = X_test.type(self.force_inference_dtype)
+
+            X_test = _maybe_run_gpu_preprocessing(
+                X_test,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                use_fitted_cache=True,
+            )
+
             with (
                 get_autocast_context(self.device, enabled=autocast),
                 torch.inference_mode(),
@@ -887,6 +885,31 @@ def _move_and_squeeze_output(
     if isinstance(output, dict):
         return {k: v.to(device) for k, v in output.items()}
     return output.squeeze(1).to(device)
+
+
+def _maybe_run_gpu_preprocessing(
+    X: torch.Tensor,
+    gpu_preprocessor: TorchPreprocessingPipeline | None,
+    *,
+    num_train_rows: int | None = None,
+    use_fitted_cache: bool = False,
+) -> torch.Tensor:
+    if gpu_preprocessor is None:
+        return X
+
+    # TODO: Currently, we construct the metadata on-the-file.
+    # In a follow-up, this will become part of a DatasetView object
+    # parsed to the inference engine class.
+    column_indices = list(range(X.shape[-1]))
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: column_indices},
+    )
+    return gpu_preprocessor(
+        X,
+        metadata=metadata,
+        num_train_rows=num_train_rows,
+        use_fitted_cache=use_fitted_cache,
+    ).x
 
 
 class _PerDeviceModelCache:

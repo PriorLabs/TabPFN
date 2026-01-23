@@ -1,3 +1,7 @@
+"""DEPRECATION WARNING: Please note that this module will be deprecated in future
+versions of TabPFN in favor of a new torch-based preprocessing pipeline.
+"""
+
 from .pipeline_interfaces import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,

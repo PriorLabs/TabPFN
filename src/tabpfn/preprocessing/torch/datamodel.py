@@ -87,6 +87,7 @@ class TorchPreprocessingStepResult:
     x: torch.Tensor
     added_columns: torch.Tensor | None = None
     added_modality: FeatureModality | None = None
+    fitted_cache: dict[str, torch.Tensor] | None = None
 
 
 @dataclass

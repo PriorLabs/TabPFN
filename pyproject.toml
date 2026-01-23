@@ -419,6 +419,8 @@ ignore_packages = [
     "nvidia*",
     # Our packages
     "tabpfn*",
+    # dependency with torch 2.10
+    "cuda-bindings",
 ]
 
 [tool.changelog-bot.towncrier_changelog]

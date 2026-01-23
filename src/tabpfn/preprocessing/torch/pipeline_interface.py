@@ -34,6 +34,7 @@ class TorchPreprocessingStep(abc.ABC):
         x: torch.Tensor,
         column_indices: list[int],
         num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
     ) -> TorchPreprocessingStepResult:
         """Fit on training data for the specified columns.
 
@@ -41,10 +42,13 @@ class TorchPreprocessingStep(abc.ABC):
             x: Full input tensor [num_rows, batch_size, num_columns].
             column_indices: Which columns this step should fit on.
             num_train_rows: Number of training rows (fit on x[:num_train_rows]).
+            fitted_cache: Fitted cache from the previous step. If None, the step will
+                fit the cache on the training data.
         """
         x_cols_selected = x[:, :, column_indices]
 
-        fitted_cache = self._fit(x_cols_selected[:num_train_rows])
+        if fitted_cache is None:
+            fitted_cache = self._fit(x_cols_selected[:num_train_rows])
 
         transformed, added_columns, added_modality = self._transform(
             x_cols_selected, fitted_cache=fitted_cache
@@ -56,6 +60,7 @@ class TorchPreprocessingStep(abc.ABC):
             x=x,
             added_columns=added_columns,
             added_modality=added_modality,
+            fitted_cache=fitted_cache,
         )
 
     @override
@@ -105,12 +110,18 @@ class TorchPreprocessingPipeline:
     def __init__(
         self,
         steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]],
+        *,
+        keep_fitted_cache: bool = False,
     ) -> None:
         """Initialize with list of (step, target_modalities) pairs.
 
         Args:
             steps: List of (step, modalities) where modalities is a set of
                 FeatureModality values the step should be applied to.
+            keep_fitted_cache: Whether to keep the fitted cache between calls.
+                If True, the fitted cache will be reused in the transform step.
+                If False, the fitted cache will be fit on the training data for each
+                step.
         """
         super().__init__()
 
@@ -121,12 +132,16 @@ class TorchPreprocessingPipeline:
                 )
 
         self.steps = steps
+        self.keep_fitted_cache = keep_fitted_cache
+        self.fitted_cache: list[dict[str, torch.Tensor] | None] = [None] * len(steps)
 
     def __call__(
         self,
         x: torch.Tensor,
         metadata: ColumnMetadata,
         num_train_rows: int | None = None,
+        *,
+        use_fitted_cache: bool = False,
     ) -> TorchPreprocessingPipelineOutput:
         """Apply all steps to the input tensor.
 
@@ -137,14 +152,22 @@ class TorchPreprocessingPipeline:
             metadata: Column modality information.
             num_train_rows: If provided, fit steps on x[:num_train_rows]. If
                 not provided, fits on the entire input tensor.
+            use_fitted_cache: Whether to use the fitted cache from the previous step.
+                If False, the processors are refit on the provided data.
 
         Returns:
             PipelineOutput with transformed tensor and updated metadata.
         """
-        squeeze_batch = False
+        if use_fitted_cache and not self.keep_fitted_cache:
+            raise ValueError(
+                "use_fitted_cache=True is only supported if keep_fitted_cache=True "
+                "during initialization."
+            )
+
+        squeeze_batch_dim = False
         if x.ndim == 2:
             x = x.unsqueeze(1)
-            squeeze_batch = True
+            squeeze_batch_dim = True
 
         num_columns = x.shape[-1]
         if num_columns != metadata.num_columns:
@@ -153,7 +176,7 @@ class TorchPreprocessingPipeline:
                 f"number of columns in metadata ({metadata.num_columns})"
             )
 
-        for step, modalities in self.steps:
+        for i, (step, modalities) in enumerate(self.steps):
             indices = metadata.indices_for_modalities(modalities)
             if not indices:
                 continue
@@ -165,6 +188,7 @@ class TorchPreprocessingPipeline:
                 x,
                 column_indices=indices,
                 num_train_rows=num_train_rows,
+                fitted_cache=self.fitted_cache[i] if use_fitted_cache else None,
             )
             x = result.x
 
@@ -175,10 +199,18 @@ class TorchPreprocessingPipeline:
                     result.added_columns.shape[-1],
                 )
 
-        if squeeze_batch:
+            self._maybe_update_fitted_cache(i, result)
+
+        if squeeze_batch_dim:
             x = x.squeeze(1)
 
         return TorchPreprocessingPipelineOutput(x=x, metadata=metadata)
+
+    def _maybe_update_fitted_cache(
+        self, i: int, result: TorchPreprocessingStepResult
+    ) -> None:
+        if self.keep_fitted_cache:
+            self.fitted_cache[i] = result.fitted_cache
 
     @override
     def __repr__(self) -> str:

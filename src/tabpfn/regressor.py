@@ -809,6 +809,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
 
         self.executor_ = create_inference_engine(

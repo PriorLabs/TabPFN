@@ -75,6 +75,7 @@ class TabPFNEnsemblePreprocessor:
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
         rng: np.random.Generator,
         n_preprocessing_jobs: int,
+        keep_fitted_cache: bool = False,
     ) -> None:
         """Init.
 
@@ -82,11 +83,15 @@ class TabPFNEnsemblePreprocessor:
             configs: List of ensemble configurations.
             rng: Random number generator.
             n_preprocessing_jobs: Number of preprocessing jobs to use.
+            keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
+                For the cpu preprocessors, the cache is always kept implicitly in the
+                preprocessor objects.
         """
         super().__init__()
         self.configs = configs
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.keep_fitted_cache = keep_fitted_cache
 
         # TODO:
         # 1. Create pipeline in init for balanced feature subsampling
@@ -123,7 +128,10 @@ class TabPFNEnsemblePreprocessor:
 
         gpu_preprocesors = []
         for config in self.configs:
-            gpu_preprocessor = create_gpu_preprocessing_pipeline(config=config)
+            gpu_preprocessor = create_gpu_preprocessing_pipeline(
+                config=config,
+                keep_fitted_cache=self.keep_fitted_cache,
+            )
             gpu_preprocesors.append(gpu_preprocessor)
 
         for i, (

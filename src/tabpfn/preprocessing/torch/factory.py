@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 def create_gpu_preprocessing_pipeline(
     config: EnsembleConfig,
+    *,
+    keep_fitted_cache: bool = False,
 ) -> TorchPreprocessingPipeline | None:
     """Create a GPU preprocessing pipeline based on configuration."""
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]] = []
@@ -34,6 +36,6 @@ def create_gpu_preprocessing_pipeline(
         )
 
     if len(steps) > 0:
-        return TorchPreprocessingPipeline(steps)
+        return TorchPreprocessingPipeline(steps, keep_fitted_cache=keep_fitted_cache)
 
     return None

@@ -42,6 +42,30 @@ class MockStep(TorchPreprocessingStep):
         return x * self.factor, None, None
 
 
+class MockStepWithCache(TorchPreprocessingStep):
+    """Mock step that tracks fit calls and uses a cached mean for subtraction."""
+
+    def __init__(self) -> None:
+        """Initialize with fit call counter."""
+        super().__init__()
+        self.fit_call_count = 0
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Compute and return the mean as cache."""
+        self.fit_call_count += 1
+        return {"mean": x.mean(dim=0, keepdim=True)}
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        """Subtract the cached mean from x."""
+        return x - fitted_cache["mean"], None, None
+
+
 def test__call__single_step_transforms_columns():
     """Test pipeline with a single step transforms the correct columns."""
     step = MockStep(factor=3.0)
@@ -202,3 +226,151 @@ def test__call__mismatching_num_columns_raises_error():
     x = torch.ones(10, 1, 2)
     with pytest.raises(ValueError, match="Number of columns in input tensor"):
         pipeline(x, metadata, num_train_rows=5)
+
+
+def test__call__keep_fitted_cache_false_does_not_store_cache():
+    """Test that cache is not stored when keep_fitted_cache=False."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=False,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    pipeline(x, metadata, num_train_rows=5)
+
+    assert pipeline.fitted_cache[0] is None
+
+
+def test__call__keep_fitted_cache_true_stores_cache():
+    """Test that cache is stored when keep_fitted_cache=True."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=True,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    pipeline(x, metadata, num_train_rows=5)
+
+    assert pipeline.fitted_cache[0] is not None
+    assert "mean" in pipeline.fitted_cache[0]
+
+
+def test__call__use_fitted_cache_true_skips_fit():
+    """Test that fit is skipped when use_fitted_cache=True and cache exists."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=True,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    # First call: fit and store cache
+    pipeline(x, metadata, num_train_rows=5)
+    assert step.fit_call_count == 1
+
+    # Second call with use_fitted_cache=True: should skip fit
+    pipeline(x, metadata, num_train_rows=5, use_fitted_cache=True)
+    assert step.fit_call_count == 1  # Still 1, fit was not called again
+
+
+def test__call__use_fitted_cache_false_refits_even_with_cache():
+    """Test that fit is called when use_fitted_cache=False even if cache exists."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=True,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    # First call: fit and store cache
+    pipeline(x, metadata, num_train_rows=5)
+    assert step.fit_call_count == 1
+
+    # Second call with use_fitted_cache=False: should refit
+    pipeline(x, metadata, num_train_rows=5, use_fitted_cache=False)
+    assert step.fit_call_count == 2
+
+
+def test__call__use_fitted_cache_true_without_stored_cache_refits():
+    """Test that fit is called when use_fitted_cache=True but no cache exists."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=False,  # Cache won't be stored
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    with pytest.raises(ValueError, match="only supported if keep_fitted_cache=True"):
+        pipeline(x, metadata, num_train_rows=5, use_fitted_cache=True)
+
+
+def test__call__cached_values_are_used_correctly():
+    """Test that cached values produce consistent transforms."""
+    step = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(step, {FeatureModality.NUMERICAL})],
+        keep_fitted_cache=True,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+
+    # First call with data that has mean=5 in training rows
+    x1 = torch.full((10, 1, 1), 5.0)
+    result1 = pipeline(x1, metadata, num_train_rows=10)
+    # After subtracting mean=5, result should be 0
+    assert torch.allclose(result1.x, torch.zeros(10, 1, 1))
+
+    # Second call with different data but use cached mean=5
+    x2 = torch.full((10, 1, 1), 8.0)
+    result2 = pipeline(x2, metadata, num_train_rows=10, use_fitted_cache=True)
+    # After subtracting cached mean=5, result should be 3
+    assert torch.allclose(result2.x, torch.full((10, 1, 1), 3.0))
+
+
+def test__call__multiple_steps_cache_stored_independently():
+    """Test that cache is stored independently for each step."""
+    step1 = MockStepWithCache()
+    step2 = MockStepWithCache()
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (step1, {FeatureModality.NUMERICAL}),
+            (step2, {FeatureModality.NUMERICAL}),
+        ],
+        keep_fitted_cache=True,
+    )
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+    )
+    x = torch.ones(10, 1, 1)
+
+    pipeline(x, metadata, num_train_rows=5)
+
+    # Both steps should have their cache stored
+    assert pipeline.fitted_cache[0] is not None
+    assert pipeline.fitted_cache[1] is not None
+    assert pipeline.fitted_cache[0] != pipeline.fitted_cache[1]
+    assert step1.fit_call_count == 1
+    assert step2.fit_call_count == 1
+
+    # Second call with use_fitted_cache=True: neither step should refit
+    pipeline(x, metadata, num_train_rows=5, use_fitted_cache=True)
+    assert step1.fit_call_count == 1
+    assert step2.fit_call_count == 1

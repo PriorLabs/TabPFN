@@ -45,8 +45,8 @@ class TorchRemoveOutliers:
                 - "upper": Upper bound for each feature.
         """
         if x.shape[0] <= 1:
-            lower = torch.full(x.shape[1:], float("-inf"))
-            upper = torch.full(x.shape[1:], float("inf"))
+            lower = torch.full(x.shape[1:], -torch.inf, dtype=x.dtype, device=x.device)
+            upper = torch.full(x.shape[1:], torch.inf, dtype=x.dtype, device=x.device)
             return {"lower": lower, "upper": upper}
 
         # First pass: compute initial statistics
@@ -62,7 +62,7 @@ class TorchRemoveOutliers:
             data_clean > upper_initial, data_clean < lower_initial
         )
         data_clean = torch.where(
-            outlier_mask, torch.full_like(data_clean, float("nan")), data_clean
+            outlier_mask, torch.full_like(data_clean, torch.nan), data_clean
         )
 
         # Second pass: recompute statistics without outliers
