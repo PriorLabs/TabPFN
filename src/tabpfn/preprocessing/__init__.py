@@ -11,7 +11,7 @@ from .ensemble import (
     generate_regression_ensemble_configs,
 )
 from .initialization import tag_features_and_sanitize_data
-from .pipeline import (
+from .pipeline_interfaces import (
     SequentialFeatureTransformer,
 )
 from .presets import (
