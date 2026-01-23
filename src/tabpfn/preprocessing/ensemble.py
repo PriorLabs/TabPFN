@@ -126,13 +126,13 @@ class TabPFNEnsemblePreprocessor:
             parallel_mode=parallel_mode,
         )
 
-        gpu_preprocesors = []
+        gpu_preprocessors = []
         for config in self.configs:
             gpu_preprocessor = create_gpu_preprocessing_pipeline(
                 config=config,
                 keep_fitted_cache=self.keep_fitted_cache,
             )
-            gpu_preprocesors.append(gpu_preprocessor)
+            gpu_preprocessors.append(gpu_preprocessor)
 
         for i, (
             config,
@@ -144,7 +144,7 @@ class TabPFNEnsemblePreprocessor:
             yield TabPFNPreprocessedEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
-                gpu_preprocessor=gpu_preprocesors[i],
+                gpu_preprocessor=gpu_preprocessors[i],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 cat_ix=cat_ix_preprocessed,

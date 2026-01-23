@@ -176,13 +176,13 @@ class TorchPreprocessingPipeline:
                 f"number of columns in metadata ({metadata.num_columns})"
             )
 
+        if num_train_rows is None:
+            num_train_rows = x.shape[0]
+
         for i, (step, modalities) in enumerate(self.steps):
             indices = metadata.indices_for_modalities(modalities)
             if not indices:
                 continue
-
-            if num_train_rows is None:
-                num_train_rows = x.shape[0]
 
             result = step.fit_transform(
                 x,

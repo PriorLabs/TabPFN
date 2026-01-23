@@ -203,7 +203,7 @@ def test__call__no_num_train_rows_fits_on_all_data():
 
 
 def test__call__zero_num_train_rows():
-    """Test that fit is skipped when num_train_rows is None."""
+    """Test that fit is skipped when num_train_rows is 0."""
     step = TorchRemoveOutliersStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(

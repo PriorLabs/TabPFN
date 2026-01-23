@@ -419,7 +419,7 @@ ignore_packages = [
     "nvidia*",
     # Our packages
     "tabpfn*",
-    # dependency with torch 2.10
+    # LICENSEREF-NVIDIA-SOFTWARE-LICENSE, introduced by torch>=2.10
     "cuda-bindings",
 ]
 

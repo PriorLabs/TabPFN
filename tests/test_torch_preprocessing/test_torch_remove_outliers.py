@@ -10,7 +10,7 @@ from tabpfn.preprocessing.torch import TorchRemoveOutliers
 
 def test__fit_transform__basic_clamping():
     """Test that extreme outliers are softly clamped."""
-    remover = TorchRemoveOutliers(n_sigma=2.0)
+    remover = TorchRemoveOutliers(n_sigma=1.5)
     # Create data with clear outliers
     x = torch.tensor(
         [
@@ -25,8 +25,8 @@ def test__fit_transform__basic_clamping():
     x_transformed = remover(x)
 
     # Outliers should be clamped closer to the bounds
-    assert x_transformed[3, 0] < 100.0  # Upper outlier clamped down
-    assert x_transformed[3, 1] > -100.0  # Lower outlier clamped up
+    assert x_transformed[4, 0] < 100.0  # Upper outlier clamped down
+    assert x_transformed[4, 1] > -100.0  # Lower outlier clamped up
     # Non-outliers should be mostly unchanged
     assert torch.allclose(x_transformed[:3], x[:3], atol=1e-5)
 

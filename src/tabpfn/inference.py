@@ -418,14 +418,11 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
         )
 
-        if gpu_preprocessor is not None:
-            num_columns = X_full.shape[-1]
-            metadata = ColumnMetadata(
-                indices_by_modality={
-                    FeatureModality.NUMERICAL: list(range(num_columns))
-                },
-            )
-            X_full = gpu_preprocessor(X_full, metadata=metadata).x
+        X_full = _maybe_run_gpu_preprocessing(
+            X_full,
+            gpu_preprocessor=gpu_preprocessor,
+            num_train_rows=X_train.shape[0],
+        )
 
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
             return model(
@@ -897,7 +894,7 @@ def _maybe_run_gpu_preprocessing(
     if gpu_preprocessor is None:
         return X
 
-    # TODO: Currently, we construct the metadata on-the-file.
+    # TODO: Currently, we construct the metadata on-the-fly.
     # In a follow-up, this will become part of a DatasetView object
     # parsed to the inference engine class.
     column_indices = list(range(X.shape[-1]))

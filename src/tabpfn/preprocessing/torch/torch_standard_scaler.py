@@ -11,7 +11,7 @@ class TorchStandardScaler:
     """Standard scaler for PyTorch tensors with NaN handling.
 
     Similar to sklearn's StandardScaler but without any implicit state.
-    The state is returned explicitely.
+    The state is returned explicitly.
     """
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -21,7 +21,7 @@ class TorchStandardScaler:
             x: Input tensor with shape [T, ...] where T is the number of rows.
 
         Returns:
-            Self for method chaining.
+            Cache dictionary with the cache for the transform step.
         """
         mean = torch_nanmean(x, axis=0)
         std = torch_nanstd(x, axis=0)
