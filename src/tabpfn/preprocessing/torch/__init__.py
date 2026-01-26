@@ -12,7 +12,7 @@ from .pipeline_interface import (
     TorchPreprocessingStepResult,
 )
 from .steps import TorchRemoveOutliersStep, TorchStandardScalerStep
-from .torch_remove_outliers import TorchRemoveOutliers
+from .torch_soft_clip_outliers import TorchSoftClipOutliers
 from .torch_standard_scaler import TorchStandardScaler
 
 __all__ = [
@@ -21,8 +21,8 @@ __all__ = [
     "TorchPreprocessingPipelineOutput",
     "TorchPreprocessingStep",
     "TorchPreprocessingStepResult",
-    "TorchRemoveOutliers",
     "TorchRemoveOutliersStep",
+    "TorchSoftClipOutliers",
     "TorchStandardScaler",
     "TorchStandardScalerStep",
     "create_gpu_preprocessing_pipeline",

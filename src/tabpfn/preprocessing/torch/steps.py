@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from typing_extensions import override
 
 from tabpfn.preprocessing.torch.pipeline_interface import TorchPreprocessingStep
-from tabpfn.preprocessing.torch.torch_remove_outliers import TorchRemoveOutliers
+from tabpfn.preprocessing.torch.torch_soft_clip_outliers import TorchSoftClipOutliers
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 if TYPE_CHECKING:
@@ -50,7 +50,7 @@ class TorchRemoveOutliersStep(TorchPreprocessingStep):
             n_sigma: Number of standard deviations to use for outlier threshold.
         """
         super().__init__()
-        self._outlier_remover = TorchRemoveOutliers(n_sigma=n_sigma)
+        self._outlier_remover = TorchSoftClipOutliers(n_sigma=n_sigma)
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:

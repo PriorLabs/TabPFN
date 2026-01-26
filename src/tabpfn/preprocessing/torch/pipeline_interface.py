@@ -14,7 +14,7 @@ from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 class TorchPreprocessingStep(abc.ABC):
-    """Base class for preprocessing steps that operate on specific columns.
+    """Base class for preprocessing steps that can operate on specific columns.
 
     These steps are designed to be stateless and can be easily used in the forward pass
     of the model during training. The fitted state is returned explicitly and can be
@@ -114,22 +114,21 @@ class TorchPreprocessingPipeline:
         Args:
             steps: List of (step, modalities) where modalities is a set of
                 FeatureModality values the step should be applied to.
-            keep_fitted_cache: Whether to keep the fitted cache between calls.
-                If True, the fitted cache will be reused in the transform step.
-                If False, the fitted cache will be fit on the training data for each
-                step.
+            keep_fitted_cache: Whether to keep the state of the individual steps
+                between calls. If True, the fitted state of all steps will be kept
+                inside the fitted_cache attribute. It can be re-used when parsing
+                `use_fitted_cache=True` in the __call__ method.
+                If False, the cache will not be saved and the steps are refit
+                on the training data.
         """
         super().__init__()
 
-        for step in steps:
-            if len(step) != 2:
-                raise ValueError(
-                    f"Each step must be a tuple of (step, modalities), but got `{step}`"
-                )
-
+        self._validate_steps(steps)
         self.steps = steps
         self.keep_fitted_cache = keep_fitted_cache
-        self.fitted_cache: list[dict[str, torch.Tensor] | None] = [None] * len(steps)
+        self.fitted_cache: list[dict[str, torch.Tensor] | None] = [None] * len(
+            self.steps
+        )
 
     def __call__(
         self,
@@ -148,17 +147,14 @@ class TorchPreprocessingPipeline:
             metadata: Column modality information.
             num_train_rows: If provided, fit steps on x[:num_train_rows]. If
                 not provided, fits on the entire input tensor.
-            use_fitted_cache: Whether to use the fitted cache from the previous step.
-                If False, the processors are refit on the provided data.
+            use_fitted_cache: Whether to use the fitted cache from the previous call
+                of the pipeline. If False, the processors are refit on the provided
+                data.
 
         Returns:
             PipelineOutput with transformed tensor and updated metadata.
         """
-        if use_fitted_cache and not self.keep_fitted_cache:
-            raise ValueError(
-                "use_fitted_cache=True is only supported if keep_fitted_cache=True "
-                "during initialization."
-            )
+        self._validate_use_fitted_cache(use_fitted_cache=use_fitted_cache)
 
         squeeze_batch_dim = False
         if x.ndim == 2:
@@ -166,11 +162,7 @@ class TorchPreprocessingPipeline:
             squeeze_batch_dim = True
 
         num_columns = x.shape[-1]
-        if num_columns != metadata.num_columns:
-            raise ValueError(
-                f"Number of columns in input tensor ({num_columns}) does not match "
-                f"number of columns in metadata ({metadata.num_columns})"
-            )
+        self._validate_metadata(metadata=metadata, num_columns=num_columns)
 
         if num_train_rows is None:
             num_train_rows = x.shape[0]
@@ -211,6 +203,29 @@ class TorchPreprocessingPipeline:
     @override
     def __repr__(self) -> str:
         return f"TorchPreprocessingPipeline(steps={self.steps})"
+
+    def _validate_steps(
+        self, steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]]
+    ) -> None:
+        for step in steps:
+            if len(step) != 2:
+                raise ValueError(
+                    f"Each step must be a tuple of (step, modalities), but got `{step}`"
+                )
+
+    def _validate_use_fitted_cache(self, *, use_fitted_cache: bool) -> None:
+        if use_fitted_cache and not self.keep_fitted_cache:
+            raise ValueError(
+                "use_fitted_cache=True is only supported if keep_fitted_cache=True "
+                "during initialization."
+            )
+
+    def _validate_metadata(self, metadata: ColumnMetadata, num_columns: int) -> None:
+        if num_columns != metadata.num_columns:
+            raise ValueError(
+                f"Number of columns in input tensor ({num_columns}) does not match "
+                f"number of columns in metadata ({metadata.num_columns})"
+            )
 
 
 @dataclasses.dataclass

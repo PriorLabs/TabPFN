@@ -11,9 +11,9 @@ import pandas as pd
 class FeatureModality(str, Enum):
     """The modality of a feature.
 
-    Here we move between the way the data is stored, and what it actually
-    represents. For instance, a numerical dtype could represent numerical
-    and categorical features, while a string could represent categorical
+    This denotes what the column actually represents, not how it is stored. For
+    instance, a numerical dtype could represent numerical features
+    or categorical features, while a string could represent categorical
     or text features.
     """
 

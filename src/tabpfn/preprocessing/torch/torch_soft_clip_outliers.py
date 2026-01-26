@@ -1,4 +1,4 @@
-"""Torch implementation of outlier removal with NaN handling."""
+"""Torch implementation of outlier clipping with NaN handling."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import torch
 from tabpfn.preprocessing.torch.ops import torch_nanmean, torch_nanstd
 
 
-class TorchRemoveOutliers:
-    """Remove outliers from PyTorch tensors based on standard deviation.
+class TorchSoftClipOutliers:
+    """Softly clip outliers from PyTorch tensors based on standard deviation.
 
     Values outside the range [mean - n_sigma * std, mean + n_sigma * std] are
     softly clamped using a logarithmic function.
@@ -19,7 +19,7 @@ class TorchRemoveOutliers:
     """
 
     def __init__(self, n_sigma: float = 4.0) -> None:
-        """Initialize the outlier remover.
+        """Init.
 
         Args:
             n_sigma: Number of standard deviations to use for outlier threshold.
@@ -79,7 +79,7 @@ class TorchRemoveOutliers:
         x: torch.Tensor,
         fitted_cache: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        """Apply outlier removal using the fitted bounds.
+        """Apply softly clipping outliers using the fitted bounds.
 
         Values below the lower bound are softly clamped using:
             max(-log(1 + |x|) + lower, x)
@@ -112,7 +112,7 @@ class TorchRemoveOutliers:
         x: torch.Tensor,
         num_train_rows: int | None = None,
     ) -> torch.Tensor:
-        """Apply outlier removal with optional train/test splitting.
+        """Apply softly clipping outliers with optional train/test splitting.
 
         This is a convenience method similar to `fit_transform` but with
         train/test split handled automatically and no state being kept.
