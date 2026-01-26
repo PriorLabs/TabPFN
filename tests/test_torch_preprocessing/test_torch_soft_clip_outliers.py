@@ -1,4 +1,4 @@
-"""Tests for TorchRemoveOutliers."""
+"""Tests for TorchSoftClipOutliers."""
 
 from __future__ import annotations
 

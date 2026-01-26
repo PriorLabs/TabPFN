@@ -40,8 +40,8 @@ class TorchStandardScalerStep(TorchPreprocessingStep):
         return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
-class TorchRemoveOutliersStep(TorchPreprocessingStep):
-    """Pipeline step wrapper for TorchRemoveOutliers."""
+class TorchSoftClipOutliersStep(TorchPreprocessingStep):
+    """Pipeline step wrapper for TorchSoftClipOutliers."""
 
     def __init__(self, n_sigma: float = 4.0) -> None:
         """Initialize the outlier removal step.

@@ -12,7 +12,7 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStep,
 )
 from tabpfn.preprocessing.torch.steps import (
-    TorchRemoveOutliersStep,
+    TorchSoftClipOutliersStep,
 )
 
 if TYPE_CHECKING:
@@ -30,7 +30,7 @@ def create_gpu_preprocessing_pipeline(
     if config.outlier_removal_std is not None:
         steps.append(
             (
-                TorchRemoveOutliersStep(n_sigma=config.outlier_removal_std),
+                TorchSoftClipOutliersStep(n_sigma=config.outlier_removal_std),
                 {FeatureModality.NUMERICAL},
             )
         )

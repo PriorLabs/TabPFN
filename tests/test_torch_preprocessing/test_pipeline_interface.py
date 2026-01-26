@@ -10,7 +10,7 @@ import torch
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
 )
-from tabpfn.preprocessing.torch import TorchRemoveOutliersStep
+from tabpfn.preprocessing.torch import TorchSoftClipOutliersStep
 from tabpfn.preprocessing.torch.pipeline_interface import (
     ColumnMetadata,
     TorchPreprocessingPipeline,
@@ -204,7 +204,7 @@ def test__call__no_num_train_rows_fits_on_all_data():
 
 def test__call__zero_num_train_rows():
     """Test that fit is skipped when num_train_rows is 0."""
-    step = TorchRemoveOutliersStep()
+    step = TorchSoftClipOutliersStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
         indices_by_modality={FeatureModality.NUMERICAL: [0]},
