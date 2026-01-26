@@ -609,7 +609,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
-        """Initialize the model for standard input."""
+        """Initialize the model for standard inputs."""
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
         # NumPy arrays. In a follow-up PR, we will fix this.
@@ -734,7 +734,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         byte_size, rng = self._initialize_model_variables()
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
-        self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
+        self.ensemble_configs_ = ensemble_configs
 
         self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 

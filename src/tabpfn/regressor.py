@@ -604,7 +604,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Handle the preprocessing of the input (X and y). We also return the
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
-        Sets self.inferred_categorical_indices_.
         """
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
@@ -754,7 +753,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self._initialize_dataset_preprocessing(X, y, rng)
         )
         self.znorm_space_bardist_ = znorm_space_bardist
-        self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
+        self.ensemble_configs_ = ensemble_configs
 
         assert len(ensemble_configs) == self.n_estimators
 
