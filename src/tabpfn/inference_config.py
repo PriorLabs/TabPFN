@@ -187,7 +187,6 @@ class InferenceConfig:
                 If an `InferenceConfig` object, then the whole config is overridden with
                     the values from the user config.
                 If None, then a copy of this config is returned with no fields changed.
-            estimator_type: The type of estimator to resolve auto values for.
         """
         if user_config is None:
             return deepcopy(self)
