@@ -118,7 +118,9 @@ def _detect_feature_modality(
         ):
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
-    if pd.api.types.is_string_dtype(s.dtype):
+    if pd.api.types.is_string_dtype(s.dtype) or isinstance(
+        s.dtype, pd.CategoricalDtype
+    ):
         if nunique <= max_unique_for_category:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT

@@ -173,6 +173,12 @@ def test__detected_categorical_without_reporting():
     assert result == FeatureModality.CATEGORICAL
 
 
+def test__detect_for_categorical_with_category_dtype():
+    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureModality.CATEGORICAL
+
+
 def test__detect_textual_feature():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
     result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
