@@ -609,7 +609,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         y: YType,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
-        """Initialize the model for standard inputs."""
+        """Prepare the ensemble configs and validate X, y inputs."""
         # TODO: Fix the types later.
         # In the following code, we have multiple conversions between DataFrames and
         # NumPy arrays. In a follow-up PR, we will fix this.
@@ -1034,7 +1034,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
-        if not self.differentiable_input:
+        if not torch.is_tensor(X):
             X = ensure_compatible_predict_input_sklearn(X, self)
             # TODO: The below steps should be handled by a "data sanitizer object"
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
