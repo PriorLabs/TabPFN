@@ -450,12 +450,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
-
-        if differentiable_input:
-            raise ValueError(
-                "Differentiable input is not supported for regressors yet."
-            )
-        self.differentiable_input = False
+        self.differentiable_input = differentiable_input
 
         if n_jobs is not None:
             warnings.warn(
@@ -740,6 +735,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
+        if self.differentiable_input:
+            raise ValueError(
+                "Differentiable input is not supported for regressors yet."
+            )
+
         if self.fit_mode == "batched":
             logging.warning(
                 "The model was in 'batched' mode, likely after finetuning. "
