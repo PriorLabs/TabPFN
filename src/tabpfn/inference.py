@@ -22,6 +22,11 @@ from tabpfn.architectures.base.memory import (
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.torch import (
+    ColumnMetadata,
+    TorchPreprocessingPipeline,
+)
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
@@ -374,6 +379,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 autocast=autocast,
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
             )
             for ensemble_member in ensemble_members_iterator
         )
@@ -394,6 +400,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         model_index: int,
         save_peak_mem: bool,
+        gpu_preprocessor: TorchPreprocessingPipeline | None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -409,6 +416,12 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
 
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
+        )
+
+        X_full = _maybe_run_gpu_preprocessing(
+            X_full,
+            gpu_preprocessor=gpu_preprocessor,
+            num_train_rows=X_train.shape[0],
         )
 
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
@@ -628,6 +641,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
             )
             for ensemble_member in self.ensemble_members
         )
@@ -648,6 +662,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         only_return_standard_out: bool,
         model_index: int,
         save_peak_mem: bool,
+        gpu_preprocessor: TorchPreprocessingPipeline | None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -663,6 +678,12 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
+        )
+
+        X_full = _maybe_run_gpu_preprocessing(
+            X_full,
+            gpu_preprocessor=gpu_preprocessor,
+            num_train_rows=X_train.shape[0],
         )
 
         with (
@@ -752,6 +773,11 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
             batched_preprocessor_cat_ix = [ensemble_member.cat_ix]
 
+            X = _maybe_run_gpu_preprocessing(
+                X,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+            )
+
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
             # at once to generate the KV cache
@@ -795,9 +821,16 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             X_test = X_test.unsqueeze(1)
             batched_cat_ix = [ensemble_member.cat_ix]
 
+            X_test = _maybe_run_gpu_preprocessing(
+                X_test,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                use_fitted_cache=True,
+            )
+
             if self.force_inference_dtype is not None:
                 model.type(self.force_inference_dtype)
                 X_test = X_test.type(self.force_inference_dtype)
+
             with (
                 get_autocast_context(self.device, enabled=autocast),
                 torch.inference_mode(),
@@ -849,6 +882,31 @@ def _move_and_squeeze_output(
     if isinstance(output, dict):
         return {k: v.to(device) for k, v in output.items()}
     return output.squeeze(1).to(device)
+
+
+def _maybe_run_gpu_preprocessing(
+    X: torch.Tensor,
+    gpu_preprocessor: TorchPreprocessingPipeline | None,
+    *,
+    num_train_rows: int | None = None,
+    use_fitted_cache: bool = False,
+) -> torch.Tensor:
+    if gpu_preprocessor is None:
+        return X
+
+    # TODO: Currently, we construct the metadata on-the-fly.
+    # In a follow-up, this will become part of a DatasetView object
+    # parsed to the inference engine class.
+    column_indices = list(range(X.shape[-1]))
+    metadata = ColumnMetadata(
+        indices_by_modality={FeatureModality.NUMERICAL: column_indices},
+    )
+    return gpu_preprocessor(
+        X,
+        metadata=metadata,
+        num_train_rows=num_train_rows,
+        use_fitted_cache=use_fitted_cache,
+    ).x
 
 
 class _PerDeviceModelCache:

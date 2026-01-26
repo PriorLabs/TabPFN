@@ -8,8 +8,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.modality_detection import (
-    FeatureModality,
     _detect_feature_modality,
     detect_feature_modalities,
 )

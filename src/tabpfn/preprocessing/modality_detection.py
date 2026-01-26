@@ -4,45 +4,19 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-
-
-# TODO: Maybe 'DatasetView' and 'FeatureModality' should belong to a more general file?
-@dataclass(frozen=True)
-class DatasetView:
-    """A view of a dataset split by feature modalities."""
-
-    X: pd.DataFrame
-    columns_by_modality: FeatureModalitiesColumns
-
-
-class FeatureModality(str, Enum):
-    """The modality of a feature. Here we move between the way the data is stored,
-    and what it actually represents. For intance, a numerical dtype could represent
-    numerical and categorical features, while a string could represent categorical or
-    text features.
-    """
-
-    NUMERICAL = "numerical"
-    CATEGORICAL = "categorical"
-    TEXT = "text"
-    CONSTANT = "constant"
-
-
-FeatureModalitiesColumns = dict[FeatureModality, list[str]]
+from tabpfn.preprocessing.datamodel import DatasetView, FeatureModality
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
 class FeatureModalityDetector:
     """Detector for feature modalities as defined by FeatureModality."""
 
-    feature_modality_columns: FeatureModalitiesColumns
+    feature_modality_columns: dict[FeatureModality, list[str]]
 
     def _fit(self, X: pd.DataFrame) -> None:
         raise NotImplementedError("Should be calling `detect_feature_modalities`.")
@@ -102,7 +76,7 @@ def _detect_feature_modalities_to_columns(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> FeatureModalitiesColumns:
+) -> dict[FeatureModality, list[str]]:
     feature_modalities_to_columns = defaultdict(list)
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     for idx, col in enumerate(X.columns):
