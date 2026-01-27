@@ -174,7 +174,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     label_encoder_: LabelEncoder
     """The label encoder used to encode the target variable."""
 
-    preprocessor_: ColumnTransformer
+    ordinal_encoder_: ColumnTransformer
     """The column transformer used to preprocess the input data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
@@ -652,7 +652,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
         )
-        self.preprocessor_ = ordinal_encoder
+        self.ordinal_encoder_ = ordinal_encoder
         self.inferred_categorical_indices_ = inferred_categorical_indices
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
@@ -1040,7 +1040,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             X = process_text_na_dataframe(
                 X=X,
-                ord_encoder=getattr(self, "preprocessor_", None),
+                ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
         return self.forward(
