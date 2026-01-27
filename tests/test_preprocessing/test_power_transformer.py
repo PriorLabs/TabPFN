@@ -9,9 +9,7 @@ from tabpfn.preprocessing.steps import SafePowerTransformer
 
 
 def test__safe_power_transformer__normal_cases__same_results_as_power_transformer():
-    """Test SafePowerTransformer gives same results as
-    PowerTransformer for normal data.
-    """
+    """Test SafePowerTransformer returns the same results as PowerTransformer for normal data."""  # noqa: E501
     rng = np.random.default_rng(42)
 
     # Test cases with normal, well-behaved data
@@ -80,9 +78,7 @@ def test__safe_power_transformer__power_transformer_fails__no_error():
 
 
 def test__safe_power_transformer__transform_then_inverse_transform__returns_original():
-    """Test that SafePowerTransformer inverse_transform returns data to original scale.
-    We haven't changed the.
-    """
+    """Test that SafePowerTransformer inverse_transform returns data to original scale."""  # noqa: E501
     rng = np.random.default_rng(42)
 
     # Test cases with different data distributions
