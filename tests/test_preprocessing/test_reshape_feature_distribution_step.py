@@ -12,7 +12,7 @@ def test__preprocessing_large_dataset():
     num_samples = 150000
     num_features = 2
     input_shape = (num_samples, num_features)
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(42)
     X = rng.random(input_shape)
 
     preprocessing_step = ReshapeFeatureDistributionsStep(
