@@ -14,8 +14,8 @@ def test__get_subsample_indices_for_estimators():
     }
 
     subsample_samples = [
-        [0, 1, 2, 3, 4],
-        [5, 6, 7, 8, 9],
+        np.array([0, 1, 2, 3, 4]),
+        np.array([5, 6, 7, 8, 9]),
     ]
     expected_subsample_indices = [
         np.array([0, 1, 2, 3, 4]),
@@ -23,7 +23,7 @@ def test__get_subsample_indices_for_estimators():
         np.array([0, 1, 2, 3, 4]),
     ]
     subsample_indices = _get_subsample_indices_for_estimators(
-        subsample_samples=np.array(subsample_samples),
+        subsample_samples=subsample_samples,
         **kwargs,
     )
     assert len(subsample_indices) == 3
