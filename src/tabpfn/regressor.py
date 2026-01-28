@@ -199,7 +199,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The inference engine used to make predictions."""
 
     ordinal_encoder_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913
         self,

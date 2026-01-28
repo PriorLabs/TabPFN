@@ -170,7 +170,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The label encoder used to encode the target variable."""
 
     ordinal_encoder_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
