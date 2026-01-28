@@ -1034,7 +1034,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         check_is_fitted(self)
 
-        if not torch.is_tensor(X):
+        if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
             # TODO: The below steps should be handled by a "data sanitizer object"
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
