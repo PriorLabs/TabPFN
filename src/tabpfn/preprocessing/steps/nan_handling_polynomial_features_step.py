@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
@@ -10,14 +9,11 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
+from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import append_numerical_features
 from tabpfn.utils import infer_random_state
-
-if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
@@ -44,14 +40,14 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)
 
         if X.shape[0] == 0 or X.shape[1] == 0:
             self.n_polynomials_ = 0
-            return feature_modalities
+            return metadata
 
         # How many polynomials can we create?
         n_polynomials = (X.shape[1] * (X.shape[1] - 1)) // 2 + X.shape[1]
@@ -89,9 +85,7 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
                 self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
         # Polynomial features are appended as new numerical columns
-        return append_numerical_features(
-            feature_modalities, X.shape[1], n_new_features=n_polynomials
-        )
+        return metadata.add_columns(FeatureModality.NUMERICAL, num_new=n_polynomials)
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

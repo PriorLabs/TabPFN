@@ -75,7 +75,7 @@ def test_reshape_step_append_original_logic(
         FeatureModality.NUMERICAL: list(range(num_features)),
         FeatureModality.CATEGORICAL: [],
     }
-    X_transformed, _ = preprocessing_step.fit_transform(X, feature_modalities)
+    result = preprocessing_step.fit_transform(X, feature_modalities)
 
-    assert X_transformed.shape[0] == num_samples
-    assert X_transformed.shape[1] == expected_output_features
+    assert result.X.shape[0] == num_samples
+    assert result.X.shape[1] == expected_output_features

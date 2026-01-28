@@ -3,25 +3,18 @@
 from __future__ import annotations
 
 import warnings
-from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
+from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
     PreprocessingStepResult,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    get_categorical_indices,
-    update_categorical_indices,
-)
 from tabpfn.utils import infer_random_state
-
-if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 def _get_least_common_category_count(x_column: np.ndarray) -> int:
@@ -117,20 +110,34 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             f"Unknown categorical transform {self.categorical_transform_name}",
         )
 
+    def _build_output_metadata(
+        self,
+        n_features: int,
+        categorical_indices: list[int],
+    ) -> ColumnMetadata:
+        """Build output metadata with updated categorical and numerical indices."""
+        numerical_indices = [
+            i for i in range(n_features) if i not in categorical_indices
+        ]
+        return ColumnMetadata(
+            indices_by_modality={
+                FeatureModality.CATEGORICAL: sorted(categorical_indices),
+                FeatureModality.NUMERICAL: sorted(numerical_indices),
+            }
+        )
+
     @override
     def _fit(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
-        categorical_features = get_categorical_indices(feature_modalities)
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
+        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return update_categorical_indices(
-                feature_modalities, categorical_features, n_features
-            )
+            return self._build_output_metadata(n_features, categorical_features)
 
         _, rng = infer_random_state(self.random_state)
 
@@ -162,23 +169,21 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        return update_categorical_indices(
-            feature_modalities, categorical_features, n_features
-        )
+        # TODO: Test if the metadata is correct after the different
+        # transformations.
+        return self._build_output_metadata(n_features, categorical_features)
 
-    def _fit_transform(
+    def _fit_transform_internal(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> tuple[np.ndarray, dict[FeatureModality, list[int]]]:
-        categorical_features = get_categorical_indices(feature_modalities)
+        metadata: ColumnMetadata,
+    ) -> tuple[np.ndarray, ColumnMetadata]:
+        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, update_categorical_indices(
-                feature_modalities, categorical_features, n_features
-            )
+            return X, self._build_output_metadata(n_features, categorical_features)
 
         _, rng = infer_random_state(self.random_state)
 
@@ -217,19 +222,20 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, update_categorical_indices(  # type: ignore
-            feature_modalities, categorical_features, n_features
-        )
+        return Xt, self._build_output_metadata(n_features, categorical_features)  # type: ignore[return-value]
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
+        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
     ) -> PreprocessingStepResult:
-        Xt, modalities = self._fit_transform(X, feature_modalities)
-        self.feature_modalities_after_transform_ = modalities
-        return PreprocessingStepResult(Xt, modalities)
+        if isinstance(metadata, dict):
+            metadata = ColumnMetadata.from_dict(metadata)
+
+        Xt, output_metadata = self._fit_transform_internal(X, metadata)
+        self.metadata_after_transform_ = output_metadata
+        return PreprocessingStepResult(X=Xt, metadata=output_metadata)
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

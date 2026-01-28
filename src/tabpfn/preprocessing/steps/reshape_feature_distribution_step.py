@@ -21,6 +21,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
+from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -32,19 +33,12 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
     KDITransformerWithNaN,
     get_all_kdi_transformers,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    filter_modalities_by_kept_indices,
-    get_categorical_indices,
-    update_categorical_indices,
-)
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
-
-    from tabpfn.preprocessing.datamodel import FeatureModality
 
 T = TypeVar("T")
 
@@ -191,13 +185,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self,
         n_samples: int,
         n_features: int,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> tuple[Pipeline | ColumnTransformer, dict[FeatureModality, list[int]]]:
+        metadata: ColumnMetadata,
+    ) -> tuple[Pipeline | ColumnTransformer, ColumnMetadata]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
         static_seed, rng = infer_random_state(self.random_state)
-        categorical_features = get_categorical_indices(feature_modalities)
+        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
 
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
@@ -211,10 +205,10 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 replace=False,
             )
             # Update modalities to reflect subsampled features
-            feature_modalities = filter_modalities_by_kept_indices(
-                feature_modalities, list(self.subsampled_features_)
-            )
-            categorical_features = get_categorical_indices(feature_modalities)
+            # Create a new metadata with only the kept indices
+            kept_indices = list(self.subsampled_features_)
+            metadata = metadata.slice_for_indices(kept_indices)
+            categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
             n_features = subsample_features
         else:
             self.subsampled_features_ = np.arange(n_features)
@@ -321,42 +315,53 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features + len(trans_ixs) if self.append_to_original else n_features
         )
 
-        return transformer, update_categorical_indices(
-            feature_modalities, cat_ix, n_output_features
+        # Build the new metadata with updated categorical indices
+        # Non-categorical indices become numerical
+        new_numerical_ix = [i for i in range(n_output_features) if i not in cat_ix]
+        new_metadata = ColumnMetadata(
+            indices_by_modality={
+                FeatureModality.CATEGORICAL: sorted(cat_ix),
+                FeatureModality.NUMERICAL: sorted(new_numerical_ix),
+            }
         )
+
+        return transformer, new_metadata
 
     @override
     def _fit(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         n_samples, n_features = X.shape
-        transformer, modalities = self._set_transformer_and_modalities(
+        transformer, output_metadata = self._set_transformer_and_modalities(
             n_samples,
             n_features,
-            feature_modalities,
+            metadata,
         )
         transformer.fit(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        return modalities
+        return output_metadata
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        feature_modalities: dict[FeatureModality, list[int]],
+        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
     ) -> PreprocessingStepResult:
+        if isinstance(metadata, dict):
+            metadata = ColumnMetadata.from_dict(metadata)
+
         n_samples, n_features = X.shape
-        transformer, modalities = self._set_transformer_and_modalities(
+        transformer, output_metadata = self._set_transformer_and_modalities(
             n_samples,
             n_features,
-            feature_modalities,
+            metadata,
         )
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        self.feature_modalities_after_transform_ = modalities
-        return PreprocessingStepResult(Xt, modalities)  # type: ignore
+        self.metadata_after_transform_ = output_metadata
+        return PreprocessingStepResult(X=Xt, metadata=output_metadata)  # type: ignore[arg-type]
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

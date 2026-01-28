@@ -11,13 +11,10 @@ import torch
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    apply_permutation_to_modalities,
-)
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
+    from tabpfn.preprocessing.datamodel import ColumnMetadata
 
 
 class ShuffleFeaturesStep(PreprocessingStep):
@@ -40,8 +37,8 @@ class ShuffleFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
             index_permutation = np.roll(
@@ -59,7 +56,7 @@ class ShuffleFeaturesStep(PreprocessingStep):
         else:
             self.index_permutation_ = index_permutation
 
-        return apply_permutation_to_modalities(feature_modalities, index_permutation)
+        return metadata.apply_permutation(index_permutation)
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

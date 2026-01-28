@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Literal
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingPipeline,
     PreprocessingStep,
+    StepWithModalities,
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
@@ -37,13 +38,23 @@ def _polynomial_feature_settings(
     raise ValueError(f"Invalid polynomial_features value: {polynomial_features}")
 
 
+# TODO: rename to create_preprocessing_pipeline
 def build_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
 ) -> PreprocessingPipeline:
-    """Convert the ensemble configuration to a preprocessing pipeline."""
-    steps: list[PreprocessingStep] = []
+    """Convert the ensemble configuration to a preprocessing pipeline.
+
+    Steps can be added in two formats:
+    1. As bare PreprocessingStep instances - these receive all columns
+    2. As (step, modalities) tuples - the pipeline slices columns for the step
+
+    Currently all steps handle their own column selection internally, so they
+    are added as bare steps for backward compatibility.
+    """
+    # TODO: Always use (step, modalities) tuples
+    steps: list[PreprocessingStep | StepWithModalities] = []
 
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features

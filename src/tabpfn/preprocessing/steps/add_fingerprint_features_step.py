@@ -4,20 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from collections import defaultdict
-from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
 import torch
 
+from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import append_numerical_features
 from tabpfn.utils import infer_random_state
-
-if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
 
 _CONSTANT = 10**12
 
@@ -46,14 +42,12 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         _, rng = infer_random_state(self.random_state)
         self.rnd_salt_ = int(rng.integers(0, 2**16))
         # Fingerprint feature is added as a new numerical column at the end
-        return append_numerical_features(
-            feature_modalities, X.shape[1], n_new_features=1
-        )
+        return metadata.add_columns(FeatureModality.NUMERICAL, num_new=1)
 
     @override
     def _transform(  # type: ignore

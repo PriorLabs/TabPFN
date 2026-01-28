@@ -12,12 +12,9 @@ from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.pipeline_interfaces import (
     PreprocessingStep,
 )
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    filter_modalities_by_kept_indices,
-)
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
+    from tabpfn.preprocessing.datamodel import ColumnMetadata
 
 
 class RemoveConstantFeaturesStep(PreprocessingStep):
@@ -31,8 +28,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
     def _fit(  # type: ignore
         self,
         X: np.ndarray | torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
         else:
@@ -45,9 +42,9 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             )
         self.sel_ = sel_
 
-        # Get indices of kept features and remap all modalities
-        kept_indices = list(np.where(sel_)[0])
-        return filter_modalities_by_kept_indices(feature_modalities, kept_indices)
+        # Get indices of removed features and update metadata
+        removed_indices = list(np.where(~np.array(sel_))[0])
+        return metadata.remove_columns(removed_indices)
 
     @override
     def _transform(

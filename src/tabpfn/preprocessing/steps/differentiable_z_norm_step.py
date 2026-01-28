@@ -12,7 +12,7 @@ from tabpfn.preprocessing.pipeline_interfaces import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureModality
+    from tabpfn.preprocessing.datamodel import ColumnMetadata
 
 
 class DifferentiableZNormStep(PreprocessingStep):
@@ -28,12 +28,12 @@ class DifferentiableZNormStep(PreprocessingStep):
     def _fit(  # type: ignore
         self,
         X: torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
-    ) -> dict[FeatureModality, list[int]]:
+        metadata: ColumnMetadata,
+    ) -> ColumnMetadata:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)
         # Z-norm doesn't change column structure
-        return feature_modalities
+        return metadata
 
     @override
     def _transform(self, X: torch.Tensor, *, is_test: bool = False) -> torch.Tensor:  # type: ignore
