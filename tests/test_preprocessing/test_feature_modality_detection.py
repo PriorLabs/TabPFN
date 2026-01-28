@@ -13,6 +13,7 @@ from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
     detect_feature_modalities,
 )
+from tabpfn.preprocessing.type_detection import infer_categorical_features
 
 
 def test__dataset_view_end_to_end():
@@ -25,16 +26,16 @@ def test__dataset_view_end_to_end():
             "const": [1.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
-    view = detect_feature_modalities(
+    modality_to_columns = detect_feature_modalities(
         df,
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=5,
     )
-    assert view.columns_by_modality[FeatureModality.NUMERICAL] == ["num"]
-    assert view.columns_by_modality[FeatureModality.CATEGORICAL] == ["cat", "cat_num"]
-    assert view.columns_by_modality[FeatureModality.TEXT] == ["text"]
-    assert view.columns_by_modality[FeatureModality.CONSTANT] == ["const"]
+    assert modality_to_columns[FeatureModality.NUMERICAL] == [0]
+    assert modality_to_columns[FeatureModality.CATEGORICAL] == [1, 2]
+    assert modality_to_columns[FeatureModality.TEXT] == [3]
+    assert modality_to_columns[FeatureModality.CONSTANT] == [4]
 
 
 def _for_test_detect_with_defaults(
@@ -92,6 +93,7 @@ def test__detect_for_constant(series_data: list[Any], test_name: str) -> None:
         (["True", "False", "True", "False"], "multiple boolean-like strings"),
         ([1.0, 0.0, 0.0, 1.0, 0.0], "multiple floats"),
         ([np.nan, 1.0, np.nan, 1.0], "constant value with missing ones"),
+        ([0.0, 1.0, np.nan, 2.0], "multiple floats with missing ones"),
     ],
 )
 def test__detect_for_categorical(series_data: list[Any], test_name: str) -> None:
@@ -215,3 +217,97 @@ def test__detect_text_as_object():
     assert result == FeatureModality.TEXT
     result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
     assert result == FeatureModality.CATEGORICAL
+
+
+@pytest.mark.parametrize(
+    (
+        "X",
+        "provided",
+        "min_samples_for_inference",
+        "max_unique_for_category",
+        "min_unique_for_numerical",
+        "expected",
+    ),
+    [
+        pytest.param(
+            np.array([[np.nan, "NA"]], dtype=object).reshape(-1, 1),
+            [0],
+            0,
+            2,
+            5,
+            [0],
+            id="str_and_nan_provided_included",
+        ),
+        pytest.param(
+            np.array([[np.nan], ["NA"], ["NA"]], dtype=object),
+            [0],
+            0,
+            2,
+            5,
+            [0],
+            id="str_and_nan_multiple_rows_provided_included",
+        ),
+        pytest.param(
+            np.array([[1.0], [1.0], [np.nan]]),
+            None,
+            3,
+            2,
+            4,
+            [],
+            id="auto_inference_blocked_when_not_enough_samples",
+        ),
+        pytest.param(
+            np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 2.0], [2.0, 3.0], [np.nan, 9.0]]),
+            None,
+            3,
+            3,
+            4,
+            [0],
+            id="auto_inference_enabled_with_enough_samples",
+        ),
+        pytest.param(
+            np.array([[0], [1], [2], [3], [np.nan]], dtype=float),
+            [0],
+            0,
+            3,
+            2,
+            [],
+            id="provided_column_excluded_if_exceeds_max_unique",
+        ),
+    ],
+)
+def test__infer_categorical_features(
+    X: np.ndarray,
+    provided: list[int] | None,
+    min_samples_for_inference: int,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    expected: list[int],
+):
+    out_old_api = infer_categorical_features(
+        X,
+        provided=provided,
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+    )
+    out_new_api = detect_feature_modalities(
+        X=pd.DataFrame(X),
+        min_samples_for_inference=min_samples_for_inference,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        reported_categorical_indices=provided,
+    )[FeatureModality.CATEGORICAL]
+    assert out_old_api == expected == out_new_api
+
+
+def test_infer_categorical_with_dict_raises_error():
+    X = np.array([[{"a": 1}], [{"b": 2}]], dtype=object)
+    with pytest.raises(TypeError):
+        infer_categorical_features(
+            X,
+            provided=None,
+            min_samples_for_inference=0,
+            max_unique_for_category=2,
+            min_unique_for_numerical=2,
+        )

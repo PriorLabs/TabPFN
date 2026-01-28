@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
@@ -10,10 +11,17 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
 from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
+    PreprocessingStep,
+    PreprocessingStepResult,
+)
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    get_categorical_indices,
+    update_categorical_indices,
 )
 from tabpfn.utils import infer_random_state
+
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 def _get_least_common_category_count(x_column: np.ndarray) -> int:
@@ -23,7 +31,7 @@ def _get_least_common_category_count(x_column: np.ndarray) -> int:
     return int(counts.min())
 
 
-class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
+class EncodeCategoricalFeaturesStep(PreprocessingStep):
     """Encode Categorical Features Step."""
 
     def __init__(
@@ -113,12 +121,16 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
     def _fit(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> list[int]:
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> dict[FeatureModality, list[int]]:
+        categorical_features = get_categorical_indices(feature_modalities)
         ct, categorical_features = self._get_transformer(X, categorical_features)
+        n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return categorical_features
+            return update_categorical_indices(
+                feature_modalities, categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -140,7 +152,8 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             if Xt.size >= 1_000_000:
                 ct = None
             else:
-                categorical_features = list(range(Xt.shape[1]))[
+                n_features = Xt.shape[1]
+                categorical_features = list(range(n_features))[
                     ct.output_indices_["one_hot_encoder"]
                 ]
         else:
@@ -149,17 +162,23 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             )
 
         self.categorical_transformer_ = ct
-        return categorical_features
+        return update_categorical_indices(
+            feature_modalities, categorical_features, n_features
+        )
 
     def _fit_transform(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> tuple[np.ndarray, list[int]]:
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> tuple[np.ndarray, dict[FeatureModality, list[int]]]:
+        categorical_features = get_categorical_indices(feature_modalities)
         ct, categorical_features = self._get_transformer(X, categorical_features)
+        n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, categorical_features
+            return X, update_categorical_indices(
+                feature_modalities, categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -188,7 +207,8 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
                 ct = None
                 Xt = X
             else:
-                categorical_features = list(range(Xt.shape[1]))[
+                n_features = Xt.shape[1]
+                categorical_features = list(range(n_features))[
                     ct.output_indices_["one_hot_encoder"]
                 ]
         else:
@@ -197,17 +217,19 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, categorical_features  # type: ignore
+        return Xt, update_categorical_indices(  # type: ignore
+            feature_modalities, categorical_features, n_features
+        )
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> TransformResult:
-        Xt, cat_ix = self._fit_transform(X, categorical_features)
-        self.categorical_features_after_transform_ = cat_ix
-        return TransformResult(Xt, cat_ix)
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> PreprocessingStepResult:
+        Xt, modalities = self._fit_transform(X, feature_modalities)
+        self.feature_modalities_after_transform_ = modalities
+        return PreprocessingStepResult(Xt, modalities)
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

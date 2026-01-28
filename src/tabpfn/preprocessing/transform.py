@@ -23,7 +23,8 @@ from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from tabpfn.preprocessing.configs import EnsembleConfig
-    from tabpfn.preprocessing.pipeline_interfaces import SequentialFeatureTransformer
+    from tabpfn.preprocessing.datamodel import FeatureModality
+    from tabpfn.preprocessing.pipeline_interfaces import PreprocessingPipeline
 
 
 def _fit_preprocessing_one(
@@ -32,10 +33,10 @@ def _fit_preprocessing_one(
     y_train: np.ndarray | torch.Tensor,
     random_state: int | np.random.Generator | None = None,
     *,
-    cat_ix: list[int],
+    feature_modalities: dict[FeatureModality, list[int]],
 ) -> tuple[
     EnsembleConfig,
-    SequentialFeatureTransformer,
+    PreprocessingPipeline,
     np.ndarray,
     np.ndarray,
     list[int],
@@ -47,7 +48,7 @@ def _fit_preprocessing_one(
         X_train: Training data.
         y_train: Training target.
         random_state: Random seed.
-        cat_ix: Indices of categorical features.
+        feature_modalities: Dictionary mapping modality to list of column indices.
 
     Returns:
         Tuple containing the ensemble configuration, the fitted preprocessing pipeline,
@@ -63,11 +64,11 @@ def _fit_preprocessing_one(
         y_train = y_train.copy()
 
     preprocessor = build_pipeline(config, random_state=static_seed)
-    res = preprocessor.fit_transform(X_train, cat_ix)
+    res = preprocessor.fit_transform(X_train, feature_modalities)
 
     y_train_processed = _transform_labels_one(config, y_train)
 
-    return (config, preprocessor, res.X, y_train_processed, res.categorical_features)
+    return (config, preprocessor, res.X, y_train_processed, res.feature_modalities)
 
 
 def _transform_labels_one(
@@ -101,13 +102,13 @@ def fit_preprocessing(
     y_train: np.ndarray,
     *,
     random_state: int | np.random.Generator | None,
-    cat_ix: list[int],
+    feature_modalities: dict[FeatureModality, list[int]],
     n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
 ) -> Iterator[
     tuple[
         EnsembleConfig,
-        SequentialFeatureTransformer,
+        PreprocessingPipeline,
         np.ndarray,
         np.ndarray,
         list[int],
@@ -120,7 +121,7 @@ def fit_preprocessing(
         X_train: Training data.
         y_train: Training target.
         random_state: Random number generator.
-        cat_ix: Indices of categorical features.
+        feature_modalities: Dictionary mapping modality to list of column indices.
         n_preprocessing_jobs: Number of worker processes to use.
             If `1`, then the preprocessing is performed in the current process. This
                 avoids multiprocessing overheads, but may not be able to full saturate
@@ -155,7 +156,7 @@ def fit_preprocessing(
         )
     else:
         executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
-    func = partial(_fit_preprocessing_one, cat_ix=cat_ix)
+    func = partial(_fit_preprocessing_one, feature_modalities=feature_modalities)
     worker_func = joblib.delayed(func)
 
     seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))

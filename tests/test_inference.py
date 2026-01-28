@@ -18,6 +18,7 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     generate_classification_ensemble_configs,
 )
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 
 
@@ -106,7 +107,10 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     engine = InferenceEngineCachePreprocessing(
         X_train,
         y_train,
-        cat_ix=[] * n_train,
+        feature_modalities={
+            FeatureModality.CATEGORICAL: [] * n_train,
+            FeatureModality.NUMERICAL: list(range(n_features)),
+        },
         ensemble_preprocessor=ensemble_preprocessor,
         models=[TestModel()],
         devices=[torch.device("cpu")],
@@ -161,7 +165,10 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
         engine = InferenceEngineOnDemand(
             X_train,
             y_train,
-            cat_ix=[] * n_train,
+            feature_modalities={
+                FeatureModality.CATEGORICAL: [] * n_train,
+                FeatureModality.NUMERICAL: list(range(n_features)),
+            },
             ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=[torch.device("cpu")],
@@ -212,7 +219,10 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     engine = InferenceEngineOnDemand(
         X_train,
         y_train,
-        cat_ix=[] * n_train,
+        feature_modalities={
+            FeatureModality.CATEGORICAL: [] * n_train,
+            FeatureModality.NUMERICAL: list(range(n_features)),
+        },
         ensemble_preprocessor=ensemble_preprocessor,
         models=models,
         devices=[torch.device("cpu")],

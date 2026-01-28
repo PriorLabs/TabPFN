@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
+    PreprocessingPipeline,
+    PreprocessingStep,
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
@@ -41,9 +41,9 @@ def build_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
-) -> SequentialFeatureTransformer:
+) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline."""
-    steps: list[FeaturePreprocessingTransformerStep] = []
+    steps: list[PreprocessingStep] = []
 
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
@@ -90,4 +90,4 @@ def build_pipeline(
             random_state=random_state,
         ),
     )
-    return SequentialFeatureTransformer(steps)
+    return PreprocessingPipeline(steps)

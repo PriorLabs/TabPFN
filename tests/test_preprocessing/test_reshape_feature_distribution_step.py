@@ -5,6 +5,7 @@ from typing import Literal
 import numpy as np
 import pytest
 
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
@@ -24,7 +25,11 @@ def test__preprocessing_large_dataset():
         random_state=42,
     )
 
-    result = preprocessing_step.fit_transform(X, categorical_features=[])
+    feature_modalities: dict[FeatureModality, list[int]] = {
+        FeatureModality.NUMERICAL: [0, 1],
+        FeatureModality.CATEGORICAL: [],
+    }
+    result = preprocessing_step.fit_transform(X, feature_modalities)
 
     assert result is not None
     X_transformed = result.X
@@ -66,7 +71,11 @@ def test_reshape_step_append_original_logic(
         max_features_per_estimator=500,
     )
 
-    X_transformed, _ = preprocessing_step.fit_transform(X, categorical_features=[])
+    feature_modalities: dict[FeatureModality, list[int]] = {
+        FeatureModality.NUMERICAL: list(range(num_features)),
+        FeatureModality.CATEGORICAL: [],
+    }
+    X_transformed, _ = preprocessing_step.fit_transform(X, feature_modalities)
 
     assert X_transformed.shape[0] == num_samples
     assert X_transformed.shape[1] == expected_output_features

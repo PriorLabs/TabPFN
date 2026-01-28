@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
@@ -10,12 +11,16 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
+    PreprocessingStep,
 )
+from tabpfn.preprocessing.steps.preprocessing_helpers import append_numerical_features
 from tabpfn.utils import infer_random_state
 
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.datamodel import FeatureModality
 
-class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
+
+class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
     """Nan Handling Polynomial Features Step."""
 
     def __init__(
@@ -31,16 +36,22 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
 
         self.poly_factor_1_idx: np.ndarray | None = None
         self.poly_factor_2_idx: np.ndarray | None = None
+        self.n_polynomials_: int = 0
 
         self.standardizer = StandardScaler(with_mean=False)
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> dict[FeatureModality, list[int]]:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)
 
         if X.shape[0] == 0 or X.shape[1] == 0:
-            return [*categorical_features]
+            self.n_polynomials_ = 0
+            return feature_modalities
 
         # How many polynomials can we create?
         n_polynomials = (X.shape[1] * (X.shape[1] - 1)) // 2 + X.shape[1]
@@ -49,6 +60,7 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
             if self.max_poly_features
             else n_polynomials
         )
+        self.n_polynomials_ = n_polynomials
 
         X = self.standardizer.fit_transform(X)
 
@@ -76,7 +88,10 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
                     continue
                 self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
-        return categorical_features
+        # Polynomial features are appended as new numerical columns
+        return append_numerical_features(
+            feature_modalities, X.shape[1], n_new_features=n_polynomials
+        )
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

@@ -14,30 +14,30 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing import steps
-from tabpfn.preprocessing.pipeline_interfaces import FeaturePreprocessingTransformerStep
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.pipeline_interfaces import PreprocessingStep
 from tabpfn.preprocessing.steps import (
     DifferentiableZNormStep,
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
+    get_categorical_indices,
 )
 
 
-def _get_preprocessing_steps() -> list[
-    Callable[..., FeaturePreprocessingTransformerStep],
-]:
-    defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
+def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
+    defaults: list[Callable[..., PreprocessingStep]] = [
         cls
         for cls in steps.__dict__.values()
         if (
             isinstance(cls, type)
-            and issubclass(cls, FeaturePreprocessingTransformerStep)
-            and cls is not FeaturePreprocessingTransformerStep
+            and issubclass(cls, PreprocessingStep)
+            and cls is not PreprocessingStep
             and cls is not DifferentiableZNormStep  # works on torch tensors
         )
     ]
-    extras: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
+    extras: list[Callable[..., PreprocessingStep]] = [
         partial(
             ReshapeFeatureDistributionsStep,
             transform_name="none",
@@ -57,6 +57,16 @@ def _get_random_data(
     return x
 
 
+def _make_feature_modalities(
+    n_features: int, cat_inds: list[int]
+) -> dict[FeatureModality, list[int]]:
+    num_inds = [i for i in range(n_features) if i not in cat_inds]
+    return {
+        FeatureModality.NUMERICAL: num_inds,
+        FeatureModality.CATEGORICAL: cat_inds,
+    }
+
+
 def test__preprocessing_steps__transform__is_idempotent():
     """Test that calling transform multiple times on the same data
     gives the same result. This ensures transform is deterministic
@@ -66,18 +76,21 @@ def test__preprocessing_steps__transform__is_idempotent():
     n_samples = 20
     n_features = 4
     cat_inds = [1, 3]
+    feature_modalities = _make_feature_modalities(n_features, cat_inds)
     for cls in _get_preprocessing_steps():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
-        obj = cls().fit(x, cat_inds)
+        obj = cls().fit(x, feature_modalities)
 
         # Calling transform multiple times should give the same result
         result1 = obj.transform(x2)
         result2 = obj.transform(x2)
 
         assert np.allclose(result1.X, result2.X), f"Transform not idempotent for {cls}"
-        assert result1.categorical_features == result2.categorical_features
+        assert get_categorical_indices(
+            result1.feature_modalities
+        ) == get_categorical_indices(result2.feature_modalities)
 
 
 def test__preprocessing_steps__transform__no_sample_interdependence():
@@ -89,11 +102,12 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
     n_samples = 20
     n_features = 4
     cat_inds = [1, 3]
+    feature_modalities = _make_feature_modalities(n_features, cat_inds)
     for cls in _get_preprocessing_steps():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
-        obj = cls().fit(x, cat_inds)
+        obj = cls().fit(x, feature_modalities)
 
         # Test 1: Shuffling samples should give correspondingly shuffled results
         result_normal = obj.transform(x2)
@@ -110,7 +124,9 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         )
 
         # Test 3: Categorical features should remain the same
-        assert result_full.categorical_features == result_subset.categorical_features
+        assert get_categorical_indices(
+            result_full.feature_modalities
+        ) == get_categorical_indices(result_subset.feature_modalities)
 
 
 # This is a test for the OrderPreservingColumnTransformer, which is not used currently

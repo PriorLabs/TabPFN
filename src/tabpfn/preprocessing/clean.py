@@ -89,9 +89,9 @@ def fix_dtypes(  # noqa: D103
     if convert_dtype:
         X = X.convert_dtypes()
 
-    integer_columns = X.select_dtypes(include=["number"]).columns
-    if len(integer_columns) > 0:
-        X[integer_columns] = X[integer_columns].astype(numeric_dtype)
+    numerical_columns = X.select_dtypes(include=["number"]).columns
+    if len(numerical_columns) > 0:
+        X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
     return X
 
 

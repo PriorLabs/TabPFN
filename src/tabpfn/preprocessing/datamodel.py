@@ -28,7 +28,12 @@ class DatasetView:
     """A view of a dataset split by feature modalities."""
 
     X: pd.DataFrame
-    columns_by_modality: dict[FeatureModality, list[str]]
+    columns_by_modality: dict[FeatureModality, list[int]]
+
+    @property
+    def feature_names(self) -> list[str]:
+        """Returns the feature names as a list of strings."""
+        return self.X.columns.tolist()
 
     @property
     def x_num(self) -> pd.DataFrame:
@@ -51,4 +56,4 @@ class DatasetView:
         return self._get_modality(FeatureModality.TEXT)
 
     def _get_modality(self, modality: FeatureModality) -> pd.DataFrame:
-        return self.X.loc[:, self.columns_by_modality[modality]]
+        return self.X.iloc[:, self.columns_by_modality[modality]]

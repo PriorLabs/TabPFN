@@ -2,19 +2,25 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import numpy as np
 import torch
 
 from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
+    PreprocessingStep,
+)
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    apply_permutation_to_modalities,
 )
 from tabpfn.utils import infer_random_state
 
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.datamodel import FeatureModality
 
-class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
+
+class ShuffleFeaturesStep(PreprocessingStep):
     """Shuffle the features in the data."""
 
     def __init__(
@@ -34,8 +40,8 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        categorical_features: list[int],
-    ) -> list[int]:
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> dict[FeatureModality, list[int]]:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
             index_permutation = np.roll(
@@ -53,11 +59,7 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
         else:
             self.index_permutation_ = index_permutation
 
-        return [
-            new_idx
-            for new_idx, idx in enumerate(index_permutation)
-            if idx in categorical_features
-        ]
+        return apply_permutation_to_modalities(feature_modalities, index_permutation)
 
     @override
     def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:

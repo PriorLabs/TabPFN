@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import torch
 
 from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
+    PreprocessingStep,
 )
 
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.datamodel import FeatureModality
 
-class DifferentiableZNormStep(FeaturePreprocessingTransformerStep):
+
+class DifferentiableZNormStep(PreprocessingStep):
     """Differentiable Z-Norm Step."""
 
     def __init__(self):
@@ -21,10 +25,15 @@ class DifferentiableZNormStep(FeaturePreprocessingTransformerStep):
         self.stds = torch.tensor([])
 
     @override
-    def _fit(self, X: torch.Tensor, categorical_features: list[int]) -> list[int]:  # type: ignore
+    def _fit(  # type: ignore
+        self,
+        X: torch.Tensor,
+        feature_modalities: dict[FeatureModality, list[int]],
+    ) -> dict[FeatureModality, list[int]]:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)
-        return categorical_features
+        # Z-norm doesn't change column structure
+        return feature_modalities
 
     @override
     def _transform(self, X: torch.Tensor, *, is_test: bool = False) -> torch.Tensor:  # type: ignore

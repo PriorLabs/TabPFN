@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.datamodel import DatasetView, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
@@ -32,7 +32,7 @@ def detect_feature_modalities(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> DatasetView:
+) -> dict[FeatureModality, list[int]]:
     """Infer the features modalities from the given data, based on heuristics
     and user-provided indices for categorical features.
 
@@ -57,31 +57,14 @@ def detect_feature_modalities(
             feature to be considered numerical.
 
     Returns:
-        A DatasetView object with the features modalities.
+        A dictionary with the feature modalities as keys and the column as
+        values.
     """
-    columns_by_modality = _detect_feature_modalities_to_columns(
-        X,
-        min_samples_for_inference=min_samples_for_inference,
-        max_unique_for_category=max_unique_for_category,
-        min_unique_for_numerical=min_unique_for_numerical,
-        reported_categorical_indices=reported_categorical_indices,
-    )
-    return DatasetView(X=X, columns_by_modality=columns_by_modality)
-
-
-def _detect_feature_modalities_to_columns(
-    X: pd.DataFrame,
-    *,
-    min_samples_for_inference: int,
-    max_unique_for_category: int,
-    min_unique_for_numerical: int,
-    reported_categorical_indices: Sequence[int] | None = None,
-) -> dict[FeatureModality, list[str]]:
     feature_modalities_to_columns = defaultdict(list)
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
-    for idx, col in enumerate(X.columns):
-        feat = X.loc[:, col]
-        reported_categorical = idx in (reported_categorical_indices or ())
+    for index in range(X.shape[1]):
+        feat = X.iloc[:, index]
+        reported_categorical = index in (reported_categorical_indices or ())
         feat_modality = _detect_feature_modality(
             s=feat,
             reported_categorical=reported_categorical,
@@ -89,7 +72,7 @@ def _detect_feature_modalities_to_columns(
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        feature_modalities_to_columns[feat_modality].append(col)
+        feature_modalities_to_columns[feat_modality].append(index)
     return feature_modalities_to_columns
 
 
@@ -102,15 +85,15 @@ def _detect_feature_modality(
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
     # Calculate total distinct values once, treating NaN as a category.
-    nunique = s.nunique(dropna=False)
-    if nunique <= 1:
+    n_unique = s.nunique(dropna=False)
+    if n_unique <= 1:
         # Either all values are missing, or all values are the same.
         # If there's a single value but also missing ones, it's not constant
         return FeatureModality.CONSTANT
 
     if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
-            nunique=nunique,
+            n_unique=n_unique,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
@@ -121,7 +104,7 @@ def _detect_feature_modality(
     if pd.api.types.is_string_dtype(s.dtype) or isinstance(
         s.dtype, pd.CategoricalDtype
     ):
-        if nunique <= max_unique_for_category:
+        if n_unique <= max_unique_for_category:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT
     raise TabPFNUserError(
@@ -136,7 +119,7 @@ def _is_numeric_pandas_series(s: pd.Series) -> bool:
 
 
 def _detect_numeric_as_categorical(
-    nunique: int,
+    n_unique: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     *,
@@ -150,9 +133,9 @@ def _detect_numeric_as_categorical(
       sufficiently low-cardinal.
     """
     if reported_categorical:
-        if nunique <= max_unique_for_category:
+        if n_unique <= max_unique_for_category:
             return True
-    elif big_enough_n_to_infer_cat and nunique < min_unique_for_numerical:
+    elif big_enough_n_to_infer_cat and n_unique < min_unique_for_numerical:
         return True
     return False
 

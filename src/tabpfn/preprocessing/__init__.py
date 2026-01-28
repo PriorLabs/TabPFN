@@ -12,7 +12,7 @@ from .ensemble import (
 )
 from .initialization import tag_features_and_sanitize_data
 from .pipeline import (
-    SequentialFeatureTransformer,
+    PreprocessingPipeline,
 )
 from .presets import (
     default_classifier_preprocessor_configs,
@@ -27,9 +27,9 @@ from .transform import fit_preprocessing
 __all__ = [
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
+    "PreprocessingPipeline",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
-    "SequentialFeatureTransformer",
     "default_classifier_preprocessor_configs",
     "default_regressor_preprocessor_configs",
     "fit_preprocessing",
