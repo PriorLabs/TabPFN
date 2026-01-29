@@ -7,7 +7,7 @@ on:
 jobs:
   check:
     name: Changelog entry
-    if: github.actor != 'dependabot[bot]'
+    if: github.actor != 'dependabot[bot]' && github.actor != 'renovate[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6

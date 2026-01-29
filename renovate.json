@@ -1,0 +1,17 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "matchManagers": ["pep621", "github-actions"],
+      "groupName": "all dependencies",
+      "schedule": ["before 9am on monday"],
+      "automerge": true,
+      "rangeStrategy": "widen"
+    },
+    {
+      "matchPackageNames": ["ruff"],
+      "enabled": false
+    }
+  ]
+}
