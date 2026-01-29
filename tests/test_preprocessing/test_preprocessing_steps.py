@@ -86,7 +86,8 @@ def test__preprocessing_steps__transform__is_idempotent():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
-        obj = cls().fit(x, feature_modalities)
+        obj = cls()
+        obj.fit_transform(x, feature_modalities)
 
         # Calling transform multiple times should give the same result
         result1 = obj.transform(x2)
@@ -94,8 +95,8 @@ def test__preprocessing_steps__transform__is_idempotent():
 
         assert np.allclose(result1.X, result2.X), f"Transform not idempotent for {cls}"
         assert get_categorical_indices(
-            result1.feature_modalities
-        ) == get_categorical_indices(result2.feature_modalities)
+            result1.column_metadata.column_modalities
+        ) == get_categorical_indices(result2.column_metadata.column_modalities)
 
 
 def test__preprocessing_steps__transform__no_sample_interdependence():
@@ -112,7 +113,8 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
-        obj = cls().fit(x, feature_modalities)
+        obj = cls()
+        obj.fit_transform(x, feature_modalities)
 
         # Test 1: Shuffling samples should give correspondingly shuffled results
         result_normal = obj.transform(x2)
@@ -130,8 +132,8 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
 
         # Test 3: Categorical features should remain the same
         assert get_categorical_indices(
-            result_full.feature_modalities
-        ) == get_categorical_indices(result_subset.feature_modalities)
+            result_full.column_metadata.column_modalities
+        ) == get_categorical_indices(result_subset.column_metadata.column_modalities)
 
 
 def test__pipeline__handles_added_columns_from_fingerprint_step():
@@ -155,8 +157,11 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     assert result.X.shape == (n_samples, n_features + 1)
 
     # Metadata should track the new column
-    assert result.metadata.num_columns == n_features + 1
-    assert len(result.metadata.indices_for(FeatureModality.NUMERICAL)) == n_features + 1
+    assert result.column_metadata.num_columns == n_features + 1
+    assert (
+        len(result.column_metadata.indices_for(FeatureModality.NUMERICAL))
+        == n_features + 1
+    )
 
     # Original columns should be preserved
     np.testing.assert_array_equal(result.X[:, :n_features], X)
@@ -182,6 +187,7 @@ def test__pipeline__transform_also_handles_added_columns():
     assert result.X.shape == (5, n_features + 1)
 
 
+# TODO: Ideally we don't allow for this in no preprocessing step!
 def test__pipeline__raises_error_when_modality_step_changes_column_count():
     """Test that pipeline raises error if modality-registered step changes columns."""
 
@@ -193,9 +199,11 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
             return metadata
 
         @override
-        def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+        def _transform(
+            self, X: np.ndarray, *, is_test: bool = False
+        ) -> tuple[np.ndarray, None, None]:
             # Incorrectly return more columns
-            return np.concatenate([X, np.ones((X.shape[0], 1))], axis=1)
+            return np.concatenate([X, np.ones((X.shape[0], 1))], axis=1), None, None
 
     rng = np.random.default_rng(42)
     X = rng.random((10, 3))

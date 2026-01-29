@@ -53,7 +53,6 @@ def build_pipeline(
     Currently all steps handle their own column selection internally, so they
     are added as bare steps for backward compatibility.
     """
-    # TODO: Always use (step, modalities) tuples
     steps: list[PreprocessingStep | StepWithModalities] = []
 
     use_poly_features, max_poly_features = _polynomial_feature_settings(

@@ -285,10 +285,7 @@ def _transform_with_pipeline(
     result_test = pipeline.transform(X_test)
 
     if NEW_PIPELINE_IMPLEMENTATION:
-        metadata_dict = {
-            modality.value: indices
-            for modality, indices in result_train.metadata.indices_by_modality.items()
-        }
+        metadata_dict = result_train.column_metadata.column_modalities
     else:
         assert isinstance(result_train, TransformResult)
         _, categorical_indices = result_train

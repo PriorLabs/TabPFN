@@ -73,7 +73,7 @@ def test__call__single_step_transforms_columns():
 
     x = torch.ones(10, 1, 3)
     metadata = ColumnMetadata(
-        indices_by_modality={
+        column_modalities={
             FeatureModality.NUMERICAL: [0, 2],
             FeatureModality.CATEGORICAL: [1],
         },
@@ -99,7 +99,7 @@ def test__call__multiple_steps_applied_sequentially():
         ]
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -116,7 +116,7 @@ def test__call__step_skipped_for_empty_indices():
         steps=[(step, {FeatureModality.TEXT})]  # No TEXT columns in metadata
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0, 1]},
+        column_modalities={FeatureModality.NUMERICAL: [0, 1]},
     )
     x = torch.ones(10, 1, 2)
 
@@ -130,7 +130,7 @@ def test__call__2d_input_adds_and_removes_batch_dimension():
     step = MockStep(factor=2.0)
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1)  # 2D input
 
@@ -152,7 +152,7 @@ def test__call__step_targeting_multiple_modalities():
         ]
     )
     metadata = ColumnMetadata(
-        indices_by_modality={
+        column_modalities={
             FeatureModality.NUMERICAL: [0],
             FeatureModality.CATEGORICAL: [1],
             FeatureModality.TEXT: [2],
@@ -173,7 +173,7 @@ def test__call__with_real_standard_scaler_step():
     step = TorchStandardScalerStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0, 1]},
+        column_modalities={FeatureModality.NUMERICAL: [0, 1]},
     )
     x = torch.randn(100, 1, 2) * 10 + 5  # Mean ~5, std ~10
 
@@ -192,7 +192,7 @@ def test__call__no_num_train_rows_fits_on_all_data():
     step = TorchStandardScalerStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -207,7 +207,7 @@ def test__call__zero_num_train_rows():
     step = TorchSoftClipOutliersStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -221,7 +221,7 @@ def test__call__mismatching_num_columns_raises_error():
     step = MockStep(factor=2.0)
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 2)
     with pytest.raises(ValueError, match="Number of columns in input tensor"):
@@ -236,7 +236,7 @@ def test__call__keep_fitted_cache_false_does_not_store_cache():
         keep_fitted_cache=False,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -253,7 +253,7 @@ def test__call__keep_fitted_cache_true_stores_cache():
         keep_fitted_cache=True,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -271,7 +271,7 @@ def test__call__use_fitted_cache_true_skips_fit():
         keep_fitted_cache=True,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -292,7 +292,7 @@ def test__call__use_fitted_cache_false_refits_even_with_cache():
         keep_fitted_cache=True,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -313,7 +313,7 @@ def test__call__use_fitted_cache_true_without_stored_cache_refits():
         keep_fitted_cache=False,  # Cache won't be stored
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 
@@ -329,7 +329,7 @@ def test__call__cached_values_are_used_correctly():
         keep_fitted_cache=True,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
 
     # First call with data that has mean=5 in training rows
@@ -357,7 +357,7 @@ def test__call__multiple_steps_cache_stored_independently():
         keep_fitted_cache=True,
     )
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: [0]},
+        column_modalities={FeatureModality.NUMERICAL: [0]},
     )
     x = torch.ones(10, 1, 1)
 

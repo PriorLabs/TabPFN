@@ -141,7 +141,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             i for i in range(n_features) if i not in categorical_indices
         ]
         return ColumnMetadata(
-            indices_by_modality={
+            column_modalities={
                 FeatureModality.CATEGORICAL: sorted(categorical_indices),
                 FeatureModality.NUMERICAL: sorted(numerical_indices),
             }
@@ -256,12 +256,14 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
         Xt, output_metadata = self._fit_transform_internal(X, metadata)
         self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, metadata=output_metadata)
+        return PreprocessingStepResult(X=Xt, column_metadata=output_metadata)
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
         if self.categorical_transformer_ is None:
-            return X
+            return X, None, None
 
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -274,7 +276,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 transformed[:, col][not_nan_mask] = mapping[
                     transformed[:, col][not_nan_mask].astype(int)
                 ].astype(transformed[:, col].dtype)
-        return transformed  # type: ignore
+        return transformed, None, None  # type: ignore
 
 
 __all__ = [

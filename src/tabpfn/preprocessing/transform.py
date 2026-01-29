@@ -39,7 +39,7 @@ def _fit_preprocessing_one(
     PreprocessingPipeline,
     np.ndarray,
     np.ndarray,
-    list[int],
+    dict[FeatureModality, list[int]],
 ]:
     """Fit preprocessing pipeline for a single ensemble configuration.
 
@@ -68,7 +68,13 @@ def _fit_preprocessing_one(
 
     y_train_processed = _transform_labels_one(config, y_train)
 
-    return (config, preprocessor, res.X, y_train_processed, res.feature_modalities)
+    return (
+        config,
+        preprocessor,
+        res.X,
+        y_train_processed,
+        res.column_metadata.column_modalities,
+    )
 
 
 def _transform_labels_one(

@@ -32,14 +32,15 @@ class DifferentiableZNormStep(PreprocessingStep):
     ) -> ColumnMetadata:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)
-        # Z-norm doesn't change column structure
         return metadata
 
     @override
-    def _transform(self, X: torch.Tensor, *, is_test: bool = False) -> torch.Tensor:  # type: ignore
+    def _transform(  # type: ignore
+        self, X: torch.Tensor, *, is_test: bool = False
+    ) -> tuple[torch.Tensor, None, None]:
         assert X.shape[1] == self.means.shape[1]
         assert X.shape[1] == self.stds.shape[1]
-        return (X - self.means) / self.stds
+        return (X - self.means) / self.stds, None, None
 
 
 __all__ = [

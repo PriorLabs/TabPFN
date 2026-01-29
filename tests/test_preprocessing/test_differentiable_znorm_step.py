@@ -68,7 +68,7 @@ def test_diff_znorm_transform(
     step._fit(sample_data, feature_modalities_fixture)  # Fit first
 
     expected_output = (sample_data - step.means) / step.stds
-    transformed_data = step._transform(sample_data)
+    transformed_data, *_ = step._transform(sample_data)
 
     assert isinstance(transformed_data, torch.Tensor)
     assert transformed_data.shape == sample_data.shape
@@ -89,10 +89,10 @@ def test_diff_znorm_fit_transform_integration(
 ):
     """Test fit and transform used together via base class methods."""
     step = DifferentiableZNormStep()
-    step.fit(sample_data, feature_modalities_fixture)
+    step.fit_transform(sample_data, feature_modalities_fixture)
     result = step.transform(sample_data)
     transformed_data = result.X
-    returned_modalities = result.feature_modalities
+    returned_modalities = result.column_metadata.column_modalities
 
     mean_transformed = torch.mean(transformed_data, dim=0)
     std_transformed = torch.std(transformed_data, dim=0)
@@ -129,7 +129,7 @@ def test_diff_znorm_transform_with_zero_std(
 
     assert torch.isclose(step.stds[0, 1], torch.tensor(0.0))
 
-    transformed_data = step._transform(data_with_zero_std)
+    transformed_data, *_ = step._transform(data_with_zero_std)
 
     # Expect NaN for division by zero
     assert torch.isnan(transformed_data[:, 1]).all()

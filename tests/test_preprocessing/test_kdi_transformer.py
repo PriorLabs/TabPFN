@@ -17,7 +17,7 @@ def test_kdi_transformer_with_nan_integration():
     transformer = KDITransformerWithNaN(alpha=1.0, output_distribution="normal")
 
     # Test fit
-    transformer.fit(X)
+    transformer.fit_transform(X)
     assert hasattr(transformer, "imputation_values_")
 
     # Test transform

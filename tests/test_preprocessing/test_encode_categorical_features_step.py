@@ -67,8 +67,14 @@ def test__encode_categorical__ordinal__indices_moved_to_start():
     # ColumnTransformer moves categorical columns to the front
     expected_cat_indices = [0, 1]  # Now at positions 0 and 1
     expected_num_indices = [2, 3, 4, 5]  # Numerical columns follow
-    assert get_categorical_indices(result.feature_modalities) == expected_cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == expected_num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities)
+        == expected_cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities)
+        == expected_num_indices
+    )
     assert result.X.shape == (n_samples, n_features)
 
 
@@ -96,8 +102,14 @@ def test__encode_categorical__ordinal_shuffled__indices_same_as_ordinal():
     # Indices should be moved to front, same as ordinal
     expected_cat_indices = [0, 1]
     expected_num_indices = [2, 3, 4, 5]
-    assert get_categorical_indices(result.feature_modalities) == expected_cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == expected_num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities)
+        == expected_cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities)
+        == expected_num_indices
+    )
     assert result.X.shape == (n_samples, n_features)
 
 
@@ -168,8 +180,14 @@ def test__encode_categorical__onehot__expands_features():
     # Categorical indices should be the onehot columns (first 3)
     expected_cat_indices = [0, 1, 2]
     expected_num_indices = [3, 4, 5]
-    assert get_categorical_indices(result.feature_modalities) == expected_cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == expected_num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities)
+        == expected_cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities)
+        == expected_num_indices
+    )
 
 
 def test__encode_categorical__numeric__no_transformation():
@@ -195,8 +213,12 @@ def test__encode_categorical__numeric__no_transformation():
     # No transformation, data unchanged
     np.testing.assert_array_equal(result.X, X)
     # All indices remain at original positions
-    assert get_categorical_indices(result.feature_modalities) == cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities) == cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities) == num_indices
+    )
 
 
 def test__encode_categorical__none__no_transformation():
@@ -221,8 +243,12 @@ def test__encode_categorical__none__no_transformation():
 
     # No transformation
     np.testing.assert_array_equal(result.X, X)
-    assert get_categorical_indices(result.feature_modalities) == cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities) == cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities) == num_indices
+    )
 
 
 def test__encode_categorical__ordinal__no_categoricals():
@@ -246,8 +272,10 @@ def test__encode_categorical__ordinal__no_categoricals():
 
     # No categorical features, data unchanged
     np.testing.assert_array_equal(result.X, X)
-    assert get_categorical_indices(result.feature_modalities) == []
-    assert _get_numerical_indices(result.feature_modalities) == num_indices
+    assert get_categorical_indices(result.column_metadata.column_modalities) == []
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities) == num_indices
+    )
 
 
 def test__encode_categorical__ordinal__all_categoricals():
@@ -271,8 +299,12 @@ def test__encode_categorical__ordinal__all_categoricals():
 
     # All features remain categorical, indices 0 to n_features-1
     assert result.X.shape == (n_samples, n_features)
-    assert get_categorical_indices(result.feature_modalities) == cat_indices
-    assert _get_numerical_indices(result.feature_modalities) == num_indices
+    assert (
+        get_categorical_indices(result.column_metadata.column_modalities) == cat_indices
+    )
+    assert (
+        _get_numerical_indices(result.column_metadata.column_modalities) == num_indices
+    )
 
 
 @pytest.mark.parametrize(
@@ -293,7 +325,7 @@ def test__encode_categorical__transform_is_deterministic(transform_name: str):
         categorical_transform_name=transform_name,
         random_state=42,
     )
-    step.fit(X_train, feature_modalities)
+    step.fit_transform(X_train, feature_modalities)
 
     # Multiple transforms should give same result
     result1 = step.transform(X_test)
@@ -301,8 +333,8 @@ def test__encode_categorical__transform_is_deterministic(transform_name: str):
 
     np.testing.assert_array_equal(result1.X, result2.X)
     assert get_categorical_indices(
-        result1.feature_modalities
-    ) == get_categorical_indices(result2.feature_modalities)
-    assert _get_numerical_indices(result1.feature_modalities) == _get_numerical_indices(
-        result2.feature_modalities
-    )
+        result1.column_metadata.column_modalities
+    ) == get_categorical_indices(result2.column_metadata.column_modalities)
+    assert _get_numerical_indices(
+        result1.column_metadata.column_modalities
+    ) == _get_numerical_indices(result2.column_metadata.column_modalities)

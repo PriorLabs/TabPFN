@@ -72,8 +72,8 @@ class ColumnMetadata:
     the data.
     """
 
-    indices_by_modality: dict[FeatureModality, list[int]] = dataclasses.field(
-        default_factory=dict
+    column_modalities: dict[FeatureModality, list[int]] = dataclasses.field(
+        default_factory=dict,
     )
 
     # TODO: Remove because this was only for backwards compatibility
@@ -90,28 +90,19 @@ class ColumnMetadata:
             New ColumnMetadata instance.
         """
         return cls(
-            indices_by_modality={
+            column_modalities={
                 mod: list(indices) for mod, indices in feature_modalities.items()
             }
         )
 
-    # TODO: Remove because this was only for backwards compatibility
-    def to_dict(self) -> dict[FeatureModality, list[int]]:
-        """Convert to a feature_modalities dictionary.
-
-        Returns:
-            Dictionary mapping modality to list of column indices.
-        """
-        return {mod: list(indices) for mod, indices in self.indices_by_modality.items()}
-
     @property
     def num_columns(self) -> int:
         """Get the total number of columns."""
-        return sum(len(indices) for indices in self.indices_by_modality.values())
+        return sum(len(indices) for indices in self.column_modalities.values())
 
     def indices_for(self, modality: FeatureModality) -> list[int]:
         """Get column indices for a single modality."""
-        return self.indices_by_modality.get(modality, [])
+        return self.column_modalities.get(modality, [])
 
     def indices_for_modalities(
         self, modalities: Iterable[FeatureModality]
@@ -119,7 +110,7 @@ class ColumnMetadata:
         """Get combined column indices for multiple modalities (sorted)."""
         indices: list[int] = []
         for modality in modalities:
-            indices.extend(self.indices_by_modality.get(modality, []))
+            indices.extend(self.column_modalities.get(modality, []))
         return sorted(set(indices))
 
     def add_columns(self, modality: FeatureModality, num_new: int) -> ColumnMetadata:
@@ -132,18 +123,18 @@ class ColumnMetadata:
         Returns:
             New ColumnMetadata instance with updated indices.
         """
-        new_indices_by_modality = {
-            mod: list(indices) for mod, indices in self.indices_by_modality.items()
+        new_column_modalities = {
+            mod: list(indices) for mod, indices in self.column_modalities.items()
         }
 
         new_column_indices = list(range(self.num_columns, self.num_columns + num_new))
-        if modality in new_indices_by_modality:
-            new_indices_by_modality[modality].extend(new_column_indices)
+        if modality in new_column_modalities:
+            new_column_modalities[modality].extend(new_column_indices)
         else:
-            new_indices_by_modality[modality] = new_column_indices
+            new_column_modalities[modality] = new_column_indices
 
         return ColumnMetadata(
-            indices_by_modality=new_indices_by_modality,
+            column_modalities=new_column_modalities,
         )
 
     def slice_for_indices(self, indices: list[int]) -> ColumnMetadata:
@@ -162,13 +153,13 @@ class ColumnMetadata:
         # Create mapping: old_idx -> new_idx
         old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(indices)}
 
-        new_indices_by_modality: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.indices_by_modality.items():
+        new_column_modalities: dict[FeatureModality, list[int]] = {}
+        for modality, mod_indices in self.column_modalities.items():
             remapped = [old_to_new[idx] for idx in mod_indices if idx in indices_set]
             if remapped:
-                new_indices_by_modality[modality] = sorted(remapped)
+                new_column_modalities[modality] = sorted(remapped)
 
-        return ColumnMetadata(indices_by_modality=new_indices_by_modality)
+        return ColumnMetadata(column_modalities=new_column_modalities)
 
     def update_from_step_result(
         self,
@@ -193,45 +184,45 @@ class ColumnMetadata:
 
         # Start with modalities for columns NOT processed by this step
         processed_set = set(original_indices)
-        new_indices_by_modality: dict[FeatureModality, list[int]] = {}
+        new_column_modalities: dict[FeatureModality, list[int]] = {}
 
-        for modality, mod_indices in self.indices_by_modality.items():
+        for modality, mod_indices in self.column_modalities.items():
             unprocessed = [idx for idx in mod_indices if idx not in processed_set]
             if unprocessed:
-                new_indices_by_modality[modality] = unprocessed
+                new_column_modalities[modality] = unprocessed
 
         # Add back the processed columns with their new modalities
-        for modality, step_indices in step_metadata.indices_by_modality.items():
+        for modality, step_indices in step_metadata.column_modalities.items():
             original_positions = [new_to_old[idx] for idx in step_indices]
-            if modality in new_indices_by_modality:
-                new_indices_by_modality[modality].extend(original_positions)
-                new_indices_by_modality[modality] = sorted(
-                    new_indices_by_modality[modality]
+            if modality in new_column_modalities:
+                new_column_modalities[modality].extend(original_positions)
+                new_column_modalities[modality] = sorted(
+                    new_column_modalities[modality]
                 )
             else:
-                new_indices_by_modality[modality] = sorted(original_positions)
+                new_column_modalities[modality] = sorted(original_positions)
 
-        return ColumnMetadata(indices_by_modality=new_indices_by_modality)
+        return ColumnMetadata(column_modalities=new_column_modalities)
 
     def remove_columns(self, indices_to_remove: list[int]) -> ColumnMetadata:
         """Return new metadata with specified columns removed and indices remapped."""
         remove_set = set(indices_to_remove)
         # Get all current indices sorted
         all_indices = sorted(
-            idx for indices in self.indices_by_modality.values() for idx in indices
+            idx for indices in self.column_modalities.values() for idx in indices
         )
         # Keep only indices not being removed
         kept_indices = [idx for idx in all_indices if idx not in remove_set]
         # Create mapping: old_idx -> new_idx
         old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(kept_indices)}
 
-        new_indices_by_modality: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.indices_by_modality.items():
+        new_column_modalities: dict[FeatureModality, list[int]] = {}
+        for modality, mod_indices in self.column_modalities.items():
             remapped = [old_to_new[idx] for idx in mod_indices if idx not in remove_set]
             if remapped:
-                new_indices_by_modality[modality] = sorted(remapped)
+                new_column_modalities[modality] = sorted(remapped)
 
-        return ColumnMetadata(indices_by_modality=new_indices_by_modality)
+        return ColumnMetadata(column_modalities=new_column_modalities)
 
     def apply_permutation(self, permutation: list[int]) -> ColumnMetadata:
         """Apply a column permutation to the metadata.
@@ -245,9 +236,9 @@ class ColumnMetadata:
         # Create reverse mapping: old_idx -> new_idx
         old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(permutation)}
 
-        new_indices_by_modality: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.indices_by_modality.items():
+        new_column_modalities: dict[FeatureModality, list[int]] = {}
+        for modality, mod_indices in self.column_modalities.items():
             remapped = sorted(old_to_new[idx] for idx in mod_indices)
-            new_indices_by_modality[modality] = remapped
+            new_column_modalities[modality] = remapped
 
-        return ColumnMetadata(indices_by_modality=new_indices_by_modality)
+        return ColumnMetadata(column_modalities=new_column_modalities)

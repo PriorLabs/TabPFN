@@ -41,7 +41,7 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     def __init__(self, random_state: int | np.random.Generator | None = None):
         super().__init__()
         self.random_state = random_state
-        self._added_fingerprint: np.ndarray | torch.Tensor | None = None
+        self.added_fingerprint: np.ndarray | torch.Tensor | None = None
 
     @override
     def _fit(
@@ -60,7 +60,7 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         X: np.ndarray | torch.Tensor,
         *,
         is_test: bool = False,
-    ) -> np.ndarray | torch.Tensor:
+    ) -> tuple[np.ndarray | torch.Tensor, np.ndarray | torch.Tensor, FeatureModality]:
         """Transform the input and compute fingerprint (stored for _get_added_columns).
 
         The fingerprint is NOT concatenated here - it's returned via _get_added_columns
@@ -111,25 +111,14 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
                 # Update counter so next identical row starts checking from new offset
                 hash_counter[h_base] = add_to_hash + 1
 
-        # Store fingerprint for _get_added_columns
         if isinstance(X, torch.Tensor):
-            self._added_fingerprint = (
+            added_fingerprint = (
                 torch.from_numpy(X_h).float().reshape(-1, 1).to(X.device)
             )
         else:
-            self._added_fingerprint = X_h.reshape(-1, 1)
+            added_fingerprint = X_h.reshape(-1, 1)
 
-        # Return X unchanged - pipeline handles concatenation
-        return X
-
-    @override
-    def _get_added_columns(
-        self,
-    ) -> tuple[np.ndarray | torch.Tensor | None, FeatureModality | None]:
-        """Return the fingerprint column to be appended by the pipeline."""
-        if self._added_fingerprint is None:
-            return None, None
-        return self._added_fingerprint, FeatureModality.NUMERICAL
+        return X, added_fingerprint, FeatureModality.NUMERICAL
 
 
 __all__ = [

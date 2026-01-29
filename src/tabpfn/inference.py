@@ -909,7 +909,7 @@ def _maybe_run_gpu_preprocessing(
     # parsed to the inference engine class.
     column_indices = list(range(X.shape[-1]))
     metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: column_indices},
+        column_modalities={FeatureModality.NUMERICAL: column_indices},
     )
     return gpu_preprocessor(
         X,

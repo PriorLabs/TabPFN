@@ -88,14 +88,16 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
         return metadata.add_columns(FeatureModality.NUMERICAL, num_new=n_polynomials)
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
 
         if X.shape[0] == 0 or X.shape[1] == 0:
-            return X
+            return X, None, None
 
         X = self.standardizer.transform(X)  # type: ignore
 
         poly_features_xs = X[:, self.poly_factor_1_idx] * X[:, self.poly_factor_2_idx]
 
-        return np.hstack((X, poly_features_xs))
+        return X, poly_features_xs, FeatureModality.NUMERICAL

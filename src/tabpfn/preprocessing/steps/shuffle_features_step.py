@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.datamodel import ColumnMetadata
 
 
+# Potentially add to a dedicated StochasticPreprocessingPipeline
 class ShuffleFeaturesStep(PreprocessingStep):
     """Shuffle the features in the data."""
 
@@ -59,9 +60,11 @@ class ShuffleFeaturesStep(PreprocessingStep):
         return metadata.apply_permutation(index_permutation)
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
         assert self.index_permutation_ is not None, "You must call fit first"
         assert len(self.index_permutation_) == X.shape[1], (
             "The number of features must not change after fit"
         )
-        return X[:, self.index_permutation_]
+        return X[:, self.index_permutation_], None, None

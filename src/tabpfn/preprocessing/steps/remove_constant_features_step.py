@@ -14,7 +14,7 @@ from tabpfn.preprocessing.pipeline_interfaces import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import ColumnMetadata
+    from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 
 
 class RemoveConstantFeaturesStep(PreprocessingStep):
@@ -46,9 +46,11 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         removed_indices = list(np.where(~np.array(sel_))[0])
         return metadata.remove_columns(removed_indices)
 
+    # TODO: Add test for it and make it useable with modality assignment
+    # in pipeline registration.
     @override
     def _transform(
         self, X: np.ndarray | torch.Tensor, *, is_test: bool = False
-    ) -> np.ndarray:
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.sel_ is not None, "You must call fit first"
-        return X[:, self.sel_]
+        return X[:, self.sel_], None, None

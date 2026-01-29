@@ -360,7 +360,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # SVD features are numerical and appended at the end
         new_numerical_ix = [i for i in range(n_output_features) if i not in cat_ix]
         new_metadata = ColumnMetadata(
-            indices_by_modality={
+            column_modalities={
                 FeatureModality.CATEGORICAL: sorted(cat_ix),
                 FeatureModality.NUMERICAL: sorted(new_numerical_ix),
             }
@@ -402,12 +402,16 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.transformer_ = transformer
         self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, metadata=output_metadata)  # type: ignore[arg-type]
+        return PreprocessingStepResult(X=Xt, column_metadata=output_metadata)  # type: ignore[arg-type]
 
+    # TODO: Add test for it and make it useable with modality assignment
+    # in pipeline registration.
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X[:, self.subsampled_features_])  # type: ignore
+        return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
 
 
 def get_all_global_transformers(
