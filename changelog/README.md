@@ -14,9 +14,12 @@ For PR #712 that adds a new feature:
 ```bash
 # Using towncrier create (recommended - validates the category)
 towncrier create 712.added.md --content "Add support for custom loss functions in finetuning"
+# or for different categories e.g:
+# towncrier create 712.fixed.md --content "Fix bug in finetuning for splitting very small datasets"
 
 # Or manually
 echo "Add support for custom loss functions in finetuning" > changelog/712.added.md
+# echo "Fix bug in finetuning for splitting very small datasets" > changelog/712.fixed.md
 ```
 
 ## Categories
