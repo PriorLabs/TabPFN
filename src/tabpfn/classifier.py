@@ -1346,9 +1346,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         assert is_standard_inference or is_batched_for_grads, (
-            "Invalid forward pass: Bad combination of inference mode, input X, "
-            "or executor type. Ensure call is from standard predict or a "
-            "batched fine-tuning context."
+            f"Invalid forward pass: Bad combination of inference mode "
+            f"({use_inference_mode=}), input X, "
+            f"or executor type ({type(self.executor_)}). Ensure call is from standard "
+            f"predict ({is_standard_inference=}) or a batched fine-tuning context."
+            f"({is_batched_for_grads=})."
         )
 
         # Specific check for float64 incompatibility if the batched engine is being
