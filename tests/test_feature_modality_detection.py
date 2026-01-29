@@ -148,6 +148,9 @@ def test__categorical_series_with_nan():
     s = pd.Series(["a", "b", "c", "a", "b", "c", np.nan, None])
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.CATEGORICAL
+    s = pd.Series([None, np.nan, pd.NA, "house", "garden"])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureModality.CATEGORICAL
 
 
 def test__numerical_reported_as_categorical():

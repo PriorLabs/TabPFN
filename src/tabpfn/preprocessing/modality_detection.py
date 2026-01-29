@@ -162,10 +162,10 @@ def _is_numeric_value(x: Any) -> bool:
         return True
     if isinstance(x, str) and x.isdigit():
         return True
-    if x is None:
+    if pd.isna(x):
         return True
     try:
         x = float(x)
         return True
-    except ValueError:
+    except (ValueError, TypeError):
         return False
