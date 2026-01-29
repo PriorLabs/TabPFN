@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from functools import partial
+from typing_extensions import override
 
 import numpy as np
 import pandas as pd
@@ -14,9 +15,13 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing import steps
-from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.pipeline_interfaces import PreprocessingStep
+from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.pipeline_interfaces import (
+    PreprocessingPipeline,
+    PreprocessingStep,
+)
 from tabpfn.preprocessing.steps import (
+    AddFingerprintFeaturesStep,
     DifferentiableZNormStep,
     ReshapeFeatureDistributionsStep,
 )
@@ -127,6 +132,81 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         assert get_categorical_indices(
             result_full.feature_modalities
         ) == get_categorical_indices(result_subset.feature_modalities)
+
+
+def test__pipeline__handles_added_columns_from_fingerprint_step():
+    """Test that the pipeline correctly handles added_columns from steps.
+
+    The fingerprint step returns X unchanged and provides the fingerprint
+    via added_columns. The pipeline should concatenate this and update metadata.
+    """
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 10, 3
+    X = rng.random((n_samples, n_features))
+    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+
+    # Create pipeline with fingerprint step
+    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    pipeline = PreprocessingPipeline(steps=[fingerprint_step])
+
+    result = pipeline.fit_transform(X, metadata)
+
+    # Pipeline should have concatenated the fingerprint column
+    assert result.X.shape == (n_samples, n_features + 1)
+
+    # Metadata should track the new column
+    assert result.metadata.num_columns == n_features + 1
+    assert len(result.metadata.indices_for(FeatureModality.NUMERICAL)) == n_features + 1
+
+    # Original columns should be preserved
+    np.testing.assert_array_equal(result.X[:, :n_features], X)
+
+
+def test__pipeline__transform_also_handles_added_columns():
+    """Test that pipeline.transform also correctly handles added_columns."""
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 10, 3
+    X_train = rng.random((n_samples, n_features))
+    X_test = rng.random((5, n_features))
+    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+
+    # Create and fit pipeline
+    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    pipeline = PreprocessingPipeline(steps=[fingerprint_step])
+    pipeline.fit_transform(X_train, metadata)
+
+    # Transform test data
+    result = pipeline.transform(X_test)
+
+    # Should also have the fingerprint column
+    assert result.X.shape == (5, n_features + 1)
+
+
+def test__pipeline__raises_error_when_modality_step_changes_column_count():
+    """Test that pipeline raises error if modality-registered step changes columns."""
+
+    class BadStep(PreprocessingStep):
+        """A step that incorrectly returns more columns than it received."""
+
+        @override
+        def _fit(self, X: np.ndarray, metadata: ColumnMetadata) -> ColumnMetadata:
+            return metadata
+
+        @override
+        def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+            # Incorrectly return more columns
+            return np.concatenate([X, np.ones((X.shape[0], 1))], axis=1)
+
+    rng = np.random.default_rng(42)
+    X = rng.random((10, 3))
+    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+
+    # Register step with modalities - should raise error
+    bad_step = BadStep()
+    pipeline = PreprocessingPipeline(steps=[(bad_step, {FeatureModality.NUMERICAL})])
+
+    with pytest.raises(ValueError, match="received 3 columns but returned 4"):
+        pipeline.fit_transform(X, metadata)
 
 
 # This is a test for the OrderPreservingColumnTransformer, which is not used currently

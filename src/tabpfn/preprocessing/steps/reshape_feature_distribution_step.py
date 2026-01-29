@@ -128,7 +128,37 @@ def _skew(x: np.ndarray) -> float:
 
 
 class ReshapeFeatureDistributionsStep(PreprocessingStep):
-    """Reshape the feature distributions using different transformations."""
+    """Reshape feature distributions using various transformations.
+
+    This step should receive ALL columns (not modality-sliced) because it:
+    1. Handles feature subsampling when too many features exist
+    2. Applies different logic based on `apply_to_categorical` flag
+    3. Can append transformed features to originals (`append_to_original`)
+    4. Can add global features like SVD components
+
+    When using with PreprocessingPipeline, register as a bare step (no modalities):
+        pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
+
+    Configuration options:
+        - transform_name: The transformation to apply (e.g., "safepower",
+            "quantile_norm")
+        - apply_to_categorical: Whether to transform categorical columns too
+        - append_to_original: If True, keep original and append transformed as new
+            columns
+        - max_features_per_estimator: Subsample features if above this threshold
+        - global_transformer_name: Optional global transform like "svd" that adds
+            features
+
+    Output column ordering:
+        - With append_to_original=True: [original_cols, transformed_cols, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=False:
+            [categorical_passthrough, numerical_transformed, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=True:
+            [all_transformed, (svd_cols)]
+
+    Note: The metadata tracking for SVD features is a known limitation - the step
+    tracks the number but may not perfectly map modalities for added SVD columns.
+    """
 
     APPEND_TO_ORIGINAL_THRESHOLD = 500
 
@@ -300,6 +330,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # one column
         # NOTE: We assume global_transformer does not destroy the semantic meaning of
         # categorical_features_.
+        n_new_global_features = 0
         if global_transformer_:
             transformer = Pipeline(
                 [
@@ -307,16 +338,26 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                     ("global_transformer", global_transformer_),
                 ],
             )
+            # TODO: Find better way to get number of global features added
+            n_new_global_features = next(
+                s[1].n_components
+                for s in global_transformer_.transformer_list[1][1].steps
+                if isinstance(s[1], TruncatedSVD)
+            )
 
         self.transformer_ = transformer
+        self.n_new_global_features_ = n_new_global_features
 
         # Compute output feature count for modality update
+        # Include: base features + appended transformed (if append_to_original) + SVD
         n_output_features = (
             n_features + len(trans_ixs) if self.append_to_original else n_features
         )
+        n_output_features += n_new_global_features
 
         # Build the new metadata with updated categorical indices
         # Non-categorical indices become numerical
+        # SVD features are numerical and appended at the end
         new_numerical_ix = [i for i in range(n_output_features) if i not in cat_ix]
         new_metadata = ColumnMetadata(
             indices_by_modality={

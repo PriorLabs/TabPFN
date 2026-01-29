@@ -29,14 +29,19 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     If `is_test = True`, it keeps the first hash even if there are collisions.
     If `is_test = False`, it handles hash collisions by counting up and rehashing
     until a unique hash is found.
+
     The idea is basically to add a random feature to help the model distinguish between
     identical rows. We use hashing to make sure the result does not depend on the order
     of the rows.
+
+    The fingerprint column is returned via `added_columns` in the result, and the
+    pipeline handles concatenation. The step does NOT modify the input array.
     """
 
     def __init__(self, random_state: int | np.random.Generator | None = None):
         super().__init__()
         self.random_state = random_state
+        self._added_fingerprint: np.ndarray | torch.Tensor | None = None
 
     @override
     def _fit(
@@ -46,8 +51,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     ) -> ColumnMetadata:
         _, rng = infer_random_state(self.random_state)
         self.rnd_salt_ = int(rng.integers(0, 2**16))
-        # Fingerprint feature is added as a new numerical column at the end
-        return metadata.add_columns(FeatureModality.NUMERICAL, num_new=1)
+        # Return input metadata unchanged - pipeline handles adding fingerprint column
+        return metadata
 
     @override
     def _transform(  # type: ignore
@@ -56,9 +61,21 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         *,
         is_test: bool = False,
     ) -> np.ndarray | torch.Tensor:
+        """Transform the input and compute fingerprint (stored for _get_added_columns).
+
+        The fingerprint is NOT concatenated here - it's returned via _get_added_columns
+        and the pipeline handles concatenation.
+
+        Args:
+            X: Input array of shape (n_samples, n_features).
+            is_test: If True, duplicate rows share the same fingerprint.
+
+        Returns:
+            The input X unchanged. Fingerprint is available via _get_added_columns().
+        """
         X_det = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else X
 
-        # no detach necessary for numpy
+        # Compute fingerprint hash for each row
         X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
         if is_test:
             # Keep the first hash even if there are collisions
@@ -94,12 +111,25 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
                 # Update counter so next identical row starts checking from new offset
                 hash_counter[h_base] = add_to_hash + 1
 
+        # Store fingerprint for _get_added_columns
         if isinstance(X, torch.Tensor):
-            return torch.cat(
-                [X, torch.from_numpy(X_h).float().reshape(-1, 1).to(X.device)], dim=1
+            self._added_fingerprint = (
+                torch.from_numpy(X_h).float().reshape(-1, 1).to(X.device)
             )
-        else:  # noqa: RET505
-            return np.concatenate([X, X_h.reshape(-1, 1)], axis=1)
+        else:
+            self._added_fingerprint = X_h.reshape(-1, 1)
+
+        # Return X unchanged - pipeline handles concatenation
+        return X
+
+    @override
+    def _get_added_columns(
+        self,
+    ) -> tuple[np.ndarray | torch.Tensor | None, FeatureModality | None]:
+        """Return the fingerprint column to be appended by the pipeline."""
+        if self._added_fingerprint is None:
+            return None, None
+        return self._added_fingerprint, FeatureModality.NUMERICAL
 
 
 __all__ = [
