@@ -299,26 +299,9 @@ def _transform_with_pipeline(
     return X_train_out, X_test_out, metadata_dict
 
 
-def _array_from_json_with_nans(data: list) -> np.ndarray:
-    """Convert a JSON list back to numpy array, restoring NaN values.
-
-    Args:
-        data: Nested list from JSON where None represents NaN.
-
-    Returns:
-        Numpy float64 array with NaN values restored.
-    """
-    # First convert to float array, then replace None with NaN
-    arr = np.array(data, dtype=object)
-    # Create a float array with the same shape
-    result = np.zeros(arr.shape, dtype=np.float64)
-    # Handle the conversion element by element for proper NaN handling
-    it = np.nditer(arr, flags=["multi_index", "refs_ok"])
-    while not it.finished:
-        val = it[0].item()
-        result[it.multi_index] = np.nan if val is None else float(val)
-        it.iternext()
-    return result
+def _load_json_to_array(data: list) -> np.ndarray:
+    """Convert a JSON list back to numpy array, restoring NaN values."""
+    return np.array(data, dtype=np.float64)
 
 
 def _load_reference_or_fail(
@@ -340,8 +323,8 @@ def _load_reference_or_fail(
         data = json.load(f)
 
     return (
-        _array_from_json_with_nans(data["X_train"]),
-        _array_from_json_with_nans(data["X_test"]),
+        _load_json_to_array(data["X_train"]),
+        _load_json_to_array(data["X_test"]),
         data["metadata"],
     )
 
