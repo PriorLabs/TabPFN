@@ -207,7 +207,7 @@ def test__fit_predict__predictions_match_reference(
 def _predict(test_case: _ConsistencyCase) -> np.ndarray:
     X_train, y_train, X_test = test_case.data()
     model = test_case.model()
-    if test_case.model().differentiable_input:
+    if model.differentiable_input and isinstance(model, TabPFNClassifier):
         model.fit_with_differentiable_input(X_train, y_train)
     else:
         model.fit(X_train, y_train)

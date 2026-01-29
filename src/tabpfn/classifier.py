@@ -1364,8 +1364,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         if self.fit_mode in ["fit_preprocessors", "batched"]:
-            # only these two modes support this option
-            self.executor_.use_torch_inference_mode(use_inference=use_inference_mode)
+            # Don't enable inference mode when differentiable_input=True (prompt tuning)
+            # to allow gradients to flow through
+            actual_inference_mode = use_inference_mode and not self.differentiable_input
+            self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
         for output, config in self.executor_.iter_outputs(
