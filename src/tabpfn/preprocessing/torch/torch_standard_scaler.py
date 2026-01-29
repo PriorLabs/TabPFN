@@ -53,7 +53,7 @@ class TorchStandardScaler:
 
         mean = fitted_cache["mean"]
         std = fitted_cache["std"]
-        x = (x - mean) / (std + torch.finfo(x.dtype).eps)
+        x = (x - mean) / (std + torch.finfo(std.dtype).eps)
 
         # Clip very large values
         return torch.clip(x, min=-100, max=100)
