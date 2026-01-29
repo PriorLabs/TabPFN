@@ -1,8 +1,7 @@
 """Check that preprocessing pipeline output matches reference transformations.
 
 This ensures that the preprocessing behavior does not change unintentionally
-during refactoring or other changes. The tests are disabled per default
-but can be enabled whenever we are changing the preprocessing pipeline.
+during refactoring or other changes.
 
 The transformed outputs can vary slightly between platforms, thus we maintain
 separate reference data for all the platforms in `ENABLED_PLATFORMS`. The tests
@@ -27,6 +26,7 @@ import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.pipeline import build_pipeline
+from tabpfn.preprocessing.pipeline_interfaces import TransformResult
 
 try:
     from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
@@ -287,9 +287,10 @@ def _transform_with_pipeline(
             for modality, indices in result_train.metadata.indices_by_modality.items()
         }
     else:
-        assert isinstance(metadata_or_cat_indices, list)
+        assert isinstance(result_train, TransformResult)
+        _, categorical_indices = result_train
         metadata_dict = {
-            "categorical": metadata_or_cat_indices,
+            "categorical": categorical_indices,
         }
 
     # Ensure we return numpy arrays (pipeline may return tensors in some cases)
