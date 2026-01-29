@@ -1,0 +1,112 @@
+name: Create Release PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 6.3.2)"
+        required: true
+      base_ref:
+        description: "Commit SHA to release from"
+        required: true
+      base_branch:
+        description: "Branch to open the PR against"
+        required: false
+        default: "main"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release_pr:
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Guard base_ref, must be a full 40-char commit SHA
+        run: |
+          echo "${{ inputs.base_ref }}" | grep -Eq '^[0-9a-f]{40}$' || {
+              echo "base_ref must be a full 40-char commit SHA (got: ${{ inputs.base_ref }})"
+              exit 1
+          }
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Towncrier
+        run: uv pip install --system towncrier
+
+      - name: Set variables
+        run: |
+          echo "VERSION=${{ inputs.version }}" >> $GITHUB_ENV
+          echo "BASE_REF=${{ inputs.base_ref }}" >> $GITHUB_ENV
+          echo "BASE_BRANCH=${{ inputs.base_branch }}" >> $GITHUB_ENV
+          echo "RELEASE_BRANCH=release/v${{ inputs.version }}" >> $GITHUB_ENV
+
+      - name: Create release branch from base ref
+        run: |
+          git fetch --all --tags
+          git checkout --detach "${BASE_REF}"
+          git checkout -b "${RELEASE_BRANCH}"
+
+      - name: Bump version in pyproject.toml
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          p = Path("pyproject.toml")
+          s = p.read_text(encoding="utf-8")
+
+          pat = r'(?ms)(^\[project\]\s*\n.*?^\s*version\s*=\s*")([^"]+)(")'
+          m = re.search(pat, s)
+          if not m:
+            raise SystemExit("Could not find [project].version in pyproject.toml")
+
+          out = s[:m.start(2)] + version + s[m.end(2):]
+          p.write_text(out, encoding="utf-8")
+          print("Bumped [project].version to", version)
+          PY
+
+      - name: Towncrier build (updates CHANGELOG.md, deletes fragments)
+        run: towncrier build --version "${VERSION}" --yes
+
+      - name: Commit release changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add pyproject.toml CHANGELOG.md changelog || true
+
+          if git diff --cached --quiet; then
+            echo "No changes staged. Are there changelog fragments to release?"
+            exit 1
+          fi
+
+          git commit -m "Release v${VERSION}"
+
+      - name: Push branch
+        run: git push --set-upstream origin "${RELEASE_BRANCH}"
+
+      - name: Create Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+          --base "${BASE_BRANCH}" \
+          --head "${RELEASE_BRANCH}" \
+          --title "Release v${VERSION}" \
+          --body "Automated release PR for v${VERSION}." \
+          --reviewer "PriorLabs/release-maintainers"

@@ -43,11 +43,13 @@ device_pairs = [
 
 @pytest.mark.parametrize(
     ("task_type", "saving_device", "loading_device"),
-    (
-        (task_type, saving_device, loading_device)
+    [
+        pytest.param(task_type, saving_device, loading_device, marks=pytest.mark.slow)
+        if "mps" in (saving_device, loading_device)
+        else (task_type, saving_device, loading_device)
         for task_type in ["regression", "classification"]
         for (saving_device, loading_device) in device_pairs
-    ),
+    ],
 )
 def test__save_and_load_twice__predictions_equal_to_before_save(
     task_type: str,

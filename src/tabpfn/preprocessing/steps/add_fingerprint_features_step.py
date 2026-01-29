@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+from collections import defaultdict
 from typing_extensions import override
 
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
+from tabpfn.preprocessing.pipeline_interfaces import (
     FeaturePreprocessingTransformerStep,
 )
 from tabpfn.utils import infer_random_state
@@ -64,15 +65,30 @@ class AddFingerprintFeaturesStep(FeaturePreprocessingTransformerStep):
         else:
             # Handle hash collisions by counting up and rehashing
             seen_hashes = set()
+            # Map initial hash -> next candidate offset to avoid O(N^2) on duplicates
+            hash_counter = defaultdict(int)
+
             salted_X = X_det + self.rnd_salt_
             for i, row in enumerate(salted_X):
-                h = _float_hash_arr(row)
-                add_to_hash = 0
+                # Calculate the base hash to identify the row content
+                h_base = _float_hash_arr(row)
+
+                # Start checking from the last known count for this row content
+                add_to_hash = hash_counter[h_base]
+
+                h = _float_hash_arr(row + add_to_hash)
+
+                # Resolve remaining collisions (if row+k accidentally collides with
+                # another row)
                 while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
                     h = _float_hash_arr(row + add_to_hash)
+
                 X_h[i] = h
                 seen_hashes.add(h)
+
+                # Update counter so next identical row starts checking from new offset
+                hash_counter[h_base] = add_to_hash + 1
 
         if isinstance(X, torch.Tensor):
             return torch.cat(

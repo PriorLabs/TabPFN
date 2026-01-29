@@ -1,1 +1,6 @@
 * @PriorLabs/opensource-review-team
+
+# Release automation – only release maintainers can modify these workflows
+.github/workflows/release-create-pr.yml  @PriorLabs/release-maintainers
+.github/workflows/release-tag-on-merge.yml       @PriorLabs/release-maintainers
+.github/workflows/release-publish.yml    @PriorLabs/release-maintainers

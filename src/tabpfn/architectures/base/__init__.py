@@ -11,23 +11,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal
 
 from tabpfn.architectures.base.config import ModelConfig
-from tabpfn.architectures.base.encoders import (
-    InputNormalizationEncoderStep,
+from tabpfn.architectures.base.transformer import PerFeatureTransformer
+from tabpfn.architectures.encoders import (
+    FeatureTransformEncoderStep,
     LinearInputEncoderStep,
     MLPInputEncoderStep,
-    MulticlassClassificationTargetEncoder,
+    MulticlassClassificationTargetEncoderStep,
     NanHandlingEncoderStep,
+    NormalizeFeatureGroupsEncoderStep,
     RemoveDuplicateFeaturesEncoderStep,
     RemoveEmptyFeaturesEncoderStep,
-    SeqEncStep,
-    SequentialEncoder,
-    VariableNumFeaturesEncoderStep,
+    TorchPreprocessingPipeline,
+    TorchPreprocessingStep,
 )
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
 
 if TYPE_CHECKING:
-    from torch import nn
-
     from tabpfn.architectures.interface import ArchitectureConfig
 
 
@@ -80,7 +78,7 @@ def get_architecture(
         config=config,
         # Things that were explicitly passed inside `build_model()`
         encoder=get_encoder(
-            num_features=config.features_per_group,
+            num_features_per_group=config.features_per_group,
             embedding_size=config.emsize,
             remove_empty_features=config.remove_empty_features,
             remove_duplicate_features=config.remove_duplicate_features,
@@ -113,7 +111,7 @@ def get_architecture(
 
 def get_encoder(  # noqa: PLR0913
     *,
-    num_features: int,
+    num_features_per_group: int,
     embedding_size: int,
     remove_empty_features: bool,
     remove_duplicate_features: bool,
@@ -127,32 +125,30 @@ def get_encoder(  # noqa: PLR0913
     encoder_type: Literal["linear", "mlp"] = "linear",
     encoder_mlp_hidden_dim: int | None = None,
     encoder_mlp_num_layers: int = 2,
-) -> nn.Module:
-    inputs_to_merge = {"main": {"dim": num_features}}
+) -> TorchPreprocessingPipeline:
+    inputs_to_merge = {"main": {"dim": num_features_per_group}}
 
-    encoder_steps: list[SeqEncStep] = []
+    encoder_steps: list[TorchPreprocessingStep] = []
     if remove_empty_features:
         encoder_steps += [RemoveEmptyFeaturesEncoderStep()]
 
     if remove_duplicate_features:
+        # TODO: This is a No-op currently. We cannot remove it
+        # because loading the state_dict of the model depends on it being present,
+        # currently. Fix this by making the state_dict loading agnostic of the
+        # presence of this step.
         encoder_steps += [RemoveDuplicateFeaturesEncoderStep()]
 
     encoder_steps += [NanHandlingEncoderStep(keep_nans=nan_handling_enabled)]
 
     if nan_handling_enabled:
-        inputs_to_merge["nan_indicators"] = {"dim": num_features}
+        inputs_to_merge["nan_indicators"] = {"dim": num_features_per_group}
 
-        encoder_steps += [
-            VariableNumFeaturesEncoderStep(
-                num_features=num_features,
-                normalize_by_used_features=False,
-                in_keys=["nan_indicators"],
-                out_keys=["nan_indicators"],
-            ),
-        ]
+        if normalize_by_used_features:
+            encoder_steps += [_legacy_normalize_features_no_op(num_features_per_group)]
 
     encoder_steps += [
-        InputNormalizationEncoderStep(
+        FeatureTransformEncoderStep(
             normalize_on_train_only=normalize_on_train_only,
             normalize_to_ranking=normalize_to_ranking,
             normalize_x=normalize_x,
@@ -160,12 +156,12 @@ def get_encoder(  # noqa: PLR0913
         ),
     ]
 
-    encoder_steps += [
-        VariableNumFeaturesEncoderStep(
-            num_features=num_features,
-            normalize_by_used_features=normalize_by_used_features,
-        ),
-    ]
+    if normalize_by_used_features:
+        encoder_steps += [
+            NormalizeFeatureGroupsEncoderStep(
+                num_features_per_group=num_features_per_group,
+            ),
+        ]
 
     num_input_features = sum(i["dim"] for i in inputs_to_merge.values())
     if encoder_type == "mlp":
@@ -196,7 +192,7 @@ def get_encoder(  # noqa: PLR0913
             f"Invalid encoder type: {encoder_type} (expected 'linear' or 'mlp')"
         )
 
-    return SequentialEncoder(*encoder_steps, output_key="output")
+    return TorchPreprocessingPipeline(encoder_steps, output_key="output")
 
 
 def get_y_encoder(
@@ -205,15 +201,15 @@ def get_y_encoder(
     embedding_size: int,
     nan_handling_y_encoder: bool,
     max_num_classes: int,
-) -> nn.Module:
-    steps: list[SeqEncStep] = []
+) -> TorchPreprocessingPipeline:
+    steps: list[TorchPreprocessingStep] = []
     inputs_to_merge = [{"name": "main", "dim": num_inputs}]
     if nan_handling_y_encoder:
         steps += [NanHandlingEncoderStep()]
         inputs_to_merge += [{"name": "nan_indicators", "dim": num_inputs}]
 
     if max_num_classes >= 2:
-        steps += [MulticlassClassificationTargetEncoder()]
+        steps += [MulticlassClassificationTargetEncoderStep()]
 
     steps += [
         LinearInputEncoderStep(
@@ -223,4 +219,19 @@ def get_y_encoder(
             out_keys=("output",),
         ),
     ]
-    return SequentialEncoder(*steps, output_key="output")
+    return TorchPreprocessingPipeline(steps, output_key="output")
+
+
+def _legacy_normalize_features_no_op(
+    num_features_per_group: int,
+) -> TorchPreprocessingStep:
+    """Create a no-op step to normalize features.
+
+    This is a no-op currently. We need it to keep the state_dict of
+    the model compatible with previously saved checkpoints. Remove
+    in future versions.
+    """
+    return NormalizeFeatureGroupsEncoderStep(
+        num_features_per_group=num_features_per_group,
+        normalize_by_used_features=False,
+    )

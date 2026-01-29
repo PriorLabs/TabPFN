@@ -376,7 +376,7 @@ def initialize_model_variables_helper(
         a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
         dtype, and rng is a NumPy random Generator for use during inference.
     """
-    static_seed, rng = infer_random_state(calling_instance.random_state)
+    _, rng = infer_random_state(calling_instance.random_state)
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
@@ -391,27 +391,14 @@ def initialize_model_variables_helper(
 
     byte_size = estimator_to_device(calling_instance, calling_instance.device)
 
-    inference_config = inference_config.override_with_user_input(
-        user_config=calling_instance.inference_config
+    inference_config = inference_config.override_with_user_input_and_resolve_auto(
+        user_config=calling_instance.inference_config,
     )
 
     calling_instance.inference_config_ = inference_config
 
-    outlier_removal_std = inference_config.OUTLIER_REMOVAL_STD
-    if outlier_removal_std == "auto":
-        default_stds = {
-            "regressor": inference_config._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD,
-            "classifier": inference_config._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD,
-        }
-        try:
-            outlier_removal_std = default_stds[model_type]
-        except KeyError as e:
-            raise ValueError(f"Invalid model_type: {model_type}") from e
-
     update_encoder_params(  # Use the renamed function if available, or original one
         models=calling_instance.models_,
-        remove_outliers_std=outlier_removal_std,
-        seed=static_seed,
         differentiable_input=calling_instance.differentiable_input,
     )
     return byte_size, rng
@@ -488,7 +475,7 @@ def get_embeddings(
 
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
-    X = model.preprocessor_.transform(X)
+    X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []
 

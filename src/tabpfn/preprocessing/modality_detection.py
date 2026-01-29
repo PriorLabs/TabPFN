@@ -4,45 +4,18 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from dataclasses import dataclass
-from enum import Enum
-from typing import Any
 
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-
-
-# TODO: Maybe 'DatasetView' and 'FeatureModality' should belong to a more general file?
-@dataclass(frozen=True)
-class DatasetView:
-    """A view of a dataset split by feature modalities."""
-
-    X: pd.DataFrame
-    columns_by_modality: FeatureModalitiesColumns
-
-
-class FeatureModality(str, Enum):
-    """The modality of a feature. Here we move between the way the data is stored,
-    and what it actually represents. For intance, a numerical dtype could represent
-    numerical and categorical features, while a string could represent categorical or
-    text features.
-    """
-
-    NUMERICAL = "numerical"
-    CATEGORICAL = "categorical"
-    TEXT = "text"
-    CONSTANT = "constant"
-
-
-FeatureModalitiesColumns = dict[FeatureModality, list[str]]
+from tabpfn.preprocessing.datamodel import DatasetView, FeatureModality
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
 class FeatureModalityDetector:
     """Detector for feature modalities as defined by FeatureModality."""
 
-    feature_modality_columns: FeatureModalitiesColumns
+    feature_modality_columns: dict[FeatureModality, list[str]]
 
     def _fit(self, X: pd.DataFrame) -> None:
         raise NotImplementedError("Should be calling `detect_feature_modalities`.")
@@ -102,7 +75,7 @@ def _detect_feature_modalities_to_columns(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> FeatureModalitiesColumns:
+) -> dict[FeatureModality, list[str]]:
     feature_modalities_to_columns = defaultdict(list)
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     for idx, col in enumerate(X.columns):
@@ -144,7 +117,9 @@ def _detect_feature_modality(
         ):
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
-    if pd.api.types.is_string_dtype(s.dtype):
+    if pd.api.types.is_string_dtype(s.dtype) or isinstance(
+        s.dtype, pd.CategoricalDtype
+    ):
         if nunique <= max_unique_for_category:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT
@@ -156,7 +131,9 @@ def _detect_feature_modality(
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.is_numeric_dtype(s.dtype):
         return True
-    return bool(all(_is_numeric_value(x) for x in s))
+    coerced = pd.to_numeric(s, errors="coerce")
+    is_numeric_or_missing = coerced.notna() | s.isna()
+    return bool(is_numeric_or_missing.all())
 
 
 def _detect_numeric_as_categorical(
@@ -179,15 +156,3 @@ def _detect_numeric_as_categorical(
     elif big_enough_n_to_infer_cat and nunique < min_unique_for_numerical:
         return True
     return False
-
-
-def _is_numeric_value(x: Any) -> bool:
-    if isinstance(x, (int, float)):
-        return True
-    if isinstance(x, str) and x.isdigit():
-        return True
-    try:
-        x = float(x)
-        return True
-    except ValueError:
-        return False

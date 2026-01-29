@@ -11,7 +11,7 @@ dependencies = [
   "scikit-learn>=1.2.0,<1.8",
   "typing_extensions>=4.12.0",
   "scipy>=1.11.1,<2",
-  "pandas>=1.4.0,<3",
+  "pandas>=1.4.0,<4",
   "einops>=0.2.0,<0.9",
   "huggingface-hub>=0.19.0,<2",
   "pydantic>=2.8.0",
@@ -78,7 +78,7 @@ dev = [
   # Lint/format
   "pre-commit>=4.3.0",
   "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
-  "mypy==1.18.2", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==1.19.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
   # Changelog
@@ -345,7 +345,7 @@ disable_error_code = ["var-annotated"]
 [[tool.mypy.overrides]]
 module = [
   "tabpfn.architectures.base.multi_head_attention",
-  "tabpfn.architectures.base.encoders"
+  "tabpfn.architectures.encoders"
 ]
 ignore_errors = true
 
@@ -419,6 +419,8 @@ ignore_packages = [
     "nvidia*",
     # Our packages
     "tabpfn*",
+    # LICENSEREF-NVIDIA-SOFTWARE-LICENSE, introduced by torch>=2.10
+    "cuda-bindings",
 ]
 
 [tool.changelog-bot.towncrier_changelog]

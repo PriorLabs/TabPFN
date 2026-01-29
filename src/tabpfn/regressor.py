@@ -198,8 +198,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    preprocessor_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    ordinal_encoder_: ColumnTransformer
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -500,6 +500,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return cls(**options)
 
     @property
+    def estimator_type(self) -> Literal["regressor"]:
+        """The type of the model."""
+        return "regressor"
+
+    @property
     def model_(self) -> Architecture:
         """The model used for inference.
 
@@ -572,12 +577,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def __sklearn_tags__(self) -> Tags:
         tags = super().__sklearn_tags__()
         tags.input_tags.allow_nan = True
-        tags.estimator_type = "regressor"
+        tags.estimator_type = self.estimator_type
         return tags
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Initializes the model, returning byte_size and RNG object."""
-        return initialize_model_variables_helper(self, "regressor")
+        return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_for_standard_input(
         self,
@@ -616,7 +621,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
         )
-        self.preprocessor_ = ordinal_encoder
+        self.ordinal_encoder_ = ordinal_encoder
         self.inferred_categorical_indices_ = inferred_categorical_indices
 
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
@@ -644,6 +649,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             target_transforms=target_preprocessors,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -801,6 +809,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
 
         self.executor_ = create_inference_engine(
@@ -918,7 +927,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
         X = process_text_na_dataframe(
             X,
-            ord_encoder=getattr(self, "preprocessor_", None),
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
         )
 
         # Runs over iteration engine

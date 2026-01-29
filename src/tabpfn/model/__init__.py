@@ -10,11 +10,11 @@ tabpfn.model has moved to tabpfn.architectures.base .
 import warnings
 
 from tabpfn import model_loading as loading
+from tabpfn.architectures import encoders
 from tabpfn.architectures.base import (
     attention,
     bar_distribution,
     config,
-    encoders,
     layer,
     memory,
     mlp,

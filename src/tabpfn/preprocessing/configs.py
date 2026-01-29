@@ -12,10 +12,6 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
-    from tabpfn.preprocessing.steps.preprocessing_helpers import (
-        SequentialFeatureTransformer,
-    )
-
 
 @dataclass(frozen=True, eq=True)
 class PreprocessorConfig:
@@ -139,6 +135,8 @@ class EnsembleConfig:
         feature_shift_decoder: How to shift features.
         subsample_ix: Indices of samples to use for this ensemble member.
             If `None`, no subsampling is done.
+        outlier_removal_std: Number of standard deviations from the mean to consider a
+            sample an outlier. If `None`, no outliers are removed.
     """
 
     preprocess_config: PreprocessorConfig
@@ -147,17 +145,9 @@ class EnsembleConfig:
     feature_shift_count: int
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
     subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
+    outlier_removal_std: float | None
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
-
-    # TODO(prep-refactor): remove this function
-    def to_pipeline(
-        self, *, random_state: int | np.random.Generator | None = None
-    ) -> SequentialFeatureTransformer:
-        """Convert the ensemble configuration to a preprocessing pipeline."""
-        from .pipeline import build_pipeline  # noqa: PLC0415
-
-        return build_pipeline(self, random_state=random_state)
 
 
 @dataclass

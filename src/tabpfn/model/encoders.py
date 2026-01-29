@@ -1,5 +1,5 @@
-"""DEPRECATED: Please import tabpfn.architectures.base.encoders instead."""
+"""DEPRECATED: Please import tabpfn.architectures.encoders instead."""
 
 from __future__ import annotations
 
-from tabpfn.architectures.base.encoders import *  # noqa: F403
+from tabpfn.architectures.encoders import *  # noqa: F403

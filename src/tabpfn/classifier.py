@@ -169,8 +169,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     label_encoder_: LabelEncoder
     """The label encoder used to encode the target variable."""
 
-    preprocessor_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    ordinal_encoder_: ColumnTransformer
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -506,6 +506,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return cls(**options)
 
     @property
+    def estimator_type(self) -> Literal["classifier"]:
+        """The type of the model."""
+        return "classifier"
+
+    @property
     def model_(self) -> Architecture:
         """The model used for inference.
 
@@ -533,14 +538,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def __sklearn_tags__(self) -> Tags:  # type: ignore
         tags = super().__sklearn_tags__()
         tags.input_tags.allow_nan = True
-        tags.estimator_type = "classifier"
+        tags.estimator_type = self.estimator_type
         return tags
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Perform initialization of the model, return determined byte_size
         and RNG object.
         """
-        return initialize_model_variables_helper(self, "classifier")
+        return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_for_differentiable_input(
         self,
@@ -585,6 +590,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 
@@ -639,7 +647,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
         )
-        self.preprocessor_ = ordinal_encoder
+        self.ordinal_encoder_ = ordinal_encoder
         self.inferred_categorical_indices_ = inferred_categorical_indices
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
@@ -656,6 +664,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 
@@ -814,6 +825,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
 
         self.executor_ = create_inference_engine(
@@ -998,7 +1010,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
             X = process_text_na_dataframe(
                 X=X,
-                ord_encoder=getattr(self, "preprocessor_", None),
+                ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
         return self.forward(

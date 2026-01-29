@@ -528,7 +528,7 @@ The data is used exclusively to help us provide stability to the relevant produc
 - **No code, model inputs, or outputs are ever sent**
 - **Data is strictly anonymous and cannot be linked to individuals**
 
-For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
+For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
 **To opt out**, set the following environment variable:
 
