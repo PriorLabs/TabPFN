@@ -26,13 +26,16 @@ import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.pipeline import build_pipeline
-from tabpfn.preprocessing.pipeline_interfaces import TransformResult
 
 try:
     from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 
     NEW_PIPELINE_IMPLEMENTATION = True
 except ImportError:
+    try:
+        from tabpfn.preprocessing.pipeline_interfaces import TransformResult
+    except ImportError:
+        pytest.skip("Pipeline consistency tests cannot be run", allow_module_level=True)
     NEW_PIPELINE_IMPLEMENTATION = False
 
 logger = logging.getLogger(__name__)
