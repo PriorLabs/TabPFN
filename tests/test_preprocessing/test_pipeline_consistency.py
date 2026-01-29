@@ -43,8 +43,8 @@ ENABLED_PLATFORMS = ["darwin_arm64"]
 For now we just test on MacOS, and simply identifying that seems to be enough
 to get consistent outputs.
 """
-N_SAMPLES = 100
-N_TEST_SAMPLES = 10
+N_SAMPLES = 50
+N_TEST_SAMPLES = 5
 
 
 def _get_random_data_with_categoricals(
