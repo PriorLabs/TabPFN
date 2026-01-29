@@ -271,9 +271,9 @@ def _transform_with_pipeline(
     # TODO: Also add 1, 2 tests with larger num samples e.g. for quantile transform to
     # have an effect.
     X_train, metadata_or_cat_indices = _get_random_data_with_categoricals(
-        rng, n_samples=20
+        rng, n_samples=200
     )
-    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=5)
+    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=10)
 
     config = test_case.config_factory()
     pipeline = build_pipeline(config, random_state=RANDOM_STATE)
