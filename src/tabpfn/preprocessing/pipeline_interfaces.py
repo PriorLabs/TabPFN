@@ -5,7 +5,7 @@ from __future__ import annotations
 import dataclasses
 from abc import abstractmethod
 from typing import TYPE_CHECKING
-from typing_extensions import Self, TypeAlias
+from typing_extensions import TypeAlias
 
 import numpy as np
 
@@ -191,44 +191,47 @@ class PreprocessingPipeline:
         super().__init__()
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
-        self.metadata_: ColumnMetadata | None = None
-        self._initial_metadata: ColumnMetadata | None = None
+        self.final_metadata_: ColumnMetadata | None = None
+        self.initial_metadata_: ColumnMetadata | None = None
 
-    def _validate_steps(
-        self,
-        steps: list[PreprocessingStep | StepWithModalities],
-    ) -> list[StepWithModalities]:
-        """Convert steps to normalized (step, modalities) format."""
-        normalized: list[StepWithModalities] = []
-        for step in steps:
-            if isinstance(step, tuple):
-                if len(step) != 2:
-                    raise ValueError(
-                        f"Step tuple must be (step, modalities), got {step}"
-                    )
-                normalized.append(step)
-            else:
-                normalized.append((step, set()))
-        return normalized
-
-    def __len__(self) -> int:
-        """Return the number of steps in the pipeline."""
-        return len(self.steps)
-
-    def _append_added_columns(
+    def fit_transform(
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata,
-        result: PreprocessingStepResult,
-    ) -> tuple[np.ndarray | torch.Tensor, ColumnMetadata]:
-        """Append added columns from a step result and update metadata."""
-        if result.X_added is not None:
-            X = np.concatenate([X, result.X_added], axis=1)
-            metadata = metadata.add_columns(
-                result.modality_added or FeatureModality.NUMERICAL,
-                result.X_added.shape[1],
-            )
-        return X, metadata
+        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
+    ) -> PreprocessingPipelineResult:
+        """Fit and transform the data using the pipeline.
+
+        Args:
+            X: 2d array of shape (n_samples, n_features).
+            metadata: Column metadata or dictionary of feature modalities.
+
+        Returns:
+            PreprocessingPipelineResult with transformed data and updated metadata.
+        """
+        if isinstance(metadata, dict):
+            metadata = ColumnMetadata.from_dict(metadata)
+
+        self.initial_metadata_ = metadata
+        X, metadata = self._process_steps(X, metadata, is_fitting=True)
+        self.final_metadata_ = metadata
+        return PreprocessingPipelineResult(X=X, column_metadata=metadata)
+
+    def transform(self, X: np.ndarray | torch.Tensor) -> PreprocessingPipelineResult:
+        """Transform the data using the fitted pipeline.
+
+        Args:
+            X: 2d array of shape (n_samples, n_features).
+
+        Returns:
+            PreprocessingPipelineResult with transformed data and metadata.
+        """
+        assert self.initial_metadata_ is not None, (
+            "The pipeline must be fit before it can be used to transform."
+        )
+        assert self.final_metadata_ is not None
+
+        X, _ = self._process_steps(X, self.initial_metadata_, is_fitting=False)
+        return PreprocessingPipelineResult(X=X, column_metadata=self.final_metadata_)
 
     def _process_steps(
         self,
@@ -268,8 +271,7 @@ class PreprocessingPipeline:
                         f"modalities must return the same number of columns."
                     )
 
-                if isinstance(X, np.ndarray):
-                    X = X.copy()
+                X = X.copy() if isinstance(X, np.ndarray) else X.clone()
                 X[:, indices] = result.X
 
                 X, metadata = self._append_added_columns(X, metadata, result)
@@ -278,8 +280,8 @@ class PreprocessingPipeline:
                 )
             else:
                 # We still have preprocessing steps that don't change the columns
-                # internally (need to be deprecated going forward). They will
-                # be handled here for backwards compatibility.
+                # internally (will be deprecated going forward). For backwards
+                # compatibility, we still handle these here.
                 result = (
                     step.fit_transform(X, metadata) if is_fitting else step.transform(X)
                 )
@@ -289,57 +291,40 @@ class PreprocessingPipeline:
 
         return X, metadata
 
-    def fit_transform(
+    def _append_added_columns(
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
-    ) -> PreprocessingPipelineResult:
-        """Fit and transform the data using the pipeline.
+        metadata: ColumnMetadata,
+        result: PreprocessingStepResult,
+    ) -> tuple[np.ndarray | torch.Tensor, ColumnMetadata]:
+        """Append added columns from a step result and update metadata."""
+        if result.X_added is not None:
+            X = np.concatenate([X, result.X_added], axis=1)
+            metadata = metadata.add_columns(
+                result.modality_added or FeatureModality.NUMERICAL,
+                result.X_added.shape[1],
+            )
+        return X, metadata
 
-        Args:
-            X: 2d array of shape (n_samples, n_features).
-            metadata: Column metadata or dictionary of feature modalities.
-
-        Returns:
-            PreprocessingPipelineResult with transformed data and updated metadata.
-        """
-        if isinstance(metadata, dict):
-            metadata = ColumnMetadata.from_dict(metadata)
-
-        self._initial_metadata = metadata
-        X, metadata = self._process_steps(X, metadata, is_fitting=True)
-        self.metadata_ = metadata
-        return PreprocessingPipelineResult(X=X, column_metadata=metadata)
-
-    def fit(
+    def _validate_steps(
         self,
-        X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
-    ) -> Self:
-        """Fit all the steps in the pipeline.
+        steps: list[PreprocessingStep | StepWithModalities],
+    ) -> list[StepWithModalities]:
+        """Convert steps to normalized (step, modalities) format."""
+        normalized: list[StepWithModalities] = []
+        if len(steps) == 0:
+            raise ValueError("The pipeline must have at least one step.")
+        for step in steps:
+            if isinstance(step, tuple):
+                if len(step) != 2:
+                    raise ValueError(
+                        f"Step tuple must be (step, modalities), got {step}"
+                    )
+                normalized.append(step)
+            else:
+                normalized.append((step, set()))
+        return normalized
 
-        Args:
-            X: 2d array of shape (n_samples, n_features).
-            metadata: Column metadata or dictionary of feature modalities.
-        """
-        assert len(self) > 0, "The pipeline must have at least one step."
-        self.fit_transform(X, metadata)
-        return self
-
-    def transform(self, X: np.ndarray | torch.Tensor) -> PreprocessingPipelineResult:
-        """Transform the data using the fitted pipeline.
-
-        Args:
-            X: 2d array of shape (n_samples, n_features).
-
-        Returns:
-            PreprocessingPipelineResult with transformed data and metadata.
-        """
-        assert len(self.steps) > 0, "The pipeline must have at least one step."
-        assert self._initial_metadata is not None, (
-            "The pipeline must be fit before it can be used to transform."
-        )
-        assert self.metadata_ is not None
-
-        X, _ = self._process_steps(X, self._initial_metadata, is_fitting=False)
-        return PreprocessingPipelineResult(X=X, column_metadata=self.metadata_)
+    def __len__(self) -> int:
+        """Return the number of steps in the pipeline."""
+        return len(self.steps)
