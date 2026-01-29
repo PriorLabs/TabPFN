@@ -9,17 +9,18 @@ This directory contains changelog "fragments" - small files that describe change
 
 ### Example
 
-For PR #712 that adds a new feature:
+For PR #712 that fixes a bug:
 
 ```bash
 # Using towncrier create (recommended - validates the category)
-towncrier create 712.added.md --content "Add support for custom loss functions in finetuning"
+towncrier create 712.fixed.md --content "Fix bug in finetuning for splitting very small datasets"
 # or for different categories e.g:
-# towncrier create 712.fixed.md --content "Fix bug in finetuning for splitting very small datasets"
+# towncrier create 712.added.md --content "Add support for custom loss functions in finetuning"
+
 
 # Or manually
-echo "Add support for custom loss functions in finetuning" > changelog/712.added.md
-# echo "Fix bug in finetuning for splitting very small datasets" > changelog/712.fixed.md
+echo "Fix bug in finetuning for splitting very small datasets" > changelog/712.fixed.md
+#echo "Add support for custom loss functions in finetuning" > changelog/712.added.md 
 ```
 
 ## Categories
