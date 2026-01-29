@@ -162,6 +162,8 @@ def _is_numeric_value(x: Any) -> bool:
         return True
     if isinstance(x, str) and x.isdigit():
         return True
+    if x is None:
+        return True
     try:
         x = float(x)
         return True

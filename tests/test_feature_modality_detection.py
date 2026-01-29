@@ -114,6 +114,12 @@ def test__numerical_series_from_strings():
     assert result == FeatureModality.NUMERICAL
 
 
+def test__detect_numerical_as_string_with_nulles():
+    s = pd.Series([None, np.nan, "1.0", "2.0", "3.0"])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureModality.NUMERICAL
+
+
 def test__numerical_series_with_nan():
     s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, np.nan])
     result = _for_test_detect_with_defaults(s)
