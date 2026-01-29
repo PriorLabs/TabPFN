@@ -43,6 +43,8 @@ ENABLED_PLATFORMS = ["darwin_arm64"]
 For now we just test on MacOS, and simply identifying that seems to be enough
 to get consistent outputs.
 """
+N_SAMPLES = 100
+N_TEST_SAMPLES = 10
 
 
 def _get_random_data_with_categoricals(
@@ -268,12 +270,10 @@ def _transform_with_pipeline(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, list[int]]]:
     """Run the preprocessing pipeline and return transformed data."""
     rng = np.random.default_rng(RANDOM_STATE)
-    # TODO: Also add 1, 2 tests with larger num samples e.g. for quantile transform to
-    # have an effect.
     X_train, metadata_or_cat_indices = _get_random_data_with_categoricals(
-        rng, n_samples=200
+        rng, n_samples=N_SAMPLES
     )
-    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=10)
+    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=N_TEST_SAMPLES)
 
     config = test_case.config_factory()
     pipeline = build_pipeline(config, random_state=RANDOM_STATE)
