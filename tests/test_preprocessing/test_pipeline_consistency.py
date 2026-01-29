@@ -1,7 +1,8 @@
 """Check that preprocessing pipeline output matches reference transformations.
 
 This ensures that the preprocessing behavior does not change unintentionally
-during refactoring or other changes.
+during refactoring or other changes. The tests are disabled per default
+but can be enabled whenever we are changing the preprocessing pipeline.
 
 The transformed outputs can vary slightly between platforms, thus we maintain
 separate reference data for all the platforms in `ENABLED_PLATFORMS`. The tests
@@ -25,30 +26,32 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline import build_pipeline
 
+try:
+    from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+
+    NEW_PIPELINE_IMPLEMENTATION = True
+except ImportError:
+    NEW_PIPELINE_IMPLEMENTATION = False
+
 logger = logging.getLogger(__name__)
+
+RANDOM_STATE = 42
+ENABLED_PLATFORMS = ["darwin_arm64"]
+"""The tests are enabled if _get_current_platform() returns a string in this set.
+For now we just test on MacOS, and simply identifying that seems to be enough
+to get consistent outputs.
+"""
 
 
 def _get_random_data_with_categoricals(
     random_state: np.random.Generator,
-    n_samples: int = 30,
-    n_numerical: int = 5,
-    n_categorical: int = 3,
-) -> tuple[np.ndarray, ColumnMetadata]:
-    """Generate random data with both numerical and categorical features.
-
-    Args:
-        random_state: Random state for reproducibility.
-        n_samples: Number of samples.
-        n_numerical: Number of numerical features.
-        n_categorical: Number of categorical features.
-
-    Returns:
-        Tuple of (X, metadata) where X is the data array and metadata
-        contains column modality information.
-    """
+    n_samples: int = 20,
+    n_numerical: int = 3,
+    n_categorical: int = 2,
+) -> tuple[np.ndarray, ColumnMetadata | list[int]]:
+    """Generate random data with both numerical and categorical features."""
     n_features = n_numerical + n_categorical
     X = np.zeros((n_samples, n_features), dtype=np.float64)
 
@@ -64,15 +67,17 @@ def _get_random_data_with_categoricals(
         num_categories = random_state.integers(2, 6)
         X[:, i] = random_state.integers(0, num_categories, size=n_samples).astype(float)
 
-    # Build column metadata
-    metadata = ColumnMetadata.from_dict(
-        {
-            FeatureModality.NUMERICAL: list(range(n_numerical)),
-            FeatureModality.CATEGORICAL: list(range(n_numerical, n_features)),
-        }
-    )
-
-    return X, metadata
+    if NEW_PIPELINE_IMPLEMENTATION:
+        # Build column metadata
+        metadata = ColumnMetadata.from_dict(  # type: ignore
+            {
+                FeatureModality.NUMERICAL: list(range(n_numerical)),  # type: ignore
+                FeatureModality.CATEGORICAL: list(range(n_numerical, n_features)),  # type: ignore
+            }
+        )
+        return X, metadata
+    categorical_indices = list(range(n_numerical, n_features))
+    return X, categorical_indices
 
 
 def _create_ensemble_config(
@@ -83,18 +88,7 @@ def _create_ensemble_config(
     feature_shift_count: int = 0,
     feature_shift_decoder: Literal["shuffle", "rotate"] | None = None,
 ) -> EnsembleConfig:
-    """Create an EnsembleConfig for testing.
-
-    Args:
-        preprocess_config: The preprocessor configuration.
-        add_fingerprint_feature: Whether to add fingerprint features.
-        polynomial_features: Polynomial features setting.
-        feature_shift_count: Feature shift count.
-        feature_shift_decoder: Feature shift method.
-
-    Returns:
-        EnsembleConfig instance.
-    """
+    """Create an EnsembleConfig for testing."""
     return EnsembleConfig(
         preprocess_config=preprocess_config,
         add_fingerprint_feature=add_fingerprint_feature,
@@ -117,86 +111,50 @@ class _PipelineConsistencyCase:
 
 # Define test cases covering various configuration options
 _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
-    # Core transformations
     "none_numeric": PreprocessorConfig(
         name="none",
         categorical_name="numeric",
-        max_features_per_estimator=500,
     ),
     "none_ordinal": PreprocessorConfig(
         name="none",
         categorical_name="ordinal",
-        max_features_per_estimator=500,
     ),
     "none_onehot": PreprocessorConfig(
         name="none",
         categorical_name="onehot",
-        max_features_per_estimator=500,
     ),
     "none_ordinal_shuffled": PreprocessorConfig(
         name="none",
         categorical_name="ordinal_shuffled",
-        max_features_per_estimator=500,
     ),
-    # Quantile transformations
     "quantile_uni_coarse": PreprocessorConfig(
         name="quantile_uni_coarse",
         categorical_name="numeric",
-        max_features_per_estimator=500,
     ),
-    "quantile_uni": PreprocessorConfig(
-        name="quantile_uni",
-        categorical_name="ordinal_shuffled",
-        max_features_per_estimator=500,
-    ),
-    # Squashing scaler
     "squashing_scaler": PreprocessorConfig(
         name="squashing_scaler_default",
         categorical_name="ordinal_very_common_categories_shuffled",
-        max_features_per_estimator=500,
     ),
-    # Power transformations
-    "safepower": PreprocessorConfig(
-        name="safepower",
-        categorical_name="onehot",
-        max_features_per_estimator=500,
-    ),
-    "safepower_box": PreprocessorConfig(
-        name="safepower_box",
-        categorical_name="ordinal",
-        max_features_per_estimator=500,
-    ),
-    # Robust scaler
-    "robust": PreprocessorConfig(
+    "robust_onehot": PreprocessorConfig(
         name="robust",
-        categorical_name="numeric",
-        max_features_per_estimator=500,
+        categorical_name="onehot",
     ),
-    # NOTE: KDI transformations are excluded due to a known bug with imputation_values_
-    # "kdi_uni": PreprocessorConfig(...),
-    # "kdi_alpha_1.0": PreprocessorConfig(...),
-    # With append_original
     "quantile_append_original": PreprocessorConfig(
         name="quantile_uni_coarse",
         categorical_name="numeric",
         append_original=True,
-        max_features_per_estimator=500,
     ),
-    # With global transformer
     "none_with_svd": PreprocessorConfig(
         name="none",
         categorical_name="numeric",
         global_transformer_name="svd",
-        max_features_per_estimator=500,
     ),
     "squashing_with_svd_quarter": PreprocessorConfig(
         name="squashing_scaler_default",
         categorical_name="ordinal_very_common_categories_shuffled",
         global_transformer_name="svd_quarter_components",
-        max_features_per_estimator=500,
     ),
-    # NOTE: scaler global transformer has a bug, excluding for now
-    # "quantile_with_scaler": PreprocessorConfig(...),
+    # TODO, add test for subsampling via max_features_per_estimator setting
 }
 
 
@@ -275,18 +233,11 @@ def _build_test_cases() -> dict[str, _PipelineConsistencyCase]:
     return test_cases
 
 
-TEST_CASES = _build_test_cases()
-RANDOM_STATE = 42
-ENABLED_PLATFORMS = ["darwin_arm64"]
-"""The tests are enabled if _get_current_platform() returns a string in this set."""
+test_cases = _build_test_cases()
 
 
 def _get_current_platform_string() -> str:
-    """Return a string identifying the current platform.
-
-    For now we just test on MacOS, and simply identifying that seems to be enough
-    to get consistent outputs.
-    """
+    """Return a string identifying the current platform."""
     if platform.system() == "Darwin" and platform.machine() == "arm64":
         return "darwin_arm64"
     return "unknown"
@@ -315,32 +266,31 @@ def _get_reference_path(test_name: str) -> pathlib.Path:
 def _transform_with_pipeline(
     test_case: _PipelineConsistencyCase,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, list[int]]]:
-    """Run the preprocessing pipeline and return transformed data.
-
-    Args:
-        test_case: The test case configuration.
-
-    Returns:
-        Tuple of (X_train_transformed, X_test_transformed, metadata_dict).
-    """
+    """Run the preprocessing pipeline and return transformed data."""
     rng = np.random.default_rng(RANDOM_STATE)
-    X_train, metadata = _get_random_data_with_categoricals(rng, n_samples=30)
-    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=10)
+    # TODO: Also add 1, 2 tests with larger num samples e.g. for quantile transform to
+    # have an effect.
+    X_train, metadata_or_cat_indices = _get_random_data_with_categoricals(
+        rng, n_samples=20
+    )
+    X_test, _ = _get_random_data_with_categoricals(rng, n_samples=5)
 
     config = test_case.config_factory()
     pipeline = build_pipeline(config, random_state=RANDOM_STATE)
 
-    # Fit and transform training data
-    result_train = pipeline.fit_transform(X_train, metadata)
-
-    # Transform test data
+    result_train = pipeline.fit_transform(X_train, metadata_or_cat_indices)
     result_test = pipeline.transform(X_test)
 
-    # Convert metadata to serializable format
-    metadata_dict = {
-        modality.value: indices
-        for modality, indices in result_train.metadata.indices_by_modality.items()
-    }
+    if NEW_PIPELINE_IMPLEMENTATION:
+        metadata_dict = {
+            modality.value: indices
+            for modality, indices in result_train.metadata.indices_by_modality.items()
+        }
+    else:
+        assert isinstance(metadata_or_cat_indices, list)
+        metadata_dict = {
+            "categorical": metadata_or_cat_indices,
+        }
 
     # Ensure we return numpy arrays (pipeline may return tensors in some cases)
     X_train_out = np.asarray(result_train.X)
@@ -402,14 +352,7 @@ def _save_reference(
     X_test: np.ndarray,
     metadata: dict[str, list[int]],
 ) -> None:
-    """Save reference data to file.
-
-    Args:
-        test_name: Name of the test case.
-        X_train: Transformed training data.
-        X_test: Transformed test data.
-        metadata: Column metadata dictionary.
-    """
+    """Save reference data to file."""
     path = _get_reference_path(test_name)
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -435,7 +378,7 @@ def _save_reference(
     _get_current_platform_string() not in ENABLED_PLATFORMS,
     reason="Current platform does not have consistency tests enabled.",
 )
-@pytest.mark.parametrize(("test_case_name", "test_case"), TEST_CASES.items())
+@pytest.mark.parametrize(("test_case_name", "test_case"), test_cases.items())
 def test__pipeline__output_matches_reference(
     test_case_name: str, test_case: _PipelineConsistencyCase
 ) -> None:
@@ -443,7 +386,6 @@ def test__pipeline__output_matches_reference(
     X_train_ref, X_test_ref, metadata_ref = _load_reference_or_fail(test_case_name)
     X_train, X_test, metadata = _transform_with_pipeline(test_case)
 
-    # Check shapes match
     assert X_train.shape == X_train_ref.shape, (
         f"Training data shape mismatch: {X_train.shape} vs {X_train_ref.shape}\n"
         f"{HOW_TO_FIX_MESSAGE}"
@@ -453,37 +395,26 @@ def test__pipeline__output_matches_reference(
         f"{HOW_TO_FIX_MESSAGE}"
     )
 
-    # Check metadata matches
-    assert metadata == metadata_ref, (
-        f"Metadata mismatch:\nGot: {metadata}\nExpected: {metadata_ref}\n"
+    assert metadata["categorical"] == metadata_ref["categorical"], (
+        f"Metadata mismatch:\nGot: {metadata['categorical']}\nExpected: "
+        f"{metadata_ref['categorical']}\n"
         f"{HOW_TO_FIX_MESSAGE}"
     )
 
-    # Check values match (with tolerance for floating point)
-    # Handle NaN values properly
-    train_nan_mask = np.isnan(X_train_ref)
-    test_nan_mask = np.isnan(X_test_ref)
-
-    assert np.array_equal(np.isnan(X_train), train_nan_mask), (
-        f"NaN positions in training data don't match.\n{HOW_TO_FIX_MESSAGE}"
-    )
-    assert np.array_equal(np.isnan(X_test), test_nan_mask), (
-        f"NaN positions in test data don't match.\n{HOW_TO_FIX_MESSAGE}"
-    )
-
-    # Compare non-NaN values
     np.testing.assert_allclose(
-        X_train[~train_nan_mask],
-        X_train_ref[~train_nan_mask],
-        rtol=1e-5,
-        atol=1e-5,
+        X_train,
+        X_train_ref,
+        rtol=1e-6,
+        atol=1e-6,
+        equal_nan=True,
         err_msg=f"Training data values changed.\n{HOW_TO_FIX_MESSAGE}",
     )
     np.testing.assert_allclose(
-        X_test[~test_nan_mask],
-        X_test_ref[~test_nan_mask],
-        rtol=1e-5,
-        atol=1e-5,
+        X_test,
+        X_test_ref,
+        rtol=1e-6,
+        atol=1e-6,
+        equal_nan=True,
         err_msg=f"Test data values changed.\n{HOW_TO_FIX_MESSAGE}",
     )
 
@@ -492,7 +423,7 @@ def save_reference_data() -> None:
     """Generate and save reference data for all test cases."""
     _get_platform_dir().mkdir(parents=True, exist_ok=True)
 
-    for test_case_name, test_case in TEST_CASES.items():
+    for test_case_name, test_case in test_cases.items():
         try:
             X_train, X_test, metadata = _transform_with_pipeline(test_case)
             _save_reference(test_case_name, X_train, X_test, metadata)

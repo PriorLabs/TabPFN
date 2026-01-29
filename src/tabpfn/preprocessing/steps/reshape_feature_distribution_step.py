@@ -417,6 +417,7 @@ def get_all_global_transformers(
 ) -> dict[str, FeatureUnion | Pipeline]:
     """Returns a dictionary of global transformers to transform the data."""
     return {
+        # TODO: Remove this scaler option!
         "scaler": _make_standard_scaler_safe(("standard", StandardScaler())),
         "svd": FeatureUnion(
             [
