@@ -197,8 +197,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    preprocessor_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    ordinal_encoder_: ColumnTransformer
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -626,7 +626,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             )
         )
-        self.preprocessor_ = ordinal_encoder
+        self.ordinal_encoder_ = ordinal_encoder
         self.inferred_categorical_indices_ = inferred_categorical_indices
 
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
@@ -909,7 +909,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
         X = process_text_na_dataframe(
             X,
-            ord_encoder=getattr(self, "preprocessor_", None),
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
         )
 
         # Runs over iteration engine

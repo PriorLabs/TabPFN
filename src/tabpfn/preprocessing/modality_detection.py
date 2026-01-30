@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Sequence
-from typing import Any
 
 import pandas as pd
 
@@ -118,7 +117,9 @@ def _detect_feature_modality(
         ):
             return FeatureModality.CATEGORICAL
         return FeatureModality.NUMERICAL
-    if pd.api.types.is_string_dtype(s.dtype):
+    if pd.api.types.is_string_dtype(s.dtype) or isinstance(
+        s.dtype, pd.CategoricalDtype
+    ):
         if nunique <= max_unique_for_category:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT
@@ -130,7 +131,9 @@ def _detect_feature_modality(
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.is_numeric_dtype(s.dtype):
         return True
-    return bool(all(_is_numeric_value(x) for x in s))
+    coerced = pd.to_numeric(s, errors="coerce")
+    is_numeric_or_missing = coerced.notna() | s.isna()
+    return bool(is_numeric_or_missing.all())
 
 
 def _detect_numeric_as_categorical(
@@ -153,15 +156,3 @@ def _detect_numeric_as_categorical(
     elif big_enough_n_to_infer_cat and nunique < min_unique_for_numerical:
         return True
     return False
-
-
-def _is_numeric_value(x: Any) -> bool:
-    if isinstance(x, (int, float)):
-        return True
-    if isinstance(x, str) and x.isdigit():
-        return True
-    try:
-        x = float(x)
-        return True
-    except ValueError:
-        return False

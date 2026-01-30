@@ -470,7 +470,7 @@ def get_embeddings(
 
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
-    X = model.preprocessor_.transform(X)
+    X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []
 

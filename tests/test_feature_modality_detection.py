@@ -114,6 +114,12 @@ def test__numerical_series_from_strings():
     assert result == FeatureModality.NUMERICAL
 
 
+def test__detect_numerical_as_string_with_nulles():
+    s = pd.Series([None, np.nan, "1.0", "2.0", "3.0"])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureModality.NUMERICAL
+
+
 def test__numerical_series_with_nan():
     s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, np.nan])
     result = _for_test_detect_with_defaults(s)
@@ -140,6 +146,9 @@ def test__categorical_series_with_nan():
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.CATEGORICAL
     s = pd.Series(["a", "b", "c", "a", "b", "c", np.nan, None])
+    result = _for_test_detect_with_defaults(s)
+    assert result == FeatureModality.CATEGORICAL
+    s = pd.Series([None, np.nan, pd.NA, "house", "garden"])
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.CATEGORICAL
 
@@ -170,6 +179,12 @@ def test__detected_categorical_without_reporting():
     result = _for_test_detect_with_defaults(
         s, reported_categorical=False, min_unique_for_numerical=5
     )
+    assert result == FeatureModality.CATEGORICAL
+
+
+def test__detect_for_categorical_with_category_dtype():
+    s = pd.Series(["a", "b", "c", "a", "b", "c"], dtype="category")
+    result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.CATEGORICAL
 
 
