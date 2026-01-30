@@ -19,10 +19,10 @@ from packaging import version
 TaskType: TypeAlias = Literal["multiclass", "regression"]
 TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 
-# TODO
 XType: TypeAlias = Any
-SampleWeightType: TypeAlias = Any
 YType: TypeAlias = Any
+
+SampleWeightType: TypeAlias = Any
 TODO_TYPE1: TypeAlias = str
 
 ModelPath: TypeAlias = Union[str, pathlib.Path]

@@ -1,0 +1,586 @@
+from __future__ import annotations
+
+import warnings
+from collections.abc import Callable
+from functools import partial
+
+import numpy as np
+import pandas as pd
+import pytest
+import torch
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import (
+    FunctionTransformer,
+    OneHotEncoder,
+    OrdinalEncoder,
+    PowerTransformer,
+)
+
+from tabpfn.preprocessing import steps
+from tabpfn.preprocessing.ensemble import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.pipeline_interfaces import FeaturePreprocessingTransformerStep
+from tabpfn.preprocessing.steps import (
+    AdaptiveQuantileTransformer,
+    DifferentiableZNormStep,
+    KDITransformerWithNaN,
+    ReshapeFeatureDistributionsStep,
+    SafePowerTransformer,
+)
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    OrderPreservingColumnTransformer,
+)
+
+
+@pytest.fixture
+def sample_data():
+    """Provides a simple 2D torch tensor for testing."""
+    return torch.tensor(
+        [[1.0, 10.0, -5.0], [3.0, 12.0, -3.0], [5.0, 14.0, -1.0]], dtype=torch.float32
+    )
+
+
+def test_preprocessing_large_dataset():
+    # Generate a synthetic dataset with more than 10,000 samples
+    num_samples = 150000
+    num_features = 2
+    rng = np.random.default_rng()
+    X = rng.random((num_samples, num_features))
+
+    # Create an instance of ReshapeFeatureDistributionsStep
+    preprocessing_step = ReshapeFeatureDistributionsStep(
+        transform_name="quantile_norm",
+        apply_to_categorical=False,
+        append_to_original=False,
+        max_features_per_estimator=500,
+        global_transformer_name=None,
+        random_state=42,
+    )
+
+    # Define categorical features (empty in this case)
+    categorical_features = []
+
+    # Run the preprocessing step
+    result = preprocessing_step.fit_transform(X, categorical_features)
+
+    # Assert the result is not None and has the correct structure
+    assert result is not None
+
+    Xt = result.X
+
+    # Verify the output shape matches the input shape
+    assert Xt.shape == (num_samples, num_features)
+
+    # Verify the dtype of the output matches the dtype of the input
+    assert Xt.dtype == X.dtype
+
+
+@pytest.fixture
+def data_with_zero_std():
+    """Provides data where one column has zero standard deviation."""
+    return torch.tensor(
+        [[1.0, 5.0, -5.0], [3.0, 5.0, -3.0], [5.0, 5.0, -1.0]], dtype=torch.float32
+    )
+
+
+@pytest.fixture
+def categorical_features_list():
+    """Provides a sample list of categorical feature indices."""
+    return [1, 2]
+
+
+# --- Test Functions ---
+
+
+def test_diff_znorm_initialization():
+    """Test initialization with empty means and stds."""
+    step = DifferentiableZNormStep()
+    assert isinstance(step.means, torch.Tensor)
+    assert step.means.numel() == 0
+    assert isinstance(step.stds, torch.Tensor)
+    assert step.stds.numel() == 0
+
+
+def test_diff_znorm_fit(sample_data, categorical_features_list):
+    """Test _fit calculates and stores mean/std correctly."""
+    step = DifferentiableZNormStep()
+    expected_means = torch.mean(sample_data, dim=0, keepdim=True)
+    expected_stds = torch.std(sample_data, dim=0, keepdim=True)
+
+    returned_cat_features = step._fit(sample_data, categorical_features_list)
+
+    assert torch.allclose(step.means, expected_means)
+    assert torch.allclose(step.stds, expected_stds)
+    assert step.means.shape == (1, sample_data.shape[1])
+    assert step.stds.shape == (1, sample_data.shape[1])
+    assert returned_cat_features == categorical_features_list
+
+
+def test_diff_znorm_transform(sample_data, categorical_features_list):
+    """Test _transform applies Z-norm correctly."""
+    step = DifferentiableZNormStep()
+    step._fit(sample_data, categorical_features_list)  # Fit first
+
+    expected_output = (sample_data - step.means) / step.stds
+    transformed_data = step._transform(sample_data)
+
+    assert isinstance(transformed_data, torch.Tensor)
+    assert transformed_data.shape == sample_data.shape
+    assert torch.allclose(transformed_data, expected_output)
+
+    # Verify properties of transformed data
+    mean_transformed = torch.mean(transformed_data, dim=0)
+    std_transformed = torch.std(transformed_data, dim=0)
+    assert torch.allclose(
+        mean_transformed, torch.zeros(sample_data.shape[1]), atol=1e-6
+    )
+    assert torch.allclose(std_transformed, torch.ones(sample_data.shape[1]), atol=1e-6)
+
+
+def test_diff_znorm_fit_transform_integration(sample_data, categorical_features_list):
+    """Test fit and transform used together via base class methods."""
+    step = DifferentiableZNormStep()
+    step.fit(sample_data, categorical_features_list)
+    result = step.transform(sample_data)
+    transformed_data = result.X
+    returned_cat_features = result.categorical_features
+
+    mean_transformed = torch.mean(transformed_data, dim=0)
+    std_transformed = torch.std(transformed_data, dim=0)
+    assert torch.allclose(
+        mean_transformed, torch.zeros(sample_data.shape[1]), atol=1e-6
+    )
+    assert torch.allclose(std_transformed, torch.ones(sample_data.shape[1]), atol=1e-6)
+    assert returned_cat_features == categorical_features_list
+
+
+def test_diff_znorm_transform_shape_mismatch(sample_data, categorical_features_list):
+    """Test transform raises AssertionError on input shape mismatch."""
+    step = DifferentiableZNormStep()
+    step._fit(sample_data, categorical_features_list)  # Fit with 3 features
+
+    mismatched_data = torch.tensor(
+        [[1.0, 10.0], [3.0, 12.0]], dtype=torch.float32
+    )  # 2 features
+
+    with pytest.raises(AssertionError):
+        step._transform(mismatched_data)
+
+
+def test_diff_znorm_transform_with_zero_std(
+    data_with_zero_std, categorical_features_list
+):
+    """Test transform behavior with zero std deviation column."""
+    step = DifferentiableZNormStep()
+    step._fit(data_with_zero_std, categorical_features_list)
+
+    assert torch.isclose(step.stds[0, 1], torch.tensor(0.0))
+
+    transformed_data = step._transform(data_with_zero_std)
+
+    # Expect NaN for division by zero
+    assert torch.isnan(transformed_data[:, 1]).all()
+    assert not torch.isnan(transformed_data[:, 0]).any()
+    assert not torch.isnan(transformed_data[:, 2]).any()
+
+
+@pytest.mark.parametrize(
+    ("append_to_original_setting", "num_features", "expected_output_features"),
+    [
+        # Test 'auto' mode below the threshold: should append original features
+        pytest.param("auto", 10, 20, id="auto_below_threshold_appends"),
+        # Test 'auto' mode above the threshold: should NOT append original features
+        pytest.param("auto", 600, 500, id="auto_above_threshold_replaces"),
+        # If n features more than half of max_features_per_estimator we do not append
+        pytest.param("auto", 300, 300, id="auto_below_half_threshold_replaces"),
+        # True: always append after capping (600 → capped 500 → doubled)
+        pytest.param(True, 600, 1000, id="true_always_appends"),
+        # Test False: should never append
+        pytest.param(False, 10, 10, id="false_never_appends"),
+    ],
+)
+def test_reshape_step_append_original_logic(
+    append_to_original_setting, num_features, expected_output_features
+):
+    """Tests the `append_to_original` logic, including the "auto" mode which
+    depends on the APPEND_TO_ORIGINAL_THRESHOLD class constant (500).
+    """
+    # ARRANGE: Create a dataset with the specified number of features
+    num_samples = 100
+    rng = np.random.default_rng(42)
+    X = rng.random((num_samples, num_features))
+
+    # ARRANGE: Instantiate the step with the specified setting
+    preprocessing_step = ReshapeFeatureDistributionsStep(
+        transform_name="quantile_norm",
+        append_to_original=append_to_original_setting,
+        random_state=42,
+        max_features_per_estimator=500,
+    )
+
+    # ACT: Run the preprocessing
+    Xt, _ = preprocessing_step.fit_transform(X, categorical_features=[])
+
+    # ASSERT: Check if the number of output features matches the expected outcome
+    assert Xt.shape[0] == num_samples
+    assert Xt.shape[1] == expected_output_features
+
+
+def _get_preprocessing_steps() -> list[
+    Callable[..., FeaturePreprocessingTransformerStep],
+]:
+    defaults: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
+        cls
+        for cls in steps.__dict__.values()
+        if (
+            isinstance(cls, type)
+            and issubclass(cls, FeaturePreprocessingTransformerStep)
+            and cls is not FeaturePreprocessingTransformerStep
+            and cls is not DifferentiableZNormStep  # works on torch tensors
+        )
+    ]
+    extras: list[Callable[..., FeaturePreprocessingTransformerStep]] = [
+        partial(
+            ReshapeFeatureDistributionsStep,
+            transform_name="none",
+            append_to_original=True,
+            global_transformer_name="svd",
+            apply_to_categorical=False,
+        )
+    ]
+    return defaults + extras
+
+
+def _get_random_data(
+    rng: np.random.Generator, n_samples: int, n_features: int, cat_inds: list[int]
+) -> np.ndarray:
+    x = rng.random((n_samples, n_features))
+    x[:, cat_inds] = rng.integers(0, 3, size=(n_samples, len(cat_inds))).astype(float)
+    return x
+
+
+def test__preprocessing_steps__transform__is_idempotent():
+    """Test that calling transform multiple times on the same data
+    gives the same result. This ensures transform is deterministic
+    and doesn't have internal state changes.
+    """
+    rng = np.random.default_rng(42)
+    n_samples = 20
+    n_features = 4
+    cat_inds = [1, 3]
+    for cls in _get_preprocessing_steps():
+        x = _get_random_data(rng, n_samples, n_features, cat_inds)
+        x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
+
+        obj = cls().fit(x, cat_inds)
+
+        # Calling transform multiple times should give the same result
+        result1 = obj.transform(x2)
+        result2 = obj.transform(x2)
+
+        assert np.allclose(result1.X, result2.X), f"Transform not idempotent for {cls}"
+        assert result1.categorical_features == result2.categorical_features
+
+
+def test__preprocessing_steps__transform__no_sample_interdependence():
+    """Test that preprocessing steps don't have
+    interdependence between samples during transform. Each sample should be
+    transformed independently based only on parameters learned during fit.
+    """
+    rng = np.random.default_rng(42)
+    n_samples = 20
+    n_features = 4
+    cat_inds = [1, 3]
+    for cls in _get_preprocessing_steps():
+        x = _get_random_data(rng, n_samples, n_features, cat_inds)
+        x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
+
+        obj = cls().fit(x, cat_inds)
+
+        # Test 1: Shuffling samples should give correspondingly shuffled results
+        result_normal = obj.transform(x2)
+        result_reversed = obj.transform(x2[::-1])
+        assert np.allclose(result_reversed.X[::-1], result_normal.X), (
+            f"Transform depends on sample order for {cls}"
+        )
+
+        # Test 2: Transforming a subset should match the subset of full transformation
+        result_full = obj.transform(x2)
+        result_subset = obj.transform(x2[:4])
+        assert np.allclose(result_full.X[:4], result_subset.X), (
+            f"Transform depends on other samples in batch for {cls}"
+        )
+
+        # Test 3: Categorical features should remain the same
+        assert result_full.categorical_features == result_subset.categorical_features
+
+
+def test_adaptive_quantile_transformer_with_numpy_generator():
+    """Tests that AdaptiveQuantileTransformer can handle a np.random.Generator.
+
+    This test ensures that the transformer is compatible with NumPy's modern
+    random number generation API, which is passed down from other parts of
+    the TabPFN codebase. It replicates the conditions that previously caused a
+    ValueError in scikit-learn's check_random_state.
+    """
+    # ARRANGE: Create sample data and a modern NumPy random number generator
+    rng = np.random.default_rng(42)
+    X = rng.random((100, 10))
+
+    # ARRANGE: Instantiate the transformer with the Generator object
+    # This is the exact condition that caused the bug
+    transformer = AdaptiveQuantileTransformer(
+        output_distribution="uniform",
+        n_quantiles=10,
+        random_state=rng,
+    )
+
+    # ACT & ASSERT: Ensure that fitting the transformer does not raise an error
+    transformer.fit(X)
+
+    # Further assertion to ensure the transformer is functional
+    assert hasattr(transformer, "quantiles_")
+    assert transformer.quantiles_.shape == (10, 10)
+
+
+def test_kdi_transformer_with_nan_integration():
+    """Tests KDITransformerWithNaN handles NaNs and maintains mask."""
+    # Create data with NaNs and a torch tensor to test both features
+    X = torch.tensor(
+        [[1.0, np.nan, 3.0], [4.0, 5.0, np.nan], [np.nan, 8.0, 9.0]],
+        dtype=torch.float32,
+    )
+
+    transformer = KDITransformerWithNaN(alpha=1.0, output_distribution="normal")
+
+    # Test fit
+    transformer.fit(X)
+    assert hasattr(transformer, "imputation_values_")
+
+    # Test transform
+    Xt = transformer.transform(X)
+
+    # Verify type and shape
+    assert isinstance(Xt, np.ndarray)
+    assert Xt.shape == X.shape
+
+    # Verify NaNs are preserved in the exact same positions
+    mask = torch.isnan(X).numpy()
+    assert np.all(np.isnan(Xt) == mask)
+
+    # Verify non-NaN values are actual numbers (transformed)
+    assert np.all(np.isfinite(Xt[~mask]))
+
+
+def test__safe_power_transformer__normal_cases__same_results_as_power_transformer():
+    """Test SafePowerTransformer gives same results as
+    PowerTransformer for normal data.
+    """
+    rng = np.random.default_rng(42)
+
+    # Test cases with normal, well-behaved data
+    test_cases = [
+        # Normal distribution
+        rng.normal(0, 1, (100, 3)),
+        # Slightly skewed data
+        rng.exponential(1, (100, 2)),
+        # Uniform data
+        rng.uniform(-2, 2, (100, 4)),
+        # Mixed positive/negative
+        np.concatenate([rng.normal(5, 2, (50, 2)), rng.normal(-3, 1, (50, 2))]),
+    ]
+
+    for i, X in enumerate(test_cases):
+        # Fit both transformers
+        sklearn_transformer = PowerTransformer(method="yeo-johnson", standardize=False)
+        safe_transformer = SafePowerTransformer(method="yeo-johnson", standardize=False)
+
+        sklearn_result = sklearn_transformer.fit_transform(X)
+        safe_result = safe_transformer.fit_transform(X)
+
+        # Results should be very close (allowing for small numerical differences)
+        np.testing.assert_allclose(
+            sklearn_result,
+            safe_result,
+            rtol=1e-6,
+            atol=1e-7,
+            err_msg=f"Results differ for test case {i}",
+        )
+
+        # Lambdas should also be close
+        np.testing.assert_allclose(
+            sklearn_transformer.lambdas_,
+            safe_transformer.lambdas_,
+            rtol=1e-6,
+            atol=1e-7,
+            err_msg=f"Lambdas differ for test case {i}",
+        )
+
+
+def test__safe_power_transformer__power_transformer_fails__no_error():
+    """Test that SafePowerTransformer handles cases where PowerTransformer overflows."""
+    # this input produces scipy.optimize._optimize.BracketError
+    # with sklearn's PowerTransformer with sklearn==1.6.1
+    # and scipy==1.15.2
+    X = np.array([2003.0, 1950.0, 1997.0, 2000.0, 2009.0]).reshape(-1, 1)
+
+    safe_transformer = SafePowerTransformer(method="yeo-johnson", standardize=False)
+
+    # Check SafePowerTransformer produces no warnings
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        safe_result = safe_transformer.fit_transform(X)
+
+    # Assert no warnings from SafePowerTransformer
+    assert len(w) == 0, (
+        f"SafePowerTransformer produced {len(w)} warning(s): "
+        f"{[str(warning.message) for warning in w]}"
+    )
+
+    # check if result contains nan or inf
+    assert np.all(np.isfinite(safe_result)), (
+        "SafePowerTransformer produced non-finite values"
+    )
+
+
+def test__safe_power_transformer__transform_then_inverse_transform__returns_original():
+    """Test that SafePowerTransformer inverse_transform returns data to original scale.
+    We haven't changed the.
+    """
+    rng = np.random.default_rng(42)
+
+    # Test cases with different data distributions
+    test_cases = [
+        # Normal distribution
+        rng.normal(0, 1, (100, 3)),
+        # Slightly skewed data
+        rng.exponential(1, (100, 2)),
+        # Uniform data
+        rng.uniform(-2, 2, (100, 4)),
+        # Mixed positive/negative
+        np.concatenate([rng.normal(5, 2, (50, 2)), rng.normal(-3, 1, (50, 2))]),
+    ]
+
+    for i, X_original in enumerate(test_cases):
+        # Create and fit transformer
+        transformer = SafePowerTransformer(method="yeo-johnson", standardize=False)
+
+        # Transform data
+        X_transformed = transformer.fit_transform(X_original)
+
+        # Inverse transform back to original scale
+        X_inverse = transformer.inverse_transform(X_transformed)
+
+        # Assert that inverse transform returns data close to original
+        np.testing.assert_allclose(
+            X_original,
+            X_inverse,
+            rtol=1e-6,
+            atol=1e-7,
+            err_msg=f"Inverse transform failed for test case {i}",
+        )
+
+
+# This is a test for the OrderPreservingColumnTransformer, which is not used currently
+# But might be used in the future, therefore I'll leave it in.
+@pytest.mark.skip
+def test_order_preserving_column_transformer():
+    """Should raise AssertionError if column sets overlap."""
+    ordinal_enc1 = OrdinalEncoder()
+    ordinal_enc2 = OrdinalEncoder()
+    onehotencoder1 = OneHotEncoder()
+
+    # Test assertion raised due to too many transformers
+    multiple_transformers = [
+        ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
+        ("ordinal_enc2", ordinal_enc2, ["c", "d"]),
+    ]
+
+    with pytest.raises(
+        AssertionError,
+        match="OrderPreservingColumnTransformer only supports up to one transformer",
+    ):
+        OrderPreservingColumnTransformer(transformers=multiple_transformers)
+
+    # Test assertion, due to unsupported encoder type (OneHotEncoder)
+    incompatible_transformer = [("onehot", onehotencoder1, ["a", "b"])]
+
+    with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin"):
+        OrderPreservingColumnTransformer(transformers=incompatible_transformer)
+
+        # --- Mock dataset ---
+    mock_data_df = pd.DataFrame(
+        {
+            "a": [10, 20, 30, 40],
+            "b": ["x", "y", "x", "z"],
+        }
+    )
+
+    # Test if normal column transformer shuffles column order,
+    # while the OrderPreserving restores the original order
+    non_overlapping_ordinal_encoder = [("ordinal_enc1", ordinal_enc1, ["b"])]
+
+    vanilla_transformer = ColumnTransformer(
+        transformers=non_overlapping_ordinal_encoder, remainder=FunctionTransformer()
+    )
+
+    vanilla_output = vanilla_transformer.fit_transform(mock_data_df)
+
+    # Vanilla transformer shuffles column order
+    assert not np.array_equal(mock_data_df.iloc[:, 0].values, vanilla_output[:, 0])
+
+    preserving_transformer = OrderPreservingColumnTransformer(
+        transformers=non_overlapping_ordinal_encoder, remainder=FunctionTransformer()
+    )
+
+    # OrderPreserving transformer does not shuffle column order
+    preserved_output = preserving_transformer.fit_transform(mock_data_df)
+    np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
+
+
+def test__get_subsample_indices_for_estimators():
+    """Test that different subsample_samples arguments work as expected."""
+    kwargs = {
+        "num_estimators": 3,
+        "max_index": 5,
+        "static_seed": 42,
+    }
+
+    subsample_samples = [
+        [0, 1, 2, 3, 4],
+        [5, 6, 7, 8, 9],
+    ]
+    expected_subsample_indices = [
+        np.array([0, 1, 2, 3, 4]),
+        np.array([5, 6, 7, 8, 9]),
+        np.array([0, 1, 2, 3, 4]),
+    ]
+    subsample_indices = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_samples,
+        **kwargs,
+    )
+    assert len(subsample_indices) == 3
+    for subsample_index, expected_subsample_index in zip(
+        subsample_indices, expected_subsample_indices
+    ):
+        assert subsample_index is not None
+        assert (subsample_index == expected_subsample_index).all()
+
+    subsample_samples = 0.5
+    subsample_indices = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_samples,
+        **kwargs,
+    )
+    assert len(subsample_indices) == 3
+    for subsample_index in subsample_indices:
+        assert subsample_index is not None
+        assert len(subsample_index) == 3  # (max_index + 1) * 0.5
+
+    subsample_samples = 2
+    subsample_indices = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_samples,
+        **kwargs,
+    )
+    assert len(subsample_indices) == 3
+    for subsample_index in subsample_indices:
+        assert subsample_index is not None
+        assert len(subsample_index) == 2

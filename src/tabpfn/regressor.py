@@ -72,7 +72,6 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
-    infer_random_state,
     transform_borders_one,
     translate_probs_across_borders,
 )
@@ -584,7 +583,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Initializes the model, returning byte_size and RNG object."""
         return initialize_model_variables_helper(self, self.estimator_type)
 
-    def _initialize_for_standard_input(
+    def _initialize_dataset_preprocessing(
         self,
         X: XType,
         y: YType,
@@ -595,6 +594,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         np.ndarray,
         FullSupportBarDistribution,
     ]:
+        """Prepare ensemble configs and validate X, y for one dataset/chunk.
+
+        Handle the preprocessing of the input (X and y). We also return the
+        BarDistribution here, since it is vital for computing the standardized
+        target variable in the DatasetCollectionWithPreprocessing class.
+        """
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
             y,
@@ -658,29 +663,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
 
-    def _initialize_dataset_preprocessing(
-        self,
-        X: XType,
-        y: YType,
-        rng: np.random.Generator,
-    ) -> tuple[
-        list[RegressorEnsembleConfig],
-        np.ndarray,
-        np.ndarray,
-        FullSupportBarDistribution,
-    ]:
-        """Prepare ensemble configs and validate X, y for one dataset/chunk.
-        Handle the preprocessing of the input (X and y). We also return the
-        BarDistribution here, since it is vital for computing the standardized
-        target variable in the DatasetCollectionWithPreprocessing class.
-        Sets self.inferred_feature_schema_.
-        """
-        if self.differentiable_input:
-            raise ValueError(
-                "Differentiable input is not supported for regressors yet."
-            )
-        return self._initialize_for_standard_input(X=X, y=y, rng=rng)
-
     @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
         self,
@@ -736,7 +718,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             dtype_byte_size=byte_size,
             force_inference_dtype=self.forced_inference_dtype_,
             save_peak_mem=self.memory_saving_mode,
-            inference_mode=not self.differentiable_input,
+            inference_mode=True,
         )
 
         return self
@@ -753,6 +735,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
+        if self.differentiable_input:
+            raise ValueError(
+                "Differentiable input is not supported for regressors yet."
+            )
+
         if self.fit_mode == "batched":
             logging.warning(
                 "The model was in 'batched' mode, likely after finetuning. "
@@ -761,22 +748,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        is_differentiable_input_and_already_fitted = (
-            self.differentiable_input and hasattr(self, "models_")
+        byte_size, rng = self._initialize_model_variables()
+        ensemble_configs, X, y, znorm_space_bardist = (
+            self._initialize_dataset_preprocessing(X, y, rng)
         )
-        if is_differentiable_input_and_already_fitted:
-            _, rng = infer_random_state(self.random_state)
-            _, _, byte_size = determine_precision(
-                self.inference_precision, self.devices_
-            )
-            ensemble_configs = self.ensemble_configs_  # Reuse from first fit
-        else:
-            byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y, znorm_space_bardist = (
-                self._initialize_dataset_preprocessing(X, y, rng)
-            )
-            self.znorm_space_bardist_ = znorm_space_bardist
-            self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
+        self.znorm_space_bardist_ = znorm_space_bardist
+        self.ensemble_configs_ = ensemble_configs
 
         assert len(ensemble_configs) == self.n_estimators
 

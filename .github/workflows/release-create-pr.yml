@@ -108,5 +108,4 @@ jobs:
           --base "${BASE_BRANCH}" \
           --head "${RELEASE_BRANCH}" \
           --title "Release v${VERSION}" \
-          --body "Automated release PR for v${VERSION}." \
-          --reviewer "PriorLabs/release-maintainers"
+          --body "Automated release PR for v${VERSION}."

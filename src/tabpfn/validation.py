@@ -180,24 +180,24 @@ def ensure_compatible_fit_inputs_sklearn(
             y_numeric=ensure_y_numeric,
             estimator=estimator,
         )
+
+        if is_classifier(estimator):
+            check_classification_targets(y)
+            # Annoyingly, the `ensure_all_finite` above only applies to `X` and
+            # there is no way to specify this for `y`. The validation check above
+            # will also only check for NaNs in `y` if `multi_output=True` which is
+            # something we don't want. Hence, we run another check on `y` here.
+            # However, we also have to consider that if the dtype is a string type,
+            # then we still want to run finite checks without forcing a numeric dtype.
+            y = check_array(
+                y,
+                accept_sparse=False,
+                ensure_all_finite=True,
+                dtype=None,  # type: ignore
+                ensure_2d=False,
+            )
     except (ValueError, TypeError) as e:
         raise TabPFNValidationError(str(e)) from e
-
-    if is_classifier(estimator):
-        check_classification_targets(y)
-        # Annoyingly, the `ensure_all_finite` above only applies to `X` and
-        # there is no way to specify this for `y`. The validation check above
-        # will also only check for NaNs in `y` if `multi_output=True` which is
-        # something we don't want. Hence, we run another check on `y` here.
-        # However, we also have to consider that if the dtype is a string type,
-        # then we still want to run finite checks without forcing a numeric dtype.
-        y = check_array(
-            y,
-            accept_sparse=False,
-            ensure_all_finite=True,
-            dtype=None,  # type: ignore
-            ensure_2d=False,
-        )
 
     # NOTE: Theoretically we don't need to return the feature names and number,
     # but it makes it clearer in the calling code that these variables now exist

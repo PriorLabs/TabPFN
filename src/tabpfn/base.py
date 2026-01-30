@@ -38,7 +38,6 @@ from tabpfn.utils import (
     infer_devices,
     infer_fp16_inference_mode,
     infer_random_state,
-    update_encoder_params,
 )
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
@@ -398,10 +397,6 @@ def initialize_model_variables_helper(
 
     calling_instance.inference_config_ = inference_config
 
-    update_encoder_params(  # Use the renamed function if available, or original one
-        models=calling_instance.models_,
-        differentiable_input=calling_instance.differentiable_input,
-    )
     return byte_size, rng
 
 

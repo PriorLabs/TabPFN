@@ -18,7 +18,7 @@ from tabpfn.preprocessing.ensemble import (
     ClassifierEnsembleConfig,
     RegressorEnsembleConfig,
 )
-from tabpfn.preprocessing.pipeline import build_pipeline
+from tabpfn.preprocessing.pipeline_factory import build_pipeline
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
