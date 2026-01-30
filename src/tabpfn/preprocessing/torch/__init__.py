@@ -5,7 +5,7 @@
 from .factory import create_gpu_preprocessing_pipeline
 from .ops import torch_nanmean, torch_nanstd, torch_nansum
 from .pipeline_interface import (
-    FeatureMetadata,
+    FeatureSchema,
     TorchPreprocessingPipeline,
     TorchPreprocessingPipelineOutput,
     TorchPreprocessingStep,
@@ -16,7 +16,7 @@ from .torch_soft_clip_outliers import TorchSoftClipOutliers
 from .torch_standard_scaler import TorchStandardScaler
 
 __all__ = [
-    "FeatureMetadata",
+    "FeatureSchema",
     "TorchPreprocessingPipeline",
     "TorchPreprocessingPipelineOutput",
     "TorchPreprocessingStep",

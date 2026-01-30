@@ -29,7 +29,7 @@ from tabpfn.preprocessing.datamodel import Feature
 from tabpfn.preprocessing.pipeline import build_pipeline
 
 try:
-    from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
     NEW_PIPELINE_IMPLEMENTATION = True
 except ImportError:
@@ -56,7 +56,7 @@ def _get_random_data_with_categoricals(
     n_samples: int = 20,
     n_numerical: int = 3,
     n_categorical: int = 2,
-) -> tuple[np.ndarray, FeatureMetadata | list[int]]:
+) -> tuple[np.ndarray, FeatureSchema | list[int]]:
     """Generate random data with both numerical and categorical features."""
     n_features = n_numerical + n_categorical
     X = np.zeros((n_samples, n_features), dtype=np.float64)
@@ -82,8 +82,8 @@ def _get_random_data_with_categoricals(
             Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
             for _ in range(n_categorical)
         ]
-        metadata = FeatureMetadata(features=features)  # type: ignore
-        return X, metadata
+        schema = FeatureSchema(features=features)  # type: ignore
+        return X, schema
     categorical_indices = list(range(n_numerical, n_features))
     return X, categorical_indices
 
@@ -276,7 +276,7 @@ def _transform_with_pipeline(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, list[int]]]:
     """Run the preprocessing pipeline and return transformed data."""
     rng = np.random.default_rng(RANDOM_STATE)
-    X_train, metadata_or_cat_indices = _get_random_data_with_categoricals(
+    X_train, schema_or_cat_indices = _get_random_data_with_categoricals(
         rng, n_samples=N_SAMPLES
     )
     X_test, _ = _get_random_data_with_categoricals(rng, n_samples=N_TEST_SAMPLES)
@@ -284,11 +284,11 @@ def _transform_with_pipeline(
     config = test_case.config_factory()
     pipeline = build_pipeline(config, random_state=RANDOM_STATE)
 
-    result_train = pipeline.fit_transform(X_train, metadata_or_cat_indices)
+    result_train = pipeline.fit_transform(X_train, schema_or_cat_indices)
     result_test = pipeline.transform(X_test)
 
     if NEW_PIPELINE_IMPLEMENTATION:
-        metadata_dict = result_train.feature_metadata.feature_modalities
+        metadata_dict = result_train.feature_schema.feature_modalities
     else:
         assert isinstance(result_train, TransformResult)
         _, categorical_indices = result_train
@@ -371,7 +371,7 @@ def test__pipeline__output_matches_reference(
 ) -> None:
     """Test that pipeline output matches saved reference data."""
     X_train_ref, X_test_ref, metadata_ref = _load_reference_or_fail(test_case_name)
-    X_train, X_test, metadata = _transform_with_pipeline(test_case)
+    X_train, X_test, schema = _transform_with_pipeline(test_case)
 
     assert X_train.shape == X_train_ref.shape, (
         f"Training data shape mismatch: {X_train.shape} vs {X_train_ref.shape}\n"
@@ -382,8 +382,8 @@ def test__pipeline__output_matches_reference(
         f"{HOW_TO_FIX_MESSAGE}"
     )
 
-    assert metadata["categorical"] == metadata_ref["categorical"], (
-        f"Metadata mismatch:\nGot: {metadata['categorical']}\nExpected: "
+    assert schema["categorical"] == metadata_ref["categorical"], (
+        f"Metadata mismatch:\nGot: {schema['categorical']}\nExpected: "
         f"{metadata_ref['categorical']}\n"
         f"{HOW_TO_FIX_MESSAGE}"
     )
@@ -412,8 +412,8 @@ def save_reference_data() -> None:
 
     for test_case_name, test_case in test_cases.items():
         try:
-            X_train, X_test, metadata = _transform_with_pipeline(test_case)
-            _save_reference(test_case_name, X_train, X_test, metadata)
+            X_train, X_test, schema = _transform_with_pipeline(test_case)
+            _save_reference(test_case_name, X_train, X_test, schema)
         except Exception as e:
             logger.error(f"Failed to generate reference for {test_case_name}: {e}")
             raise

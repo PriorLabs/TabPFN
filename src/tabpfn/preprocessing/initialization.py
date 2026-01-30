@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     import pandas as pd
     from sklearn.compose import ColumnTransformer
 
-    from tabpfn.preprocessing.torch import FeatureMetadata
+    from tabpfn.preprocessing.torch import FeatureSchema
 
 
 def tag_features_and_sanitize_data(
@@ -26,7 +26,7 @@ def tag_features_and_sanitize_data(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     provided_categorical_indices: Sequence[int] | None = None,
-) -> tuple[np.ndarray, ColumnTransformer, FeatureMetadata]:
+) -> tuple[np.ndarray, ColumnTransformer, FeatureSchema]:
     """Tag features and sanitize data.
 
     This function will:
@@ -50,7 +50,7 @@ def tag_features_and_sanitize_data(
         A tuple containing the data, the ordinal encoder, and the inferred feature
         modalities.
     """
-    feature_metadata = detect_feature_modalities(
+    feature_schema = detect_feature_modalities(
         X=X,
         feature_names=feature_names,
         min_samples_for_inference=min_samples_for_inference,
@@ -64,7 +64,7 @@ def tag_features_and_sanitize_data(
     # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
     X_pandas: pd.DataFrame = fix_dtypes(
         X=X,
-        cat_indices=feature_metadata.indices_for(FeatureModality.CATEGORICAL),
+        cat_indices=feature_schema.indices_for(FeatureModality.CATEGORICAL),
     )
     # Ensure categories are ordinally encoded
     ord_encoder = get_ordinal_encoder()
@@ -72,4 +72,4 @@ def tag_features_and_sanitize_data(
         X=X_pandas, ord_encoder=ord_encoder, fit_encoder=True
     )
 
-    return X_numpy, ord_encoder, feature_metadata
+    return X_numpy, ord_encoder, feature_schema

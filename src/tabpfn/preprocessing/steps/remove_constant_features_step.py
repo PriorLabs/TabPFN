@@ -14,7 +14,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 
 class RemoveConstantFeaturesStep(PreprocessingStep):
@@ -28,8 +28,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
     def _fit(  # type: ignore
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
         else:
@@ -42,9 +42,9 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
             )
         self.sel_ = sel_
 
-        # Get indices of removed features and update metadata
+        # Get indices of removed features and update schema
         removed_indices = list(np.where(~np.array(sel_))[0])
-        return metadata.remove_columns(removed_indices)
+        return feature_schema.remove_columns(removed_indices)
 
     # TODO: Add test for it and make it useable with modality assignment
     # in pipeline registration.

@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing import PreprocessingPipeline
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
-def _make_metadata(n_features: int, cat_indices: list[int]) -> FeatureMetadata:
-    return FeatureMetadata.from_only_categorical_indices(cat_indices, n_features)
+def _make_metadata(n_features: int, cat_indices: list[int]) -> FeatureSchema:
+    return FeatureSchema.from_only_categorical_indices(cat_indices, n_features)
 
 
 def _make_test_data(
@@ -45,7 +45,7 @@ def test__reshape__append_false_apply_to_cat_false__cat_at_start():
     cat_indices = [2, 4]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_metadata(n_features, cat_indices)
+    feature_schema = _make_metadata(n_features, cat_indices)
 
     step = ReshapeFeatureDistributionsStep(
         transform_name="safepower",
@@ -53,17 +53,17 @@ def test__reshape__append_false_apply_to_cat_false__cat_at_start():
         append_to_original=False,
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # Categorical features are passed through first, numerical after
     expected_cat_indices = [0, 1]
     expected_num_indices = [2, 3, 4, 5]
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_features)
@@ -97,11 +97,11 @@ def test__reshape__append_false_apply_to_cat_true__no_categoricals():
     expected_cat_indices: list[int] = []
     expected_num_indices = list(range(n_features))
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_features)
@@ -144,11 +144,11 @@ def test__reshape__append_true_apply_to_cat_false__cat_preserved():
     expected_num_indices = num_indices + list(range(n_features, n_output))
 
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_output)
@@ -189,11 +189,11 @@ def test__reshape__append_true_apply_to_cat_true__cat_preserved():
     expected_num_indices = num_indices + list(range(n_features, n_output))
 
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_output)
@@ -220,8 +220,8 @@ def test__reshape__no_categoricals__all_numerical():
     )
     result = step.fit_transform(X, feature_modalities)
 
-    assert result.feature_metadata.indices_for(FeatureModality.CATEGORICAL) == []
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == []
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
     assert result.X.shape == (n_samples, n_features)
 
 
@@ -249,10 +249,10 @@ def test__reshape__all_categoricals__apply_to_cat_false():
     # All features are categorical and passed through
     expected_cat_indices = list(range(n_features))
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
     assert result.X.shape == (n_samples, n_features)
 
 
@@ -284,8 +284,8 @@ def test__reshape__subsampling__modalities_filtered():
     assert result.X.shape == (n_samples, max_features)
 
     # Categorical indices should be subset and remapped
-    result_cat = result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
-    result_num = result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+    result_cat = result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    result_num = result.feature_schema.indices_for(FeatureModality.NUMERICAL)
 
     # The categorical indices should be at the start (due to passthrough first)
     # and should be a subset of the original categorical features
@@ -333,12 +333,12 @@ def test__reshape__transform_is_deterministic(
     result2 = step.transform(X_test)
 
     np.testing.assert_array_equal(result1.X, result2.X)
-    assert result1.feature_metadata.indices_for(
+    assert result1.feature_schema.indices_for(
         FeatureModality.CATEGORICAL
-    ) == result2.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
-    assert result1.feature_metadata.indices_for(
+    ) == result2.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    assert result1.feature_schema.indices_for(
         FeatureModality.NUMERICAL
-    ) == result2.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+    ) == result2.feature_schema.indices_for(FeatureModality.NUMERICAL)
 
 
 @pytest.mark.parametrize(
@@ -386,8 +386,8 @@ def test__reshape__categorical_and_numerical_index_positions(
     )
     result = step.fit_transform(X, feature_modalities)
 
-    result_cat = result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
-    result_num = result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+    result_cat = result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    result_num = result.feature_schema.indices_for(FeatureModality.NUMERICAL)
 
     if not append_to_original and apply_to_categorical:
         # Categoricals are transformed, none remain, all numerical
@@ -425,8 +425,8 @@ def test__preprocessing_large_dataset():
         random_state=42,
     )
 
-    feature_metadata = _make_metadata(num_features, [])
-    result = preprocessing_step.fit_transform(X, feature_metadata)
+    feature_schema = _make_metadata(num_features, [])
+    result = preprocessing_step.fit_transform(X, feature_schema)
 
     assert result is not None
     X_transformed = result.X
@@ -474,7 +474,7 @@ def test__reshape_step_append_original_logic(
         Feature(name=None, modality=FeatureModality.NUMERICAL)
         for _ in range(num_features)
     ]
-    result = preprocessing_step.fit_transform(X, FeatureMetadata(features=features))  # type: ignore
+    result = preprocessing_step.fit_transform(X, FeatureSchema(features=features))  # type: ignore
 
     assert result.X.shape[0] == num_samples
     assert result.X.shape[1] == expected_output_features
@@ -513,10 +513,10 @@ def test__reshape__with_global_transformer():
     assert result.X.shape == (n_samples, n_output_features)
     # Verify we have some categorical and numerical indices tracked
     # (exact positions may vary due to ColumnTransformer reordering)
-    assert len(result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)) == len(
+    assert len(result.feature_schema.indices_for(FeatureModality.CATEGORICAL)) == len(
         cat_indices
     )
-    assert len(result.feature_metadata.indices_for(FeatureModality.NUMERICAL)) > 0
+    assert len(result.feature_schema.indices_for(FeatureModality.NUMERICAL)) > 0
 
 
 # TODO: Split ReshapeDistributionStep into multiple steps so that this pipeline passes
@@ -542,9 +542,9 @@ def test__pipeline_with_reshape__with_indizes():
         Feature(name=None, modality=FeatureModality.NUMERICAL)
         for _ in numerical_indices
     ] + [Feature(name=None, modality=FeatureModality.CATEGORICAL) for _ in cat_indices]
-    metadata = FeatureMetadata(features=features)  # type: ignore
+    schema = FeatureSchema(features=features)  # type: ignore
     with pytest.raises(
         ValueError,
         match="Steps registered with modalities must return the same number of columns",
     ):
-        _ = pipeline.fit_transform(X, metadata)
+        _ = pipeline.fit_transform(X, schema)

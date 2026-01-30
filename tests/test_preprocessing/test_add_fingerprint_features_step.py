@@ -5,14 +5,14 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
 
 
-def _get_metadata(num_columns: int) -> FeatureMetadata:
-    return FeatureMetadata(
+def _get_schema(num_columns: int) -> FeatureSchema:
+    return FeatureSchema(
         features=[
             Feature(name=None, modality=FeatureModality.NUMERICAL)
             for _ in range(num_columns)
@@ -24,7 +24,7 @@ def test__transform__returns_x_unchanged_numpy() -> None:
     """Test that _transform returns X unchanged, fingerprint in added_columns."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
     step = AddFingerprintFeaturesStep(random_state=42)
-    step._fit(data, _get_metadata(num_columns=3))
+    step._fit(data, _get_schema(num_columns=3))
     result, added_cols, modality = step._transform(data)
 
     # X should be returned unchanged
@@ -42,7 +42,7 @@ def test__transform__returns_x_unchanged_torch() -> None:
     """Test that _transform returns torch tensor unchanged, fingerprint separate."""
     data = torch.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=torch.float32)
     step = AddFingerprintFeaturesStep(random_state=42)
-    step._fit(data.numpy(), _get_metadata(num_columns=3))
+    step._fit(data.numpy(), _get_schema(num_columns=3))
     result, added_cols, _ = step._transform(data)
 
     # X should be returned unchanged
@@ -57,9 +57,9 @@ def test__transform__returns_x_unchanged_torch() -> None:
 def test__transform__collision_handling_with_duplicate_rows() -> None:
     """Test that duplicate rows get unique fingerprints only when is_test=False."""
     data = np.array([[1.0, 2.0], [1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
-    metadata = _get_metadata(num_columns=2)
+    schema = _get_schema(num_columns=2)
     step = AddFingerprintFeaturesStep(random_state=42)
-    step._fit(data, metadata)
+    step._fit(data, schema)
 
     # is_test=False: collision handling ensures unique fingerprints
     _, fingerprints_train, _ = step._transform(data, is_test=False)
@@ -76,17 +76,17 @@ def test__transform__collision_handling_with_duplicate_rows() -> None:
 def test__fit_transform__returns_added_columns() -> None:
     """Test fit_transform returns X unchanged with fingerprint in added_columns."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
-    metadata = _get_metadata(num_columns=3)
+    schema = _get_schema(num_columns=3)
 
     step = AddFingerprintFeaturesStep(random_state=42)
-    result = step.fit_transform(data, metadata)
+    result = step.fit_transform(data, schema)
 
     # X should be unchanged
     assert result.X.shape == (2, 3)
     np.testing.assert_array_equal(result.X, data)
 
     # Metadata should be unchanged (pipeline handles adding fingerprint)
-    assert result.feature_metadata.num_columns == 3
+    assert result.feature_schema.num_columns == 3
 
     # Fingerprint should be in added_columns
     assert result.X_added is not None
@@ -97,10 +97,10 @@ def test__fit_transform__returns_added_columns() -> None:
 def test__transform__returns_added_columns() -> None:
     """Test transform returns X unchanged with fingerprint in added_columns."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
-    metadata = _get_metadata(num_columns=3)
+    schema = _get_schema(num_columns=3)
 
     step = AddFingerprintFeaturesStep(random_state=42)
-    result = step.fit_transform(data, metadata)
+    result = step.fit_transform(data, schema)
 
     # X should be unchanged
     assert result.X.shape == (2, 3)
@@ -114,11 +114,11 @@ def test__transform__returns_added_columns() -> None:
 def test__fit__does_not_modify_metadata() -> None:
     """Test that _fit returns metadata unchanged (pipeline handles added cols)."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
-    metadata = _get_metadata(num_columns=3)
+    schema = _get_schema(num_columns=3)
 
     step = AddFingerprintFeaturesStep(random_state=42)
-    result_metadata = step._fit(data, metadata)
+    result_schema = step._fit(data, schema)
 
     # Metadata should be unchanged - same number of columns
-    assert result_metadata.num_columns == 3
-    assert result_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]
+    assert result_schema.num_columns == 3
+    assert result_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]

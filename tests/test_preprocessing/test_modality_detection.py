@@ -26,17 +26,17 @@ def test__dataset_view_end_to_end():
             "const": [1.0, 1.0, 1.0, 1.0, 1.0],
         }
     )
-    feature_metadata = detect_feature_modalities(
+    feature_schema = detect_feature_modalities(
         X=df.values,
         feature_names=df.columns.tolist(),
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=5,
     )
-    assert feature_metadata.indices_for(FeatureModality.NUMERICAL) == [0]
-    assert feature_metadata.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
-    assert feature_metadata.indices_for(FeatureModality.TEXT) == [3]
-    assert feature_metadata.indices_for(FeatureModality.CONSTANT) == [4]
+    assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0]
+    assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
+    assert feature_schema.indices_for(FeatureModality.TEXT) == [3]
+    assert feature_schema.indices_for(FeatureModality.CONSTANT) == [4]
 
 
 def _for_test_detect_with_defaults(
@@ -292,7 +292,7 @@ def test__infer_categorical_features(
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
     )
-    feature_metadata = detect_feature_modalities(
+    feature_schema = detect_feature_modalities(
         X=X,
         feature_names=None,
         min_samples_for_inference=min_samples_for_inference,
@@ -303,7 +303,7 @@ def test__infer_categorical_features(
     assert (
         out_old_api
         == expected
-        == feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        == feature_schema.indices_for(FeatureModality.CATEGORICAL)
     )
 
 

@@ -77,7 +77,7 @@ class DatasetView:
 
 
 @dataclasses.dataclass
-class FeatureMetadata:
+class FeatureSchema:
     """Metadata about the features in the dataset.
 
     Uses a single list of Feature objects as the source of truth, where
@@ -96,8 +96,8 @@ class FeatureMetadata:
         cls,
         categorical_indices: list[int],
         num_columns: int,
-    ) -> FeatureMetadata:
-        """Create FeatureMetadata from only categorical indices.
+    ) -> FeatureSchema:
+        """Create FeatureSchema from only categorical indices.
 
         This is used for backwards compatibility with the old preprocessing pipeline
         that only tracked categorical indices. All columns that are not categorical
@@ -161,8 +161,8 @@ class FeatureMetadata:
         modality: FeatureModality,
         num_new: int,
         names: list[str] | None = None,
-    ) -> FeatureMetadata:
-        """Return new metadata with additional columns appended.
+    ) -> FeatureSchema:
+        """Return new schema with additional columns appended.
 
         Args:
             modality: The modality for the new columns.
@@ -170,7 +170,7 @@ class FeatureMetadata:
             names: Names for the new columns. If None, uses "added_0", "added_1", ...
 
         Returns:
-            New FeatureMetadata instance with added features.
+            New FeatureSchema instance with added features.
         """
         if names is None:
             names = [f"added_{i}" for i in range(num_new)]
@@ -180,71 +180,71 @@ class FeatureMetadata:
         new_features = self.features + [
             Feature(name=name, modality=modality) for name in names
         ]
-        return FeatureMetadata(features=new_features)
+        return FeatureSchema(features=new_features)
 
-    def slice_for_indices(self, indices: list[int]) -> FeatureMetadata:
-        """Create metadata for a subset of columns, remapping to 0-based indices.
+    def slice_for_indices(self, indices: list[int]) -> FeatureSchema:
+        """Create schema for a subset of columns, remapping to 0-based indices.
 
-        When slicing columns from an array, this method creates new metadata
+        When slicing columns from an array, this method creates new schema
         where the selected columns are remapped to positions 0, 1, 2, etc.
 
         Args:
             indices: The column indices being selected (in original indexing).
 
         Returns:
-            New FeatureMetadata with features at the selected indices.
+            New FeatureSchema with features at the selected indices.
         """
-        return FeatureMetadata(features=[self.features[i] for i in indices])
+        return FeatureSchema(features=[self.features[i] for i in indices])
 
     def update_from_preprocessing_step_result(
         self,
         original_indices: list[int],
-        new_metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
-        """Update metadata after a step has transformed selected columns.
+        new_schema: FeatureSchema,
+    ) -> FeatureSchema:
+        """Update schema after a step has transformed selected columns.
 
-        This method merges the step's output metadata back into the full metadata.
-        The new_metadata contains features for the columns it processed (0-based),
+        This method merges the step's output schema back into the full schema.
+        The new_schema contains features for the columns it processed (0-based),
         which are mapped back to the original column positions.
 
         Args:
             original_indices: The column indices that were passed to the step.
-            new_metadata: The metadata returned by the step (0-based indices).
+            new_schema: The schema returned by the step (0-based indices).
 
         Returns:
-            New FeatureMetadata with updated modalities for the processed columns.
+            New FeatureSchema with updated modalities for the processed columns.
         """
         # Copy features and update the processed ones
         new_features = list(self.features)
         for step_idx, original_idx in enumerate(original_indices):
-            step_feature = new_metadata.features[step_idx]
+            step_feature = new_schema.features[step_idx]
             new_features[original_idx] = Feature(
                 name=step_feature.name,
                 modality=step_feature.modality,
             )
-        return FeatureMetadata(features=new_features)
+        return FeatureSchema(features=new_features)
 
-    def remove_columns(self, indices_to_remove: list[int]) -> FeatureMetadata:
-        """Return new metadata with specified columns removed.
+    def remove_columns(self, indices_to_remove: list[int]) -> FeatureSchema:
+        """Return new schema with specified columns removed.
 
         Args:
             indices_to_remove: Column indices to remove.
 
         Returns:
-            New FeatureMetadata with features at removed indices excluded.
+            New FeatureSchema with features at removed indices excluded.
         """
         remove_set = set(indices_to_remove)
-        return FeatureMetadata(
+        return FeatureSchema(
             features=[f for i, f in enumerate(self.features) if i not in remove_set]
         )
 
-    def apply_permutation(self, permutation: list[int]) -> FeatureMetadata:
-        """Apply a column permutation to the metadata.
+    def apply_permutation(self, permutation: list[int]) -> FeatureSchema:
+        """Apply a column permutation to the schema.
 
         Args:
             permutation: The permutation where permutation[new_idx] = old_idx.
 
         Returns:
-            New FeatureMetadata with features reordered according to permutation.
+            New FeatureSchema with features reordered according to permutation.
         """
-        return FeatureMetadata(features=[self.features[i] for i in permutation])
+        return FeatureSchema(features=[self.features[i] for i in permutation])

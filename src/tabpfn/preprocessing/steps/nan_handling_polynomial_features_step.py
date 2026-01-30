@@ -9,7 +9,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
@@ -40,14 +40,14 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)
 
         if X.shape[0] == 0 or X.shape[1] == 0:
             self.n_polynomials_ = 0
-            return metadata
+            return feature_schema
 
         # How many polynomials can we create?
         n_polynomials = (X.shape[1] * (X.shape[1] - 1)) // 2 + X.shape[1]
@@ -85,7 +85,9 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
                 self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
         # Polynomial features are appended as new numerical columns
-        return metadata.append_columns(FeatureModality.NUMERICAL, num_new=n_polynomials)
+        return feature_schema.append_columns(
+            FeatureModality.NUMERICAL, num_new=n_polynomials
+        )
 
     @override
     def _transform(

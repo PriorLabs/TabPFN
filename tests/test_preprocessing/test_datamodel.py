@@ -4,31 +4,31 @@ from __future__ import annotations
 
 import pytest
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 
-class TestFeatureMetadata:
-    """Tests for the FeatureMetadata class."""
+class TestFeatureSchema:
+    """Tests for the FeatureSchema class."""
 
     def test__init__with_features(self) -> None:
-        """Test FeatureMetadata construction with features list."""
+        """Test FeatureSchema construction with features list."""
         features = [
             Feature(name="age", modality=FeatureModality.NUMERICAL),
             Feature(name="city", modality=FeatureModality.CATEGORICAL),
             Feature(name="income", modality=FeatureModality.NUMERICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        assert metadata.num_columns == 3
-        assert metadata.feature_names == ["age", "city", "income"]
-        assert metadata.feature_modalities == {
+        assert schema.num_columns == 3
+        assert schema.feature_names == ["age", "city", "income"]
+        assert schema.feature_modalities == {
             "numerical": [0, 2],
             "categorical": [1],
         }
 
     def test__from_feature_modalities__basic(self) -> None:
         """Test from_feature_modalities factory method."""
-        metadata = FeatureMetadata(
+        schema = FeatureSchema(
             features=[
                 Feature(name=None, modality=FeatureModality.NUMERICAL),
                 Feature(name=None, modality=FeatureModality.CATEGORICAL),
@@ -36,22 +36,22 @@ class TestFeatureMetadata:
             ]
         )
 
-        assert metadata.num_columns == 3
-        assert metadata.feature_names == [None, None, None]
-        assert metadata.indices_for(FeatureModality.NUMERICAL) == [0, 2]
-        assert metadata.indices_for(FeatureModality.CATEGORICAL) == [1]
+        assert schema.num_columns == 3
+        assert schema.feature_names == [None, None, None]
+        assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
 
     def test__from_feature_modalities__with_custom_names(self) -> None:
         """Test from_feature_modalities with custom feature names."""
-        metadata = FeatureMetadata(
+        schema = FeatureSchema(
             features=[
                 Feature(name="height", modality=FeatureModality.NUMERICAL),
                 Feature(name="weight", modality=FeatureModality.NUMERICAL),
             ]
         )
 
-        assert metadata.feature_names == ["height", "weight"]
-        assert metadata.num_columns == 2
+        assert schema.feature_names == ["height", "weight"]
+        assert schema.num_columns == 2
 
     def test__feature_modalities__derived_property(self) -> None:
         """Test feature_modalities is correctly derived from features list."""
@@ -61,9 +61,9 @@ class TestFeatureMetadata:
             Feature(name="num2", modality=FeatureModality.NUMERICAL),
             Feature(name="txt1", modality=FeatureModality.TEXT),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        assert metadata.feature_modalities == {
+        assert schema.feature_modalities == {
             "numerical": [0, 2],
             "categorical": [1],
             "text": [3],
@@ -72,61 +72,61 @@ class TestFeatureMetadata:
     def test__indices_for__missing_modality(self) -> None:
         """Test indices_for returns empty list for missing modality."""
         features = [Feature(name="a", modality=FeatureModality.NUMERICAL)]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        assert metadata.indices_for(FeatureModality.TEXT) == []
+        assert schema.indices_for(FeatureModality.TEXT) == []
 
 
-class TestFeatureMetadataAddColumns:
+class TestFeatureSchemaAddColumns:
     """Tests for the add_columns method."""
 
     def test__add_columns__basic(self) -> None:
         """Test adding columns appends to features list."""
         features = [Feature(name="a", modality=FeatureModality.NUMERICAL)]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.append_columns(FeatureModality.CATEGORICAL, num_new=2)
+        new_schema = schema.append_columns(FeatureModality.CATEGORICAL, num_new=2)
 
-        assert new_metadata.num_columns == 3
-        assert new_metadata.feature_names == ["a", "added_0", "added_1"]
-        assert new_metadata.indices_for(FeatureModality.NUMERICAL) == [0]
-        assert new_metadata.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
+        assert new_schema.num_columns == 3
+        assert new_schema.feature_names == ["a", "added_0", "added_1"]
+        assert new_schema.indices_for(FeatureModality.NUMERICAL) == [0]
+        assert new_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
 
     def test__add_columns__with_custom_names(self) -> None:
         """Test adding columns with custom names."""
         features = [Feature(name="a", modality=FeatureModality.NUMERICAL)]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.append_columns(
+        new_schema = schema.append_columns(
             FeatureModality.NUMERICAL,
             num_new=2,
             names=["fingerprint_1", "fingerprint_2"],
         )
 
-        assert new_metadata.feature_names == ["a", "fingerprint_1", "fingerprint_2"]
-        assert new_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]
+        assert new_schema.feature_names == ["a", "fingerprint_1", "fingerprint_2"]
+        assert new_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]
 
     def test__add_columns__name_count_mismatch_raises(self) -> None:
         """Test that mismatched name count raises error."""
-        metadata = FeatureMetadata()
+        schema = FeatureSchema()
 
         with pytest.raises(ValueError, match="Expected 2 names"):
-            metadata.append_columns(
+            schema.append_columns(
                 FeatureModality.NUMERICAL, num_new=2, names=["only_one"]
             )
 
     def test__add_columns__immutability(self) -> None:
         """Test that add_columns returns new instance, doesn't modify original."""
         features = [Feature(name="a", modality=FeatureModality.NUMERICAL)]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.append_columns(FeatureModality.CATEGORICAL, num_new=1)
+        new_schema = schema.append_columns(FeatureModality.CATEGORICAL, num_new=1)
 
-        assert metadata.num_columns == 1
-        assert new_metadata.num_columns == 2
+        assert schema.num_columns == 1
+        assert new_schema.num_columns == 2
 
 
-class TestFeatureMetadataRemoveColumns:
+class TestFeatureSchemaRemoveColumns:
     """Tests for the remove_columns method."""
 
     def test__remove_columns__basic(self) -> None:
@@ -136,14 +136,14 @@ class TestFeatureMetadataRemoveColumns:
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
             Feature(name="c", modality=FeatureModality.NUMERICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.remove_columns([1])
+        new_schema = schema.remove_columns([1])
 
-        assert new_metadata.num_columns == 2
-        assert new_metadata.feature_names == ["a", "c"]
-        assert new_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
-        assert new_metadata.indices_for(FeatureModality.CATEGORICAL) == []
+        assert new_schema.num_columns == 2
+        assert new_schema.feature_names == ["a", "c"]
+        assert new_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+        assert new_schema.indices_for(FeatureModality.CATEGORICAL) == []
 
     def test__remove_columns__immutability(self) -> None:
         """Test that remove_columns returns new instance, doesn't modify original."""
@@ -151,15 +151,15 @@ class TestFeatureMetadataRemoveColumns:
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.NUMERICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.remove_columns([0])
+        new_schema = schema.remove_columns([0])
 
-        assert metadata.num_columns == 2
-        assert new_metadata.num_columns == 1
+        assert schema.num_columns == 2
+        assert new_schema.num_columns == 1
 
 
-class TestFeatureMetadataApplyPermutation:
+class TestFeatureSchemaApplyPermutation:
     """Tests for the apply_permutation method."""
 
     def test__apply_permutation__basic_reorder(self) -> None:
@@ -169,15 +169,15 @@ class TestFeatureMetadataApplyPermutation:
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
             Feature(name="c", modality=FeatureModality.TEXT),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
         # Permutation: new position 0 <- old 2, new 1 <- old 0, new 2 <- old 1
-        new_metadata = metadata.apply_permutation([2, 0, 1])
+        new_schema = schema.apply_permutation([2, 0, 1])
 
-        assert new_metadata.feature_names == ["c", "a", "b"]
-        assert new_metadata.indices_for(FeatureModality.TEXT) == [0]
-        assert new_metadata.indices_for(FeatureModality.NUMERICAL) == [1]
-        assert new_metadata.indices_for(FeatureModality.CATEGORICAL) == [2]
+        assert new_schema.feature_names == ["c", "a", "b"]
+        assert new_schema.indices_for(FeatureModality.TEXT) == [0]
+        assert new_schema.indices_for(FeatureModality.NUMERICAL) == [1]
+        assert new_schema.indices_for(FeatureModality.CATEGORICAL) == [2]
 
     def test__apply_permutation__immutability(self) -> None:
         """Test that apply_permutation returns new instance."""
@@ -185,15 +185,15 @@ class TestFeatureMetadataApplyPermutation:
             Feature(name="a", modality=FeatureModality.NUMERICAL),
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        new_metadata = metadata.apply_permutation([1, 0])
+        new_schema = schema.apply_permutation([1, 0])
 
-        assert metadata.feature_names == ["a", "b"]
-        assert new_metadata.feature_names == ["b", "a"]
+        assert schema.feature_names == ["a", "b"]
+        assert new_schema.feature_names == ["b", "a"]
 
 
-class TestFeatureMetadataSliceForIndices:
+class TestFeatureSchemaSliceForIndices:
     """Tests for the slice_for_indices method."""
 
     def test__slice_for_indices__basic(self) -> None:
@@ -204,10 +204,10 @@ class TestFeatureMetadataSliceForIndices:
             Feature(name="c", modality=FeatureModality.NUMERICAL),
             Feature(name="d", modality=FeatureModality.TEXT),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
         # Select indices 1 and 3
-        sliced = metadata.slice_for_indices([1, 3])
+        sliced = schema.slice_for_indices([1, 3])
 
         assert sliced.num_columns == 2
         assert sliced.feature_names == ["b", "d"]
@@ -220,9 +220,9 @@ class TestFeatureMetadataSliceForIndices:
             Feature(name="original_name", modality=FeatureModality.NUMERICAL),
             Feature(name="other", modality=FeatureModality.CATEGORICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        sliced = metadata.slice_for_indices([0])
+        sliced = schema.slice_for_indices([0])
 
         assert sliced.feature_names == ["original_name"]
 
@@ -233,16 +233,16 @@ class TestFeatureMetadataSliceForIndices:
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
             Feature(name="c", modality=FeatureModality.TEXT),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        sliced = metadata.slice_for_indices([1])
+        sliced = schema.slice_for_indices([1])
 
         assert sliced.num_columns == 1
         assert sliced.feature_names == ["b"]
         assert sliced.indices_for(FeatureModality.CATEGORICAL) == [0]
 
 
-class TestFeatureMetadataUpdateFromPreprocessingStepResult:
+class TestFeatureSchemaUpdateFromPreprocessingStepResult:
     """Tests for the update_from_preprocessing_step_result method."""
 
     def test__update_from_preprocessing_step_result__multiple_columns(self) -> None:
@@ -254,18 +254,18 @@ class TestFeatureMetadataUpdateFromPreprocessingStepResult:
             Feature(name="num1", modality=FeatureModality.NUMERICAL),
             Feature(name="num2", modality=FeatureModality.NUMERICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
         # Step processed categorical columns [0, 1] and converted them to numerical
-        step_result = FeatureMetadata(
+        step_result = FeatureSchema(
             features=[
                 Feature(name="encoded_0", modality=FeatureModality.NUMERICAL),
                 Feature(name="encoded_1", modality=FeatureModality.NUMERICAL),
             ]
         )
 
-        updated = metadata.update_from_preprocessing_step_result(
-            original_indices=[0, 1], new_metadata=step_result
+        updated = schema.update_from_preprocessing_step_result(
+            original_indices=[0, 1], new_schema=step_result
         )
 
         # Original names preserved
@@ -283,15 +283,15 @@ class TestFeatureMetadataUpdateFromPreprocessingStepResult:
             Feature(name="b", modality=FeatureModality.CATEGORICAL),
             Feature(name="c", modality=FeatureModality.TEXT),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
         # Only process column 1
-        step_result = FeatureMetadata(
+        step_result = FeatureSchema(
             features=[Feature(name="x", modality=FeatureModality.NUMERICAL)]
         )
 
-        updated = metadata.update_from_preprocessing_step_result(
-            original_indices=[1], new_metadata=step_result
+        updated = schema.update_from_preprocessing_step_result(
+            original_indices=[1], new_schema=step_result
         )
 
         # Columns 0 and 2 unchanged
@@ -305,17 +305,17 @@ class TestFeatureMetadataUpdateFromPreprocessingStepResult:
         features = [
             Feature(name="a", modality=FeatureModality.CATEGORICAL),
         ]
-        metadata = FeatureMetadata(features=features)
+        schema = FeatureSchema(features=features)
 
-        step_result = FeatureMetadata(
+        step_result = FeatureSchema(
             features=[Feature(name="x", modality=FeatureModality.NUMERICAL)]
         )
 
-        updated = metadata.update_from_preprocessing_step_result(
-            original_indices=[0], new_metadata=step_result
+        updated = schema.update_from_preprocessing_step_result(
+            original_indices=[0], new_schema=step_result
         )
 
         # Original unchanged
-        assert metadata.indices_for(FeatureModality.CATEGORICAL) == [0]
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == [0]
         # Updated has new modality
         assert updated.indices_for(FeatureModality.NUMERICAL) == [0]

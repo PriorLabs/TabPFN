@@ -20,7 +20,7 @@ from tabpfn.preprocessing.configs import (
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.torch import (
-    FeatureMetadata,
+    FeatureSchema,
     TorchPreprocessingPipeline,
     create_gpu_preprocessing_pipeline,
 )
@@ -52,7 +52,7 @@ class TabPFNEnsembleMember:
     gpu_preprocessor: TorchPreprocessingPipeline | None
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
-    feature_metadata: FeatureMetadata
+    feature_schema: FeatureSchema
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
@@ -114,7 +114,7 @@ class TabPFNEnsembleFactory:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
         override_random_state: int | np.random.Generator | None = None,
     ) -> Iterator[TabPFNEnsembleMember]:
@@ -123,7 +123,7 @@ class TabPFNEnsembleFactory:
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            feature_metadata=feature_metadata,
+            feature_schema=feature_schema,
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
@@ -142,7 +142,7 @@ class TabPFNEnsembleFactory:
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
-            feature_metadata_preprocessed,
+            feature_schema_preprocessed,
         ) in enumerate(preprocessed_data_iterator):
             yield TabPFNEnsembleMember(
                 config=config,
@@ -150,21 +150,21 @@ class TabPFNEnsembleFactory:
                 gpu_preprocessor=gpu_preprocessors[i],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
-                feature_metadata=feature_metadata_preprocessed,
+                feature_schema=feature_schema_preprocessed,
             )
 
     def fit_transform_ensemble_members(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
     ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                feature_metadata=feature_metadata,
+                feature_schema=feature_schema,
                 parallel_mode="block",
             )
         )

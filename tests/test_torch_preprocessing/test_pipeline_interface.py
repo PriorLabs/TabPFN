@@ -7,7 +7,7 @@ from typing_extensions import override
 import pytest
 import torch
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.torch import TorchSoftClipOutliersStep
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
@@ -63,19 +63,19 @@ class MockStepWithCache(TorchPreprocessingStep):
         return x - fitted_cache["mean"], None, None
 
 
-def get_test_feature_metadata(
+def get_test_feature_schema(
     *,
     num_numericals: int = 0,
     num_categoricals: int = 0,
     num_text: int = 0,
-) -> FeatureMetadata:
-    """Create FeatureMetadata for tests from modality counts."""
+) -> FeatureSchema:
+    """Create FeatureSchema for tests from modality counts."""
     features = (
         [Feature(name=None, modality=FeatureModality.NUMERICAL)] * num_numericals
         + [Feature(name=None, modality=FeatureModality.CATEGORICAL)] * num_categoricals
         + [Feature(name=None, modality=FeatureModality.TEXT)] * num_text
     )
-    return FeatureMetadata(features=features)
+    return FeatureSchema(features=features)
 
 
 def test__call__single_step_transforms_columns():
@@ -84,7 +84,7 @@ def test__call__single_step_transforms_columns():
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
 
     x = torch.ones(10, 1, 3)
-    metadata = get_test_feature_metadata(num_numericals=2, num_categoricals=1)
+    metadata = get_test_feature_schema(num_numericals=2, num_categoricals=1)
 
     result = pipeline(x, metadata, num_train_rows=5)
 
@@ -105,7 +105,7 @@ def test__call__multiple_steps_applied_sequentially():
             (step2, {FeatureModality.NUMERICAL}),
         ]
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     result = pipeline(x, metadata, num_train_rows=5)
@@ -120,7 +120,7 @@ def test__call__step_skipped_for_empty_indices():
     pipeline = TorchPreprocessingPipeline(
         steps=[(step, {FeatureModality.TEXT})]  # No TEXT columns in metadata
     )
-    metadata = get_test_feature_metadata(num_numericals=2)
+    metadata = get_test_feature_schema(num_numericals=2)
     x = torch.ones(10, 1, 2)
 
     result = pipeline(x, metadata, num_train_rows=5)
@@ -132,7 +132,7 @@ def test__call__2d_input_adds_and_removes_batch_dimension():
     """Test that 2D input gets batch dimension added then removed."""
     step = MockStep(factor=2.0)
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1)  # 2D input
 
     result = pipeline(x, metadata, num_train_rows=5)
@@ -152,7 +152,7 @@ def test__call__step_targeting_multiple_modalities():
             )
         ]
     )
-    metadata = get_test_feature_metadata(
+    metadata = get_test_feature_schema(
         num_numericals=1,
         num_categoricals=1,
         num_text=1,
@@ -171,7 +171,7 @@ def test__call__with_real_standard_scaler_step():
     """Test pipeline with a real TorchStandardScalerStep."""
     step = TorchStandardScalerStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    metadata = get_test_feature_metadata(num_numericals=2)
+    metadata = get_test_feature_schema(num_numericals=2)
     x = torch.randn(100, 1, 2) * 10 + 5  # Mean ~5, std ~10
 
     result = pipeline(x, metadata, num_train_rows=80)
@@ -188,7 +188,7 @@ def test__call__no_num_train_rows_fits_on_all_data():
     """Test that when num_train_rows is None, fit uses all data."""
     step = TorchStandardScalerStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     result = pipeline(x, metadata, num_train_rows=None)
@@ -201,7 +201,7 @@ def test__call__zero_num_train_rows():
     """Test that fit is skipped when num_train_rows is 0."""
     step = TorchSoftClipOutliersStep()
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     result = pipeline(x, metadata, num_train_rows=0)
@@ -213,7 +213,7 @@ def test__call__mismatching_num_columns_raises_error():
     """Test that mismatching num_columns raises an error."""
     step = MockStep(factor=2.0)
     pipeline = TorchPreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 2)
     with pytest.raises(ValueError, match="Number of columns in input tensor"):
         pipeline(x, metadata, num_train_rows=5)
@@ -226,7 +226,7 @@ def test__call__keep_fitted_cache_false_does_not_store_cache():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=False,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     pipeline(x, metadata, num_train_rows=5)
@@ -241,7 +241,7 @@ def test__call__keep_fitted_cache_true_stores_cache():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=True,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     pipeline(x, metadata, num_train_rows=5)
@@ -257,7 +257,7 @@ def test__call__use_fitted_cache_true_skips_fit():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=True,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     # First call: fit and store cache
@@ -276,7 +276,7 @@ def test__call__use_fitted_cache_false_refits_even_with_cache():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=True,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     # First call: fit and store cache
@@ -295,7 +295,7 @@ def test__call__use_fitted_cache_true_without_stored_cache_refits():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=False,  # Cache won't be stored
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     with pytest.raises(ValueError, match="only supported if keep_fitted_cache=True"):
@@ -309,7 +309,7 @@ def test__call__cached_values_are_used_correctly():
         steps=[(step, {FeatureModality.NUMERICAL})],
         keep_fitted_cache=True,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
 
     # First call with data that has mean=5 in training rows
     x1 = torch.full((10, 1, 1), 5.0)
@@ -335,7 +335,7 @@ def test__call__multiple_steps_cache_stored_independently():
         ],
         keep_fitted_cache=True,
     )
-    metadata = get_test_feature_metadata(num_numericals=1)
+    metadata = get_test_feature_schema(num_numericals=1)
     x = torch.ones(10, 1, 1)
 
     pipeline(x, metadata, num_train_rows=5)

@@ -21,7 +21,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -156,7 +156,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         - With append_to_original=False, apply_to_categorical=True:
             [all_transformed, (svd_cols)]
 
-    Note: The metadata tracking for SVD features is a known limitation - the step
+    Note: The schema tracking for SVD features is a known limitation - the step
     tracks the number but may not perfectly map modalities for added SVD columns.
     """
 
@@ -215,13 +215,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self,
         n_samples: int,
         n_features: int,
-        metadata: FeatureMetadata,
-    ) -> tuple[Pipeline | ColumnTransformer, FeatureMetadata]:
+        feature_schema: FeatureSchema,
+    ) -> tuple[Pipeline | ColumnTransformer, FeatureSchema]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
         static_seed, rng = infer_random_state(self.random_state)
-        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
@@ -235,10 +235,12 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 replace=False,
             )
             # Update modalities to reflect subsampled features
-            # Create a new metadata with only the kept indices
+            # Create a new schema with only the kept indices
             kept_indices = list(self.subsampled_features_)
-            metadata = metadata.slice_for_indices(kept_indices)
-            categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
+            feature_schema = feature_schema.slice_for_indices(kept_indices)
+            categorical_features = feature_schema.indices_for(
+                FeatureModality.CATEGORICAL
+            )
             n_features = subsample_features
         else:
             self.subsampled_features_ = np.arange(n_features)
@@ -358,45 +360,45 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # Build the new metadata with updated categorical indices
         # Non-categorical indices become numerical
         # SVD features are numerical and appended at the end
-        new_metadata = FeatureMetadata.from_only_categorical_indices(
+        new_schema = FeatureSchema.from_only_categorical_indices(
             categorical_indices=sorted(cat_ix),
             num_columns=n_output_features,
         )
 
-        return transformer, new_metadata
+        return transformer, new_schema
 
     @override
     def _fit(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         n_samples, n_features = X.shape
-        transformer, output_metadata = self._set_transformer_and_modalities(
+        transformer, output_schema = self._set_transformer_and_modalities(
             n_samples,
             n_features,
-            metadata,
+            feature_schema,
         )
         transformer.fit(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        return output_metadata
+        return output_schema
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
     ) -> PreprocessingStepResult:
         n_samples, n_features = X.shape
-        transformer, output_metadata = self._set_transformer_and_modalities(
+        transformer, output_schema = self._set_transformer_and_modalities(
             n_samples,
             n_features,
-            metadata,
+            feature_schema,
         )
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, feature_metadata=output_metadata)  # type: ignore[arg-type]
+        self.feature_schema_after_transform_ = output_schema
+        return PreprocessingStepResult(X=Xt, feature_schema=output_schema)  # type: ignore[arg-type]
 
     # TODO: Add test for it and make it useable with modality assignment
     # in pipeline registration.

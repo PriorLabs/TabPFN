@@ -12,7 +12,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import FeatureMetadata
+    from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
 # TODO: Deprecate this step. It's not needed because we normalize
@@ -30,11 +30,11 @@ class DifferentiableZNormStep(PreprocessingStep):
     def _fit(  # type: ignore
         self,
         X: torch.Tensor,
-        metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)
-        return metadata
+        return feature_schema
 
     @override
     def _transform(  # type: ignore

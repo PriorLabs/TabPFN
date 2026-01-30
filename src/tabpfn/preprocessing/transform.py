@@ -23,7 +23,7 @@ from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from tabpfn.preprocessing.configs import EnsembleConfig
-    from tabpfn.preprocessing.datamodel import FeatureMetadata
+    from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 
@@ -33,13 +33,13 @@ def _fit_preprocessing_one(
     y_train: np.ndarray | torch.Tensor,
     random_state: int | np.random.Generator | None = None,
     *,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ) -> tuple[
     EnsembleConfig,
     PreprocessingPipeline,
     np.ndarray,
     np.ndarray,
-    FeatureMetadata,
+    FeatureSchema,
 ]:
     """Fit preprocessing pipeline for a single ensemble configuration.
 
@@ -48,7 +48,7 @@ def _fit_preprocessing_one(
         X_train: Training data.
         y_train: Training target.
         random_state: Random seed.
-        feature_metadata: Feature metadata.
+        feature_schema: feature schema.
 
     Returns:
         Tuple containing the ensemble configuration, the fitted preprocessing pipeline,
@@ -64,7 +64,7 @@ def _fit_preprocessing_one(
         y_train = y_train.copy()
 
     preprocessor = build_pipeline(config, random_state=static_seed)
-    res = preprocessor.fit_transform(X_train, feature_metadata)
+    res = preprocessor.fit_transform(X_train, feature_schema)
 
     y_train_processed = _transform_labels_one(config, y_train)
 
@@ -73,7 +73,7 @@ def _fit_preprocessing_one(
         preprocessor,
         res.X,
         y_train_processed,
-        res.feature_metadata,
+        res.feature_schema,
     )
 
 
@@ -108,7 +108,7 @@ def fit_preprocessing(
     y_train: np.ndarray,
     *,
     random_state: int | np.random.Generator | None,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
     n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
 ) -> Iterator[
@@ -117,7 +117,7 @@ def fit_preprocessing(
         PreprocessingPipeline,
         np.ndarray,
         np.ndarray,
-        FeatureMetadata,
+        FeatureSchema,
     ]
 ]:
     """Fit preprocessing pipelines in parallel.
@@ -127,7 +127,7 @@ def fit_preprocessing(
         X_train: Training data.
         y_train: Training target.
         random_state: Random number generator.
-        feature_metadata: Feature metadata.
+        feature_schema: feature schema.
         n_preprocessing_jobs: Number of worker processes to use.
             If `1`, then the preprocessing is performed in the current process. This
                 avoids multiprocessing overheads, but may not be able to full saturate
@@ -162,7 +162,7 @@ def fit_preprocessing(
         )
     else:
         executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
-    func = partial(_fit_preprocessing_one, feature_metadata=feature_metadata)
+    func = partial(_fit_preprocessing_one, feature_schema=feature_schema)
     worker_func = joblib.delayed(func)
 
     seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))

@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps import DifferentiableZNormStep
 
 
@@ -24,9 +24,9 @@ def data_with_zero_std():
 
 
 @pytest.fixture
-def feature_metadata():
+def feature_schema():
     """Provides a sample feature modalities dictionary."""
-    return FeatureMetadata(
+    return FeatureSchema(
         features=[
             Feature(name=None, modality=FeatureModality.NUMERICAL),
             Feature(name=None, modality=FeatureModality.CATEGORICAL),
@@ -46,29 +46,29 @@ def test_diff_znorm_initialization():
 
 def test_diff_znorm_fit(
     sample_data: torch.Tensor,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ):
     """Test _fit calculates and stores mean/std correctly."""
     step = DifferentiableZNormStep()
     expected_means = torch.mean(sample_data, dim=0, keepdim=True)
     expected_stds = torch.std(sample_data, dim=0, keepdim=True)
 
-    returned_modalities = step._fit(sample_data, feature_metadata)
+    returned_modalities = step._fit(sample_data, feature_schema)
 
     assert torch.allclose(step.means, expected_means)
     assert torch.allclose(step.stds, expected_stds)
     assert step.means.shape == (1, sample_data.shape[1])
     assert step.stds.shape == (1, sample_data.shape[1])
-    assert returned_modalities == feature_metadata
+    assert returned_modalities == feature_schema
 
 
 def test_diff_znorm_transform(
     sample_data: torch.Tensor,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ):
     """Test _transform applies Z-norm correctly."""
     step = DifferentiableZNormStep()
-    step._fit(sample_data, feature_metadata)  # Fit first
+    step._fit(sample_data, feature_schema)  # Fit first
 
     expected_output = (sample_data - step.means) / step.stds
     transformed_data, *_ = step._transform(sample_data)
@@ -88,14 +88,14 @@ def test_diff_znorm_transform(
 
 def test_diff_znorm_fit_transform_integration(
     sample_data: torch.Tensor,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ):
     """Test fit and transform used together via base class methods."""
     step = DifferentiableZNormStep()
-    step.fit_transform(sample_data, feature_metadata)
+    step.fit_transform(sample_data, feature_schema)
     result = step.transform(sample_data)
     transformed_data = result.X
-    returned_modalities = result.feature_metadata
+    returned_modalities = result.feature_schema
 
     mean_transformed = torch.mean(transformed_data, dim=0)
     std_transformed = torch.std(transformed_data, dim=0)
@@ -103,16 +103,16 @@ def test_diff_znorm_fit_transform_integration(
         mean_transformed, torch.zeros(sample_data.shape[1]), atol=1e-6
     )
     assert torch.allclose(std_transformed, torch.ones(sample_data.shape[1]), atol=1e-6)
-    assert returned_modalities == feature_metadata
+    assert returned_modalities == feature_schema
 
 
 def test_diff_znorm_transform_shape_mismatch(
     sample_data: torch.Tensor,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ):
     """Test transform raises AssertionError on input shape mismatch."""
     step = DifferentiableZNormStep()
-    step._fit(sample_data, feature_metadata)  # Fit with 3 features
+    step._fit(sample_data, feature_schema)  # Fit with 3 features
 
     mismatched_data = torch.tensor(
         [[1.0, 10.0], [3.0, 12.0]], dtype=torch.float32
@@ -124,11 +124,11 @@ def test_diff_znorm_transform_shape_mismatch(
 
 def test_diff_znorm_transform_with_zero_std(
     data_with_zero_std: torch.Tensor,
-    feature_metadata: FeatureMetadata,
+    feature_schema: FeatureSchema,
 ):
     """Test transform behavior with zero std deviation column."""
     step = DifferentiableZNormStep()
-    step._fit(data_with_zero_std, feature_metadata)
+    step._fit(data_with_zero_std, feature_schema)
 
     assert torch.isclose(step.stds[0, 1], torch.tensor(0.0))
 

@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -28,7 +28,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     """Encode categorical features using ordinal or one-hot encoding.
 
     This step should receive ALL columns (not modality-sliced) because it:
-    1. Needs to identify categorical vs numerical columns from metadata
+    1. Needs to identify categorical vs numerical columns from feature schema
     2. Transforms only categorical columns while preserving numerical
     3. Reorders output: categorical columns first, then numerical columns
 
@@ -135,14 +135,14 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
-        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return FeatureMetadata.from_only_categorical_indices(
+            return FeatureSchema.from_only_categorical_indices(
                 categorical_features, n_features
             )
 
@@ -176,23 +176,23 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        # TODO: Test if the metadata is correct after the different
+        # TODO: Test if the feature schema is correct after the different
         # transformations.
-        return FeatureMetadata.from_only_categorical_indices(
+        return FeatureSchema.from_only_categorical_indices(
             categorical_features, n_features
         )
 
     def _fit_transform_internal(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
-    ) -> tuple[np.ndarray, FeatureMetadata]:
-        categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
+        feature_schema: FeatureSchema,
+    ) -> tuple[np.ndarray, FeatureSchema]:
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, FeatureMetadata.from_only_categorical_indices(
+            return X, FeatureSchema.from_only_categorical_indices(
                 categorical_features, n_features
             )
 
@@ -233,7 +233,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, FeatureMetadata.from_only_categorical_indices(
+        return Xt, FeatureSchema.from_only_categorical_indices(
             categorical_features, n_features
         )
 
@@ -241,11 +241,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
     def fit_transform(
         self,
         X: np.ndarray,
-        metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
     ) -> PreprocessingStepResult:
-        Xt, output_metadata = self._fit_transform_internal(X, metadata)
-        self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, feature_metadata=output_metadata)
+        Xt, output_feature_schema = self._fit_transform_internal(X, feature_schema)
+        self.feature_schema_after_transform_ = output_feature_schema
+        return PreprocessingStepResult(X=Xt, feature_schema=output_feature_schema)
 
     @override
     def _transform(

@@ -72,7 +72,7 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.utils import (
@@ -140,8 +140,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
-    inferred_feature_metadata_: FeatureMetadata
-    """The inferred column metadata. This contains the feature modalities per column,
+    inferred_feature_schema_: FeatureSchema
+    """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
 
     classes_: npt.NDArray[Any]
@@ -576,7 +576,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Minimal preprocessing for prompt tuning
         n_features = X.shape[1]
         features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
-        self.inferred_feature_metadata_ = FeatureMetadata(features=features)
+        self.inferred_feature_schema_ = FeatureSchema(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = generate_classification_ensemble_configs(
@@ -618,7 +618,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             devices=self.devices_,
         )
 
-        X, ordinal_encoder, feature_metadata = tag_features_and_sanitize_data(
+        X, ordinal_encoder, feature_schema = tag_features_and_sanitize_data(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
@@ -627,7 +627,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         self.ordinal_encoder_ = ordinal_encoder
-        self.inferred_feature_metadata_ = feature_metadata
+        self.inferred_feature_schema_ = feature_schema
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 
@@ -661,7 +661,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert len(ensemble_configs) == self.n_estimators
 
         # We can convert to numpy. We stored the feature names in the
-        # feature metadata and the target name in the label encoder.
+        # feature schema and the target name in the label encoder.
         return ensemble_configs, X, y
 
     def _initialize_dataset_preprocessing(
@@ -718,9 +718,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
 
         num_features = X_preprocessed[0].shape[1]
-        feature_metadata = []
+        feature_schema = []
         for ib in cat_ix:
-            feature_metadata.append([])
+            feature_schema.append([])
             for cat_index in ib:
                 features = [
                     Feature(
@@ -731,12 +731,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     )
                     for i in range(num_features)
                 ]
-                feature_metadata[-1].append(FeatureMetadata(features=features))
+                feature_schema[-1].append(FeatureSchema(features=features))
 
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
-            feature_metadata=feature_metadata,
+            feature_schema=feature_schema,
             ensemble_configs=configs,
             models=self.models_,
             devices=self.devices_,
@@ -837,7 +837,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            feature_metadata=self.inferred_feature_metadata_,
+            feature_schema=self.inferred_feature_schema_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices_=self.devices_,
@@ -1013,7 +1013,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = fix_dtypes(
                 X,
-                cat_indices=self.inferred_feature_metadata_.indices_for(
+                cat_indices=self.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
             )

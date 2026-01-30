@@ -64,7 +64,7 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
-from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -172,8 +172,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
-    inferred_feature_metadata_: FeatureMetadata
-    """The inferred column metadata. This contains the feature modalities per column,
+    inferred_feature_schema_: FeatureSchema
+    """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
 
     n_outputs_: Literal[1]  # We only support single output
@@ -620,7 +620,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         self.ordinal_encoder_ = ordinal_encoder
-        self.inferred_feature_metadata_ = feature_modalities
+        self.inferred_feature_schema_ = feature_modalities
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -675,7 +675,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Handle the preprocessing of the input (X and y). We also return the
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
-        Sets self.inferred_feature_metadata_.
+        Sets self.inferred_feature_schema_.
         """
         if self.differentiable_input:
             raise ValueError(
@@ -725,9 +725,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # TODO: this is a bit cryptic
         num_features = X_preprocessed[0].shape[1]
-        feature_metadata = []
+        feature_schema = []
         for ib in cat_ix:
-            feature_metadata.append([])
+            feature_schema.append([])
             for cat_index in ib:
                 features = [
                     Feature(
@@ -738,12 +738,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     )
                     for i in range(num_features)
                 ]
-                feature_metadata[-1].append(FeatureMetadata(features=features))
+                feature_schema[-1].append(FeatureSchema(features=features))
 
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
-            feature_metadata=feature_metadata,
+            feature_schema=feature_schema,
             ensemble_configs=configs,
             models=self.models_,
             devices=self.devices_,
@@ -835,7 +835,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            feature_metadata=self.inferred_feature_metadata_,
+            feature_schema=self.inferred_feature_schema_,
             ensemble_preprocessor=ensemble_preprocessor,
             models=self.models_,
             devices_=self.devices_,
@@ -942,7 +942,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        cat_indices = self.inferred_feature_metadata_.indices_for(
+        cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
         X = fix_dtypes(X, cat_indices=cat_indices)

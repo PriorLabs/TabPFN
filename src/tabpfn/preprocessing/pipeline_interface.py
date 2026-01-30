@@ -9,7 +9,7 @@ from typing_extensions import TypeAlias
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 StepWithModalities: TypeAlias = tuple["PreprocessingStep", set[FeatureModality]]
 
@@ -22,19 +22,19 @@ class PreprocessingStepResult:
         X: Transformed array. For steps registered with specific modalities,
             this is only the transformed columns (not the full array).
             The shape should match the input shape unless columns are removed.
-        column_metadata: Column metadata for the columns this step processed.
+        feature_schema: Feature schema for the columns this step processed.
             Contains 0-based indices relative to the step's input.
             Should NOT include added_columns - the pipeline handles that.
         X_added: Optional new features to append (e.g., fingerprint features).
             These are handled by the pipeline, which concatenates them and
-            updates the metadata accordingly. Steps should NOT concatenate
+            updates the schema accordingly. Steps should NOT concatenate
             these internally.
         modality_added: Modality for the added features. Required if X_added
             is provided.
     """
 
     X: np.ndarray | torch.Tensor
-    feature_metadata: FeatureMetadata
+    feature_schema: FeatureSchema
     X_added: np.ndarray | torch.Tensor | None = None
     modality_added: FeatureModality | None = None
 
@@ -50,11 +50,11 @@ class PreprocessingPipelineResult:
 
     Attributes:
         X: The transformed array.
-        column_metadata: Updated column metadata (may have new columns added).
+        feature_schema: Updated feature schema (may have new columns added).
     """
 
     X: np.ndarray | torch.Tensor
-    feature_metadata: FeatureMetadata
+    feature_schema: FeatureSchema
 
 
 class PreprocessingStep:
@@ -64,7 +64,7 @@ class PreprocessingStep:
     will handle slicing the data to only pass the relevant columns to the step.
 
     Subclasses should implement `_fit` and `_transform` methods. The `_fit` method
-    receives the sliced data and metadata, and should return the metadata after
+    receives the sliced data and schema, and should return the schema after
     transformation (for the transformed columns only, NOT including added_columns).
 
     The `_transform` method receives the sliced data and returns the transformed
@@ -75,23 +75,23 @@ class PreprocessingStep:
     they don't transform. The pipeline handles column slicing and reassembly.
     """
 
-    metadata_after_transform_: FeatureMetadata
+    feature_schema_after_transform_: FeatureSchema
 
     @abstractmethod
     def _fit(
         self,
         X: np.ndarray,
-        feature_metadata: FeatureMetadata,
-    ) -> FeatureMetadata:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         """Underlying method of the preprocessor to implement by subclasses.
 
         Args:
             X: 2d array of shape (n_samples, n_features). For steps registered
                 with specific modalities, this is only the relevant columns.
-            feature_metadata: Feature metadata for the input columns.
+            feature_schema: feature schema for the input columns.
 
         Returns:
-            Column metadata after the transform.
+            Feature schema after the transform.
         """
         ...
 
@@ -115,18 +115,18 @@ class PreprocessingStep:
     def fit_transform(
         self,
         X: np.ndarray,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
     ) -> PreprocessingStepResult:
         """Fits the preprocessor and transforms the data.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
-            feature_metadata: Feature metadata.
+            feature_schema: feature schema.
 
         Returns:
-            PreprocessingStepResult with transformed data and updated metadata.
+            PreprocessingStepResult with transformed data and updated feature schema.
         """
-        self.metadata_after_transform_ = self._fit(X, feature_metadata)
+        self.feature_schema_after_transform_ = self._fit(X, feature_schema)
         return self.transform(X, is_test=False)
 
     def transform(
@@ -143,13 +143,13 @@ class PreprocessingStep:
             is_test: Whether this is test data (used for AddFingerPrint step).
 
         Returns:
-            PreprocessingStepResult with transformed data and metadata.
+            PreprocessingStepResult with transformed data and feature schema.
         """
         result, X_added, modality_added = self._transform(X, is_test=is_test)
 
         return PreprocessingStepResult(
             X=result,
-            feature_metadata=self.metadata_after_transform_,
+            feature_schema=self.feature_schema_after_transform_,
             X_added=X_added,
             modality_added=modality_added,
         )
@@ -162,7 +162,7 @@ class PreprocessingPipeline:
     where each step can be registered to target specific feature modalities.
     The pipeline handles slicing columns based on registered modalities,
     passing only relevant columns to each step, reassembling data after each
-    step, and tracking metadata updates.
+    step, and tracking feature schema updates.
 
     For backwards compatibility, steps can be registered as (step, modalities)
     tuples where the step receives only columns matching the specified modalities,
@@ -170,6 +170,12 @@ class PreprocessingPipeline:
     need to be tracked by the step itself. Going forward, only the former format will be
     supported.
     """
+
+    initial_feature_schema_: FeatureSchema | None = None
+    """The feature schema before the pipeline has been fit."""
+
+    final_feature_schema_: FeatureSchema | None = None
+    """The feature schema after the pipeline has been fit."""
 
     def __init__(
         self,
@@ -186,27 +192,25 @@ class PreprocessingPipeline:
         super().__init__()
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
-        self.final_metadata_: FeatureMetadata | None = None
-        self.initial_metadata_: FeatureMetadata | None = None
 
     def fit_transform(
         self,
         X: np.ndarray | torch.Tensor,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
     ) -> PreprocessingPipelineResult:
         """Fit and transform the data using the pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
-            feature_metadata: Feature metadata.
+            feature_schema: feature schema.
 
         Returns:
-            PreprocessingPipelineResult with transformed data and updated metadata.
+            PreprocessingPipelineResult with transformed data and updated schema.
         """
-        self.initial_metadata_ = feature_metadata
-        X, feature_metadata = self._process_steps(X, feature_metadata, is_fitting=True)
-        self.final_metadata_ = feature_metadata
-        return PreprocessingPipelineResult(X=X, feature_metadata=feature_metadata)
+        self.initial_feature_schema_ = feature_schema
+        X, feature_schema = self._process_steps(X, feature_schema, is_fitting=True)
+        self.final_feature_schema_ = feature_schema
+        return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
     def transform(self, X: np.ndarray | torch.Tensor) -> PreprocessingPipelineResult:
         """Transform the data using the fitted pipeline.
@@ -215,43 +219,45 @@ class PreprocessingPipeline:
             X: 2d array of shape (n_samples, n_features).
 
         Returns:
-            PreprocessingPipelineResult with transformed data and metadata.
+            PreprocessingPipelineResult with transformed data and feature schema.
         """
-        assert self.initial_metadata_ is not None, (
+        assert self.initial_feature_schema_ is not None, (
             "The pipeline must be fit before it can be used to transform."
         )
-        assert self.final_metadata_ is not None
+        assert self.final_feature_schema_ is not None
 
-        X, _ = self._process_steps(X, self.initial_metadata_, is_fitting=False)
-        return PreprocessingPipelineResult(X=X, feature_metadata=self.final_metadata_)
+        X, _ = self._process_steps(X, self.initial_feature_schema_, is_fitting=False)
+        return PreprocessingPipelineResult(
+            X=X, feature_schema=self.final_feature_schema_
+        )
 
     def _process_steps(
         self,
         X: np.ndarray | torch.Tensor,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
         *,
         is_fitting: bool,
-    ) -> tuple[np.ndarray | torch.Tensor, FeatureMetadata]:
+    ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Process all pipeline steps.
 
         Args:
             X: Input array of shape (n_samples, n_features).
-            feature_metadata: Feature metadata.
+            feature_schema: Feature schema.
             is_fitting: If True, call fit_transform on steps; otherwise transform.
 
         Returns:
-            Tuple of (transformed array, updated metadata).
+            Tuple of (transformed array, updated feature schema).
         """
         for step, modalities in self.steps:
             if modalities:
-                indices = feature_metadata.indices_for_modalities(modalities)
+                indices = feature_schema.indices_for_modalities(modalities)
                 if not indices:
                     continue
 
                 X_slice = X[:, indices]
                 result = (
                     step.fit_transform(
-                        X_slice, feature_metadata.slice_for_indices(indices)
+                        X_slice, feature_schema.slice_for_indices(indices)
                     )
                     if is_fitting
                     else step.transform(X_slice)
@@ -269,49 +275,47 @@ class PreprocessingPipeline:
                 assert X.dtype == result.X.dtype
                 X[:, indices] = result.X
 
-                X, feature_metadata = self._maybe_append_added_columns(
-                    X, feature_metadata, result
+                X, feature_schema = self._maybe_append_added_columns(
+                    X, feature_schema, result
                 )
-                feature_metadata = (
-                    feature_metadata.update_from_preprocessing_step_result(
-                        indices, result.feature_metadata
-                    )
+                feature_schema = feature_schema.update_from_preprocessing_step_result(
+                    indices, result.feature_schema
                 )
             else:
                 # We still have preprocessing steps that don't change the columns
                 # internally (will be deprecated going forward). For backwards
                 # compatibility, we still handle these here.
                 result = (
-                    step.fit_transform(X, feature_metadata)
+                    step.fit_transform(X, feature_schema)
                     if is_fitting
                     else step.transform(X)
                 )
                 X = result.X
-                feature_metadata = result.feature_metadata
-                X, feature_metadata = self._maybe_append_added_columns(
-                    X, feature_metadata, result
+                feature_schema = result.feature_schema
+                X, feature_schema = self._maybe_append_added_columns(
+                    X, feature_schema, result
                 )
 
-        return X, feature_metadata
+        return X, feature_schema
 
     def _maybe_append_added_columns(
         self,
         X: np.ndarray | torch.Tensor,
-        feature_metadata: FeatureMetadata,
+        feature_schema: FeatureSchema,
         result: PreprocessingStepResult,
-    ) -> tuple[np.ndarray | torch.Tensor, FeatureMetadata]:
-        """Append added columns from a step result and update metadata."""
+    ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
+        """Append added columns from a step result and update schema."""
         if result.X_added is not None:
             if isinstance(X, np.ndarray):
                 X = np.concatenate([X, result.X_added], axis=1)
             else:
                 assert isinstance(result.X_added, torch.Tensor)
                 X = torch.cat([X, result.X_added], dim=1)
-            feature_metadata = feature_metadata.append_columns(
+            feature_schema = feature_schema.append_columns(
                 result.modality_added or FeatureModality.NUMERICAL,
                 result.X_added.shape[1],
             )
-        return X, feature_metadata
+        return X, feature_schema
 
     def _validate_steps(
         self,

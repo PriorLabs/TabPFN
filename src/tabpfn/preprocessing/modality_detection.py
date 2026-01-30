@@ -8,8 +8,7 @@ from typing import TYPE_CHECKING, Any
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.datamodel import Feature, FeatureModality
-from tabpfn.preprocessing.torch import FeatureMetadata
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
     import numpy as np
@@ -36,7 +35,7 @@ def detect_feature_modalities(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> FeatureMetadata:
+) -> FeatureSchema:
     """Infer the features modalities from the given data, based on heuristics
     and user-provided indices for categorical features.
 
@@ -79,7 +78,7 @@ def detect_feature_modalities(
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    return FeatureMetadata(features=features)
+    return FeatureSchema(features=features)
 
 
 def _detect_feature_modality(

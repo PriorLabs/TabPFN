@@ -5,13 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
 
 
-def _make_feature_metadata(n_features: int, cat_indices: list[int]) -> FeatureMetadata:
-    """Create FeatureMetadata from feature count and categorical indices."""
-    return FeatureMetadata.from_only_categorical_indices(cat_indices, n_features)
+def _make_feature_schema(n_features: int, cat_indices: list[int]) -> FeatureSchema:
+    """Create FeatureSchema from feature count and categorical indices."""
+    return FeatureSchema.from_only_categorical_indices(cat_indices, n_features)
 
 
 def _make_test_data(
@@ -42,23 +42,23 @@ def test__encode_categorical__ordinal__indices_moved_to_start():
     cat_indices = [1, 4]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # ColumnTransformer moves categorical columns to the front
     expected_cat_indices = [0, 1]  # Now at positions 0 and 1
     expected_num_indices = [2, 3, 4, 5]  # Numerical columns follow
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_features)
@@ -77,23 +77,23 @@ def test__encode_categorical__ordinal_shuffled__indices_same_as_ordinal():
     cat_indices = [2, 5]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal_shuffled",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # Indices should be moved to front, same as ordinal
     expected_cat_indices = [0, 1]
     expected_num_indices = [2, 3, 4, 5]
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
     assert result.X.shape == (n_samples, n_features)
@@ -106,21 +106,21 @@ def test__encode_categorical__ordinal_shuffled__values_are_permuted():
     cat_indices = [1, 3]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     # Fit with ordinal (no shuffling)
     step_ordinal = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal",
         random_state=42,
     )
-    result_ordinal = step_ordinal.fit_transform(X, feature_metadata)
+    result_ordinal = step_ordinal.fit_transform(X, feature_schema)
 
     # Fit with ordinal_shuffled
     step_shuffled = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal_shuffled",
         random_state=42,
     )
-    result_shuffled = step_shuffled.fit_transform(X.copy(), feature_metadata)
+    result_shuffled = step_shuffled.fit_transform(X.copy(), feature_schema)
 
     # The categorical columns (now at 0 and 1) should have different values
     # due to shuffling, but same unique value count
@@ -150,13 +150,13 @@ def test__encode_categorical__onehot__expands_features():
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
     # Force exactly 3 categories for predictable output
     X[:, 1] = rng.integers(0, 3, size=n_samples).astype(float)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="onehot",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # OneHot with drop="if_binary" keeps all 3 categories for non-binary
     # So 1 cat column with 3 cats -> 3 onehot columns (at the front)
@@ -167,11 +167,11 @@ def test__encode_categorical__onehot__expands_features():
     expected_cat_indices = [0, 1, 2]
     expected_num_indices = [3, 4, 5]
     assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
+        result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
         == expected_cat_indices
     )
     assert (
-        result.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+        result.feature_schema.indices_for(FeatureModality.NUMERICAL)
         == expected_num_indices
     )
 
@@ -188,21 +188,19 @@ def test__encode_categorical__numeric__no_transformation():
     num_indices = [1, 3, 4]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="numeric",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # No transformation, data unchanged
     np.testing.assert_array_equal(result.X, X)
     # All indices remain at original positions
-    assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL) == cat_indices
-    )
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == cat_indices
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
 
 
 def test__encode_categorical__none__no_transformation():
@@ -217,20 +215,18 @@ def test__encode_categorical__none__no_transformation():
     num_indices = [0, 2, 4]
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="none",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # No transformation
     np.testing.assert_array_equal(result.X, X)
-    assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL) == cat_indices
-    )
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == cat_indices
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
 
 
 def test__encode_categorical__ordinal__no_categoricals():
@@ -244,18 +240,18 @@ def test__encode_categorical__ordinal__no_categoricals():
     num_indices = list(range(n_features))
 
     X = rng.random((n_samples, n_features))
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # No categorical features, data unchanged
     np.testing.assert_array_equal(result.X, X)
-    assert result.feature_metadata.indices_for(FeatureModality.CATEGORICAL) == []
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == []
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
 
 
 def test__encode_categorical__ordinal__all_categoricals():
@@ -269,20 +265,18 @@ def test__encode_categorical__ordinal__all_categoricals():
     num_indices: list[int] = []
 
     X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name="ordinal",
         random_state=42,
     )
-    result = step.fit_transform(X, feature_metadata)
+    result = step.fit_transform(X, feature_schema)
 
     # All features remain categorical, indices 0 to n_features-1
     assert result.X.shape == (n_samples, n_features)
-    assert (
-        result.feature_metadata.indices_for(FeatureModality.CATEGORICAL) == cat_indices
-    )
-    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == num_indices
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == cat_indices
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
 
 
 @pytest.mark.parametrize(
@@ -297,22 +291,22 @@ def test__encode_categorical__transform_is_deterministic(transform_name: str):
 
     X_train = _make_test_data(rng, n_samples, n_features, cat_indices)
     X_test = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_metadata = _make_feature_metadata(n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
 
     step = EncodeCategoricalFeaturesStep(
         categorical_transform_name=transform_name,
         random_state=42,
     )
-    step.fit_transform(X_train, feature_metadata)
+    step.fit_transform(X_train, feature_schema)
 
     # Multiple transforms should give same result
     result1 = step.transform(X_test)
     result2 = step.transform(X_test)
 
     np.testing.assert_array_equal(result1.X, result2.X)
-    assert result1.feature_metadata.indices_for(
+    assert result1.feature_schema.indices_for(
         FeatureModality.CATEGORICAL
-    ) == result2.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
-    assert result1.feature_metadata.indices_for(
+    ) == result2.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    assert result1.feature_schema.indices_for(
         FeatureModality.NUMERICAL
-    ) == result2.feature_metadata.indices_for(FeatureModality.NUMERICAL)
+    ) == result2.feature_schema.indices_for(FeatureModality.NUMERICAL)
