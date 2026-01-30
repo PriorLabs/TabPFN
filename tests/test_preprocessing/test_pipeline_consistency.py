@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-from tabpfn.preprocessing.pipeline import build_pipeline
+from tabpfn.preprocessing.pipeline_factory import build_pipeline
 from tabpfn.preprocessing.pipeline_interfaces import TransformResult
 
 try:
