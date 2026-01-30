@@ -8,7 +8,7 @@ This file is intended to be vendored in your project if you do not want to depen
 Be aware that depending on `sklearn-compat` does not add any additional dependencies:
 we are only depending on `scikit-learn`.
 
-Version: 0.1.3
+Version: 0.1.4
 """
 
 from __future__ import annotations
@@ -23,8 +23,6 @@ from typing import Callable, Literal
 
 import sklearn
 from sklearn.utils.fixes import parse_version
-
-from tabpfn.errors import TabPFNValidationError
 
 sklearn_version = parse_version(parse_version(sklearn.__version__).base_version)
 
@@ -54,7 +52,7 @@ def get_tags(estimator):
     estimator : estimator object
         A scikit-learn estimator instance.
 
-    Returns:
+    Returns
     -------
     tags : Tags
         An object containing metadata about the estimator's requirements and
@@ -113,7 +111,6 @@ def _to_new_tags(old_tags, estimator=None):
     if estimator_type == "regressor":
         regressor_tags = RegressorTags(
             poor_score=old_tags["poor_score"],
-            multi_label=old_tags["multilabel"],
         )
     else:
         regressor_tags = None
@@ -174,7 +171,7 @@ else:
 if sklearn_version < parse_version("1.4"):
 
     def _is_fitted(estimator, attributes=None, all_or_any=all):
-        """Determine if an estimator is fitted.
+        """Determine if an estimator is fitted
 
         Parameters
         ----------
@@ -192,7 +189,7 @@ if sklearn_version < parse_version("1.4"):
         all_or_any : callable, {all, any}, default=all
             Specify whether all or any of the given attributes must exist.
 
-        Returns:
+        Returns
         -------
         fitted : bool
             Whether the estimator is fitted.
@@ -214,13 +211,14 @@ if sklearn_version < parse_version("1.4"):
 
         def process_routing(_obj, _method, /, **kwargs):
             raise NotImplementedError(
-                "Metadata routing is not implemented in scikit-learn < 1.3",
+                "Metadata routing is not implemented in scikit-learn < 1.3"
             )
 
         def _raise_for_params(params, owner, method):
             raise NotImplementedError(
-                "Metadata routing is not implemented in scikit-learn < 1.3",
+                "Metadata routing is not implemented in scikit-learn < 1.3"
             )
+
     else:
 
         def process_routing(_obj, _method, /, **kwargs):
@@ -244,16 +242,8 @@ if sklearn_version < parse_version("1.4"):
                     " enable_metadata_routing=True, which you can set using"
                     " `sklearn.set_config`. See the User Guide"
                     " <https://scikit-learn.org/stable/metadata_routing.html> for more"
-                    f" details. Extra parameters passed are: {set(params)}",
+                    f" details. Extra parameters passed are: {set(params)}"
                 )
-
-    def _is_pandas_df(X):
-        """Return True if the X is a pandas dataframe."""
-        try:
-            pd = sys.modules["pandas"]
-        except KeyError:
-            return False
-        return isinstance(X, pd.DataFrame)
 
 else:
     from sklearn.utils.metadata_routing import (
@@ -262,7 +252,6 @@ else:
     )
     from sklearn.utils.validation import (
         _is_fitted,  # noqa: F401
-        _is_pandas_df,  # noqa: F401
     )
 
 
@@ -276,15 +265,15 @@ if sklearn_version < parse_version("1.5"):
     # extmath
     # fixes
     from sklearn.utils import (
-        _IS_32BIT,
-        _approximate_mode,
-        _chunk_generator as chunk_generator,
-        _in_unstable_openblas_configuration,
-        gen_batches,
-        gen_even_slices,
-        get_chunk_n_rows,
-        safe_sqr,
+        _IS_32BIT,  # noqa: F401
+        _approximate_mode,  # noqa: F401
+        _in_unstable_openblas_configuration,  # noqa: F401
+        gen_batches,  # noqa: F401
+        gen_even_slices,  # noqa: F401
+        get_chunk_n_rows,  # noqa: F401
+        safe_sqr,  # noqa: F401
     )
+    from sklearn.utils import _chunk_generator as chunk_generator  # noqa: F401
 
     _IS_WASM = platform.machine() in ["wasm32", "wasm64"]
     # indexing
@@ -294,22 +283,22 @@ if sklearn_version < parse_version("1.5"):
     # user interface
     # validation
     from sklearn.utils import (
-        _determine_key_type,
-        _get_column_indices,
-        _is_pandas_na as is_pandas_na,
-        _print_elapsed_time,
-        _safe_assign,
-        _safe_indexing,
-        _to_object_array,
-        axis0_safe_slice,
-        check_matplotlib_support,
-        check_pandas_support,
-        indices_to_mask,
-        is_scalar_nan,
-        resample,
-        safe_mask,
-        shuffle,
+        _determine_key_type,  # noqa: F401
+        _get_column_indices,  # noqa: F401
+        _print_elapsed_time,  # noqa: F401
+        _safe_assign,  # noqa: F401
+        _safe_indexing,  # noqa: F401
+        _to_object_array,  # noqa: F401
+        axis0_safe_slice,  # noqa: F401
+        check_matplotlib_support,  # noqa: F401
+        check_pandas_support,  # noqa: F401
+        indices_to_mask,  # noqa: F401
+        is_scalar_nan,  # noqa: F401
+        resample,  # noqa: F401
+        safe_mask,  # noqa: F401
+        shuffle,  # noqa: F401
     )
+    from sklearn.utils import _is_pandas_na as is_pandas_na  # noqa: F401
 else:
     # chunking
     from sklearn.utils._chunking import (
@@ -345,7 +334,7 @@ else:
     # optional dependencies
     from sklearn.utils._optional_dependencies import (  # noqa: F401
         check_matplotlib_support,
-        check_pandas_support,
+        check_pandas_support,  # noqa: F401
     )
 
     # user interface
@@ -392,7 +381,8 @@ if sklearn_version < parse_version("1.6"):
             if raise_unknown and target_type == "unknown":
                 input = input_name if input_name else "data"
                 raise ValueError(f"Unknown label type for {input}: {y!r}")
-            return target_type
+            else:
+                return target_type
 
         target_type = type_of_target(y, input_name=input_name)
         return _raise_or_return(target_type)
@@ -421,7 +411,7 @@ if sklearn_version < parse_version("1.6"):
             _check_feature_names(_estimator, X, reset=reset)
 
             no_val_X = isinstance(X, str) and X == "no_validation"
-            no_val_y = y is None or (isinstance(y, str) and y == "no_validation")
+            no_val_y = y is None or isinstance(y, str) and y == "no_validation"
             if not no_val_X and no_val_y:
                 out = X
             elif no_val_X and not no_val_y:
@@ -429,18 +419,19 @@ if sklearn_version < parse_version("1.6"):
             else:
                 out = X, y
             return out
-        if "ensure_all_finite" in kwargs:
-            force_all_finite = kwargs.pop("ensure_all_finite")
         else:
-            force_all_finite = True
-        return _estimator._validate_data(
-            X=X,
-            y=y,
-            reset=reset,
-            validate_separately=validate_separately,
-            force_all_finite=force_all_finite,
-            **kwargs,
-        )
+            if "ensure_all_finite" in kwargs:
+                force_all_finite = kwargs.pop("ensure_all_finite")
+            else:
+                force_all_finite = True
+            return _estimator._validate_data(
+                X=X,
+                y=y,
+                reset=reset,
+                validate_separately=validate_separately,
+                force_all_finite=force_all_finite,
+                **kwargs,
+            )
 
     def _check_n_features(estimator, X, *, reset):
         """Set the `n_features_in_` attribute, or check against it on an estimator."""
@@ -475,7 +466,10 @@ if sklearn_version < parse_version("1.6"):
         """
         from sklearn.utils.validation import check_array as _check_array
 
-        force_all_finite = ensure_all_finite if ensure_all_finite is not None else True
+        if ensure_all_finite is not None:
+            force_all_finite = ensure_all_finite
+        else:
+            force_all_finite = True
 
         check_array_params = inspect.signature(_check_array).parameters
         kwargs = {}
@@ -527,7 +521,10 @@ if sklearn_version < parse_version("1.6"):
         """
         from sklearn.utils.validation import check_X_y as _check_X_y
 
-        force_all_finite = ensure_all_finite if ensure_all_finite is not None else True
+        if ensure_all_finite is not None:
+            force_all_finite = ensure_all_finite
+        else:
+            force_all_finite = True
 
         check_X_y_params = inspect.signature(_check_X_y).parameters
         kwargs = {}
@@ -711,13 +708,9 @@ if sklearn_version < parse_version("1.6"):
             n_informative=1, bias=5.0, noise=20, random_state=42)``. The
             dataset and values are based on current estimators in scikit-learn
             and might be replaced by something more systematic.
-
-        multi_label : bool, default=False
-            Whether the regressor supports multilabel output.
         """
 
         poor_score: bool = False
-        multi_label: bool = False
 
     @dataclass(**_dataclass_args())
     class Tags:
@@ -786,7 +779,7 @@ if sklearn_version < parse_version("1.6"):
         original_class_more_tags = estimator.__class__._more_tags
 
         def patched_instance_more_tags(self):
-            """Instance-level _more_tags that combines class tags with _xfail_checks."""
+            """Instance-level _more_tags that combines class tags with _xfail_checks"""
             # Get tags from class-level _more_tags
             tags = original_class_more_tags(self)
             # Update with the xfail checks
@@ -857,9 +850,153 @@ else:
 
     # validation
     from sklearn.utils.validation import (
-        _check_feature_names,
-        _check_n_features,
+        _check_feature_names,  # noqa: F401
+        _check_n_features,  # noqa: F401
         check_array,  # noqa: F401
         check_X_y,  # noqa: F401
         validate_data,  # noqa: F401
     )
+
+########################################################################################
+# Upgrading for scikit-learn 1.8
+########################################################################################
+
+if sklearn_version < parse_version("1.8"):
+    if sklearn_version < parse_version("1.4"):
+
+        def is_pandas_df(X):
+            """Return True if the X is a pandas dataframe."""
+            try:
+                pd = sys.modules["pandas"]
+            except KeyError:
+                return False
+            return isinstance(X, pd.DataFrame)
+
+        def is_pandas_df_or_series(X):
+            """Return True if the X is a pandas dataframe or series."""
+            try:
+                pd = sys.modules["pandas"]
+            except KeyError:
+                return False
+            return isinstance(X, (pd.DataFrame, pd.Series))
+
+        def is_polars_df(X):
+            """Return True if the X is a polars dataframe."""
+            try:
+                pl = sys.modules["polars"]
+            except KeyError:
+                return False
+            return isinstance(X, pl.DataFrame)
+
+    else:
+        from sklearn.utils.validation import _is_pandas_df as is_pandas_df  # noqa: F401
+        from sklearn.utils.validation import (
+            _is_pandas_df_or_series as is_pandas_df_or_series,
+        )  # noqa: F401
+        from sklearn.utils.validation import _is_polars_df as is_polars_df  # noqa: F401
+
+    if sklearn_version < parse_version("1.5"):
+
+        def is_polars_df_or_series(X):
+            """Return True if the X is a polars dataframe or series."""
+            try:
+                pl = sys.modules["polars"]
+            except KeyError:
+                return False
+            return isinstance(X, (pl.DataFrame, pl.Series))
+
+    else:
+        from sklearn.utils.validation import (
+            _is_polars_df_or_series as is_polars_df_or_series,
+        )  # noqa: F401
+
+    if sklearn_version < parse_version("1.7"):
+
+        def is_pyarrow_data(X):
+            """Return True if the X is a pyarrow Table, RecordBatch, Array or
+            ChunkedArray."""
+            try:
+                pa = sys.modules["pyarrow"]
+            except KeyError:
+                return False
+            return isinstance(X, (pa.Table, pa.RecordBatch, pa.Array, pa.ChunkedArray))
+
+    else:
+        from sklearn.utils.validation import (
+            _is_pyarrow_data as is_pyarrow_data,
+        )  # noqa: F401
+
+    def is_df_or_series(X):
+        """Return True if the X is a dataframe or series.
+
+        Parameters
+        ----------
+        X : {array-like, dataframe}
+            The array-like or dataframe object to check.
+
+        Returns
+        -------
+        bool
+            True if the X is a dataframe or series, False otherwise.
+        """
+        return (
+            is_pandas_df_or_series(X) or is_polars_df_or_series(X) or is_pyarrow_data(X)
+        )
+
+    from sklearn.metrics._classification import (
+        _check_targets as _check_targets_without_weights,
+    )
+
+    def _check_targets(y_true, y_pred, sample_weight=None):
+        """Check that y_true and y_pred belong to the same classification task.
+
+        This converts multiclass or binary types to a common shape, and raises a
+        ValueError for a mix of multilabel and multiclass targets, a mix of
+        multilabel formats, for the presence of continuous-valued or multioutput
+        targets, or for targets of different lengths.
+
+        Column vectors are squeezed to 1d, while multilabel formats are returned
+        as CSR sparse label indicators.
+
+        Parameters
+        ----------
+        y_true : array-like
+
+        y_pred : array-like
+
+        sample_weight : array-like, default=None
+
+        Returns
+        -------
+        type_true : one of {'multilabel-indicator', 'multiclass', 'binary'}
+            The type of the true target data, as output by
+            ``utils.multiclass.type_of_target``.
+
+        y_true : array or indicator matrix
+
+        y_pred : array or indicator matrix
+
+        sample_weight : array or None
+        """
+        from sklearn.utils.validation import (
+            check_consistent_length,
+            _check_sample_weight,
+        )
+
+        y_type, y_true, y_pred = _check_targets_without_weights(y_true, y_pred)
+
+        if sample_weight is not None:
+            check_consistent_length(y_true, y_pred, sample_weight)
+            sample_weight = _check_sample_weight(sample_weight, y_true)
+        return y_type, y_true, y_pred, sample_weight
+
+else:
+    from sklearn.utils._dataframe import (
+        is_df_or_series,  # noqa: F401
+        is_pandas_df_or_series,  # noqa: F401
+        is_pandas_df,  # noqa: F401
+        is_pyarrow_data,  # noqa: F401
+        is_polars_df_or_series,  # noqa: F401
+        is_polars_df,  # noqa: F401
+    )
+    from sklearn.metrics._classification import _check_targets  # noqa: F401
