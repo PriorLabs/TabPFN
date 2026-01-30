@@ -65,7 +65,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 from tabpfn.preprocessing.initialization import convert_to_pandas
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -818,7 +818,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
 
-        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        ensemble_preprocessor = TabPFNEnsembleFactory(
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,

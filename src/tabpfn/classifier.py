@@ -73,7 +73,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 from tabpfn.preprocessing.initialization import convert_to_pandas
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.utils import (
@@ -819,7 +819,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y=y.to_numpy(),
         )
 
-        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
+        self.ensemble_preprocessor_ = TabPFNEnsembleFactory(
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,

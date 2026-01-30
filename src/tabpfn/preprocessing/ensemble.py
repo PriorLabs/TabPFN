@@ -40,8 +40,8 @@ T = TypeVar("T")
 
 
 @dataclasses.dataclass
-class TabPFNPreprocessedEnsembleMember:
-    """Holds preprocessed data, config, preprocessors for a single ensemble member.
+class TabPFNEnsembleMember:
+    """Holds data, config, and preprocessors for a single ensemble member.
 
     The data is preprocessed on the CPU but this member also holds a torch preprocessor
     pipeline to be run before inference on the GPU.
@@ -61,12 +61,14 @@ class TabPFNPreprocessedEnsembleMember:
         return self.cpu_preprocessor.transform(X).X
 
 
-class TabPFNEnsemblePreprocessor:
-    """Generates pipelines and preprocesses the ensemble members.
+class TabPFNEnsembleFactory:
+    """Orchestrates the creation of ensemble members.
 
-    This class has two main functionalities:
-    1. Can parallelize the preprocessing of multiple ensemble members
-    2. Can use global data information and pipelines to perform balanced data slicing
+    - Generates preprocessing pipelines.
+    - Iterates over cpu preprocessing.
+    - Creates TabPFNEnsembleMember objects with all necessary information to process
+        a single ensemble member.
+    - Can use global data information and pipelines to perform balanced data slicing
        (e.g. sample/feature subsampling) per ensemble member.
     """
 
@@ -115,7 +117,7 @@ class TabPFNEnsemblePreprocessor:
         feature_modalities: dict[FeatureModality, list[int]],
         parallel_mode: Literal["block", "as-ready", "in-order"],
         override_random_state: int | np.random.Generator | None = None,
-    ) -> Iterator[TabPFNPreprocessedEnsembleMember]:
+    ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.configs,
@@ -142,7 +144,7 @@ class TabPFNEnsemblePreprocessor:
             y_train_preprocessed,
             feature_modalities_preprocessed,
         ) in enumerate(preprocessed_data_iterator):
-            yield TabPFNPreprocessedEnsembleMember(
+            yield TabPFNEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
                 gpu_preprocessor=gpu_preprocessors[i],
@@ -156,7 +158,7 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
         feature_modalities: dict[FeatureModality, list[int]],
-    ) -> list[TabPFNPreprocessedEnsembleMember]:
+    ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(

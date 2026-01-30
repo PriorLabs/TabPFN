@@ -19,7 +19,7 @@ from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
 )
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 
 
 class TestModel(Architecture):
@@ -92,7 +92,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
     X_test = rng.standard_normal(size=(2, n_features))
 
-    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+    ensemble_preprocessor = TabPFNEnsembleFactory(
         configs=_create_test_ensemble_configs(
             n_configs=5,
             n_classes=3,
@@ -152,7 +152,7 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
 
         num_models = 1
         models = [TestModel() for _ in range(num_models)]
-        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        ensemble_preprocessor = TabPFNEnsembleFactory(
             configs=_create_test_ensemble_configs(
                 n_configs=5,
                 n_classes=3,
@@ -204,7 +204,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
 
     num_models = 3
     models = [TestModel() for _ in range(num_models)]
-    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+    ensemble_preprocessor = TabPFNEnsembleFactory(
         configs=_create_test_ensemble_configs(
             n_configs=5,
             n_classes=3,

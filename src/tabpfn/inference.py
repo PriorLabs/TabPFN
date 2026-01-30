@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
-        TabPFNEnsemblePreprocessor,
-        TabPFNPreprocessedEnsembleMember,
+        TabPFNEnsembleFactory,
+        TabPFNEnsembleMember,
     )
 
 
@@ -296,7 +296,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         y_train: np.ndarray,
         *,
         feature_modalities: dict[FeatureModality, list[int]],
-        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
+        ensemble_preprocessor: TabPFNEnsembleFactory,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,
@@ -556,7 +556,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         y_train: np.ndarray | torch.Tensor,
         *,
         feature_modalities: dict[FeatureModality, list[int]],
-        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
+        ensemble_preprocessor: TabPFNEnsembleFactory,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,
@@ -596,7 +596,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.X_train_shape_before_preprocessing = X_train.shape
         self.feature_modalities = feature_modalities
 
-        self.ensemble_members: list[TabPFNPreprocessedEnsembleMember] = (
+        self.ensemble_members: list[TabPFNEnsembleMember] = (
             ensemble_preprocessor.fit_transform_ensemble_members(
                 X_train=X_train,
                 y_train=y_train,
@@ -632,7 +632,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             save_peak_mem = False
 
         def _transform_X_test(
-            ensemble_member: TabPFNPreprocessedEnsembleMember,
+            ensemble_member: TabPFNEnsembleMember,
         ) -> np.ndarray | torch.Tensor:
             return X if self.no_preprocessing else ensemble_member.transform_X_test(X)
 
@@ -723,7 +723,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         y_train: np.ndarray,
         *,
         feature_modalities: dict[FeatureModality, list[int]],
-        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
+        ensemble_preprocessor: TabPFNEnsembleFactory,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,
@@ -761,7 +761,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         )
 
         ens_models: list[Architecture] = []
-        ensemble_members: list[TabPFNPreprocessedEnsembleMember] = []
+        ensemble_members: list[TabPFNEnsembleMember] = []
 
         for ensemble_member in ensemble_members_iterator:
             ensemble_members.append(ensemble_member)
