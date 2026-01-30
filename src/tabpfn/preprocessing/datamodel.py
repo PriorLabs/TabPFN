@@ -76,7 +76,6 @@ class ColumnMetadata:
         default_factory=dict,
     )
 
-    # TODO: Remove because this was only for backwards compatibility
     @classmethod
     def from_dict(
         cls, feature_modalities: dict[FeatureModality, list[int]]
@@ -161,10 +160,10 @@ class ColumnMetadata:
 
         return ColumnMetadata(column_modalities=new_column_modalities)
 
-    def update_from_step_result(
+    def update_from_preprocessing_step_result(
         self,
         original_indices: list[int],
-        step_metadata: ColumnMetadata,
+        new_metadata: ColumnMetadata,
     ) -> ColumnMetadata:
         """Update metadata after a step has transformed selected columns.
 
@@ -174,7 +173,7 @@ class ColumnMetadata:
 
         Args:
             original_indices: The column indices that were passed to the step.
-            step_metadata: The metadata returned by the step (0-based indices).
+            new_metadata: The metadata returned by the step (0-based indices).
 
         Returns:
             New ColumnMetadata with updated modalities for the processed columns.
@@ -192,7 +191,7 @@ class ColumnMetadata:
                 new_column_modalities[modality] = unprocessed
 
         # Add back the processed columns with their new modalities
-        for modality, step_indices in step_metadata.column_modalities.items():
+        for modality, step_indices in new_metadata.column_modalities.items():
             original_positions = [new_to_old[idx] for idx in step_indices]
             if modality in new_column_modalities:
                 new_column_modalities[modality].extend(original_positions)

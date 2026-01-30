@@ -4,16 +4,12 @@ from __future__ import annotations
 
 import dataclasses
 from abc import abstractmethod
-from typing import TYPE_CHECKING
 from typing_extensions import TypeAlias
 
 import numpy as np
+import torch
 
 from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
-
-if TYPE_CHECKING:
-    import torch
-
 
 StepWithModalities: TypeAlias = tuple["PreprocessingStep", set[FeatureModality]]
 
@@ -165,15 +161,17 @@ class PreprocessingStep:
 class PreprocessingPipeline:
     """Modality-aware preprocessing pipeline that handles column slicing.
 
-    This pipeline applies a sequence of preprocessing steps to an array,
+    This pipeline applies a sequence of preprocessing steps to data,
     where each step can be registered to target specific feature modalities.
     The pipeline handles slicing columns based on registered modalities,
     passing only relevant columns to each step, reassembling data after each
     step, and tracking metadata updates.
 
-    Steps can be registered as (step, modalities) tuples where the step receives
-    only columns matching the specified modalities, or as bare steps that receive
-    all columns.
+    For backwards compatibility, steps can be registered as (step, modalities)
+    tuples where the step receives only columns matching the specified modalities,
+    or as bare steps that receive all columns. In the latter case, the column modalities
+    need to be tracked by the step itself. Going forward, only the former format will be
+    supported.
     """
 
     def __init__(
@@ -272,10 +270,11 @@ class PreprocessingPipeline:
                     )
 
                 X = X.copy() if isinstance(X, np.ndarray) else X.clone()
+                assert X.dtype == result.X.dtype
                 X[:, indices] = result.X
 
-                X, metadata = self._append_added_columns(X, metadata, result)
-                metadata = metadata.update_from_step_result(
+                X, metadata = self._maybe_append_added_columns(X, metadata, result)
+                metadata = metadata.update_from_preprocessing_step_result(
                     indices, result.column_metadata
                 )
             else:
@@ -287,11 +286,11 @@ class PreprocessingPipeline:
                 )
                 X = result.X
                 metadata = result.column_metadata
-                X, metadata = self._append_added_columns(X, metadata, result)
+                X, metadata = self._maybe_append_added_columns(X, metadata, result)
 
         return X, metadata
 
-    def _append_added_columns(
+    def _maybe_append_added_columns(
         self,
         X: np.ndarray | torch.Tensor,
         metadata: ColumnMetadata,
@@ -299,7 +298,11 @@ class PreprocessingPipeline:
     ) -> tuple[np.ndarray | torch.Tensor, ColumnMetadata]:
         """Append added columns from a step result and update metadata."""
         if result.X_added is not None:
-            X = np.concatenate([X, result.X_added], axis=1)
+            if isinstance(X, np.ndarray):
+                X = np.concatenate([X, result.X_added], axis=1)
+            else:
+                assert isinstance(result.X_added, torch.Tensor)
+                X = torch.cat([X, result.X_added], dim=1)
             metadata = metadata.add_columns(
                 result.modality_added or FeatureModality.NUMERICAL,
                 result.X_added.shape[1],

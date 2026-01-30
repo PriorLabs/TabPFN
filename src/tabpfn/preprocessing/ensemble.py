@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
     from tabpfn.preprocessing.datamodel import FeatureModality
-    from tabpfn.preprocessing.pipeline_interfaces import PreprocessingPipeline
+    from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 T = TypeVar("T")
 

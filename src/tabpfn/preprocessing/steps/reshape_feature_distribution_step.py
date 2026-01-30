@@ -22,7 +22,7 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
-from tabpfn.preprocessing.pipeline_interfaces import (
+from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
 )

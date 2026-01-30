@@ -33,7 +33,7 @@ try:
     NEW_PIPELINE_IMPLEMENTATION = True
 except ImportError:
     try:
-        from tabpfn.preprocessing.pipeline_interfaces import TransformResult
+        from tabpfn.preprocessing.pipeline_interface import TransformResult
     except ImportError:
         pytest.skip("Pipeline consistency tests cannot be run", allow_module_level=True)
     NEW_PIPELINE_IMPLEMENTATION = False

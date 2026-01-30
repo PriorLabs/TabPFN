@@ -7,7 +7,7 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.preprocessing.pipeline_interfaces import (
+from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
 

@@ -8,7 +8,7 @@ from typing_extensions import override
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.pipeline_interfaces import (
+from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
 from tabpfn.utils import infer_random_state

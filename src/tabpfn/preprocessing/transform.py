@@ -24,7 +24,7 @@ from tabpfn.utils import infer_random_state
 if TYPE_CHECKING:
     from tabpfn.preprocessing.configs import EnsembleConfig
     from tabpfn.preprocessing.datamodel import FeatureModality
-    from tabpfn.preprocessing.pipeline_interfaces import PreprocessingPipeline
+    from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 
 def _fit_preprocessing_one(
