@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
-# Potentially add to a dedicated StochasticPreprocessingPipeline
 class ShuffleFeaturesStep(PreprocessingStep):
     """Shuffle the features in the data."""
 

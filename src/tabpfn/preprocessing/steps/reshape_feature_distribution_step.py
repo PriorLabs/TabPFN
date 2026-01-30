@@ -140,8 +140,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
 
     Configuration options:
-        - transform_name: The transformation to apply (e.g., "safepower",
-            "quantile_norm")
+        - transform_name: The transformation to apply (e.g., "squashing_scaler_default",
+            "quantile_uni_coarse")
         - apply_to_categorical: Whether to transform categorical columns too
         - append_to_original: If True, keep original and append transformed as new
             columns
@@ -155,9 +155,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             [categorical_passthrough, numerical_transformed, (svd_cols)]
         - With append_to_original=False, apply_to_categorical=True:
             [all_transformed, (svd_cols)]
-
-    Note: The schema tracking for SVD features is a known limitation - the step
-    tracks the number but may not perfectly map modalities for added SVD columns.
     """
 
     APPEND_TO_ORIGINAL_THRESHOLD = 500
@@ -211,7 +208,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
-    def _set_transformer_and_modalities(  # noqa: PLR0912
+    def _create_transformers_and_new_schema(  # noqa: PLR0912
         self,
         n_samples: int,
         n_features: int,
@@ -374,7 +371,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         n_samples, n_features = X.shape
-        transformer, output_schema = self._set_transformer_and_modalities(
+        transformer, output_schema = self._create_transformers_and_new_schema(
             n_samples,
             n_features,
             feature_schema,
@@ -390,7 +387,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> PreprocessingStepResult:
         n_samples, n_features = X.shape
-        transformer, output_schema = self._set_transformer_and_modalities(
+        transformer, output_schema = self._create_transformers_and_new_schema(
             n_samples,
             n_features,
             feature_schema,
@@ -400,8 +397,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.feature_schema_after_transform_ = output_schema
         return PreprocessingStepResult(X=Xt, feature_schema=output_schema)  # type: ignore[arg-type]
 
-    # TODO: Add test for it and make it useable with modality assignment
-    # in pipeline registration.
     @override
     def _transform(
         self, X: np.ndarray, *, is_test: bool = False
@@ -417,7 +412,6 @@ def get_all_global_transformers(
 ) -> dict[str, FeatureUnion | Pipeline]:
     """Returns a dictionary of global transformers to transform the data."""
     return {
-        # TODO: Remove this scaler option!
         "scaler": _make_standard_scaler_safe(("standard", StandardScaler())),
         "svd": FeatureUnion(
             [

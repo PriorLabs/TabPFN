@@ -18,7 +18,7 @@ from tabpfn.preprocessing.ensemble import (
     ClassifierEnsembleConfig,
     RegressorEnsembleConfig,
 )
-from tabpfn.preprocessing.pipeline_factory import build_pipeline
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -63,7 +63,7 @@ def _fit_preprocessing_one(
         X_train = X_train.copy()
         y_train = y_train.copy()
 
-    preprocessor = build_pipeline(config, random_state=static_seed)
+    preprocessor = create_preprocessing_pipeline(config, random_state=static_seed)
     res = preprocessor.fit_transform(X_train, feature_schema)
 
     y_train_processed = _transform_labels_one(config, y_train)

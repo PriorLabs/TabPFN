@@ -61,7 +61,7 @@ class TabPFNEnsembleMember:
         return self.cpu_preprocessor.transform(X).X
 
 
-class TabPFNEnsembleFactory:
+class TabPFNEnsemblePreprocessor:
     """Orchestrates the creation of ensemble members.
 
     - Generates preprocessing pipelines.

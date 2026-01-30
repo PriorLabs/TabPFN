@@ -46,8 +46,6 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         removed_indices = list(np.where(~np.array(sel_))[0])
         return feature_schema.remove_columns(removed_indices)
 
-    # TODO: Add test for it and make it useable with modality assignment
-    # in pipeline registration.
     @override
     def _transform(
         self, X: np.ndarray | torch.Tensor, *, is_test: bool = False

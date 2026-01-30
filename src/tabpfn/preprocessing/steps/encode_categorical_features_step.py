@@ -27,25 +27,15 @@ def _get_least_common_category_count(x_column: np.ndarray) -> int:
 class EncodeCategoricalFeaturesStep(PreprocessingStep):
     """Encode categorical features using ordinal or one-hot encoding.
 
-    This step should receive ALL columns (not modality-sliced) because it:
-    1. Needs to identify categorical vs numerical columns from feature schema
-    2. Transforms only categorical columns while preserving numerical
-    3. Reorders output: categorical columns first, then numerical columns
-
     When using with PreprocessingPipeline, register as a bare step (no modalities):
         pipeline = PreprocessingPipeline(steps=[EncodeCategoricalFeaturesStep()])
 
     NOT as a modality-targeted step:
-        # DON'T DO THIS:
         pipeline = PreprocessingPipeline(steps=[
             (EncodeCategoricalFeaturesStep(), {FeatureModality.CATEGORICAL})
         ])
 
-    Supported transforms:
-        - "ordinal": OrdinalEncoder (categories -> 0, 1, 2, ...)
-        - "ordinal_shuffled": OrdinalEncoder with random permutation of codes
-        - "onehot": OneHotEncoder (expands to multiple binary columns)
-        - "numeric" / "none": No transformation (passthrough)
+    This will be updated in future versions.
     """
 
     def __init__(
@@ -176,8 +166,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        # TODO: Test if the feature schema is correct after the different
-        # transformations.
+
         return FeatureSchema.from_only_categorical_indices(
             categorical_features, n_features
         )

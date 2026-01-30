@@ -45,12 +45,7 @@ class DatasetView:
     """A view of a dataset split by feature modalities."""
 
     X: pd.DataFrame
-    columns_by_modality: dict[FeatureModality, list[int]]
-
-    @property
-    def feature_names(self) -> list[str]:
-        """Returns the feature names as a list of strings."""
-        return self.X.columns.tolist()
+    columns_by_modality: dict[FeatureModality, list[str]]
 
     @property
     def x_num(self) -> pd.DataFrame:
@@ -73,14 +68,14 @@ class DatasetView:
         return self._get_modality(FeatureModality.TEXT)
 
     def _get_modality(self, modality: FeatureModality) -> pd.DataFrame:
-        return self.X.iloc[:, self.columns_by_modality[modality]]
+        return self.X.loc[:, self.columns_by_modality[modality]]
 
 
 @dataclasses.dataclass
 class FeatureSchema:
     """Metadata about the features in the dataset.
 
-    Uses a single list of Feature objects as the source of truth, where
+    Uses a single list of Feature objects to track the features in the dataset, where
     position in the list corresponds to column index. Provides utilities
     for tracking which columns represent which modality, and for updating
     this mapping as preprocessing steps transform the data.
@@ -121,22 +116,6 @@ class FeatureSchema:
     def feature_names(self) -> list[str | None]:
         """Get list of feature names (derived from features list)."""
         return [f.name for f in self.features]
-
-    @property
-    def feature_modalities(self) -> dict[str, list[int]]:
-        """Get dictionary mapping modality name to column indices.
-
-        Returns string keys (e.g., "numerical", "categorical") for backwards
-        compatibility with code that expects string-keyed dictionaries.
-        Always includes "categorical" key for backwards compatibility, even if empty.
-        """
-        result: dict[str, list[int]] = {"categorical": []}
-        for idx, feature in enumerate(self.features):
-            key = feature.modality.value
-            if key not in result:
-                result[key] = []
-            result[key].append(idx)
-        return result
 
     @property
     def num_columns(self) -> int:
@@ -225,26 +204,12 @@ class FeatureSchema:
         return FeatureSchema(features=new_features)
 
     def remove_columns(self, indices_to_remove: list[int]) -> FeatureSchema:
-        """Return new schema with specified columns removed.
-
-        Args:
-            indices_to_remove: Column indices to remove.
-
-        Returns:
-            New FeatureSchema with features at removed indices excluded.
-        """
+        """Return new schema with specified columns removed."""
         remove_set = set(indices_to_remove)
         return FeatureSchema(
             features=[f for i, f in enumerate(self.features) if i not in remove_set]
         )
 
     def apply_permutation(self, permutation: list[int]) -> FeatureSchema:
-        """Apply a column permutation to the schema.
-
-        Args:
-            permutation: The permutation where permutation[new_idx] = old_idx.
-
-        Returns:
-            New FeatureSchema with features reordered according to permutation.
-        """
+        """Apply a column permutation to the schema."""
         return FeatureSchema(features=[self.features[i] for i in permutation])

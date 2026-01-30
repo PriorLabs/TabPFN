@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
-        TabPFNEnsembleFactory,
         TabPFNEnsembleMember,
+        TabPFNEnsemblePreprocessor,
     )
 
 
@@ -296,7 +296,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         y_train: np.ndarray,
         *,
         feature_schema: FeatureSchema,
-        ensemble_preprocessor: TabPFNEnsembleFactory,
+        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,
@@ -556,7 +556,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         y_train: np.ndarray | torch.Tensor,
         *,
         feature_schema: FeatureSchema,
-        ensemble_preprocessor: TabPFNEnsembleFactory,
+        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,
@@ -723,7 +723,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         y_train: np.ndarray,
         *,
         feature_schema: FeatureSchema,
-        ensemble_preprocessor: TabPFNEnsembleFactory,
+        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
         dtype_byte_size: int,

@@ -26,7 +26,7 @@ import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature
-from tabpfn.preprocessing.pipeline_factory import build_pipeline
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 
 try:
     from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
@@ -282,17 +282,22 @@ def _transform_with_pipeline(
     X_test, _ = _get_random_data_with_categoricals(rng, n_samples=N_TEST_SAMPLES)
 
     config = test_case.config_factory()
-    pipeline = build_pipeline(config, random_state=RANDOM_STATE)
+    pipeline = create_preprocessing_pipeline(config, random_state=RANDOM_STATE)
 
     result_train = pipeline.fit_transform(X_train, schema_or_cat_indices)
     result_test = pipeline.transform(X_test)
 
     if NEW_PIPELINE_IMPLEMENTATION:
-        metadata_dict = result_train.feature_schema.feature_modalities
+        schema_dict: dict[str, list[int]] = {"categorical": []}
+        for idx, feature in enumerate(result_train.feature_schema.features):
+            key = feature.modality.value
+            if key not in schema_dict:
+                schema_dict[key] = []
+            schema_dict[key].append(idx)
     else:
         assert isinstance(result_train, TransformResult)
         _, categorical_indices = result_train
-        metadata_dict = {
+        schema_dict = {
             "categorical": categorical_indices,
         }
 
@@ -300,7 +305,7 @@ def _transform_with_pipeline(
     X_train_out = np.asarray(result_train.X)
     X_test_out = np.asarray(result_test.X)
 
-    return X_train_out, X_test_out, metadata_dict
+    return X_train_out, X_test_out, schema_dict
 
 
 def _load_json_to_array(data: list) -> np.ndarray:

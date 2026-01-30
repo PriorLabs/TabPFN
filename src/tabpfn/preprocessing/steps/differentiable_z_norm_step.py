@@ -15,8 +15,6 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
-# TODO: Deprecate this step. It's not needed because we normalize
-# in the model itself.
 class DifferentiableZNormStep(PreprocessingStep):
     """Differentiable Z-Norm Step."""
 

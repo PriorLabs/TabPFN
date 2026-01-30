@@ -61,10 +61,7 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         *,
         is_test: bool = False,
     ) -> tuple[np.ndarray | torch.Tensor, np.ndarray | torch.Tensor, FeatureModality]:
-        """Transform the input and compute fingerprint (stored for _get_added_columns).
-
-        The fingerprint is NOT concatenated here - it's returned via _get_added_columns
-        and the pipeline handles concatenation.
+        """Transform the input and compute fingerprint.
 
         Args:
             X: Input array of shape (n_samples, n_features).

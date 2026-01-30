@@ -42,10 +42,6 @@ def ensure_compatible_fit_inputs(
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
     """Validate and convert inputs to standardized format.
 
-    Returns X as a DataFrame with preserved column names if the input was a DataFrame,
-    otherwise uses default column names "c0", "c1", etc. Returns y as a Series with
-    preserved name if the input was a Series, otherwise uses the name "y".
-
     Args:
         X: The input data.
         y: The target data.
@@ -131,7 +127,7 @@ def validate_dataset_size(
             f"The input data X is not a 2D array. Got shape: {X.shape}",
         )
     num_samples, num_features = X.shape
-    _validate_dataset_size(
+    _validate_num_samples_and_features(
         num_features=num_features,
         num_samples=num_samples,
         max_num_samples=max_num_samples,
@@ -221,7 +217,7 @@ def validate_num_classes(
         )
 
 
-def _validate_dataset_size(
+def _validate_num_samples_and_features(
     num_features: int,
     num_samples: int,
     max_num_samples: int,

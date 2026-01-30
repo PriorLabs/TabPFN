@@ -21,10 +21,8 @@ class TestFeatureSchema:
 
         assert schema.num_columns == 3
         assert schema.feature_names == ["age", "city", "income"]
-        assert schema.feature_modalities == {
-            "numerical": [0, 2],
-            "categorical": [1],
-        }
+        assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
 
     def test__from_feature_modalities__basic(self) -> None:
         """Test from_feature_modalities factory method."""
@@ -63,11 +61,9 @@ class TestFeatureSchema:
         ]
         schema = FeatureSchema(features=features)
 
-        assert schema.feature_modalities == {
-            "numerical": [0, 2],
-            "categorical": [1],
-            "text": [3],
-        }
+        assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
+        assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
+        assert schema.indices_for(FeatureModality.TEXT) == [3]
 
     def test__indices_for__missing_modality(self) -> None:
         """Test indices_for returns empty list for missing modality."""

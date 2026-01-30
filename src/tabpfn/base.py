@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.datamodel import FeatureSchema
-    from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
+    from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
 
@@ -278,7 +278,7 @@ def create_inference_engine(  # noqa: PLR0913
     X_train: np.ndarray,
     y_train: np.ndarray,
     feature_schema: FeatureSchema,
-    ensemble_preprocessor: TabPFNEnsembleFactory,
+    ensemble_preprocessor: TabPFNEnsemblePreprocessor,
     models: list[Architecture],
     devices_: Sequence[torch.device],
     byte_size: int,

@@ -77,7 +77,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
+from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.utils import (
     DevicesSpecification,
@@ -666,8 +666,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         assert len(ensemble_configs) == self.n_estimators
 
-        # We can convert to numpy. We stored the feature names in the
-        # feature schema and the target name in the label encoder.
         return ensemble_configs, X, y
 
     def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
@@ -731,7 +729,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
 
-        self.ensemble_preprocessor_ = TabPFNEnsembleFactory(
+        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
@@ -849,7 +847,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
 
-        self.ensemble_preprocessor_ = TabPFNEnsembleFactory(
+        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
