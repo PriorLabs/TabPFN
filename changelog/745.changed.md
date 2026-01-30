@@ -1,0 +1,3 @@
+- Optimize regressor predict method for memory efficiency
+  - Average ensemble outputs on-the-fly instead of accumulating all outputs
+  - Reduces memory usage by avoiding storage of all intermediate outputs, especially beneficial for large `n_estimators`
