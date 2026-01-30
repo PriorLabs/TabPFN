@@ -78,6 +78,7 @@ from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
+    convert_batch_of_cat_ix_to_schema,
     infer_random_state,
 )
 from tabpfn.validation import (
@@ -717,21 +718,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        num_features = X_preprocessed[0].shape[1]
-        feature_schema = []
-        for ib in cat_ix:
-            feature_schema.append([])
-            for cat_index in ib:
-                features = [
-                    Feature(
-                        name=f"c{i}",
-                        modality=FeatureModality.NUMERICAL
-                        if i in cat_index
-                        else FeatureModality.CATEGORICAL,
-                    )
-                    for i in range(num_features)
-                ]
-                feature_schema[-1].append(FeatureSchema(features=features))
+        feature_schema = convert_batch_of_cat_ix_to_schema(
+            batch_of_cat_indices=cat_ix,
+            num_features=X_preprocessed[0].shape[1],
+        )
 
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,

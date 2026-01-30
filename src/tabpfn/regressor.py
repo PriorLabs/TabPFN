@@ -64,13 +64,14 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
-from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.utils import (
     DevicesSpecification,
+    convert_batch_of_cat_ix_to_schema,
     infer_random_state,
     transform_borders_one,
     translate_probs_across_borders,
@@ -594,9 +595,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         np.ndarray,
         FullSupportBarDistribution,
     ]:
-        # TODO: Fix the types later.
-        # In the following code, we have multiple conversions between DataFrames and
-        # NumPy arrays. In a follow-up PR, we will fix this.
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
             y,
@@ -723,22 +721,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        # TODO: this is a bit cryptic
-        num_features = X_preprocessed[0].shape[1]
-        feature_schema = []
-        for ib in cat_ix:
-            feature_schema.append([])
-            for cat_index in ib:
-                features = [
-                    Feature(
-                        name=f"c{i}",
-                        modality=FeatureModality.NUMERICAL
-                        if i in cat_index
-                        else FeatureModality.CATEGORICAL,
-                    )
-                    for i in range(num_features)
-                ]
-                feature_schema[-1].append(FeatureSchema(features=features))
+        feature_schema = convert_batch_of_cat_ix_to_schema(
+            batch_of_cat_indices=cat_ix,
+            num_features=X_preprocessed[0].shape[1],
+        )
 
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
