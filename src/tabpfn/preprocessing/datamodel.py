@@ -27,6 +27,19 @@ class FeatureModality(str, Enum):
     CONSTANT = "constant"
 
 
+@dataclasses.dataclass
+class Feature:
+    """A single feature with its name and modality.
+
+    Attributes:
+        name: The name of the feature.
+        modality: The modality (type) of the feature.
+    """
+
+    name: str | None
+    modality: FeatureModality
+
+
 @dataclasses.dataclass(frozen=True)
 class DatasetView:
     """A view of a dataset split by feature modalities."""
@@ -64,79 +77,112 @@ class DatasetView:
 
 
 @dataclasses.dataclass
-class ColumnMetadata:
-    """Maps feature modalities to column indices in the tensor/array.
+class FeatureMetadata:
+    """Metadata about the features in the dataset.
 
-    This class provides utilities for tracking which columns belong to which
-    modality, and for updating this mapping as preprocessing steps transform
-    the data.
+    Uses a single list of Feature objects as the source of truth, where
+    position in the list corresponds to column index. Provides utilities
+    for tracking which columns represent which modality, and for updating
+    this mapping as preprocessing steps transform the data.
+
+    Attributes:
+        features: List of Feature objects where index = column position.
     """
 
-    column_modalities: dict[FeatureModality, list[int]] = dataclasses.field(
-        default_factory=dict,
-    )
+    features: list[Feature] = dataclasses.field(default_factory=list)
 
     @classmethod
-    def from_dict(
-        cls, feature_modalities: dict[FeatureModality, list[int]]
-    ) -> ColumnMetadata:
-        """Create ColumnMetadata from a feature_modalities dictionary.
+    def from_only_categorical_indices(
+        cls,
+        categorical_indices: list[int],
+        num_columns: int,
+    ) -> FeatureMetadata:
+        """Create FeatureMetadata from only categorical indices.
 
-        Args:
-            feature_modalities: Dictionary mapping modality to list of column indices.
-
-        Returns:
-            New ColumnMetadata instance.
+        This is used for backwards compatibility with the old preprocessing pipeline
+        that only tracked categorical indices. All columns that are not categorical
+        are assumed to be numerical.
         """
-        return cls(
-            column_modalities={
-                mod: list(indices) for mod, indices in feature_modalities.items()
-            }
-        )
+        numerical_indices = [
+            i for i in range(num_columns) if i not in categorical_indices
+        ]
+        if not numerical_indices and not categorical_indices:
+            return cls(features=[])
+
+        features: list[Feature | None] = [None] * num_columns
+        for idx in categorical_indices:
+            features[idx] = Feature(name=None, modality=FeatureModality.CATEGORICAL)
+        for idx in numerical_indices:
+            features[idx] = Feature(name=None, modality=FeatureModality.NUMERICAL)
+
+        return cls(features=features)  # type: ignore[arg-type]
+
+    @property
+    def feature_names(self) -> list[str | None]:
+        """Get list of feature names (derived from features list)."""
+        return [f.name for f in self.features]
+
+    @property
+    def feature_modalities(self) -> dict[str, list[int]]:
+        """Get dictionary mapping modality name to column indices.
+
+        Returns string keys (e.g., "numerical", "categorical") for backwards
+        compatibility with code that expects string-keyed dictionaries.
+        Always includes "categorical" key for backwards compatibility, even if empty.
+        """
+        result: dict[str, list[int]] = {"categorical": []}
+        for idx, feature in enumerate(self.features):
+            key = feature.modality.value
+            if key not in result:
+                result[key] = []
+            result[key].append(idx)
+        return result
 
     @property
     def num_columns(self) -> int:
         """Get the total number of columns."""
-        return sum(len(indices) for indices in self.column_modalities.values())
+        return len(self.features)
 
     def indices_for(self, modality: FeatureModality) -> list[int]:
         """Get column indices for a single modality."""
-        return self.column_modalities.get(modality, [])
+        return [i for i, f in enumerate(self.features) if f.modality == modality]
 
     def indices_for_modalities(
         self, modalities: Iterable[FeatureModality]
     ) -> list[int]:
         """Get combined column indices for multiple modalities (sorted)."""
-        indices: list[int] = []
-        for modality in modalities:
-            indices.extend(self.column_modalities.get(modality, []))
-        return sorted(set(indices))
+        modality_set = set(modalities)
+        return sorted(
+            i for i, f in enumerate(self.features) if f.modality in modality_set
+        )
 
-    def add_columns(self, modality: FeatureModality, num_new: int) -> ColumnMetadata:
+    def append_columns(
+        self,
+        modality: FeatureModality,
+        num_new: int,
+        names: list[str] | None = None,
+    ) -> FeatureMetadata:
         """Return new metadata with additional columns appended.
 
         Args:
             modality: The modality for the new columns.
             num_new: Number of new columns to add.
+            names: Names for the new columns. If None, uses "added_0", "added_1", ...
 
         Returns:
-            New ColumnMetadata instance with updated indices.
+            New FeatureMetadata instance with added features.
         """
-        new_column_modalities = {
-            mod: list(indices) for mod, indices in self.column_modalities.items()
-        }
+        if names is None:
+            names = [f"added_{i}" for i in range(num_new)]
+        if len(names) != num_new:
+            raise ValueError(f"Expected {num_new} names, got {len(names)}")
 
-        new_column_indices = list(range(self.num_columns, self.num_columns + num_new))
-        if modality in new_column_modalities:
-            new_column_modalities[modality].extend(new_column_indices)
-        else:
-            new_column_modalities[modality] = new_column_indices
+        new_features = self.features + [
+            Feature(name=name, modality=modality) for name in names
+        ]
+        return FeatureMetadata(features=new_features)
 
-        return ColumnMetadata(
-            column_modalities=new_column_modalities,
-        )
-
-    def slice_for_indices(self, indices: list[int]) -> ColumnMetadata:
+    def slice_for_indices(self, indices: list[int]) -> FeatureMetadata:
         """Create metadata for a subset of columns, remapping to 0-based indices.
 
         When slicing columns from an array, this method creates new metadata
@@ -146,29 +192,19 @@ class ColumnMetadata:
             indices: The column indices being selected (in original indexing).
 
         Returns:
-            New ColumnMetadata with remapped indices for the selected columns.
+            New FeatureMetadata with features at the selected indices.
         """
-        indices_set = set(indices)
-        # Create mapping: old_idx -> new_idx
-        old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(indices)}
-
-        new_column_modalities: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.column_modalities.items():
-            remapped = [old_to_new[idx] for idx in mod_indices if idx in indices_set]
-            if remapped:
-                new_column_modalities[modality] = sorted(remapped)
-
-        return ColumnMetadata(column_modalities=new_column_modalities)
+        return FeatureMetadata(features=[self.features[i] for i in indices])
 
     def update_from_preprocessing_step_result(
         self,
         original_indices: list[int],
-        new_metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        new_metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         """Update metadata after a step has transformed selected columns.
 
         This method merges the step's output metadata back into the full metadata.
-        The step_metadata contains 0-based indices for the columns it processed,
+        The new_metadata contains features for the columns it processed (0-based),
         which are mapped back to the original column positions.
 
         Args:
@@ -176,68 +212,39 @@ class ColumnMetadata:
             new_metadata: The metadata returned by the step (0-based indices).
 
         Returns:
-            New ColumnMetadata with updated modalities for the processed columns.
+            New FeatureMetadata with updated modalities for the processed columns.
         """
-        # Create mapping: new_idx (0-based in step) -> old_idx (original position)
-        new_to_old = dict(enumerate(original_indices))
+        # Copy features and update the processed ones
+        new_features = list(self.features)
+        for step_idx, original_idx in enumerate(original_indices):
+            step_feature = new_metadata.features[step_idx]
+            new_features[original_idx] = Feature(
+                name=step_feature.name,
+                modality=step_feature.modality,
+            )
+        return FeatureMetadata(features=new_features)
 
-        # Start with modalities for columns NOT processed by this step
-        processed_set = set(original_indices)
-        new_column_modalities: dict[FeatureModality, list[int]] = {}
+    def remove_columns(self, indices_to_remove: list[int]) -> FeatureMetadata:
+        """Return new metadata with specified columns removed.
 
-        for modality, mod_indices in self.column_modalities.items():
-            unprocessed = [idx for idx in mod_indices if idx not in processed_set]
-            if unprocessed:
-                new_column_modalities[modality] = unprocessed
+        Args:
+            indices_to_remove: Column indices to remove.
 
-        # Add back the processed columns with their new modalities
-        for modality, step_indices in new_metadata.column_modalities.items():
-            original_positions = [new_to_old[idx] for idx in step_indices]
-            if modality in new_column_modalities:
-                new_column_modalities[modality].extend(original_positions)
-                new_column_modalities[modality] = sorted(
-                    new_column_modalities[modality]
-                )
-            else:
-                new_column_modalities[modality] = sorted(original_positions)
-
-        return ColumnMetadata(column_modalities=new_column_modalities)
-
-    def remove_columns(self, indices_to_remove: list[int]) -> ColumnMetadata:
-        """Return new metadata with specified columns removed and indices remapped."""
+        Returns:
+            New FeatureMetadata with features at removed indices excluded.
+        """
         remove_set = set(indices_to_remove)
-        # Get all current indices sorted
-        all_indices = sorted(
-            idx for indices in self.column_modalities.values() for idx in indices
+        return FeatureMetadata(
+            features=[f for i, f in enumerate(self.features) if i not in remove_set]
         )
-        # Keep only indices not being removed
-        kept_indices = [idx for idx in all_indices if idx not in remove_set]
-        # Create mapping: old_idx -> new_idx
-        old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(kept_indices)}
 
-        new_column_modalities: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.column_modalities.items():
-            remapped = [old_to_new[idx] for idx in mod_indices if idx not in remove_set]
-            if remapped:
-                new_column_modalities[modality] = sorted(remapped)
-
-        return ColumnMetadata(column_modalities=new_column_modalities)
-
-    def apply_permutation(self, permutation: list[int]) -> ColumnMetadata:
+    def apply_permutation(self, permutation: list[int]) -> FeatureMetadata:
         """Apply a column permutation to the metadata.
 
         Args:
             permutation: The permutation where permutation[new_idx] = old_idx.
 
         Returns:
-            New ColumnMetadata with updated indices.
+            New FeatureMetadata with features reordered according to permutation.
         """
-        # Create reverse mapping: old_idx -> new_idx
-        old_to_new = {old_idx: new_idx for new_idx, old_idx in enumerate(permutation)}
-
-        new_column_modalities: dict[FeatureModality, list[int]] = {}
-        for modality, mod_indices in self.column_modalities.items():
-            remapped = sorted(old_to_new[idx] for idx in mod_indices)
-            new_column_modalities[modality] = remapped
-
-        return ColumnMetadata(column_modalities=new_column_modalities)
+        return FeatureMetadata(features=[self.features[i] for i in permutation])

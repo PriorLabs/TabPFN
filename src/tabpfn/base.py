@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
-    from tabpfn.preprocessing.datamodel import FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureMetadata
     from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
     from tabpfn.regressor import TabPFNRegressor
 
@@ -278,7 +278,7 @@ def create_inference_engine(  # noqa: PLR0913
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
     X_train: np.ndarray,
     y_train: np.ndarray,
-    feature_modalities: dict[FeatureModality, list[int]],
+    feature_metadata: FeatureMetadata,
     ensemble_preprocessor: TabPFNEnsembleFactory,
     models: list[Architecture],
     devices_: Sequence[torch.device],
@@ -299,7 +299,7 @@ def create_inference_engine(  # noqa: PLR0913
         fit_mode: Determines how we prepare inference (pre-cache or not).
         X_train: Training features
         y_train: Training target
-        feature_modalities: The feature modalities.
+        feature_metadata: The feature metadata.
         ensemble_preprocessor: The ensemble preprocessor to use.
         models: The loaded TabPFN models.
         devices_: The devices for inference.
@@ -314,7 +314,7 @@ def create_inference_engine(  # noqa: PLR0913
         return InferenceEngineOnDemand(
             X_train=X_train,
             y_train=y_train,
-            feature_modalities=feature_modalities,
+            feature_metadata=feature_metadata,
             ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
@@ -326,7 +326,7 @@ def create_inference_engine(  # noqa: PLR0913
         return InferenceEngineCachePreprocessing(
             X_train=X_train,
             y_train=y_train,
-            feature_modalities=feature_modalities,
+            feature_metadata=feature_metadata,
             ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
@@ -339,7 +339,7 @@ def create_inference_engine(  # noqa: PLR0913
         return InferenceEngineCacheKV(
             X_train=X_train,
             y_train=y_train,
-            feature_modalities=feature_modalities,
+            feature_metadata=feature_metadata,
             ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=devices_,
@@ -352,7 +352,7 @@ def create_inference_engine(  # noqa: PLR0913
         return InferenceEngineBatchedNoPreprocessing(
             X_trains=X_train,  # pyright: ignore[reportArgumentType]
             y_trains=y_train,  # pyright: ignore[reportArgumentType]
-            feature_modalities=feature_modalities,  # pyright: ignore[reportArgumentType]
+            feature_metadata=feature_metadata,  # pyright: ignore[reportArgumentType]
             ensemble_configs=ensemble_preprocessor.configs,  # pyright: ignore[reportArgumentType]
             models=models,
             devices=devices_,

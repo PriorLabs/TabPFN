@@ -15,7 +15,7 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing import steps
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
     PreprocessingStep,
@@ -27,7 +27,6 @@ from tabpfn.preprocessing.steps import (
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
-    get_categorical_indices,
 )
 
 
@@ -62,14 +61,8 @@ def _get_random_data(
     return x
 
 
-def _make_feature_modalities(
-    n_features: int, cat_inds: list[int]
-) -> dict[FeatureModality, list[int]]:
-    num_inds = [i for i in range(n_features) if i not in cat_inds]
-    return {
-        FeatureModality.NUMERICAL: num_inds,
-        FeatureModality.CATEGORICAL: cat_inds,
-    }
+def _make_metadata(n_features: int, cat_inds: list[int]) -> FeatureMetadata:
+    return FeatureMetadata.from_only_categorical_indices(cat_inds, n_features)
 
 
 def test__preprocessing_steps__transform__is_idempotent():
@@ -81,22 +74,22 @@ def test__preprocessing_steps__transform__is_idempotent():
     n_samples = 20
     n_features = 4
     cat_inds = [1, 3]
-    feature_modalities = _make_feature_modalities(n_features, cat_inds)
+    feature_metadata = _make_metadata(n_features, cat_inds)
     for cls in _get_preprocessing_steps():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
         obj = cls()
-        obj.fit_transform(x, feature_modalities)
+        obj.fit_transform(x, feature_metadata)
 
         # Calling transform multiple times should give the same result
         result1 = obj.transform(x2)
         result2 = obj.transform(x2)
 
         assert np.allclose(result1.X, result2.X), f"Transform not idempotent for {cls}"
-        assert get_categorical_indices(
-            result1.column_metadata.column_modalities
-        ) == get_categorical_indices(result2.column_metadata.column_modalities)
+        assert result1.feature_metadata.indices_for(
+            FeatureModality.CATEGORICAL
+        ) == result2.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
 
 
 def test__preprocessing_steps__transform__no_sample_interdependence():
@@ -108,13 +101,13 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
     n_samples = 20
     n_features = 4
     cat_inds = [1, 3]
-    feature_modalities = _make_feature_modalities(n_features, cat_inds)
+    feature_metadata = _make_metadata(n_features, cat_inds)
     for cls in _get_preprocessing_steps():
         x = _get_random_data(rng, n_samples, n_features, cat_inds)
         x2 = _get_random_data(rng, n_samples, n_features, cat_inds)
 
         obj = cls()
-        obj.fit_transform(x, feature_modalities)
+        obj.fit_transform(x, feature_metadata)
 
         # Test 1: Shuffling samples should give correspondingly shuffled results
         result_normal = obj.transform(x2)
@@ -131,9 +124,9 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         )
 
         # Test 3: Categorical features should remain the same
-        assert get_categorical_indices(
-            result_full.column_metadata.column_modalities
-        ) == get_categorical_indices(result_subset.column_metadata.column_modalities)
+        assert result_full.feature_metadata.indices_for(
+            FeatureModality.CATEGORICAL
+        ) == result_subset.feature_metadata.indices_for(FeatureModality.CATEGORICAL)
 
 
 def test__pipeline__handles_added_columns_from_fingerprint_step():
@@ -145,7 +138,12 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     rng = np.random.default_rng(42)
     n_samples, n_features = 10, 3
     X = rng.random((n_samples, n_features))
-    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = FeatureMetadata(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(n_features)
+        ]
+    )
 
     # Create pipeline with fingerprint step
     fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
@@ -157,9 +155,9 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     assert result.X.shape == (n_samples, n_features + 1)
 
     # Metadata should track the new column
-    assert result.column_metadata.num_columns == n_features + 1
+    assert result.feature_metadata.num_columns == n_features + 1
     assert (
-        len(result.column_metadata.indices_for(FeatureModality.NUMERICAL))
+        len(result.feature_metadata.indices_for(FeatureModality.NUMERICAL))
         == n_features + 1
     )
 
@@ -173,7 +171,12 @@ def test__pipeline__transform_also_handles_added_columns():
     n_samples, n_features = 10, 3
     X_train = rng.random((n_samples, n_features))
     X_test = rng.random((5, n_features))
-    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = FeatureMetadata(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(n_features)
+        ]
+    )
 
     # Create and fit pipeline
     fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
@@ -195,7 +198,7 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
         """A step that incorrectly returns more columns than it received."""
 
         @override
-        def _fit(self, X: np.ndarray, metadata: ColumnMetadata) -> ColumnMetadata:
+        def _fit(self, X: np.ndarray, metadata: FeatureMetadata) -> FeatureMetadata:
             return metadata
 
         @override
@@ -207,7 +210,11 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
 
     rng = np.random.default_rng(42)
     X = rng.random((10, 3))
-    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = FeatureMetadata(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL) for _ in range(3)
+        ]
+    )
 
     # Register step with modalities - should raise error
     bad_step = BadStep()

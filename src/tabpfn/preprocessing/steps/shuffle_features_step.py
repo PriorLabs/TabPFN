@@ -14,7 +14,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import ColumnMetadata
+    from tabpfn.preprocessing.datamodel import FeatureMetadata
 
 
 # Potentially add to a dedicated StochasticPreprocessingPipeline
@@ -38,8 +38,8 @@ class ShuffleFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
             index_permutation = np.roll(

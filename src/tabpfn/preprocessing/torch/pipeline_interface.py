@@ -10,7 +10,7 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 
 
 class TorchPreprocessingStep(abc.ABC):
@@ -133,7 +133,7 @@ class TorchPreprocessingPipeline:
     def __call__(
         self,
         x: torch.Tensor,
-        metadata: ColumnMetadata,
+        metadata: FeatureMetadata,
         num_train_rows: int | None = None,
         *,
         use_fitted_cache: bool = False,
@@ -182,7 +182,7 @@ class TorchPreprocessingPipeline:
 
             if result.added_columns is not None:
                 x = torch.cat([x, result.added_columns], dim=-1)
-                metadata = metadata.add_columns(
+                metadata = metadata.append_columns(
                     result.added_modality or FeatureModality.NUMERICAL,
                     result.added_columns.shape[-1],
                 )
@@ -220,7 +220,7 @@ class TorchPreprocessingPipeline:
                 "during initialization."
             )
 
-    def _validate_metadata(self, metadata: ColumnMetadata, num_columns: int) -> None:
+    def _validate_metadata(self, metadata: FeatureMetadata, num_columns: int) -> None:
         if num_columns != metadata.num_columns:
             raise ValueError(
                 f"Number of columns in input tensor ({num_columns}) does not match "
@@ -254,4 +254,4 @@ class TorchPreprocessingPipelineOutput:
     """
 
     x: torch.Tensor
-    metadata: ColumnMetadata
+    metadata: FeatureMetadata

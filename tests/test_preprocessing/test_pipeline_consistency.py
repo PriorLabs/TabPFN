@@ -25,10 +25,11 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
+from tabpfn.preprocessing.datamodel import Feature
 from tabpfn.preprocessing.pipeline import build_pipeline
 
 try:
-    from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 
     NEW_PIPELINE_IMPLEMENTATION = True
 except ImportError:
@@ -55,7 +56,7 @@ def _get_random_data_with_categoricals(
     n_samples: int = 20,
     n_numerical: int = 3,
     n_categorical: int = 2,
-) -> tuple[np.ndarray, ColumnMetadata | list[int]]:
+) -> tuple[np.ndarray, FeatureMetadata | list[int]]:
     """Generate random data with both numerical and categorical features."""
     n_features = n_numerical + n_categorical
     X = np.zeros((n_samples, n_features), dtype=np.float64)
@@ -74,12 +75,14 @@ def _get_random_data_with_categoricals(
 
     if NEW_PIPELINE_IMPLEMENTATION:
         # Build column metadata
-        metadata = ColumnMetadata.from_dict(  # type: ignore
-            {
-                FeatureModality.NUMERICAL: list(range(n_numerical)),  # type: ignore
-                FeatureModality.CATEGORICAL: list(range(n_numerical, n_features)),  # type: ignore
-            }
-        )
+        features = [
+            Feature(name=None, modality=FeatureModality.NUMERICAL)  # type: ignore
+            for _ in range(n_numerical)
+        ] + [
+            Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
+            for _ in range(n_categorical)
+        ]
+        metadata = FeatureMetadata(features=features)  # type: ignore
         return X, metadata
     categorical_indices = list(range(n_numerical, n_features))
     return X, categorical_indices
@@ -285,7 +288,7 @@ def _transform_with_pipeline(
     result_test = pipeline.transform(X_test)
 
     if NEW_PIPELINE_IMPLEMENTATION:
-        metadata_dict = result_train.column_metadata.column_modalities
+        metadata_dict = result_train.feature_metadata.feature_modalities
     else:
         assert isinstance(result_train, TransformResult)
         _, categorical_indices = result_train

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality
+from tabpfn.preprocessing.torch import FeatureMetadata
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 # This should inheric from FeaturePreprocessingTransformerStep-like object
@@ -26,13 +29,14 @@ class FeatureModalityDetector:
 
 
 def detect_feature_modalities(
-    X: pd.DataFrame,
+    X: np.ndarray,
+    feature_names: list[str] | None,
     *,
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     reported_categorical_indices: Sequence[int] | None = None,
-) -> dict[FeatureModality, list[int]]:
+) -> FeatureMetadata:
     """Infer the features modalities from the given data, based on heuristics
     and user-provided indices for categorical features.
 
@@ -42,7 +46,8 @@ def detect_feature_modalities(
         as defined by what suits the model predictions and it's pre-training.
 
     Args:
-        X: The data to infer the categorical features from.
+        X: The data to infer the categorical features from.\
+        feature_names: The names of the features.
         reported_categorical_indices: Any user provided indices of what is
             considered categorical.
         min_samples_for_inference:
@@ -60,20 +65,21 @@ def detect_feature_modalities(
         A dictionary with the feature modalities as keys and the column as
         values.
     """
-    feature_modalities_to_columns = defaultdict(list)
+    features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
-    for index in range(X.shape[1]):
-        feat = X.iloc[:, index]
+    for i, index in enumerate(range(X.shape[1])):
+        X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (reported_categorical_indices or ())
+        feature_name = feature_names[i] if feature_names is not None else None
         feat_modality = _detect_feature_modality(
-            s=feat,
+            s=pd.Series(X_slice, name=feature_name),
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        feature_modalities_to_columns[feat_modality].append(index)
-    return feature_modalities_to_columns
+        features.append(Feature(name=feature_name, modality=feat_modality))
+    return FeatureMetadata(features=features)
 
 
 def _detect_feature_modality(

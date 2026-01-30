@@ -295,25 +295,27 @@ class TestTagFeaturesAndSanitizeData:
         expected_modalities: dict[FeatureModality, list[int]],
     ) -> None:
         """Test that different input types are correctly tagged and sanitized."""
-        X_out, ord_encoder, modalities = tag_features_and_sanitize_data(
+        feature_names = [f"feature_{i}" for i in range(input_data.shape[1])]
+        X_out, ord_encoder, feature_metadata = tag_features_and_sanitize_data(
             X=input_data,
+            feature_names=feature_names,
             min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
             max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
             min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
             provided_categorical_indices=None,
         )
-
+        assert feature_metadata.feature_names == feature_names
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
         assert X_out.dtype == np.float64
         assert ord_encoder is not None
 
         assert (
-            modalities[FeatureModality.NUMERICAL]
+            feature_metadata.indices_for(FeatureModality.NUMERICAL)
             == expected_modalities[FeatureModality.NUMERICAL]
         )
         assert (
-            modalities[FeatureModality.CATEGORICAL]
+            feature_metadata.indices_for(FeatureModality.CATEGORICAL)
             == expected_modalities[FeatureModality.CATEGORICAL]
         )
 
@@ -355,14 +357,16 @@ class TestTagFeaturesAndSanitizeData:
         expected_modalities: dict[FeatureModality, list[int]],
     ) -> None:
         """Test that pandas DataFrames are correctly processed and tagged."""
-        X_out, ord_encoder, modalities = tag_features_and_sanitize_data(
+        X_out, ord_encoder, feature_metadata = tag_features_and_sanitize_data(
             X=input_data.values,
+            feature_names=None,
             min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
             max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
             min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
             provided_categorical_indices=None,
         )
 
+        assert feature_metadata.feature_names == [None] * input_data.shape[1]
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
         assert X_out.dtype == np.float64
@@ -370,11 +374,11 @@ class TestTagFeaturesAndSanitizeData:
         assert ord_encoder is not None
 
         assert (
-            modalities[FeatureModality.NUMERICAL]
+            feature_metadata.indices_for(FeatureModality.NUMERICAL)
             == expected_modalities[FeatureModality.NUMERICAL]
         )
         assert (
-            modalities[FeatureModality.CATEGORICAL]
+            feature_metadata.indices_for(FeatureModality.CATEGORICAL)
             == expected_modalities[FeatureModality.CATEGORICAL]
         )
 
@@ -396,15 +400,17 @@ class TestTagFeaturesAndSanitizeData:
                 "type": ["guest", "member", pd.NA],
             }
         )
-        X_out_first, _, modalities_first = tag_features_and_sanitize_data(
+        X_out_first, _, feature_metadata_first = tag_features_and_sanitize_data(
             X=df.values,
+            feature_names=None,
             min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
             max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
             min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
             provided_categorical_indices=None,
         )
-        X_out_second, _, modalities_second = tag_features_and_sanitize_data(
+        X_out_second, _, feature_metadata_second = tag_features_and_sanitize_data(
             X=X_out_first,
+            feature_names=None,
             min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
             max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
             min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
@@ -418,4 +424,4 @@ class TestTagFeaturesAndSanitizeData:
         # Note that depending on the settings for max_unique_for_category and
         # min_unique_for_numerical, the modalities may be different if
         # auto-detecting them on an ordinally encoded data frame.
-        assert modalities_first == modalities_second
+        assert feature_metadata_first.features == feature_metadata_second.features

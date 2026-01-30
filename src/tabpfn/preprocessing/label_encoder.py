@@ -24,12 +24,13 @@ class TabPFNLabelEncoder:
     """Handles label encoding and validation for TabPFN classifier.
 
     Wraps sklearn's LabelEncoder and adds validation for maximum number of classes,
-    as well as computing class counts.
+    as well as computing class counts. Also keeps the target name as a string.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, original_target_name: str | None = None) -> None:
         super().__init__()
         self._encoder = LabelEncoder()
+        self.original_target_name = original_target_name
 
     def fit_transform(
         self,

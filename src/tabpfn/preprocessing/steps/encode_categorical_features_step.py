@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -131,34 +131,20 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             f"Unknown categorical transform {self.categorical_transform_name}",
         )
 
-    def _build_output_metadata(
-        self,
-        n_features: int,
-        categorical_indices: list[int],
-    ) -> ColumnMetadata:
-        """Build output metadata with updated categorical and numerical indices."""
-        numerical_indices = [
-            i for i in range(n_features) if i not in categorical_indices
-        ]
-        return ColumnMetadata(
-            column_modalities={
-                FeatureModality.CATEGORICAL: sorted(categorical_indices),
-                FeatureModality.NUMERICAL: sorted(numerical_indices),
-            }
-        )
-
     @override
     def _fit(
         self,
         X: np.ndarray,
-        metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return self._build_output_metadata(n_features, categorical_features)
+            return FeatureMetadata.from_only_categorical_indices(
+                categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -192,19 +178,23 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         self.categorical_transformer_ = ct
         # TODO: Test if the metadata is correct after the different
         # transformations.
-        return self._build_output_metadata(n_features, categorical_features)
+        return FeatureMetadata.from_only_categorical_indices(
+            categorical_features, n_features
+        )
 
     def _fit_transform_internal(
         self,
         X: np.ndarray,
-        metadata: ColumnMetadata,
-    ) -> tuple[np.ndarray, ColumnMetadata]:
+        metadata: FeatureMetadata,
+    ) -> tuple[np.ndarray, FeatureMetadata]:
         categorical_features = metadata.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
         n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, self._build_output_metadata(n_features, categorical_features)
+            return X, FeatureMetadata.from_only_categorical_indices(
+                categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -243,20 +233,19 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, self._build_output_metadata(n_features, categorical_features)  # type: ignore[return-value]
+        return Xt, FeatureMetadata.from_only_categorical_indices(
+            categorical_features, n_features
+        )
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
+        metadata: FeatureMetadata,
     ) -> PreprocessingStepResult:
-        if isinstance(metadata, dict):
-            metadata = ColumnMetadata.from_dict(metadata)
-
         Xt, output_metadata = self._fit_transform_internal(X, metadata)
         self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, column_metadata=output_metadata)
+        return PreprocessingStepResult(X=Xt, feature_metadata=output_metadata)
 
     @override
     def _transform(

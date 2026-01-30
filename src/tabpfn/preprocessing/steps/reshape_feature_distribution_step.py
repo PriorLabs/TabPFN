@@ -21,7 +21,7 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -215,8 +215,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self,
         n_samples: int,
         n_features: int,
-        metadata: ColumnMetadata,
-    ) -> tuple[Pipeline | ColumnTransformer, ColumnMetadata]:
+        metadata: FeatureMetadata,
+    ) -> tuple[Pipeline | ColumnTransformer, FeatureMetadata]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
@@ -358,12 +358,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # Build the new metadata with updated categorical indices
         # Non-categorical indices become numerical
         # SVD features are numerical and appended at the end
-        new_numerical_ix = [i for i in range(n_output_features) if i not in cat_ix]
-        new_metadata = ColumnMetadata(
-            column_modalities={
-                FeatureModality.CATEGORICAL: sorted(cat_ix),
-                FeatureModality.NUMERICAL: sorted(new_numerical_ix),
-            }
+        new_metadata = FeatureMetadata.from_only_categorical_indices(
+            categorical_indices=sorted(cat_ix),
+            num_columns=n_output_features,
         )
 
         return transformer, new_metadata
@@ -372,8 +369,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray,
-        metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         n_samples, n_features = X.shape
         transformer, output_metadata = self._set_transformer_and_modalities(
             n_samples,
@@ -388,11 +385,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def fit_transform(
         self,
         X: np.ndarray,
-        metadata: ColumnMetadata | dict[FeatureModality, list[int]],
+        metadata: FeatureMetadata,
     ) -> PreprocessingStepResult:
-        if isinstance(metadata, dict):
-            metadata = ColumnMetadata.from_dict(metadata)
-
         n_samples, n_features = X.shape
         transformer, output_metadata = self._set_transformer_and_modalities(
             n_samples,
@@ -402,7 +396,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.transformer_ = transformer
         self.metadata_after_transform_ = output_metadata
-        return PreprocessingStepResult(X=Xt, column_metadata=output_metadata)  # type: ignore[arg-type]
+        return PreprocessingStepResult(X=Xt, feature_metadata=output_metadata)  # type: ignore[arg-type]
 
     # TODO: Add test for it and make it useable with modality assignment
     # in pipeline registration.

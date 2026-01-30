@@ -72,9 +72,8 @@ from tabpfn.preprocessing import (
     tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.ensemble import TabPFNEnsembleFactory
-from tabpfn.preprocessing.initialization import convert_to_pandas
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.utils import (
     DevicesSpecification,
@@ -101,7 +100,6 @@ if TYPE_CHECKING:
         from sklearn.base import Tags
     except ImportError:
         Tags = Any
-    import pandas as pd
 
 DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
 
@@ -142,10 +140,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
-    inferred_column_modalities_: dict[FeatureModality, list[int]]
-    """The inferred column modalities. This is a mapping of feature modalities to
-    indices of the columns that were inferred to be that modality, using heuristics
-    and user-provided indices for categorical features."""
+    inferred_feature_metadata_: FeatureMetadata
+    """The inferred column metadata. This contains the feature modalities per column,
+    using heuristics and user-provided indices for categorical features."""
 
     classes_: npt.NDArray[Any]
     """The unique classes found in the target data during `fit()`."""
@@ -577,7 +574,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         # Minimal preprocessing for prompt tuning
-        self.inferred_column_modalities_ = {}
+        n_features = X.shape[1]
+        features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
+        self.inferred_feature_metadata_ = FeatureMetadata(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = generate_classification_ensemble_configs(
@@ -605,7 +604,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X: XType,
         y: YType,
         rng: np.random.Generator,
-    ) -> tuple[list[ClassifierEnsembleConfig], pd.DataFrame, pd.Series]:
+    ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Data validation and cleaning
         X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
@@ -618,20 +617,22 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ensure_y_numeric=False,
             devices=self.devices_,
         )
-        X, ordinal_encoder, inferred_column_modalities = tag_features_and_sanitize_data(
+
+        X, ordinal_encoder, feature_metadata = tag_features_and_sanitize_data(
             X=X,
+            feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         self.ordinal_encoder_ = ordinal_encoder
-        self.inferred_column_modalities_ = inferred_column_modalities
+        self.inferred_feature_metadata_ = feature_metadata
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 
         # Label encoding
-        self.label_encoder_ = TabPFNLabelEncoder()
+        self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name)
         y, label_metadata = self.label_encoder_.fit_transform(
             y=y, max_num_classes=self.inference_config_.MAX_NUMBER_OF_CLASSES
         )
@@ -659,14 +660,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         assert len(ensemble_configs) == self.n_estimators
 
-        # Always return pandas DataFrames and Series for further processing.
-        X, y = convert_to_pandas(
-            X=X,
-            y=y,
-            feature_names=feature_names,
-            y_name=original_y_name,
-        )
-
+        # We can convert to numpy. We stored the feature names in the
+        # feature metadata and the target name in the label encoder.
         return ensemble_configs, X, y
 
     def _initialize_dataset_preprocessing(
@@ -722,14 +717,26 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        feature_modalities = [
-            [{FeatureModality.CATEGORICAL: indices} for indices in ensemble_cat_ix]
-            for ensemble_cat_ix in cat_ix
-        ]
+        num_features = X_preprocessed[0].shape[1]
+        feature_metadata = []
+        for ib in cat_ix:
+            feature_metadata.append([])
+            for cat_index in ib:
+                features = [
+                    Feature(
+                        name=f"c{i}",
+                        modality=FeatureModality.NUMERICAL
+                        if i in cat_index
+                        else FeatureModality.CATEGORICAL,
+                    )
+                    for i in range(num_features)
+                ]
+                feature_metadata[-1].append(FeatureMetadata(features=features))
+
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
-            feature_modalities=feature_modalities,
+            feature_metadata=feature_metadata,
             ensemble_configs=configs,
             models=self.models_,
             devices=self.devices_,
@@ -815,8 +822,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
 
         self._maybe_calibrate_temperature_and_tune_decision_thresholds(
-            X=X.to_numpy(),
-            y=y.to_numpy(),
+            X=X,
+            y=y,
         )
 
         self.ensemble_preprocessor_ = TabPFNEnsembleFactory(
@@ -828,9 +835,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.executor_ = create_inference_engine(
             fit_mode=self.fit_mode,
-            X_train=X.to_numpy(),
-            y_train=y.to_numpy(),
-            feature_modalities=self.inferred_column_modalities_,
+            X_train=X,
+            y_train=y,
+            feature_metadata=self.inferred_feature_metadata_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices_=self.devices_,
@@ -1004,12 +1011,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
-            # TODO: The below steps should be handled by a "data sanitizer object"
             X = fix_dtypes(
                 X,
-                cat_indices=self.inferred_column_modalities_[
+                cat_indices=self.inferred_feature_metadata_.indices_for(
                     FeatureModality.CATEGORICAL
-                ],
+                ),
             )
             X = process_text_na_dataframe(
                 X=X,

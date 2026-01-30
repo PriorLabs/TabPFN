@@ -9,7 +9,7 @@ from typing_extensions import override
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
@@ -47,8 +47,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         _, rng = infer_random_state(self.random_state)
         self.rnd_salt_ = int(rng.integers(0, 2**16))
         # Return input metadata unchanged - pipeline handles adding fingerprint column

@@ -6,6 +6,7 @@ e.g. NaN mapping and dtype conversion.
 
 from __future__ import annotations
 
+import typing
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -66,9 +67,10 @@ def fix_dtypes(  # noqa: D103
         columns_are_numeric = all(
             isinstance(col, (int, np.integer)) for col in X.columns.tolist()
         )
-        use_iloc = is_numeric_indices and not columns_are_numeric
-        if use_iloc:
-            X.iloc[:, cat_indices] = X.iloc[:, cat_indices].astype("category")
+        use_col_names = is_numeric_indices and not columns_are_numeric
+        if use_col_names:
+            cat_col_names = [X.columns[i] for i in cat_indices]
+            X[cat_col_names] = X[cat_col_names].astype("category")
         else:
             X[cat_indices] = X[cat_indices].astype("category")
 
@@ -123,7 +125,7 @@ def process_text_na_dataframe(
     elif ord_encoder is not None:
         X_encoded = ord_encoder.transform(X)
     else:
-        X_encoded = X
+        X_encoded = X.to_numpy()
 
     string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
@@ -132,4 +134,4 @@ def process_text_na_dataframe(
         np.nan,
         X_encoded[:, string_cols_ix],
     )
-    return X_encoded.astype(np.float64)
+    return typing.cast("np.ndarray", X_encoded.astype(np.float64))

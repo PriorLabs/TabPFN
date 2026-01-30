@@ -20,6 +20,7 @@ from tabpfn.preprocessing.configs import (
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.torch import (
+    FeatureMetadata,
     TorchPreprocessingPipeline,
     create_gpu_preprocessing_pipeline,
 )
@@ -33,7 +34,6 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
-    from tabpfn.preprocessing.datamodel import FeatureModality
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 T = TypeVar("T")
@@ -52,7 +52,7 @@ class TabPFNEnsembleMember:
     gpu_preprocessor: TorchPreprocessingPipeline | None
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
-    feature_modalities: dict[FeatureModality, list[int]]
+    feature_metadata: FeatureMetadata
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
@@ -114,7 +114,7 @@ class TabPFNEnsembleFactory:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
+        feature_metadata: FeatureMetadata,
         parallel_mode: Literal["block", "as-ready", "in-order"],
         override_random_state: int | np.random.Generator | None = None,
     ) -> Iterator[TabPFNEnsembleMember]:
@@ -123,7 +123,7 @@ class TabPFNEnsembleFactory:
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            feature_modalities=feature_modalities,
+            feature_metadata=feature_metadata,
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
@@ -142,7 +142,7 @@ class TabPFNEnsembleFactory:
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
-            feature_modalities_preprocessed,
+            feature_metadata_preprocessed,
         ) in enumerate(preprocessed_data_iterator):
             yield TabPFNEnsembleMember(
                 config=config,
@@ -150,21 +150,21 @@ class TabPFNEnsembleFactory:
                 gpu_preprocessor=gpu_preprocessors[i],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
-                feature_modalities=feature_modalities_preprocessed,
+                feature_metadata=feature_metadata_preprocessed,
             )
 
     def fit_transform_ensemble_members(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_modalities: dict[FeatureModality, list[int]],
+        feature_metadata: FeatureMetadata,
     ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                feature_modalities=feature_modalities,
+                feature_metadata=feature_metadata,
                 parallel_mode="block",
             )
         )

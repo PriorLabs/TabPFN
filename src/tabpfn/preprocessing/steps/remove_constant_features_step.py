@@ -14,7 +14,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureMetadata, FeatureModality
 
 
 class RemoveConstantFeaturesStep(PreprocessingStep):
@@ -28,8 +28,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
     def _fit(  # type: ignore
         self,
         X: np.ndarray | torch.Tensor,
-        metadata: ColumnMetadata,
-    ) -> ColumnMetadata:
+        metadata: FeatureMetadata,
+    ) -> FeatureMetadata:
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
         else:

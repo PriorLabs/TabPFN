@@ -8,10 +8,20 @@ import torch
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import PreprocessingPipeline
-from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureMetadata, FeatureModality
 from tabpfn.preprocessing.steps.remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
+
+
+def _numerical_metadata(num_features: int) -> FeatureMetadata:
+    """Create FeatureMetadata with numerical features only."""
+    return FeatureMetadata(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(num_features)
+        ]
+    )
 
 
 def test__remove_constant_features_step__drops_constant_numpy() -> None:
@@ -23,10 +33,10 @@ def test__remove_constant_features_step__drops_constant_numpy() -> None:
             [1.0, 7.0, 4.0],
         ]
     )
-    metadata = ColumnMetadata({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = _numerical_metadata(num_features=3)
 
     step = RemoveConstantFeaturesStep()
-    result = step.fit_transform(X, metadata)  # type: ignore[arg-type]
+    result = step.fit_transform(X, metadata)
 
     expected = np.array(
         [
@@ -36,7 +46,7 @@ def test__remove_constant_features_step__drops_constant_numpy() -> None:
         ]
     )
     np.testing.assert_array_equal(result.X, expected)
-    assert result.column_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
     assert result.X_added is None
     assert result.modality_added is None
 
@@ -44,7 +54,7 @@ def test__remove_constant_features_step__drops_constant_numpy() -> None:
 def test__remove_constant_features_step__raises_when_all_constant() -> None:
     """Raise when all columns are constant."""
     X = np.ones((4, 2))
-    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1]})
+    metadata = _numerical_metadata(num_features=2)
 
     step = RemoveConstantFeaturesStep()
     with pytest.raises(TabPFNValidationError, match="All features are constant"):
@@ -60,7 +70,7 @@ def test__remove_constant_features_step__drops_constant_torch() -> None:
             [2.0, 3.0, 6.0],
         ]
     )
-    metadata = ColumnMetadata.from_dict({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = _numerical_metadata(num_features=3)
 
     step = RemoveConstantFeaturesStep()
     result = step.fit_transform(X, metadata)  # type: ignore[arg-type]
@@ -74,7 +84,7 @@ def test__remove_constant_features_step__drops_constant_torch() -> None:
     )
     assert isinstance(result.X, torch.Tensor)
     assert torch.equal(result.X, expected)
-    assert result.column_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
     assert result.X_added is None
     assert result.modality_added is None
 
@@ -88,7 +98,7 @@ def test__pipeline__remove_constant_features_step() -> None:
             [1.0, 7.0, 4.0],
         ]
     )
-    metadata = ColumnMetadata({FeatureModality.NUMERICAL: [0, 1, 2]})
+    metadata = _numerical_metadata(num_features=3)
     pipeline = PreprocessingPipeline([RemoveConstantFeaturesStep()])
-    result = pipeline.fit_transform(X, metadata)  # type: ignore[arg-type]
-    assert result.column_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    result = pipeline.fit_transform(X, metadata)
+    assert result.feature_metadata.indices_for(FeatureModality.NUMERICAL) == [0, 1]
