@@ -89,8 +89,8 @@ def _detect_feature_modality(
     min_unique_for_numerical: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    # Calculate total distinct values once, treating NaN as a category.
-    n_unique = s.nunique(dropna=False)
+    n_unique = _get_unique_with_sklearn_compatible_error(s)
+
     if n_unique <= 1:
         # Either all values are missing, or all values are the same.
         # If there's a single value but also missing ones, it's not constant
@@ -145,3 +145,19 @@ def _detect_numeric_as_categorical(
     elif big_enough_n_to_infer_cat and n_unique < min_unique_for_numerical:
         return True
     return False
+
+
+def _get_unique_with_sklearn_compatible_error(s: pd.Series) -> int:
+    """Calculate total distinct values once, treating NaN as a category."""
+    try:
+        return s.nunique(dropna=False)
+    except TypeError as e:
+        # The sklearn test is inserting a dict ({"foo": "bar"}) into the data to verify
+        # that the estimator raises a TypeError with a specific message pattern
+        # ("argument must be .* string.* number"). However, when pandas tries to
+        # compute nunique() on a Series containing a dict, it fails with "unhashable
+        # type: 'dict'" which doesn't match sklearn's expected error pattern.
+        raise TypeError(
+            f"argument must be a string or a number (columns must only contain strings "
+            f"or numbers), got `{type(s.iloc[0]).__name__}`"
+        ) from e
