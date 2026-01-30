@@ -492,9 +492,9 @@ def convert_batch_of_cat_ix_to_schema(
             features = [
                 Feature(
                     name=f"c{i}",
-                    modality=FeatureModality.NUMERICAL
+                    modality=FeatureModality.CATEGORICAL
                     if i in cat_indices
-                    else FeatureModality.CATEGORICAL,
+                    else FeatureModality.NUMERICAL,
                 )
                 for i in range(num_features)
             ]
