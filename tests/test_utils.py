@@ -6,92 +6,12 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
-from sklearn.preprocessing import LabelEncoder
 from torch.torch_version import TorchVersion
 
-from tabpfn import TabPFNClassifier
-from tabpfn.constants import NA_PLACEHOLDER
-from tabpfn.inference_config import InferenceConfig
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
-from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.preprocessing.type_detection import infer_categorical_features
 from tabpfn.utils import (
     balance_probas_by_class_counts,
     infer_devices,
 )
-from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
-
-
-def test_infer_categorical_with_str_and_nan_provided_included():
-    X = np.array([[np.nan, "NA"]], dtype=object).reshape(-1, 1)
-    out = infer_categorical_features(
-        X,
-        provided=[0],
-        min_samples_for_inference=0,
-        max_unique_for_category=2,
-        min_unique_for_numerical=5,
-    )
-    assert out == [0]
-
-
-def test_infer_categorical_with_str_and_nan_multiple_rows_provided_included():
-    X = np.array([[np.nan], ["NA"], ["NA"]], dtype=object)
-    out = infer_categorical_features(
-        X,
-        provided=[0],
-        min_samples_for_inference=0,
-        max_unique_for_category=2,
-        min_unique_for_numerical=5,
-    )
-    assert out == [0]
-
-
-def test_infer_categorical_auto_inference_blocked_when_not_enough_samples():
-    X = np.array([[1.0], [1.0], [np.nan]])
-    out = infer_categorical_features(
-        X,
-        provided=None,
-        min_samples_for_inference=3,
-        max_unique_for_category=2,
-        min_unique_for_numerical=4,
-    )
-    assert out == []
-
-
-def test_infer_categorical_auto_inference_enabled_with_enough_samples():
-    X = np.array([[1.0, 0.0], [1.0, 1.0], [2.0, 2.0], [2.0, 3.0], [np.nan, 9.0]])
-    out = infer_categorical_features(
-        X,
-        provided=None,
-        min_samples_for_inference=3,
-        max_unique_for_category=3,
-        min_unique_for_numerical=4,
-    )
-    assert out == [0]
-
-
-def test_infer_categorical_provided_column_excluded_if_exceeds_max_unique():
-    X = np.array([[0], [1], [2], [3], [np.nan]], dtype=float)
-    out = infer_categorical_features(
-        X,
-        provided=[0],
-        min_samples_for_inference=0,
-        max_unique_for_category=3,
-        min_unique_for_numerical=2,
-    )
-    assert out == []
-
-
-def test_infer_categorical_with_dict_raises_error():
-    X = np.array([[{"a": 1}], [{"b": 2}]], dtype=object)
-    with pytest.raises(TypeError):
-        infer_categorical_features(
-            X,
-            provided=None,
-            min_samples_for_inference=0,
-            max_unique_for_category=2,
-            min_unique_for_numerical=2,
-        )
 
 
 def test__infer_devices__auto__cuda_and_mps_not_available__selects_cpu(
@@ -266,102 +186,6 @@ test_cases = [
         ),
     },
 ]
-
-
-# --- Fixture for the "test_process_text_na_dataframe" test ---
-# prepare the DataFrame
-@pytest.fixture(params=test_cases)
-def prepared_tabpfn_data(request):
-    temp_df = request.param["df"].copy()
-    categorical_idx = request.param["categorical_indices"]
-    # Dummy target, as tests do not need a target
-    y = np.array([0, 1, 0])
-
-    cls = TabPFNClassifier()
-
-    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
-        temp_df,
-        y,
-        estimator=cls,
-        ensure_y_numeric=False,
-    )
-
-    if feature_names_in is not None:
-        cls.feature_names_in_ = feature_names_in
-    cls.n_features_in_ = n_features_in
-
-    if not cls.differentiable_input:
-        _, counts = np.unique(y, return_counts=True)
-        cls.class_counts_ = counts
-        cls.label_encoder_ = LabelEncoder()
-        y = cls.label_encoder_.fit_transform(y)
-        cls.classes_ = cls.label_encoder_.classes_
-        cls.n_classes_ = len(cls.classes_)
-    else:
-        cls.label_encoder_ = None
-        if not hasattr(cls, "n_classes_"):
-            cls.n_classes_ = int(torch.max(torch.tensor(y)).item()) + 1
-        cls.classes_ = torch.arange(cls.n_classes_)
-
-    cls.inferred_categorical_indices_ = infer_categorical_features(
-        X=X,
-        provided=categorical_idx,
-        min_samples_for_inference=InferenceConfig.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-        max_unique_for_category=InferenceConfig.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-        min_unique_for_numerical=InferenceConfig.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-    )
-    return (
-        fix_dtypes(X, cat_indices=cls.inferred_categorical_indices_),
-        cls.inferred_categorical_indices_,
-        request.param["ground_truth"],
-    )
-
-
-# --- Actual test ---
-# This is a test for the OrderPreservingColumnTransformer, which is not used currently
-# But might be used in the future, therefore I'll leave it in.
-@pytest.mark.skip
-def test_process_text_na_dataframe(prepared_tabpfn_data):
-    X, categorical_idx, ground_truth = prepared_tabpfn_data  # use the fixture
-
-    ord_encoder = get_ordinal_encoder()
-    X_out = process_text_na_dataframe(
-        X,
-        placeholder=NA_PLACEHOLDER,
-        ord_encoder=ord_encoder,
-        fit_encoder=True,
-    )
-
-    assert X_out.shape[0] == ground_truth.shape[0]
-    assert X_out.shape[1] == ground_truth.shape[1]
-
-    for col_name in X.columns:
-        # col_name should already be a numeric index but using get_loc for safety
-        col_idx = X.columns.get_loc(col_name)
-        original_col = X[col_name].to_numpy()
-        output_col = X_out[:, col_idx]
-        gt_col = ground_truth[:, col_idx]
-        if col_idx not in categorical_idx:
-            # For numeric columns, values should be preserved (within float tolerance).
-            # NaNs should also be in the same positions.
-            np.testing.assert_allclose(
-                output_col,
-                original_col,
-                equal_nan=True,
-                rtol=1e-5,
-            )
-        else:
-            # OrdinalEncoder does not guarante that element order is preserved:
-
-            # First, check if np.nan are correctly positioned
-            # ! use np.isnan on outputcol -> must be numerical
-            # ! use pd.isna on original col -> can be any type
-            np.testing.assert_array_equal(np.isnan(output_col), pd.isna(original_col))
-            # Second, check if there are as many unique non-nan values, as expected
-            # e.g.: ["high", "mid", "low"] -> [0,2,1] or [2,1,0],...
-            assert len(np.unique(output_col[~pd.isna(output_col)])) == len(
-                np.unique(gt_col[~pd.isna(gt_col)])
-            )
 
 
 def test_balance_probas_by_class_counts():

@@ -20,6 +20,7 @@ from tabpfn.preprocessing.configs import (
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.torch import (
+    FeatureSchema,
     TorchPreprocessingPipeline,
     create_gpu_preprocessing_pipeline,
 )
@@ -33,25 +34,25 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
-    from tabpfn.preprocessing.pipeline_interfaces import SequentialFeatureTransformer
+    from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 T = TypeVar("T")
 
 
 @dataclasses.dataclass
-class TabPFNPreprocessedEnsembleMember:
-    """Holds preprocessed data, config, preprocessors for a single ensemble member.
+class TabPFNEnsembleMember:
+    """Holds data, config, and preprocessors for a single ensemble member.
 
     The data is preprocessed on the CPU but this member also holds a torch preprocessor
     pipeline to be run before inference on the GPU.
     """
 
     config: EnsembleConfig
-    cpu_preprocessor: SequentialFeatureTransformer
+    cpu_preprocessor: PreprocessingPipeline
     gpu_preprocessor: TorchPreprocessingPipeline | None
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
-    cat_ix: list[int]
+    feature_schema: FeatureSchema
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
@@ -61,11 +62,13 @@ class TabPFNPreprocessedEnsembleMember:
 
 
 class TabPFNEnsemblePreprocessor:
-    """Generates pipelines and preprocesses the ensemble members.
+    """Orchestrates the creation of ensemble members.
 
-    This class has two main functionalities:
-    1. Can parallelize the preprocessing of multiple ensemble members
-    2. Can use global data information and pipelines to perform balanced data slicing
+    - Generates preprocessing pipelines.
+    - Iterates over cpu preprocessing.
+    - Creates TabPFNEnsembleMember objects with all necessary information to process
+        a single ensemble member.
+    - Can use global data information and pipelines to perform balanced data slicing
        (e.g. sample/feature subsampling) per ensemble member.
     """
 
@@ -111,16 +114,16 @@ class TabPFNEnsemblePreprocessor:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
         override_random_state: int | np.random.Generator | None = None,
-    ) -> Iterator[TabPFNPreprocessedEnsembleMember]:
+    ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            cat_ix=cat_ix,
+            feature_schema=feature_schema,
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
@@ -139,29 +142,29 @@ class TabPFNEnsemblePreprocessor:
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
-            cat_ix_preprocessed,
+            feature_schema_preprocessed,
         ) in enumerate(preprocessed_data_iterator):
-            yield TabPFNPreprocessedEnsembleMember(
+            yield TabPFNEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
                 gpu_preprocessor=gpu_preprocessors[i],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
-                cat_ix=cat_ix_preprocessed,
+                feature_schema=feature_schema_preprocessed,
             )
 
     def fit_transform_ensemble_members(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        cat_ix: list[int],
-    ) -> list[TabPFNPreprocessedEnsembleMember]:
+        feature_schema: FeatureSchema,
+    ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                cat_ix=cat_ix,
+                feature_schema=feature_schema,
                 parallel_mode="block",
             )
         )

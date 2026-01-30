@@ -24,6 +24,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -477,3 +478,26 @@ def balance_probas_by_class_counts(
         probas.device
     )
     return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
+
+
+def convert_batch_of_cat_ix_to_schema(
+    batch_of_cat_indices: list[list[list[int]]],
+    num_features: int,
+) -> list[list[FeatureSchema]]:
+    """Convert a batch of categorical indices to a schema."""
+    feature_schema = []
+    for ibatch in batch_of_cat_indices:
+        feature_schema.append([])
+        for cat_indices in ibatch:
+            features = [
+                Feature(
+                    name=f"c{i}",
+                    modality=FeatureModality.CATEGORICAL
+                    if i in cat_indices
+                    else FeatureModality.NUMERICAL,
+                )
+                for i in range(num_features)
+            ]
+            feature_schema[-1].append(FeatureSchema(features=features))
+
+    return feature_schema

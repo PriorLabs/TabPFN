@@ -123,6 +123,13 @@ class KDITransformerWithNaN(KDITransformer):
 
         return X  # type: ignore
 
+    def fit_transform(
+        self, X: torch.Tensor | np.ndarray, y: Any | None = None
+    ) -> np.ndarray:
+        """Fit the transformer and transform the data."""
+        self.fit(X, y)
+        return self.transform(X)
+
 
 def get_all_kdi_transformers() -> dict[str, KDITransformerWithNaN]:
     """Get all KDI transformers."""

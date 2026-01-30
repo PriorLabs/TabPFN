@@ -11,8 +11,8 @@ from .ensemble import (
     generate_regression_ensemble_configs,
 )
 from .initialization import tag_features_and_sanitize_data
-from .pipeline_interfaces import (
-    SequentialFeatureTransformer,
+from .pipeline_interface import (
+    PreprocessingPipeline,
 )
 from .presets import (
     default_classifier_preprocessor_configs,
@@ -27,9 +27,9 @@ from .transform import fit_preprocessing
 __all__ = [
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
+    "PreprocessingPipeline",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
-    "SequentialFeatureTransformer",
     "default_classifier_preprocessor_configs",
     "default_regressor_preprocessor_configs",
     "fit_preprocessing",

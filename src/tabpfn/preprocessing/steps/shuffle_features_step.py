@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import numpy as np
 import torch
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingStep,
 )
 from tabpfn.utils import infer_random_state
 
+if TYPE_CHECKING:
+    from tabpfn.preprocessing.datamodel import FeatureSchema
 
-class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
+
+class ShuffleFeaturesStep(PreprocessingStep):
     """Shuffle the features in the data."""
 
     def __init__(
@@ -34,8 +37,8 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
     def _fit(
         self,
         X: np.ndarray | torch.Tensor,
-        categorical_features: list[int],
-    ) -> list[int]:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":
             index_permutation = np.roll(
@@ -53,16 +56,14 @@ class ShuffleFeaturesStep(FeaturePreprocessingTransformerStep):
         else:
             self.index_permutation_ = index_permutation
 
-        return [
-            new_idx
-            for new_idx, idx in enumerate(index_permutation)
-            if idx in categorical_features
-        ]
+        return feature_schema.apply_permutation(index_permutation)
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
         assert self.index_permutation_ is not None, "You must call fit first"
         assert len(self.index_permutation_) == X.shape[1], (
             "The number of features must not change after fit"
         )
-        return X[:, self.index_permutation_]
+        return X[:, self.index_permutation_], None, None
