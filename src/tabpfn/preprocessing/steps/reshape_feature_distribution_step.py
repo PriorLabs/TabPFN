@@ -394,7 +394,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         )
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        self.feature_schema_after_transform_ = output_schema
+        self.feature_schema_updated_ = output_schema
         return PreprocessingStepResult(X=Xt, feature_schema=output_schema)  # type: ignore[arg-type]
 
     @override
