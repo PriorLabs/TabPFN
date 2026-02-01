@@ -3,28 +3,23 @@
 from __future__ import annotations
 
 import contextlib
-from copy import deepcopy
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import numpy as np
 from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
-from sklearn.decomposition import TruncatedSVD
-from sklearn.impute import SimpleImputer
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
     MinMaxScaler,
     PowerTransformer,
     RobustScaler,
-    StandardScaler,
 )
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
-    PreprocessingStepResult,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
@@ -35,62 +30,17 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
+from tabpfn.preprocessing.steps.utils import (
+    add_safe_standard_to_safe_power_without_standard,
+)
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
 
-T = TypeVar("T")
-
-
-def _identity(x: T) -> T:
-    return x
-
-
-def _inf_to_nan_func(x: np.ndarray) -> np.ndarray:
-    return np.nan_to_num(x, nan=np.nan, neginf=np.nan, posinf=np.nan)
-
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
     return np.exp(x) - 1  # type: ignore
-
-
-inf_to_nan_transformer = FunctionTransformer(
-    func=_inf_to_nan_func,
-    inverse_func=_identity,
-    check_inverse=False,
-)
-nan_impute_transformer = SimpleImputer(
-    missing_values=np.nan,
-    strategy="mean",
-    # keep empty features for inverse to function
-    keep_empty_features=True,
-)
-nan_impute_transformer.inverse_transform = (
-    _identity  # do not inverse np.nan values.  # type: ignore
-)
-
-_make_finite_transformer = [
-    ("inf_to_nan", inf_to_nan_transformer),
-    ("nan_impute", nan_impute_transformer),
-]
-
-
-def _make_standard_scaler_safe(
-    _name_scaler_tuple: tuple[str, TransformerMixin],
-    *,
-    no_name: bool = False,
-) -> Pipeline:
-    # Make sure that all data that enters and leaves a scaler is finite.
-    # This is needed in edge cases where, for example, a division by zero
-    # occurs while scaling or when the input contains not number values.
-    return Pipeline(
-        steps=[
-            *[(n + "_pre ", deepcopy(t)) for n, t in _make_finite_transformer],
-            ("placeholder", _name_scaler_tuple) if no_name else _name_scaler_tuple,
-            *[(n + "_post", deepcopy(t)) for n, t in _make_finite_transformer],
-        ],
-    )
 
 
 def _make_box_cox_safe(input_transformer: TransformerMixin | Pipeline) -> Pipeline:
@@ -104,20 +54,6 @@ def _make_box_cox_safe(input_transformer: TransformerMixin | Pipeline) -> Pipeli
         steps=[
             ("mm", MinMaxScaler(feature_range=(0.1, 1), clip=True)),
             ("box_cox", input_transformer),
-        ],
-    )
-
-
-def _add_safe_standard_to_safe_power_without_standard(
-    input_transformer: TransformerMixin,
-) -> Pipeline:
-    """In edge cases PowerTransformer can create inf values and similar. Then, the post
-    standard scale crashes. This fixes this issue.
-    """
-    return Pipeline(
-        steps=[
-            ("input_transformer", input_transformer),
-            ("standard", _make_standard_scaler_safe(("standard", StandardScaler()))),
         ],
     )
 
@@ -208,7 +144,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
-    def _create_transformers_and_new_schema(  # noqa: PLR0912
+    def _create_transformers_and_new_schema(
         self,
         n_samples: int,
         n_features: int,
@@ -241,22 +177,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features = subsample_features
         else:
             self.subsampled_features_ = np.arange(n_features)
-
-        if (
-            self.global_transformer_name is not None
-            and self.global_transformer_name != "None"
-            and not (
-                self.global_transformer_name in ["svd", "svd_quarter_components"]
-                and n_features < 2
-            )
-        ):
-            global_transformer_ = get_all_global_transformers(
-                n_samples,
-                n_features,
-                random_state=static_seed,
-            )[self.global_transformer_name]
-        else:
-            global_transformer_ = None
 
         all_feats_ix = list(range(n_features))
         transformers = []
@@ -325,34 +245,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             sparse_threshold=0.0,  # No sparse
         )
 
-        # Apply a global transformer which accepts the entire dataset instead of
-        # one column
-        # NOTE: We assume global_transformer does not destroy the semantic meaning of
-        # categorical_features_.
-        n_new_global_features = 0
-        if global_transformer_:
-            transformer = Pipeline(
-                [
-                    ("preprocess", transformer),
-                    ("global_transformer", global_transformer_),
-                ],
-            )
-            # TODO: Find better way to get number of global features added
-            n_new_global_features = next(
-                s[1].n_components
-                for s in global_transformer_.transformer_list[1][1].steps
-                if isinstance(s[1], TruncatedSVD)
-            )
-
         self.transformer_ = transformer
-        self.n_new_global_features_ = n_new_global_features
 
         # Compute output feature count for modality update
         # Include: base features + appended transformed (if append_to_original) + SVD
         n_output_features = (
             n_features + len(trans_ixs) if self.append_to_original else n_features
         )
-        n_output_features += n_new_global_features
 
         # Build the new metadata with updated categorical indices
         # Non-categorical indices become numerical
@@ -381,104 +280,11 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         return output_schema
 
     @override
-    def fit_transform(
-        self,
-        X: np.ndarray,
-        feature_schema: FeatureSchema,
-    ) -> PreprocessingStepResult:
-        n_samples, n_features = X.shape
-        transformer, output_schema = self._create_transformers_and_new_schema(
-            n_samples,
-            n_features,
-            feature_schema,
-        )
-        Xt = transformer.fit_transform(X[:, self.subsampled_features_])
-        self.transformer_ = transformer
-        self.feature_schema_updated_ = output_schema
-        return PreprocessingStepResult(X=Xt, feature_schema=output_schema)  # type: ignore[arg-type]
-
-    @override
     def _transform(
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
-
-
-def get_all_global_transformers(
-    num_examples: int,
-    num_features: int,
-    random_state: int | None = None,
-) -> dict[str, FeatureUnion | Pipeline]:
-    """Returns a dictionary of global transformers to transform the data."""
-    return {
-        "scaler": _make_standard_scaler_safe(("standard", StandardScaler())),
-        "svd": FeatureUnion(
-            [
-                # default FunctionTransformer yields the identity function
-                ("passthrough", FunctionTransformer()),
-                (
-                    "svd",
-                    Pipeline(
-                        steps=[
-                            (
-                                "save_standard",
-                                _make_standard_scaler_safe(
-                                    ("standard", StandardScaler(with_mean=False)),
-                                ),
-                            ),
-                            (
-                                "svd",
-                                TruncatedSVD(
-                                    algorithm="arpack",
-                                    n_components=max(
-                                        1,
-                                        min(
-                                            num_examples // 10 + 1,
-                                            num_features // 2,
-                                        ),
-                                    ),
-                                    random_state=random_state,
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        ),
-        "svd_quarter_components": FeatureUnion(
-            [
-                ("passthrough", FunctionTransformer(func=_identity)),
-                (
-                    "svd",
-                    Pipeline(
-                        steps=[
-                            (
-                                "save_standard",
-                                _make_standard_scaler_safe(
-                                    ("standard", StandardScaler(with_mean=False)),
-                                ),
-                            ),
-                            (
-                                "svd",
-                                TruncatedSVD(
-                                    algorithm="arpack",
-                                    n_components=max(
-                                        1,
-                                        min(
-                                            num_examples // 10 + 1,
-                                            num_features // 4,
-                                        ),
-                                    ),
-                                    random_state=random_state,
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        ),
-    }
 
 
 def get_adaptive_preprocessors(
@@ -510,7 +316,7 @@ def get_adaptive_preprocessors(
                 (
                     "skewed_pos",
                     _make_box_cox_safe(
-                        _add_safe_standard_to_safe_power_without_standard(
+                        add_safe_standard_to_safe_power_without_standard(
                             SafePowerTransformer(
                                 standardize=False,
                                 method="box-cox",
@@ -521,7 +327,7 @@ def get_adaptive_preprocessors(
                 ),
                 (
                     "skewed",
-                    _add_safe_standard_to_safe_power_without_standard(
+                    add_safe_standard_to_safe_power_without_standard(
                         SafePowerTransformer(
                             standardize=False,
                             method="yeo-johnson",
@@ -564,19 +370,19 @@ def get_all_reshape_feature_distribution_preprocessors(
 ) -> dict[str, TransformerMixin | Pipeline]:
     """Returns a dictionary of preprocessing to preprocess the data."""
     all_preprocessors = {
-        "power": _add_safe_standard_to_safe_power_without_standard(
+        "power": add_safe_standard_to_safe_power_without_standard(
             PowerTransformer(standardize=False),
         ),
-        "safepower": _add_safe_standard_to_safe_power_without_standard(
+        "safepower": add_safe_standard_to_safe_power_without_standard(
             SafePowerTransformer(standardize=False),
         ),
         "power_box": _make_box_cox_safe(
-            _add_safe_standard_to_safe_power_without_standard(
+            add_safe_standard_to_safe_power_without_standard(
                 PowerTransformer(standardize=False, method="box-cox"),
             ),
         ),
         "safepower_box": _make_box_cox_safe(
-            _add_safe_standard_to_safe_power_without_standard(
+            add_safe_standard_to_safe_power_without_standard(
                 SafePowerTransformer(standardize=False, method="box-cox"),
             ),
         ),
