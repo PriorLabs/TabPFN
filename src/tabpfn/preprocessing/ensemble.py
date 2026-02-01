@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import warnings
 from collections.abc import Iterable, Iterator, Sequence
@@ -370,17 +371,19 @@ def _get_subsample_feature_indices(
     # (SVD, append_original, fingerprint).
     subsample_sizes = []
     for pipeline in pipelines:
-        n_subsample_features = feature_schema.num_columns
+        feature_schema_pipeline = copy.deepcopy(feature_schema)
         while (
             get_total_features(
                 pipeline=pipeline,
                 n_samples=n_samples,
-                feature_schema=feature_schema,
+                feature_schema=feature_schema_pipeline,
             )
             > max_features_per_estimator
         ):
-            n_subsample_features -= 1
-        subsample_sizes.append(n_subsample_features)
+            feature_schema_pipeline = feature_schema_pipeline.slice_for_indices(
+                list(range(feature_schema_pipeline.num_columns - 1))
+            )
+        subsample_sizes.append(feature_schema_pipeline.num_columns)
 
     # Generate balanced feature indices using round-robin sampling from a shuffled pool.
     # This ensures each feature appears approximately the same number of times across

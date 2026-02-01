@@ -4,10 +4,20 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
 )
+from tabpfn.preprocessing.torch import FeatureSchema
+
+
+def _get_schema(n_features: int) -> FeatureSchema:
+    features = [
+        Feature(name=None, modality=FeatureModality.NUMERICAL)
+        for _ in range(n_features)
+    ]
+    return FeatureSchema(features=features)
 
 
 def test__get_subsample_indices_for_estimators():
@@ -68,7 +78,7 @@ def test__get_subsample_feature_indices__no_subsampling_needed():
     result = _get_subsample_feature_indices(
         pipelines=[pipeline, pipeline],
         n_samples=100,
-        n_features=10,
+        feature_schema=_get_schema(n_features=10),
         max_features_per_estimator=15,
         rng=rng,
     )
@@ -90,7 +100,7 @@ def test__get_subsample_feature_indices__subsampling_needed():
     result = _get_subsample_feature_indices(
         pipelines=[pipeline, pipeline2],
         n_samples=100,
-        n_features=100,
+        feature_schema=_get_schema(n_features=100),
         max_features_per_estimator=80,  # With 2 added features, need to subsample to 6
         rng=rng,
     )
