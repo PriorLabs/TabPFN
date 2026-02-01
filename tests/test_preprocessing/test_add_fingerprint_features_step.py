@@ -5,10 +5,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-<<<<<<< HEAD
-=======
 from tabpfn.preprocessing import PreprocessingPipeline
->>>>>>> 47806b7 (Squash feature branch commits)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
