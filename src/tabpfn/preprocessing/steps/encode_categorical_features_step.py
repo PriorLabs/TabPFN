@@ -233,7 +233,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> PreprocessingStepResult:
         Xt, output_feature_schema = self._fit_transform_internal(X, feature_schema)
-        self.feature_schema_after_transform_ = output_feature_schema
+        self.feature_schema_updated_ = output_feature_schema
         return PreprocessingStepResult(X=Xt, feature_schema=output_feature_schema)
 
     @override

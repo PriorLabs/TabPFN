@@ -75,7 +75,23 @@ class PreprocessingStep:
     they don't transform. The pipeline handles column slicing and reassembly.
     """
 
-    feature_schema_after_transform_: FeatureSchema
+    feature_schema_updated_: FeatureSchema
+    """Schema describing this step's *main* transformed output.
+
+    This schema corresponds to the `X` returned by `_transform(...)` (i.e. the
+    transformed columns for this step) and **must not** include any features
+    produced via the optional `X_added` / `modality_added` return values.
+
+    Expected usage patterns (for backwards compatibility):
+    - If the step adds features via `X_added` (e.g. fingerprint features), then
+      `_fit(...)` should describe only the main output `X` with potentially permuted
+      features. The pipeline will append `X_added` and update the overall
+      feature schema itself.
+    - If the step changes the column semantics/shape of its main output `X`
+      (e.g. encoding, reordering, dropping columns) and does **not** rely on the
+      `X_added` pathway, then `_fit(...)` should update this schema to match that
+      main output.
+    """
 
     @abstractmethod
     def _fit(
@@ -126,7 +142,7 @@ class PreprocessingStep:
         Returns:
             PreprocessingStepResult with transformed data and updated feature schema.
         """
-        self.feature_schema_after_transform_ = self._fit(X, feature_schema)
+        self.feature_schema_updated_ = self._fit(X, feature_schema)
         return self.transform(X, is_test=False)
 
     def transform(
@@ -149,7 +165,7 @@ class PreprocessingStep:
 
         return PreprocessingStepResult(
             X=result,
-            feature_schema=self.feature_schema_after_transform_,
+            feature_schema=self.feature_schema_updated_,
             X_added=X_added,
             modality_added=modality_added,
         )
