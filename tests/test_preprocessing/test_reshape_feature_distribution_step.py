@@ -520,6 +520,6 @@ def test__num_added_features():
         random_state=42,
         max_features_per_estimator=500,
     )
-    assert step.num_added_features(100, _get_schema(num_columns=501)) == 10
+    assert step.num_added_features(100, _get_schema(num_columns=10)) == 10
     assert step.num_added_features(100, _get_schema(num_columns=501)) == 0
     assert step.num_added_features(100, _get_schema(num_columns=250)) == 250
