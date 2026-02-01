@@ -144,8 +144,15 @@ class TabPFNEnsemblePreprocessor:
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
-            pipelines=self.pipelines,
-            subsample_feature_indices=self.subsample_feature_indices,
+            # TODO:
+            # When adding this, this test is failing:
+            # tests/test_finetuning_classifier.py::
+            # test_finetuning_consistency_preprocessing_classifier
+            # Likely because of random seed for data shuffling.
+            # TODO: Fix this by using TabPFNEnsemblePreprocessor
+            # also in finetuning pipeline or by improving random seed handling.
+            # pipelines=self.pipelines,
+            # subsample_feature_indices=self.subsample_feature_indices,
         )
 
         gpu_preprocessors = []
