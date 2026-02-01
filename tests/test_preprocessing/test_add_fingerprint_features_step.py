@@ -5,6 +5,10 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+<<<<<<< HEAD
+=======
+from tabpfn.preprocessing import PreprocessingPipeline
+>>>>>>> 47806b7 (Squash feature branch commits)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
@@ -122,3 +126,16 @@ def test__fit__does_not_modify_metadata() -> None:
     # Metadata should be unchanged - same number of columns
     assert result_schema.num_columns == 3
     assert result_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]
+
+
+def test__in_pipeline__returns_added_columns() -> None:
+    """Test that the step returns added columns when used in a pipeline."""
+    data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
+    schema = _get_schema(num_columns=3)
+
+    step = AddFingerprintFeaturesStep(random_state=42)
+    pipeline = PreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
+    result = pipeline.fit_transform(data, schema)
+
+    assert result.feature_schema.num_columns == 4
+    assert result.X.shape == (2, 4)

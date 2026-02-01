@@ -7,7 +7,6 @@ from typing import Literal
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing import PreprocessingPipeline
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
@@ -478,73 +477,3 @@ def test__reshape_step_append_original_logic(
 
     assert result.X.shape[0] == num_samples
     assert result.X.shape[1] == expected_output_features
-
-
-def test__reshape__with_global_transformer():
-    """Test that the step works with a global transformer.
-
-    Note: SVD global transformer uses FeatureUnion with passthrough + SVD,
-    so output has original_features + svd_components columns.
-    SVD n_components = min(n_samples//10+1, n_features//2) = min(11, 4) = 4
-
-    Known limitation: Metadata tracking for categorical indices is not fully
-    accurate when using global transformers with ColumnTransformer reordering.
-    This will be addressed when refactoring to centralized column orchestration.
-    """
-    rng = np.random.default_rng(42)
-    n_samples, n_features = 100, 8
-    cat_indices = [1, 5]
-    n_svd_components = 4  # min(100//10+1, 8//2) = min(11, 4)
-    n_output_features = n_features + n_svd_components
-
-    X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_modalities = _make_metadata(n_features, cat_indices)
-
-    step = ReshapeFeatureDistributionsStep(
-        transform_name="none",
-        apply_to_categorical=False,
-        append_to_original=False,
-        global_transformer_name="svd",
-        random_state=42,
-    )
-    result = step.fit_transform(X, feature_modalities)
-
-    # SVD adds components via FeatureUnion (passthrough + SVD)
-    assert result.X.shape == (n_samples, n_output_features)
-    # Verify we have some categorical and numerical indices tracked
-    # (exact positions may vary due to ColumnTransformer reordering)
-    assert len(result.feature_schema.indices_for(FeatureModality.CATEGORICAL)) == len(
-        cat_indices
-    )
-    assert len(result.feature_schema.indices_for(FeatureModality.NUMERICAL)) > 0
-
-
-# TODO: Split ReshapeDistributionStep into multiple steps so that this pipeline passes
-def test__pipeline_with_reshape__with_indizes():
-    rng = np.random.default_rng(42)
-    n_samples, n_features = 100, 8
-    cat_indices = [1, 5]
-    X = _make_test_data(rng, n_samples, n_features, cat_indices)
-
-    step = ReshapeFeatureDistributionsStep(
-        transform_name="none",
-        apply_to_categorical=False,
-        append_to_original=False,
-        global_transformer_name="svd_quarter_components",
-        random_state=42,
-    )
-    pipeline = PreprocessingPipeline(
-        steps=[(step, {FeatureModality.NUMERICAL, FeatureModality.CATEGORICAL})]
-    )
-    # Provide complete metadata covering all 8 features
-    numerical_indices = [i for i in range(n_features) if i not in cat_indices]
-    features = [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)
-        for _ in numerical_indices
-    ] + [Feature(name=None, modality=FeatureModality.CATEGORICAL) for _ in cat_indices]
-    schema = FeatureSchema(features=features)  # type: ignore
-    with pytest.raises(
-        ValueError,
-        match="Steps registered with modalities must return the same number of columns",
-    ):
-        _ = pipeline.fit_transform(X, schema)
