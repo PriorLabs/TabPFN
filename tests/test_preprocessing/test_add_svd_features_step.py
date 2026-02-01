@@ -134,11 +134,13 @@ def test__num_output_features__returns_correct_count() -> None:
 
     # For n_features=10, n_samples=100:
     # n_components = min(100//10+1, 10//2) = min(11, 5) = 5
-    result = step.num_added_features(n_features=10, n_samples=100)
-    assert result == 5
+    result = step.num_added_features(100, _get_schema(num_columns=10))
+    assert result == 10 // 2
 
     # For n_features=1 (less than 2), should return unchanged
-    result_single = step.num_added_features(n_features=1, n_samples=100)
+    result_single = step.num_added_features(
+        n_samples=100, feature_schema=_get_schema(num_columns=1)
+    )
     assert result_single == 0
 
 

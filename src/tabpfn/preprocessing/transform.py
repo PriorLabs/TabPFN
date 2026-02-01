@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from functools import partial
 from typing import TYPE_CHECKING, Literal
 
 import joblib
@@ -34,6 +33,7 @@ def _fit_preprocessing_one(
     random_state: int | np.random.Generator | None = None,
     *,
     feature_schema: FeatureSchema,
+    pipeline: PreprocessingPipeline | None = None,
 ) -> tuple[
     EnsembleConfig,
     PreprocessingPipeline,
@@ -49,6 +49,8 @@ def _fit_preprocessing_one(
         y_train: Training target.
         random_state: Random seed.
         feature_schema: feature schema.
+        pipeline: Preprocessing pipeline. If not provided, a new pipeline is created
+            on-the-fly.
 
     Returns:
         Tuple containing the ensemble configuration, the fitted preprocessing pipeline,
@@ -56,21 +58,16 @@ def _fit_preprocessing_one(
         categorical features.
     """
     static_seed, _ = infer_random_state(random_state)
-    if config.subsample_ix is not None:
-        X_train = X_train[config.subsample_ix]
-        y_train = y_train[config.subsample_ix]
-    if not isinstance(X_train, torch.Tensor):
-        X_train = X_train.copy()
-        y_train = y_train.copy()
 
-    preprocessor = create_preprocessing_pipeline(config, random_state=static_seed)
-    res = preprocessor.fit_transform(X_train, feature_schema)
+    if pipeline is None:
+        pipeline = create_preprocessing_pipeline(config, random_state=static_seed)
+    res = pipeline.fit_transform(X_train, feature_schema)
 
     y_train_processed = _transform_labels_one(config, y_train)
 
     return (
         config,
-        preprocessor,
+        pipeline,
         res.X,
         y_train_processed,
         res.feature_schema,
@@ -111,6 +108,8 @@ def fit_preprocessing(
     feature_schema: FeatureSchema,
     n_preprocessing_jobs: int,
     parallel_mode: Literal["block", "as-ready", "in-order"],
+    pipelines: Sequence[PreprocessingPipeline | None] | None = None,
+    subsample_feature_indices: list[np.ndarray | None] | None = None,
 ) -> Iterator[
     tuple[
         EnsembleConfig,
@@ -145,6 +144,10 @@ def fit_preprocessing(
             * `"as-ready"`: Returns results as they are ready. Any order.
             * `"in-order"`: Returns results in order, blocking only in the order that
                 needs to be returned in.
+        pipelines: Preprocessing pipelines. If not provided, a new pipeline is created
+            on-the-fly for each configuration.
+        subsample_feature_indices: Indices of features to subsample. If not provided,
+            no features are subsampled.
 
     Returns:
         Iterator of tuples containing the ensemble configuration, the fitted
@@ -152,6 +155,18 @@ def fit_preprocessing(
         and the indices of categorical features.
     """
     _, rng = infer_random_state(random_state)
+
+    if pipelines is None:
+        pipelines = [None] * len(configs)
+    assert len(pipelines) == len(configs)
+
+    X_train_list, y_train_list = _get_subsampled_data_per_estimator(
+        configs=configs,
+        X_train=X_train,
+        y_train=y_train,
+        subsample_feature_indices=subsample_feature_indices,
+    )
+    assert len(X_train_list) == len(y_train_list) == len(configs)
 
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
@@ -162,13 +177,51 @@ def fit_preprocessing(
         )
     else:
         executor = joblib.Parallel(n_jobs=n_preprocessing_jobs, batch_size="auto")
-    func = partial(_fit_preprocessing_one, feature_schema=feature_schema)
-    worker_func = joblib.delayed(func)
 
     seeds = rng.integers(0, np.iinfo(np.int32).max, len(configs))
     yield from executor(  # type: ignore[misc]
-        [
-            worker_func(config, X_train, y_train, seed)
-            for config, seed in zip(configs, seeds)
-        ],
+        joblib.delayed(_fit_preprocessing_one)(
+            config,
+            X_train,
+            y_train,
+            seed,
+            feature_schema=feature_schema,
+            pipeline=pipeline,
+        )
+        for config, X_train, y_train, seed, pipeline in zip(
+            configs, X_train_list, y_train_list, seeds, pipelines
+        )
     )
+
+
+def _get_subsampled_data_per_estimator(
+    configs: Sequence[EnsembleConfig],
+    X_train: np.ndarray | torch.Tensor,
+    y_train: np.ndarray | torch.Tensor,
+    subsample_feature_indices: Sequence[np.ndarray | None] | None = None,
+) -> tuple[list[np.ndarray | torch.Tensor], list[np.ndarray | torch.Tensor]]:
+    """Get the data per estimator that is potentially subsampled.
+
+    For datasets that are too large we need to subsample the rows and/or features.
+    """
+    if subsample_feature_indices is None:
+        subsample_feature_indices = [None] * len(configs)
+    assert len(subsample_feature_indices) == len(configs)
+
+    X_train_list = []
+    y_train_list = []
+    for config, feature_indices in zip(configs, subsample_feature_indices):
+        X_train_estimator = X_train
+        y_train_estimator = y_train
+        if config.subsample_ix is not None:
+            X_train_estimator = X_train_estimator[config.subsample_ix]
+            y_train_estimator = y_train_estimator[config.subsample_ix]
+        if feature_indices is not None:
+            X_train_estimator = X_train_estimator[..., feature_indices]
+        if not isinstance(X_train, torch.Tensor):
+            X_train_estimator = X_train_estimator.copy()
+            y_train_estimator = y_train_estimator.copy()
+        X_train_list.append(X_train_estimator)
+        y_train_list.append(y_train_estimator)
+
+    return X_train_list, y_train_list

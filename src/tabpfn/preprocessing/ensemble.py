@@ -19,6 +19,7 @@ from tabpfn.preprocessing.configs import (
     EnsembleConfig,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -76,6 +77,8 @@ class TabPFNEnsemblePreprocessor:
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
+        n_samples: int,
+        feature_schema: FeatureSchema,
         rng: np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
@@ -84,6 +87,8 @@ class TabPFNEnsemblePreprocessor:
 
         Args:
             configs: List of ensemble configurations.
+            n_samples: Number of samples in the dataset.
+            feature_schema: Feature schema of the dataset.
             rng: Random number generator.
             n_preprocessing_jobs: Number of preprocessing jobs to use.
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
@@ -92,14 +97,25 @@ class TabPFNEnsemblePreprocessor:
         """
         super().__init__()
         self.configs = configs
+        self.n_samples = n_samples
+        self.feature_schema = feature_schema
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
 
-        # TODO:
-        # 1. Create pipeline in init for balanced feature subsampling
-        # 2. Run pipeline.num_added_features() for each ensemble member
-        # 3. Create feature slices
+        self.pipelines = [
+            create_preprocessing_pipeline(config, random_state=self.rng)
+            for config in self.configs
+        ]
+
+        max_features = self.configs[0].preprocess_config.max_features_per_estimator
+        self.subsample_feature_indices = _get_subsample_feature_indices(
+            pipelines=self.pipelines,
+            n_samples=self.n_samples,
+            feature_schema=self.feature_schema,
+            max_features_per_estimator=max_features,
+            rng=self.rng,
+        )
 
     def next_static_seed(self) -> int:
         """Get a static seed for the ensemble data processor.
@@ -127,6 +143,8 @@ class TabPFNEnsemblePreprocessor:
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
+            pipelines=self.pipelines,
+            subsample_feature_indices=self.subsample_feature_indices,
         )
 
         gpu_preprocessors = []
@@ -328,6 +346,71 @@ def _generate_class_permutations(
         return [None] * num_estimators  # type: ignore[return-value]
 
     raise ValueError(f"Unknown {class_shift_method=}")
+
+
+def _get_subsample_feature_indices(
+    pipelines: Sequence[PreprocessingPipeline],
+    n_samples: int,
+    feature_schema: FeatureSchema,
+    max_features_per_estimator: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Get the indices of the features to subsample for each estimator."""
+
+    def get_total_features(
+        pipeline: PreprocessingPipeline,
+        n_samples: int,
+        feature_schema: FeatureSchema,
+    ) -> int:
+        n_features = feature_schema.num_columns
+        return n_features + pipeline.num_added_features(n_samples, feature_schema)
+
+    # The feature subsampling will be done aware of the settings used in the
+    # preprocessing pipelines because some steps add features
+    # (SVD, append_original, fingerprint).
+    subsample_sizes = []
+    for pipeline in pipelines:
+        n_subsample_features = feature_schema.num_columns
+        while (
+            get_total_features(
+                pipeline=pipeline,
+                n_samples=n_samples,
+                feature_schema=feature_schema,
+            )
+            > max_features_per_estimator
+        ):
+            n_subsample_features -= 1
+        subsample_sizes.append(n_subsample_features)
+
+    # Generate balanced feature indices using round-robin sampling from a shuffled pool.
+    # This ensures each feature appears approximately the same number of times across
+    # all estimators. When the pool is exhausted, it is reshuffled and refilled.
+    subsample_feature_indices: list[np.ndarray | None] = []
+    pool: list[int] = []
+
+    for size in subsample_sizes:
+        if size >= feature_schema.num_columns:
+            # No subsampling needed, use all features
+            subsample_feature_indices.append(None)
+            continue
+
+        indices: list[int] = []
+        remaining = size
+
+        while remaining > 0:
+            if len(pool) == 0:
+                # Reshuffle and create a new pool of all feature indices
+                pool = rng.permutation(feature_schema.num_columns).tolist()
+
+            # Take as many as we need (or as many as available) from the pool
+            take = min(remaining, len(pool))
+            indices.extend(pool[:take])
+            pool = pool[take:]
+            remaining -= take
+
+        subsample_feature_indices.append(np.array(indices))
+
+    return subsample_feature_indices
 
 
 def generate_classification_ensemble_configs(  # noqa: PLR0913

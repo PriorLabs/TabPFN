@@ -793,6 +793,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),

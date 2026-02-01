@@ -94,6 +94,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     """
 
     APPEND_TO_ORIGINAL_THRESHOLD = 500
+    """Threshold to allow appending the original features if append_to_original is
+    auto. This is used to reduce computational cost."""
 
     @staticmethod
     def get_column_types(X: np.ndarray) -> list[str]:
@@ -181,14 +183,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
 
-        append_decision = (
-            n_features < self.APPEND_TO_ORIGINAL_THRESHOLD
-            and n_features < (self.max_features_per_estimator / 2)
-        )
-        self.append_to_original = (
-            append_decision
-            if self.append_to_original == "auto"
-            else self.append_to_original
+        self.append_to_original = self._get_append_to_original_decision(
+            n_features=n_features,
+            max_features_per_estimator=self.max_features_per_estimator,
         )
 
         # -------- Append to original ------
@@ -282,6 +279,36 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
+
+    def _get_append_to_original_decision(
+        self,
+        n_features: int,
+        max_features_per_estimator: int,
+    ) -> bool:
+        append_decision = (
+            n_features < self.APPEND_TO_ORIGINAL_THRESHOLD
+            and n_features <= (max_features_per_estimator / 2)
+        )
+        return bool(
+            append_decision
+            if self.append_to_original == "auto"
+            else self.append_to_original
+        )
+
+    @override
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+        """Return the number of added features."""
+        del n_samples
+        n_features = feature_schema.num_columns
+        append = self._get_append_to_original_decision(
+            n_features=n_features,
+            max_features_per_estimator=self.max_features_per_estimator,
+        )
+        if append:
+            if self.apply_to_categorical:
+                return n_features
+            return len(feature_schema.indices_for(FeatureModality.NUMERICAL))
+        return 0
 
 
 def get_adaptive_preprocessors(

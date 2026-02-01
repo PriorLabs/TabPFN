@@ -22,12 +22,26 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
+    AddSVDFeaturesStep,
     DifferentiableZNormStep,
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
 )
+from tabpfn.preprocessing.steps.remove_constant_features_step import (
+    RemoveConstantFeaturesStep,
+)
+
+
+def _get_schema(num_columns: int) -> FeatureSchema:
+    """Create a schema with all numerical features."""
+    return FeatureSchema(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(num_columns)
+        ]
+    )
 
 
 def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
@@ -278,3 +292,44 @@ def test__order_preserving_column_transformer():
     # OrderPreserving transformer does not shuffle column order
     preserved_output = preserving_transformer.fit_transform(mock_data_df)
     np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
+
+
+def test__pipeline__num_added_features():
+    """Test that the pipeline returns the correct number of added features."""
+    pipeline = PreprocessingPipeline(
+        steps=[
+            ReshapeFeatureDistributionsStep(
+                transform_name="quantile_uni",
+                append_to_original="auto",
+                random_state=42,
+                max_features_per_estimator=500,
+            ),
+            AddFingerprintFeaturesStep(random_state=42),
+        ]
+    )
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 11
+    assert pipeline.num_added_features(100, _get_schema(num_columns=501)) == 1
+
+    pipeline = PreprocessingPipeline(
+        steps=[
+            ReshapeFeatureDistributionsStep(
+                transform_name="quantile_uni",
+                append_to_original="auto",
+                random_state=42,
+                max_features_per_estimator=500,
+            ),
+            AddSVDFeaturesStep(global_transformer_name="svd", random_state=42),
+        ]
+    )
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 10 + 10 // 2
+
+    pipeline = PreprocessingPipeline(
+        steps=[
+            RemoveConstantFeaturesStep(),
+            AddFingerprintFeaturesStep(random_state=42),
+        ]
+    )
+    # Note that we currently don't count the removed features as -1.
+    # This is a minor effect that we ignore for now. In the future,
+    # we will make sure that the pipeline never actually sees constant features.
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 1

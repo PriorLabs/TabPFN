@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import numpy as np
 
-from tabpfn.preprocessing.ensemble import _get_subsample_indices_for_estimators
+from tabpfn.preprocessing.ensemble import (
+    _get_subsample_feature_indices,
+    _get_subsample_indices_for_estimators,
+)
 
 
 def test__get_subsample_indices_for_estimators():
@@ -52,3 +57,51 @@ def test__get_subsample_indices_for_estimators():
     for subsample_index in subsample_indices:
         assert subsample_index is not None
         assert len(subsample_index) == 2
+
+
+def test__get_subsample_feature_indices__no_subsampling_needed():
+    """Test that None is returned when features fit within the limit."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+
+    rng = np.random.default_rng(42)
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline],
+        n_samples=100,
+        n_features=10,
+        max_features_per_estimator=15,
+        rng=rng,
+    )
+
+    assert len(result) == 2
+    assert result[0] is None
+    assert result[1] is None
+
+
+def test__get_subsample_feature_indices__subsampling_needed():
+    """Test that feature indices are generated when subsampling is required."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 20  # Adds 2 features
+
+    pipeline2 = MagicMock()
+    pipeline2.num_added_features.return_value = 40  # Adds 2 features
+
+    rng = np.random.default_rng(42)
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline2],
+        n_samples=100,
+        n_features=100,
+        max_features_per_estimator=80,  # With 2 added features, need to subsample to 6
+        rng=rng,
+    )
+
+    assert result[0] is not None
+    assert len(result[0]) == 60
+    assert all(0 <= idx < 100 for idx in result[0])
+
+    assert result[1] is not None
+    assert len(result[1]) == 40
+    assert all(0 <= idx < 100 for idx in result[1])
+
+    # Assert that each feature is present in at least one of the two estimators.
+    assert set(result[0]) | set(result[1]) == set(range(100))

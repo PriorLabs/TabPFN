@@ -136,3 +136,9 @@ def test__in_pipeline__returns_added_columns() -> None:
 
     assert result.feature_schema.num_columns == 4
     assert result.X.shape == (2, 4)
+
+
+def test__num_added_features() -> None:
+    """Test that the step returns the correct number of added features."""
+    step = AddFingerprintFeaturesStep(random_state=42)
+    assert step.num_added_features(-1, _get_schema(num_columns=1)) == 1

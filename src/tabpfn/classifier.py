@@ -743,6 +743,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
@@ -861,6 +863,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            n_features=X.shape[1],
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )

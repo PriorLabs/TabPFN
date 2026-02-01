@@ -40,8 +40,10 @@ class AddSVDFeaturesStep(PreprocessingStep):
         self.random_state = random_state
         self.is_no_op: bool = False
 
-    def num_added_features(self, n_samples: int, n_features: int) -> int:
+    @override
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
         """Return the number of added features."""
+        n_features = feature_schema.num_columns
         if n_features < 2:
             return 0
 
