@@ -905,8 +905,6 @@ def _maybe_run_gpu_preprocessing(
         return X
 
     # TODO: Currently, we construct the metadata on-the-fly.
-    # In a follow-up, this will become part of a DatasetView object
-    # parsed to the inference engine class.
     n_cols = X.shape[-1]
     features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_cols
     feature_schema = FeatureSchema(features=features)

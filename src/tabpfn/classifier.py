@@ -864,7 +864,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             n_samples=X.shape[0],
-            n_features=X.shape[1],
+            feature_schema=self.inferred_feature_schema_,
             rng=rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )

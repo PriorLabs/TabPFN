@@ -7,9 +7,7 @@ import torch
 
 from tabpfn.preprocessing import PreprocessingPipeline
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
-    AddFingerprintFeaturesStep,
-)
+from tabpfn.preprocessing.steps import AddFingerprintFeaturesStep
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -125,17 +123,23 @@ def test__fit__does_not_modify_metadata() -> None:
     assert result_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1, 2]
 
 
-def test__in_pipeline__returns_added_columns() -> None:
+def test__in_pipeline__returns_correct_shape_and_metadata() -> None:
     """Test that the step returns added columns when used in a pipeline."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
     schema = _get_schema(num_columns=3)
 
     step = AddFingerprintFeaturesStep(random_state=42)
     pipeline = PreprocessingPipeline(steps=[(step, {FeatureModality.NUMERICAL})])
-    result = pipeline.fit_transform(data, schema)
+    result_with_modalities = pipeline.fit_transform(data, schema)
 
-    assert result.feature_schema.num_columns == 4
-    assert result.X.shape == (2, 4)
+    assert result_with_modalities.feature_schema.num_columns == 4
+    assert result_with_modalities.X.shape == (2, 4)
+
+    pipeline = PreprocessingPipeline(steps=[step])
+    result_without_modalities = pipeline.fit_transform(data, schema)
+
+    assert result_without_modalities.feature_schema.num_columns == 4
+    assert result_without_modalities.X.shape == (2, 4)
 
 
 def test__num_added_features() -> None:
