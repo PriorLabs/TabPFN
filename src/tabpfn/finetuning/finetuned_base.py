@@ -546,11 +546,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             epoch_loss_sum = 0.0
             epoch_batches = 0
 
+            epoch_random_state = static_seed + epoch
+
             # Regenerate datasets each epoch with a different random_state
             training_splitter = partial(
                 train_test_split,
                 test_size=finetuning_query_size,
-                random_state=self.random_state + epoch,
+                random_state=epoch_random_state,
             )
 
             training_datasets = get_preprocessed_dataset_chunks(
@@ -561,13 +563,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 max_data_size=n_finetune_ctx_plus_query_samples,
                 model_type=self._model_type,
                 equal_split_size=False,
-                data_shuffle_seed=self.random_state + epoch,
+                data_shuffle_seed=epoch_random_state,
                 preprocessing_random_state=preprocessing_random_state,
             )
 
-            dataloader_generator = torch.Generator().manual_seed(
-                self.random_state + epoch
-            )
+            dataloader_generator = torch.Generator().manual_seed(epoch_random_state)
             finetuning_dataloader = DataLoader(
                 training_datasets,
                 batch_size=self.meta_batch_size,
