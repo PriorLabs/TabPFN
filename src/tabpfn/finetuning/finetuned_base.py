@@ -39,7 +39,7 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
-from tabpfn.utils import infer_devices
+from tabpfn.utils import infer_devices, infer_random_state
 from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 logger = logging.getLogger(__name__)
@@ -131,6 +131,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             only has an effect if `output_dir` is provided during the `fit()` call.
             If None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
+        use_fixed_preprocessing_seed: Whether to use a fixed preprocessing seed.
+            If True, the preprocessing will always use the same random seed throughout
+            data batches. This is helpful in most cases because, e.g., the column order
+            will stay the same across batches.
+            If False, the preprocessing will use a different random seed for each batch.
     """
 
     def __init__(  # noqa: PLR0913
@@ -157,6 +162,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
+        use_fixed_preprocessing_seed: bool = True,
     ):
         super().__init__()
         self.device = device
@@ -181,6 +187,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.use_activation_checkpointing = use_activation_checkpointing
         self.save_checkpoint_interval = save_checkpoint_interval
         self.meta_batch_size = META_BATCH_SIZE
+        self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
+
+        # TODO: Add check for n estimators when using fixed preprocessing seed!
 
     def _build_estimator_config(
         self,
@@ -517,6 +526,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self._log_epoch_evaluation(-1, eval_result, mean_train_loss=None)
         best_metric: float = eval_result.primary
 
+        static_seed, rng = infer_random_state(self.random_state)
+        preprocessing_random_state = (
+            static_seed if self.use_fixed_preprocessing_seed else rng
+        )
+
         logger.info("--- 🚀 Starting Fine-tuning ---")
         patience_counter = 0
         best_model = None
@@ -549,7 +563,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 max_data_size=n_finetune_ctx_plus_query_samples,
                 model_type=self._model_type,
                 equal_split_size=False,
-                seed=self.random_state + epoch,
+                data_shuffle_seed=self.random_state + epoch,
+                preprocessing_random_state=preprocessing_random_state,
             )
 
             dataloader_generator = torch.Generator().manual_seed(
