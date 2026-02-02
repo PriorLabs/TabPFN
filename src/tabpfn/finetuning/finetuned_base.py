@@ -189,8 +189,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
 
-        # TODO: Add check for n estimators when using fixed preprocessing seed!
-
     def _build_estimator_config(
         self,
         base_config: dict[str, Any],
