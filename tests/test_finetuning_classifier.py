@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from unittest import mock
 from unittest.mock import patch
 
@@ -264,7 +264,7 @@ def _get_classifier_dataset_chunks(
         "model_type": "classifier",
         "equal_split_size": True,
         "data_shuffle_seed": 42,
-        "preprocessing_random_state": 0,
+        "preprocessing_random_state": 42,
     }
     defaults.update(kwargs)
     return get_preprocessed_dataset_chunks(
@@ -325,7 +325,7 @@ def variable_synthetic_dataset_collection() -> list[tuple[np.ndarray, np.ndarray
     ("device", "early_stopping", "use_lr_scheduler"),
     mark_mps_configs_as_slow(finetuned_combinations),
 )
-def test_finetuned_tabpfn_classifier_fit_and_predict(
+def test__finetuned_tabpfn_classifier__fit_and_predict(
     device: str,
     early_stopping: bool,
     use_lr_scheduler: bool,
@@ -397,7 +397,7 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_saving_and_loading(
+def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -477,7 +477,7 @@ def test_checkpoint_saving_and_loading(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_resumption(
+def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -573,7 +573,9 @@ def test_checkpoint_resumption(
     assert finetuned_clf_resumed.is_fitted_
 
 
-def test_checkpoint_epoch_offset_extraction(tmp_path: Path) -> None:
+def test__get_checkpoint_path_and_epoch_from_output_dir__epoch_offset_extraction(
+    tmp_path: Path,
+) -> None:
     """Test that epoch offset is correctly extracted from checkpoint filenames."""
     # Test with no checkpoints
     output_folder = tmp_path / "no_checkpoints"
@@ -618,7 +620,7 @@ def test_checkpoint_epoch_offset_extraction(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_interval_configuration(
+def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -683,7 +685,7 @@ def test_checkpoint_interval_configuration(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_best_checkpoint_saving(
+def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -744,7 +746,7 @@ def test_best_checkpoint_saving(
 # =============================================================================
 
 
-def test_get_preprocessed_datasets_basic() -> None:
+def test__get_preprocessed_dataset_chunks__returns_classifierbatch() -> None:
     """Test basic functionality of get_preprocessed_datasets_helper."""
     X = rng.normal(size=(100, 4)).astype(np.float32)
     y = rng.integers(0, 3, size=100)
@@ -764,7 +766,7 @@ def test_get_preprocessed_datasets_basic() -> None:
     assert hasattr(item, "configs")
 
 
-def test_datasetcollectionwithpreprocessing_classification_single_dataset(
+def test__datasetcollectionwithpreprocessing__classification_single_dataset(
     synthetic_data: tuple[np.ndarray, np.ndarray],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -796,7 +798,7 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     assert batch.X_context[0].shape[0] == expected_n_train
 
 
-def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
+def test__datasetcollectionwithpreprocessing__classification_multiple_datasets(
     uniform_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -831,7 +833,7 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
         assert batch.X_context[0].shape[0] == expected_n_train
 
 
-def test_dataset_and_collator_with_dataloader_uniform(
+def test__meta_dataset_collator__dataloader_integration_uniform_data(
     uniform_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -862,7 +864,7 @@ def test_dataset_and_collator_with_dataloader_uniform(
         break  # Only check one batch
 
 
-def test_classifier_dataset_and_collator_batches_type(
+def test__meta_dataset_collator__batches_have_expected_types(
     variable_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -893,7 +895,7 @@ def test_classifier_dataset_and_collator_batches_type(
         break
 
 
-def test_get_preprocessed_datasets_multiple_datasets(
+def test__get_preprocessed_dataset_chunks__multiple_datasets(
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test get_preprocessed_datasets_helper with multiple datasets."""
@@ -912,7 +914,7 @@ def test_get_preprocessed_datasets_multiple_datasets(
     assert len(datasets) == 2
 
 
-def test_get_preprocessed_datasets_categorical_features(
+def test__get_preprocessed_dataset_chunks__categorical_features(
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test get_preprocessed_datasets_helper with categorical features."""
@@ -925,7 +927,7 @@ def test_get_preprocessed_datasets_categorical_features(
     assert hasattr(datasets, "__getitem__")
 
 
-def test_forward_runs(
+def test__tabpfn_classifier__forward_runs_after_fit(
     classifier_instance: TabPFNClassifier,
     classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
@@ -946,7 +948,7 @@ def test_forward_runs(
     )
 
 
-def test_fit_from_preprocessed_runs(
+def test__tabpfn_classifier__fit_from_preprocessed_runs(
     classifier_instance: TabPFNClassifier,
     classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
@@ -964,8 +966,9 @@ def test_fit_from_preprocessed_runs(
 
     for batch in dl:
         assert isinstance(batch, ClassifierBatch)
+        cat_indices = cast(list[list[list[int]]], batch.cat_indices)
         clf.fit_from_preprocessed(
-            batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+            batch.X_context, batch.y_context, cat_indices, batch.configs
         )
         preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
@@ -980,7 +983,7 @@ def test_fit_from_preprocessed_runs(
         break
 
 
-def test_finetuning_consistency_preprocessing_classifier() -> None:
+def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() -> None:
     """Test consistency between standard and finetuning preprocessing pipelines.
 
     Compares tensors entering the internal model for:
@@ -1080,6 +1083,7 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
         max_data_size=10_000,
         force_no_stratify=True,
         shuffle=False,
+        preprocessing_random_state=common_seed,
     )
     assert len(datasets_list) > 0, "get_preprocessed_datasets returned empty list."
 
@@ -1093,8 +1097,9 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     assert batch is not None, "DataLoader yielded no batches."
     assert isinstance(batch, ClassifierBatch)
 
+    cat_indices = cast(list[list[list[int]]], batch.cat_indices)
     clf_batched.fit_from_preprocessed(
-        batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+        batch.X_context, batch.y_context, cat_indices, batch.configs
     )
     assert hasattr(clf_batched, "models_"), (
         "Batched classifier models_ not found after fit_from_preprocessed."
@@ -1149,15 +1154,7 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     # Floating point ops might introduce tiny differences.
     atol = 1e-6
     rtol = 1e-5
-    tensors_match = torch.allclose(tensor_p1_full, tensor_p2_full, atol=atol, rtol=rtol)
-
-    if not tensors_match:
-        diff = torch.abs(tensor_p1_full - tensor_p2_full)
-        # Find where they differ most
-        _max_diff_val, max_diff_idx = torch.max(diff.flatten(), dim=0)
-        np.unravel_index(max_diff_idx.item(), tensor_p1_full.shape)
-
-    assert tensors_match, "Mismatch between final model input tensors."
+    assert torch.allclose(tensor_p1_full, tensor_p2_full, atol=atol, rtol=rtol)
 
 
 @pytest.mark.parametrize("use_fixed_preprocessing_seed", [True, False])
