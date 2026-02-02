@@ -37,7 +37,6 @@ from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
     infer_fp16_inference_mode,
-    infer_random_state,
 )
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
