@@ -548,9 +548,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
-        """Perform initialization of the model, return determined byte_size
-        and RNG object.
+    def _initialize_model_variables(self) -> int:
+        """Initializes the model and configurations.
+
+        Returns:
+            The determined byte_size.
         """
         return initialize_model_variables_helper(self, self.estimator_type)
 
@@ -735,7 +737,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
-        byte_size, rng = self._initialize_model_variables()
+        static_seed, rng = infer_random_state(self.random_state)
+        byte_size = self._initialize_model_variables()
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
         self.ensemble_configs_ = ensemble_configs
 
@@ -799,7 +802,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, _ = self._initialize_model_variables()
+            byte_size = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
@@ -846,7 +849,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         is_first_fit_call = not hasattr(self, "models_")
         if is_first_fit_call:
-            byte_size, rng = self._initialize_model_variables()
+            static_seed, rng = infer_random_state(self.random_state)
+            byte_size = self._initialize_model_variables()
             ensemble_configs, X, y = self._initialize_for_differentiable_input(
                 X=X, y=y, rng=rng
             )

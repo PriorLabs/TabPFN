@@ -73,6 +73,7 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
+    infer_random_state,
     transform_borders_one,
     translate_probs_across_borders,
 )
@@ -580,8 +581,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
-        """Initializes the model, returning byte_size and RNG object."""
+    def _initialize_model_variables(self) -> int:
+        """Initializes the model and configurations.
+
+        Returns:
+            The determined byte_size.
+        """
         return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_dataset_preprocessing(
@@ -701,7 +706,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, _ = self._initialize_model_variables()
+            byte_size = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
@@ -752,7 +757,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        byte_size, rng = self._initialize_model_variables()
+        static_seed, rng = infer_random_state(self.random_state)
+        byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist = (
             self._initialize_dataset_preprocessing(X, y, rng)
         )
