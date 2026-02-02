@@ -620,7 +620,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X: XType,
         y: YType,
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Data validation and cleaning
@@ -672,7 +672,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
             n_classes=self.n_classes_,
-            random_state=rng,
+            random_state=random_state,
             num_models=len(self.models_),
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
@@ -746,7 +746,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
@@ -847,9 +849,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
+        static_seed, rng = infer_random_state(self.random_state)
+
         is_first_fit_call = not hasattr(self, "models_")
         if is_first_fit_call:
-            static_seed, rng = infer_random_state(self.random_state)
             byte_size = self._initialize_model_variables()
             ensemble_configs, X, y = self._initialize_for_differentiable_input(
                 X=X, y=y, rng=rng
@@ -857,7 +860,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
             remove_non_differentiable_preprocessing_from_models(models=self.models_)
         else:
-            _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
@@ -865,7 +867,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )
 

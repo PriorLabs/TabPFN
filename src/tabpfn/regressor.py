@@ -593,7 +593,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         X: XType,
         y: YType,
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
     ) -> tuple[
         list[RegressorEnsembleConfig],
         np.ndarray,
@@ -638,7 +638,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # target name
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
             num_examples=y.shape[0],  # Use length of validated y
-            random_state=rng,  # Use the provided rng
+            random_state=random_state,  # Use the provided rng
         )
         target_preprocessors: list[TransformerMixin | Pipeline | None] = []
         for (
@@ -659,7 +659,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             max_index=len(X),
             preprocessor_configs=self.inference_config_.PREPROCESS_TRANSFORMS,
             target_transforms=target_preprocessors,
-            random_state=rng,
+            random_state=random_state,
             num_models=len(self.models_),
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
@@ -799,7 +799,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )

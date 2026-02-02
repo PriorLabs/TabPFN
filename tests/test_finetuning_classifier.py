@@ -720,7 +720,8 @@ def test_get_preprocessed_datasets_basic() -> None:
         100,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     assert hasattr(dataset, "__getitem__")
     assert hasattr(dataset, "__len__")
@@ -754,7 +755,8 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
         max_data_size=None,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
 
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
@@ -796,7 +798,8 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
         max_data_size=None,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
 
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
@@ -831,7 +834,8 @@ def test_dataset_and_collator_with_dataloader_uniform(
         100,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     batch_size = 1
     dl = DataLoader(
@@ -869,7 +873,8 @@ def test_classifier_dataset_and_collator_batches_type(
         100,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     batch_size = 1
     dl = DataLoader(
@@ -908,7 +913,8 @@ def test_get_preprocessed_datasets_multiple_datasets(
         max_data_size=10_000,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     assert hasattr(datasets, "__getitem__")
     assert len(datasets) == 2
@@ -929,7 +935,8 @@ def test_get_preprocessed_datasets_categorical_features(
         model_type="classifier",
         max_data_size=None,
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     assert hasattr(datasets, "__getitem__")
 
@@ -965,6 +972,7 @@ def test_fit_from_preprocessed_runs(
 
     split_fn = partial(train_test_split, test_size=0.3, random_state=42)
 
+    # TODO: HELPER FUNCTION FOR THIS CHUNKING BECAUSE IT"S USED A LOT
     datasets_list = get_preprocessed_dataset_chunks(
         clf,
         X_train,
@@ -973,7 +981,8 @@ def test_fit_from_preprocessed_runs(
         100,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
     batch_size = 1
     dl = DataLoader(
@@ -1098,7 +1107,8 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
         max_data_size=10_000,
         model_type="classifier",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
         force_no_stratify=True,
         shuffle=False,
     )
@@ -1179,3 +1189,6 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
         np.unravel_index(max_diff_idx.item(), tensor_p1_full.shape)
 
     assert tensors_match, "Mismatch between final model input tensors."
+
+
+# TODO: SOMEHOW ADD TEST FOR FIXED PREPROCESSING SEEDS!
