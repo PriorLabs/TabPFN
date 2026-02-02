@@ -189,6 +189,21 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
 
+        if self.use_fixed_preprocessing_seed and not (
+            self.n_estimators_finetune
+            == self.n_estimators_validation
+            == self.n_estimators_final_inference
+        ):
+            warnings.warn(
+                "`use_fixed_preprocessing_seed` is only supported if "
+                "`n_estimators_finetune` == `n_estimators_validation` == "
+                "`n_estimators_final_inference`. We are setting the number of "
+                "estimators for validation and final inference to the same value "
+                f"as `n_estimators_finetune`(={self.n_estimators_finetune}).",
+                UserWarning,
+                stacklevel=2,
+            )
+
     def _build_estimator_config(
         self,
         base_config: dict[str, Any],

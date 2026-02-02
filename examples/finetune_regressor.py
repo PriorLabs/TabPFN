@@ -1,7 +1,6 @@
 """Example of fine-tuning a TabPFN regressor using the FinetunedTabPFNRegressor wrapper.
 
-Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
-support for the Apple Silicon (MPS) backend is still under development.
+Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80Gb of VRAM.
 """
 
 import logging
