@@ -51,6 +51,12 @@ class TabPFNSettings(BaseSettings):
     )
 
     def model_post_init(self, _: Any) -> None:
+        """Configure MPS memory limits after settings are initialized.
+
+        To change the memory fraction, set the TABPFN_MPS_MEMORY_FRACTION
+        environment variable before importing tabpfn, e.g.:
+            export TABPFN_MPS_MEMORY_FRACTION=0.5
+        """
         if torch.backends.mps.is_available():
             torch.mps.set_per_process_memory_fraction(self.mps_memory_fraction)
 
