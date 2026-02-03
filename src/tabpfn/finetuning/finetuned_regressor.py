@@ -567,15 +567,18 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return self
 
     @override
-    def predict(self, X: XType) -> np.ndarray:
+    def predict(self, X: XType, **kwargs) -> np.ndarray:
         """Predict target values for X.
 
         Args:
             X: The input samples of shape (n_samples, n_features).
+            **kwargs: Additional keyword arguments to pass to the underlying
+                inference regressor (e.g., output_type, quantiles).
 
         Returns:
             The predicted target values with shape (n_samples,).
         """
         check_is_fitted(self)
 
-        return self.finetuned_inference_regressor_.predict(X)
+        return self.finetuned_inference_regressor_.predict(X, **kwargs)
+
