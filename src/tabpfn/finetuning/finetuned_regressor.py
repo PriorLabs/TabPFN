@@ -582,4 +582,3 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         check_is_fitted(self)
 
         return self.finetuned_inference_regressor_.predict(X, **kwargs)
-
