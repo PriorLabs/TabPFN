@@ -17,6 +17,7 @@ DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
 # Default memory fraction for MPS (70% of recommended max)
 MPS_DEFAULT_MEMORY_FRACTION = 0.7
 
+
 def support_save_peak_mem_factor(method: MethodType) -> Callable:
     """Can be applied to a method acting on a tensor 'x' whose first dimension is a
     flat batch dimension
@@ -179,7 +180,6 @@ def _get_num_cells(
     return (n_train + n_test) * n_features
 
 
-
 def configure_mps_memory_limits(
     memory_fraction: float | None = None,
 ) -> None:
@@ -209,4 +209,3 @@ def configure_mps_memory_limits(
         )
 
     torch.mps.set_per_process_memory_fraction(memory_fraction)
-
