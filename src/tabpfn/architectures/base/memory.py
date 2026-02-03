@@ -192,7 +192,7 @@ def configure_mps_memory_limits(
     Args:
         memory_fraction: Fraction of recommended max device memory to allow.
             If None, uses TABPFN_MPS_MEMORY_FRACTION env var or default (0.7).
-            Range: 0.0 to 1.0.
+            Range: 0.0 to 2.0. Values > 1.0 are not recommended.
             - 0.7: Safe default, leaves room for system
             - 1.0: Use full recommended amount (may still crash)
             - Lower values for systems with other GPU-intensive apps
@@ -204,8 +204,9 @@ def configure_mps_memory_limits(
         return
 
     if memory_fraction is None:
-        memory_fraction = float(
-            os.environ.get("TABPFN_MPS_MEMORY_FRACTION", MPS_DEFAULT_MEMORY_FRACTION)
-        )
+        try:
+            memory_fraction = float(os.environ.get("TABPFN_MPS_MEMORY_FRACTION"))
+        except (ValueError, TypeError):
+            memory_fraction = MPS_DEFAULT_MEMORY_FRACTION
 
     torch.mps.set_per_process_memory_fraction(memory_fraction)
