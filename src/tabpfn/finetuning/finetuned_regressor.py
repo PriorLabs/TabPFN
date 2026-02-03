@@ -22,13 +22,13 @@ from tabpfn import TabPFNRegressor
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 from tabpfn.model_loading import get_n_out
-from tabpfn.regressor import RegressionResultType
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
     from tabpfn.finetuning.data_util import RegressorBatch
+    from tabpfn.regressor import RegressionResultType
 
 
 def _compute_regression_loss(  # noqa: C901
@@ -568,7 +568,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return self
 
     @override
-    def predict(self, X: XType, **kwargs) -> "RegressionResultType":
+    def predict(self, X: XType, **kwargs) -> RegressionResultType:
         """Predict target values for X.
 
         Args:
