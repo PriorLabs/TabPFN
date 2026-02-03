@@ -49,7 +49,7 @@ from tabpfn.constants import (
     XType,
     YType,
 )
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNMPSOutOfMemoryError
+from tabpfn.errors import handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -1044,27 +1044,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        try:
+        with handle_oom_errors(self.devices_, X, model_type="classifier"):
             return self.forward(
                 X,
                 use_inference_mode=True,
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
-        except torch.OutOfMemoryError as e:
-            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
-            raise TabPFNCUDAOutOfMemoryError(
-                e, n_test_samples=n_samples, model_type="classifier"
-            ) from None
-        except RuntimeError as e:
-            is_mps = any(d.type == "mps" for d in self.devices_)
-            is_oom = "out of memory" in str(e).lower()
-            if is_mps and is_oom:
-                n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
-                raise TabPFNMPSOutOfMemoryError(
-                    e, n_test_samples=n_samples, model_type="classifier"
-                ) from None
-            raise
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:

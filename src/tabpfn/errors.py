@@ -4,6 +4,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+import torch
+
+if TYPE_CHECKING:
+    from tabpfn.constants import XType
+
 
 class TabPFNError(Exception):
     """Base class for all TabPFN-specific exceptions."""
@@ -64,7 +73,8 @@ class TabPFNOutOfMemoryError(TabPFNError):
             f"    batch_size = 1000\n"
             f"    predictions = []\n"
             f"    for i in range(0, len(X_test), batch_size):\n"
-            f"        predictions.append(model.{predict_method}(X_test[i:i + batch_size]))\n"
+            f"        batch = model.{predict_method}(X_test[i:i + batch_size])\n"
+            f"        predictions.append(batch)\n"
             f"    predictions = np.vstack(predictions)"
         )
         if original_error is not None:
@@ -80,6 +90,41 @@ class TabPFNCUDAOutOfMemoryError(TabPFNOutOfMemoryError):
 
 
 class TabPFNMPSOutOfMemoryError(TabPFNOutOfMemoryError):
-    """Error raised when MPS (Apple Silicon) GPU runs out of memory during prediction."""
+    """Error raised when MPS (Apple Silicon) runs out of memory during prediction."""
 
     device_name = "MPS"
+
+
+@contextmanager
+def handle_oom_errors(
+    devices: tuple[torch.device, ...],
+    X: XType,
+    model_type: str,
+) -> Generator[None, None, None]:
+    """Context manager to catch OOM errors and raise helpful TabPFN exceptions.
+
+    Args:
+        devices: The devices the model is running on.
+        X: The input data (used to get n_samples for the error message).
+        model_type: Either "classifier" or "regressor".
+
+    Raises:
+        TabPFNCUDAOutOfMemoryError: If a CUDA OOM error occurs.
+        TabPFNMPSOutOfMemoryError: If an MPS OOM error occurs.
+    """
+    try:
+        yield
+    except torch.OutOfMemoryError as e:
+        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+        raise TabPFNCUDAOutOfMemoryError(
+            e, n_test_samples=n_samples, model_type=model_type
+        ) from None
+    except RuntimeError as e:
+        is_mps = any(d.type == "mps" for d in devices)
+        is_oom = "out of memory" in str(e).lower()
+        if is_mps and is_oom:
+            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+            raise TabPFNMPSOutOfMemoryError(
+                e, n_test_samples=n_samples, model_type=model_type
+            ) from None
+        raise
