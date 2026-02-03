@@ -39,8 +39,10 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     get_embeddings,
+    handle_prediction_memory_error,
     initialize_model_variables_helper,
     initialize_telemetry,
+    is_gpu_oom_error,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -1043,12 +1045,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        return self.forward(
-            X,
-            use_inference_mode=True,
-            return_logits=return_logits,
-            return_raw_logits=return_raw_logits,
-        )
+        try:
+            return self.forward(
+                X,
+                use_inference_mode=True,
+                return_logits=return_logits,
+                return_raw_logits=return_raw_logits,
+            )
+        except RuntimeError as e:
+            if is_gpu_oom_error(e):
+                handle_prediction_memory_error(e, X, model_type="classifier")
+            raise
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:

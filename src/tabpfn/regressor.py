@@ -44,8 +44,10 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     get_embeddings,
+    handle_prediction_memory_error,
     initialize_model_variables_helper,
     initialize_telemetry,
+    is_gpu_oom_error,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.errors import TabPFNValidationError
@@ -913,11 +915,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         # Runs over iteration engine
-        (
-            _,
-            outputs,  # list of tensors [N_est, N_samples, N_borders] (after forward)
-            borders,  # list of numpy arrays containing borders for each estimator
-        ) = self.forward(X, use_inference_mode=True)
+        try:
+            (
+                _,
+                outputs,  # list of tensors [N_est, N_samples, N_borders] (after forward)
+                borders,  # list of numpy arrays containing borders for each estimator
+            ) = self.forward(X, use_inference_mode=True)
+        except RuntimeError as e:
+            if is_gpu_oom_error(e):
+                handle_prediction_memory_error(e, X, model_type="regressor")
+            raise
 
         # --- Translate probs, average, get final logits ---
         transformed_logits = [
