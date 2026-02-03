@@ -14,19 +14,6 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-# This should inheric from FeaturePreprocessingTransformerStep-like object
-class FeatureModalityDetector:
-    """Detector for feature modalities as defined by FeatureModality."""
-
-    feature_modality_columns: dict[FeatureModality, list[str]]
-
-    def _fit(self, X: pd.DataFrame) -> None:
-        raise NotImplementedError("Should be calling `detect_feature_modalities`.")
-
-    def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        raise NotImplementedError("Should be a no-op.")
-
-
 def detect_feature_modalities(
     X: np.ndarray,
     feature_names: list[str] | None,

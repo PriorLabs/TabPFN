@@ -6,8 +6,6 @@ import dataclasses
 from enum import Enum
 from typing import TYPE_CHECKING
 
-import pandas as pd
-
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -38,37 +36,6 @@ class Feature:
 
     name: str | None
     modality: FeatureModality
-
-
-@dataclasses.dataclass(frozen=True)
-class DatasetView:
-    """A view of a dataset split by feature modalities."""
-
-    X: pd.DataFrame
-    columns_by_modality: dict[FeatureModality, list[str]]
-
-    @property
-    def x_num(self) -> pd.DataFrame:
-        """Returns the numerical features as a pd.DataFrame."""
-        return self._get_modality(FeatureModality.NUMERICAL)
-
-    @property
-    def x_cat(self) -> pd.DataFrame:
-        """Returns the categorical features as a pd.DataFrame."""
-        return self._get_modality(FeatureModality.CATEGORICAL)
-
-    @property
-    def x_num_and_cat(self) -> pd.DataFrame:
-        """Returns the numerical and categorical features as a pd.DataFrame."""
-        return pd.concat([self.x_num, self.x_cat], axis=1)
-
-    @property
-    def x_txt(self) -> pd.DataFrame:
-        """Returns the text features as a pd.DataFrame."""
-        return self._get_modality(FeatureModality.TEXT)
-
-    def _get_modality(self, modality: FeatureModality) -> pd.DataFrame:
-        return self.X.loc[:, self.columns_by_modality[modality]]
 
 
 @dataclasses.dataclass
