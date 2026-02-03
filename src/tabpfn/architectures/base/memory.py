@@ -14,9 +14,6 @@ from tabpfn.settings import settings
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
 DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
 
-# Default memory fraction for MPS (70% of recommended max)
-MPS_DEFAULT_MEMORY_FRACTION = 0.7
-
 
 def support_save_peak_mem_factor(method: MethodType) -> Callable:
     """Can be applied to a method acting on a tensor 'x' whose first dimension is a
@@ -178,35 +175,3 @@ def _get_num_cells(
     n_train, n_features = X_train_shape
     n_test, _ = X_test_shape
     return (n_train + n_test) * n_features
-
-
-def configure_mps_memory_limits(
-    memory_fraction: float | None = None,
-) -> None:
-    """Configure MPS memory limits to prevent system crashes on macOS.
-
-    Uses torch.mps.set_per_process_memory_fraction() to set a hard limit on
-    MPS memory allocation as a fraction of the device's recommended max
-    working set size (from Metal API).
-
-    Args:
-        memory_fraction: Fraction of recommended max device memory to allow.
-            If None, uses TABPFN_MPS_MEMORY_FRACTION env var or default (0.7).
-            Range: 0.0 to 2.0. Values > 1.0 are not recommended.
-            - 0.7: Safe default, leaves room for system
-            - 1.0: Use full recommended amount (may still crash)
-            - Lower values for systems with other GPU-intensive apps
-
-    References:
-        https://pytorch.org/docs/stable/generated/torch.mps.set_per_process_memory_fraction.html
-    """
-    if not torch.backends.mps.is_available():
-        return
-
-    if memory_fraction is None:
-        try:
-            memory_fraction = float(os.environ.get("TABPFN_MPS_MEMORY_FRACTION"))
-        except (ValueError, TypeError):
-            memory_fraction = MPS_DEFAULT_MEMORY_FRACTION
-
-    torch.mps.set_per_process_memory_fraction(memory_fraction)
