@@ -42,7 +42,6 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     initialize_telemetry,
 )
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNMPSOutOfMemoryError
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
@@ -50,6 +49,7 @@ from tabpfn.constants import (
     XType,
     YType,
 )
+from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNMPSOutOfMemoryError
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,

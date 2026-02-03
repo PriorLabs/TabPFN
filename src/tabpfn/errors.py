@@ -54,12 +54,9 @@ class TabPFNOutOfMemoryError(TabPFNError):
         n_test_samples: int | None = None,
         model_type: str = "classifier",
     ):
-        if model_type == "classifier":
-            predict_method = "predict_proba"
-        else:
-            predict_method = "predict"
+        predict_method = "predict_proba" if model_type == "classifier" else "predict"
 
-        size_info = f" with {n_test_samples:,} samples" if n_test_samples else ""
+        size_info = f" with {n_test_samples:,} test samples" if n_test_samples else ""
 
         message = (
             f"{self.device_name} out of memory{size_info}.\n\n"

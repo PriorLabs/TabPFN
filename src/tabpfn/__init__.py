@@ -16,8 +16,8 @@ except ImportError:
 
 __all__ = [
     "TabPFNCUDAOutOfMemoryError",
-    "TabPFNMPSOutOfMemoryError",
     "TabPFNClassifier",
+    "TabPFNMPSOutOfMemoryError",
     "TabPFNRegressor",
     "__version__",
     "display_debug_info",
