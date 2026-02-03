@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.2] - 2026-02-03
+
+### Added
+
+- Add MPS memory limiting to prevent macOS system crashes when using Apple Silicon GPUs. Memory is automatically limited to 70% of recommended max on import. Configurable via `TABPFN_MPS_MEMORY_FRACTION` environment variable.
+
 ## [6.3.2] - 2026-01-30
 
 ### Added
