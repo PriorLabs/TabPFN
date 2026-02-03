@@ -42,7 +42,7 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     initialize_telemetry,
 )
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError
+from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNMPSOutOfMemoryError
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
@@ -1055,7 +1055,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
             raise TabPFNCUDAOutOfMemoryError(
                 e, n_test_samples=n_samples, model_type="classifier"
-            ) from e
+            ) from None
+        except RuntimeError as e:
+            is_mps = any(d.type == "mps" for d in self.devices_)
+            is_oom = "out of memory" in str(e).lower()
+            if is_mps and is_oom:
+                n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+                raise TabPFNMPSOutOfMemoryError(
+                    e, n_test_samples=n_samples, model_type="classifier"
+                ) from None
+            raise
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:

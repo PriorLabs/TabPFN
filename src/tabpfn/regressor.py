@@ -48,7 +48,11 @@ from tabpfn.base import (
     initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNValidationError
+from tabpfn.errors import (
+    TabPFNCUDAOutOfMemoryError,
+    TabPFNMPSOutOfMemoryError,
+    TabPFNValidationError,
+)
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
@@ -923,7 +927,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
             raise TabPFNCUDAOutOfMemoryError(
                 e, n_test_samples=n_samples, model_type="regressor"
-            ) from e
+            ) from None
+        except RuntimeError as e:
+            is_mps = any(d.type == "mps" for d in self.devices_)
+            is_oom = "out of memory" in str(e).lower()
+            if is_mps and is_oom:
+                n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+                raise TabPFNMPSOutOfMemoryError(
+                    e, n_test_samples=n_samples, model_type="regressor"
+                ) from None
+            raise
 
         # --- Translate probs, average, get final logits ---
         transformed_logits = [

@@ -1,7 +1,7 @@
 from importlib.metadata import version
 
 from tabpfn.classifier import TabPFNClassifier
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError
+from tabpfn.errors import TabPFNCUDAOutOfMemoryError, TabPFNMPSOutOfMemoryError
 from tabpfn.misc.debug_versions import display_debug_info
 from tabpfn.model_loading import (
     load_fitted_tabpfn_model,
@@ -16,6 +16,7 @@ except ImportError:
 
 __all__ = [
     "TabPFNCUDAOutOfMemoryError",
+    "TabPFNMPSOutOfMemoryError",
     "TabPFNClassifier",
     "TabPFNRegressor",
     "__version__",

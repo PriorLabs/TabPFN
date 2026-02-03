@@ -38,12 +38,14 @@ class TabPFNHuggingFaceGatedRepoError(TabPFNError):
         super().__init__(message)
 
 
-class TabPFNCUDAOutOfMemoryError(TabPFNError):
-    """Error raised when GPU runs out of memory during prediction.
+class TabPFNOutOfMemoryError(TabPFNError):
+    """Base class for GPU out-of-memory errors during prediction.
 
     This error provides guidance on how to handle large test sets that exceed
-    available GPU memory. Works for both CUDA and MPS devices.
+    available GPU memory.
     """
+
+    device_name: str = "GPU"  # Override in subclasses
 
     def __init__(
         self,
@@ -60,7 +62,7 @@ class TabPFNCUDAOutOfMemoryError(TabPFNError):
         size_info = f" with {n_test_samples:,} samples" if n_test_samples else ""
 
         message = (
-            f"GPU out of memory{size_info}.\n\n"
+            f"{self.device_name} out of memory{size_info}.\n\n"
             f"Solution: Split your test data into smaller batches:\n\n"
             f"    batch_size = 1000\n"
             f"    predictions = []\n"
@@ -72,3 +74,15 @@ class TabPFNCUDAOutOfMemoryError(TabPFNError):
             message += f"\n\nOriginal error: {original_error}"
         super().__init__(message)
         self.original_error = original_error
+
+
+class TabPFNCUDAOutOfMemoryError(TabPFNOutOfMemoryError):
+    """Error raised when CUDA GPU runs out of memory during prediction."""
+
+    device_name = "CUDA"
+
+
+class TabPFNMPSOutOfMemoryError(TabPFNOutOfMemoryError):
+    """Error raised when MPS (Apple Silicon) GPU runs out of memory during prediction."""
+
+    device_name = "MPS"
