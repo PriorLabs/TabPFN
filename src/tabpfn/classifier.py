@@ -51,6 +51,7 @@ from tabpfn.constants import (
     XType,
     YType,
 )
+from tabpfn.errors import TabPFNCUDAOutOfMemoryError
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -1052,10 +1053,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
-        except RuntimeError as e:
-            if is_gpu_oom_error(e):
-                handle_prediction_memory_error(e, X, model_type="classifier")
-            raise
+        except torch.OutOfMemoryError as e:
+            raise TabPFNCUDAOutOfMemoryError(original_error=e) from e
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:

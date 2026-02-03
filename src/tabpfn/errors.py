@@ -36,3 +36,30 @@ class TabPFNHuggingFaceGatedRepoError(TabPFNError):
             "https://docs.priorlabs.ai/how-to-access-gated-models"
         )
         super().__init__(message)
+
+
+class TabPFNCUDAOutOfMemoryError(TabPFNError):
+    """Error raised when CUDA runs out of memory during prediction.
+
+    This error provides guidance on how to handle large test sets that exceed
+    available GPU memory.
+    """
+
+    def __init__(self, original_error: Exception | None = None):
+        message = (
+            "CUDA out of memory during prediction.\n\n"
+            "The test set is too large to process in a single batch. "
+            "To resolve this, split your test data into smaller batches:\n\n"
+            "    # Split predictions into batches\n"
+            "    batch_size = 10000  # Adjust based on your GPU memory\n"
+            "    predictions = []\n"
+            "    for i in range(0, len(X_test), batch_size):\n"
+            "        batch = X_test[i:i + batch_size]\n"
+            "        predictions.append(clf.predict_proba(batch))\n"
+            "    predictions = np.concatenate(predictions, axis=0)\n\n"
+            "Alternatively, reduce the number of test samples or use a GPU "
+            "with more memory."
+        )
+        if original_error is not None:
+            message += f"\n\nOriginal error: {original_error}"
+        super().__init__(message)
