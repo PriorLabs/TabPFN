@@ -48,7 +48,7 @@ from tabpfn.base import (
     initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
-from tabpfn.errors import TabPFNValidationError
+from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
@@ -913,11 +913,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         # Runs over iteration engine
-        (
-            _,
-            outputs,  # list of tensors [N_est, N_samples, N_borders] (after forward)
-            borders,  # list of numpy arrays containing borders for each estimator
-        ) = self.forward(X, use_inference_mode=True)
+        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+            (
+                _,
+                # list of tensors [N_est, N_samples, N_borders] (after forward)
+                outputs,
+                # list of numpy arrays containing borders for each estimator
+                borders,
+            ) = self.forward(X, use_inference_mode=True)
 
         # --- Translate probs, average, get final logits ---
         transformed_logits = [

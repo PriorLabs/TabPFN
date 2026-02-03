@@ -49,6 +49,7 @@ from tabpfn.constants import (
     XType,
     YType,
 )
+from tabpfn.errors import handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -1043,12 +1044,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        return self.forward(
-            X,
-            use_inference_mode=True,
-            return_logits=return_logits,
-            return_raw_logits=return_raw_logits,
-        )
+        with handle_oom_errors(self.devices_, X, model_type="classifier"):
+            return self.forward(
+                X,
+                use_inference_mode=True,
+                return_logits=return_logits,
+                return_raw_logits=return_raw_logits,
+            )
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:
