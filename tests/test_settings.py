@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import torch
 
 from tabpfn.settings import TabPFNSettings, TestingSettings
 
@@ -29,3 +30,25 @@ def test__ci_env_false_sets_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CI", "false")
     testing_settings = TestingSettings()
     assert testing_settings.ci is False
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test__mps_memory_limit__low_limit__causes_oom() -> None:
+    """Test that a very low MPS memory limit causes OOM on large allocations."""
+    TabPFNSettings(mps_memory_fraction=0.001)  # 0.1% - triggers model_post_init
+    torch.mps.empty_cache()
+
+    with pytest.raises(RuntimeError, match="out of memory"):
+        _ = [torch.randn(5000, 5000, device="mps") for _ in range(10)]
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="MPS not available")
+def test__mps_memory_limit__reasonable_limit__no_oom() -> None:
+    """Test that a reasonable MPS memory limit allows normal allocations."""
+    TabPFNSettings(mps_memory_fraction=0.7)  # 70% - triggers model_post_init
+    torch.mps.empty_cache()
+
+    x = torch.randn(1000, 1000, device="mps")
+    y = x @ x.T
+    assert y.shape == (1000, 1000)
+    del x, y
