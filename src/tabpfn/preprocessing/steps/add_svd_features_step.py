@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from enum import Enum
 from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
@@ -19,13 +18,6 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-class GlobalTransformerName(str, Enum):
-    """The name of the global transformer to use."""
-
-    SVD = "svd"
-    SVD_QUARTER_COMPONENTS = "svd_quarter_components"
-
-
 class AddSVDFeaturesStep(PreprocessingStep):
     """Adds SVD features to the data."""
 
@@ -38,7 +30,7 @@ class AddSVDFeaturesStep(PreprocessingStep):
     ):
         """Initializes the AddSVDFeaturesStep."""
         super().__init__()
-        self.global_transformer_name = GlobalTransformerName(global_transformer_name)
+        self.global_transformer_name = global_transformer_name
         self.random_state = random_state
         self.is_no_op: bool = False
 
@@ -97,21 +89,18 @@ class AddSVDFeaturesStep(PreprocessingStep):
 
 
 def get_svd_features_transformer(
-    global_transformer_name: GlobalTransformerName,
+    global_transformer_name: Literal["svd", "svd_quarter_components"],
     n_samples: int,
     n_features: int,
     random_state: int | None = None,
 ) -> Pipeline:
     """Returns a transformer to add SVD features to the data."""
-    if global_transformer_name == GlobalTransformerName.SVD:
+    if global_transformer_name == "svd":
         divisor = 2
-    elif global_transformer_name == GlobalTransformerName.SVD_QUARTER_COMPONENTS:
+    elif global_transformer_name == "svd_quarter_components":
         divisor = 4
     else:
-        raise ValueError(
-            f"Invalid global transformer name: {global_transformer_name}. "
-            f"Must be one of {', '.join([n.value for n in GlobalTransformerName])}."
-        )
+        raise ValueError(f"Invalid global transformer name: {global_transformer_name}.")
 
     n_components = max(1, min(n_samples // 10 + 1, n_features // divisor))
     return Pipeline(
