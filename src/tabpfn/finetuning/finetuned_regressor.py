@@ -567,7 +567,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         return self
 
     @override
-    def predict(self, X: XType, **kwargs) -> np.ndarray:
+    def predict(self, X: XType, **kwargs) -> "RegressionResultType":
         """Predict target values for X.
 
         Args:
