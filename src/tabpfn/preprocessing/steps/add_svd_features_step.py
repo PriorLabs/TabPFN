@@ -104,47 +104,31 @@ def get_svd_features_transformer(
 ) -> Pipeline:
     """Returns a transformer to add SVD features to the data."""
     if global_transformer_name == GlobalTransformerName.SVD:
-        n_components = max(1, min(n_samples // 10 + 1, n_features // 2))
-        return Pipeline(
-            steps=[
-                (
-                    "save_standard",
-                    make_standard_scaler_safe(
-                        ("standard", StandardScaler(with_mean=False)),
-                    ),
-                ),
-                (
-                    "svd",
-                    TruncatedSVD(
-                        algorithm="arpack",
-                        n_components=n_components,
-                        random_state=random_state,
-                    ),
-                ),
-            ],
-        )
-    if global_transformer_name == GlobalTransformerName.SVD_QUARTER_COMPONENTS:
-        n_components = max(1, min(n_samples // 10 + 1, n_features // 4))
-        return Pipeline(
-            steps=[
-                (
-                    "save_standard",
-                    make_standard_scaler_safe(
-                        ("standard", StandardScaler(with_mean=False)),
-                    ),
-                ),
-                (
-                    "svd",
-                    TruncatedSVD(
-                        algorithm="arpack",
-                        n_components=n_components,
-                        random_state=random_state,
-                    ),
-                ),
-            ],
+        divisor = 2
+    elif global_transformer_name == GlobalTransformerName.SVD_QUARTER_COMPONENTS:
+        divisor = 4
+    else:
+        raise ValueError(
+            f"Invalid global transformer name: {global_transformer_name}. "
+            f"Must be one of {', '.join([n.value for n in GlobalTransformerName])}."
         )
 
-    raise ValueError(
-        f"Invalid global transformer name: {global_transformer_name}. Must be one of "
-        f"{', '.join([n.value for n in GlobalTransformerName])}."
+    n_components = max(1, min(n_samples // 10 + 1, n_features // divisor))
+    return Pipeline(
+        steps=[
+            (
+                "save_standard",
+                make_standard_scaler_safe(
+                    ("standard", StandardScaler(with_mean=False)),
+                ),
+            ),
+            (
+                "svd",
+                TruncatedSVD(
+                    algorithm="arpack",
+                    n_components=n_components,
+                    random_state=random_state,
+                ),
+            ),
+        ],
     )

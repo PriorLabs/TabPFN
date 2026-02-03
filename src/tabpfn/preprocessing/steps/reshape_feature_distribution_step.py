@@ -70,7 +70,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     1. Handles feature subsampling when too many features exist
     2. Applies different logic based on `apply_to_categorical` flag
     3. Can append transformed features to originals (`append_to_original`)
-    4. Can add global features like SVD components
 
     # TODO(ben): Add separate PreprocessingStep's for all of the above
     # so that we can register this with modalities
