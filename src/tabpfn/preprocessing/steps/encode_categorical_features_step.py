@@ -35,7 +35,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             (EncodeCategoricalFeaturesStep(), {FeatureModality.CATEGORICAL})
         ])
 
-    This will be updated in future versions.
+    This is needed for the pipeline with onehot encoding to work.
+    It will be updated in future versions.
     """
 
     def __init__(

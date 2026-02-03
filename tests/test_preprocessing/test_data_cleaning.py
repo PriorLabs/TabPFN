@@ -9,8 +9,8 @@ import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.initialization import tag_features_and_sanitize_data
+from tabpfn.preprocessing import clean_data
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.validation import ensure_compatible_fit_inputs
 
 
@@ -27,6 +27,28 @@ def regressor() -> TabPFNRegressor:
 @pytest.fixture
 def cpu_devices() -> tuple[torch.device, ...]:
     return (torch.device("cpu"),)
+
+
+def _get_schema(
+    n_numerical_features: int = 0,
+    n_categorical_features: int = 0,
+    n_text_features: int = 0,
+    n_constant_features: int = 0,
+) -> FeatureSchema:
+    features = []
+    for i in range(n_numerical_features):
+        features.append(
+            Feature(name=f"feature_{i}", modality=FeatureModality.NUMERICAL)
+        )
+    for i in range(n_categorical_features):
+        features.append(
+            Feature(name=f"feature_{i}", modality=FeatureModality.CATEGORICAL)
+        )
+    for i in range(n_text_features):
+        features.append(Feature(name=f"feature_{i}", modality=FeatureModality.TEXT))
+    for i in range(n_constant_features):
+        features.append(Feature(name=f"feature_{i}", modality=FeatureModality.CONSTANT))
+    return FeatureSchema(features=features)
 
 
 class TestEnsureCompatibleFitInputsBasic:
@@ -241,7 +263,7 @@ class TestTagFeaturesAndSanitizeData:
     MIN_UNIQUE_FOR_NUMERICAL = 4
 
     @pytest.mark.parametrize(
-        ("input_data", "expected_modalities"),
+        ("input_data", "modalities"),
         [
             pytest.param(
                 np.array([[1.5, 2.3], [3.1, 4.7], [5.2, 6.8], [7.4, 8.1]]),
@@ -292,35 +314,24 @@ class TestTagFeaturesAndSanitizeData:
     def test__tag_features_and_sanitize_data__input_types(
         self,
         input_data: np.ndarray,
-        expected_modalities: dict[FeatureModality, list[int]],
+        modalities: dict[FeatureModality, list[int]],
     ) -> None:
         """Test that different input types are correctly tagged and sanitized."""
-        feature_names = [f"feature_{i}" for i in range(input_data.shape[1])]
-        X_out, ord_encoder, feature_schema = tag_features_and_sanitize_data(
-            X=input_data,
-            feature_names=feature_names,
-            min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
-            max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
-            min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
-            provided_categorical_indices=None,
+        schema = _get_schema(
+            n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
+            n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
         )
-        assert feature_schema.feature_names == feature_names
+        X_out, ord_encoder, _ = clean_data(
+            X=input_data,
+            feature_schema=schema,
+        )
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
         assert X_out.dtype == np.float64
         assert ord_encoder is not None
 
-        assert (
-            feature_schema.indices_for(FeatureModality.NUMERICAL)
-            == expected_modalities[FeatureModality.NUMERICAL]
-        )
-        assert (
-            feature_schema.indices_for(FeatureModality.CATEGORICAL)
-            == expected_modalities[FeatureModality.CATEGORICAL]
-        )
-
     @pytest.mark.parametrize(
-        ("input_data", "expected_modalities"),
+        ("input_data", "modalities"),
         [
             pytest.param(
                 pd.DataFrame({"a": [1.0, 2.0, 3.0, 4.0]}),
@@ -354,33 +365,23 @@ class TestTagFeaturesAndSanitizeData:
     def test__tag_features_and_sanitize_data__pandas_input(
         self,
         input_data: pd.DataFrame,
-        expected_modalities: dict[FeatureModality, list[int]],
+        modalities: dict[FeatureModality, list[int]],
     ) -> None:
         """Test that pandas DataFrames are correctly processed and tagged."""
-        X_out, ord_encoder, feature_schema = tag_features_and_sanitize_data(
+        schema = _get_schema(
+            n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
+            n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
+        )
+        X_out, ord_encoder, _ = clean_data(
             X=input_data.values,
-            feature_names=None,
-            min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
-            max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
-            min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
-            provided_categorical_indices=None,
+            feature_schema=schema,
         )
 
-        assert feature_schema.feature_names == [None] * input_data.shape[1]
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
         assert X_out.dtype == np.float64
 
         assert ord_encoder is not None
-
-        assert (
-            feature_schema.indices_for(FeatureModality.NUMERICAL)
-            == expected_modalities[FeatureModality.NUMERICAL]
-        )
-        assert (
-            feature_schema.indices_for(FeatureModality.CATEGORICAL)
-            == expected_modalities[FeatureModality.CATEGORICAL]
-        )
 
     # This test currently fails because the standard ColumnTransformer used inside
     # the ordinal encoder inside `tag_features_and_sanitize_data` is not preserving the
@@ -395,26 +396,25 @@ class TestTagFeaturesAndSanitizeData:
             {
                 "ratio": [0.4, 0.5, 0.6],
                 "risk": ["High", None, "Low"],
-                "height": ["Low", "Low", "Low"],
                 "amount": [10.2, 20.4, 20.5],
                 "type": ["guest", "member", pd.NA],
             }
         )
-        X_out_first, _, feature_schema_first = tag_features_and_sanitize_data(
-            X=df.values,
-            feature_names=None,
-            min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
-            max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
-            min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
-            provided_categorical_indices=None,
+        schema = FeatureSchema(
+            features=[
+                Feature(name="ratio", modality=FeatureModality.NUMERICAL),
+                Feature(name="risk", modality=FeatureModality.TEXT),
+                Feature(name="amount", modality=FeatureModality.NUMERICAL),
+                Feature(name="type", modality=FeatureModality.CATEGORICAL),
+            ]
         )
-        X_out_second, _, feature_schema_second = tag_features_and_sanitize_data(
+        X_out_first, _, feature_schema_first = clean_data(
+            X=df.values,
+            feature_schema=schema,
+        )
+        X_out_second, _, feature_schema_second = clean_data(
             X=X_out_first,
-            feature_names=None,
-            min_samples_for_inference=self.MIN_SAMPLES_FOR_INFERENCE,
-            max_unique_for_category=self.MAX_UNIQUE_FOR_CATEGORY,
-            min_unique_for_numerical=self.MIN_UNIQUE_FOR_NUMERICAL,
-            provided_categorical_indices=None,
+            feature_schema=schema,
         )
 
         # If the column order is preserved, the data should be the same.

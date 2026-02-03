@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
 
 
@@ -310,3 +311,25 @@ def test__encode_categorical__transform_is_deterministic(transform_name: str):
     assert result1.feature_schema.indices_for(
         FeatureModality.NUMERICAL
     ) == result2.feature_schema.indices_for(FeatureModality.NUMERICAL)
+
+
+def test__in_pipeline__with_modality_selection_works():
+    """Test that the step works when registered with a modality selection."""
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 50, 5
+    cat_indices = [1, 3]
+
+    X = _make_test_data(rng, n_samples, n_features, cat_indices)
+    feature_schema = _make_feature_schema(n_features, cat_indices)
+
+    step = EncodeCategoricalFeaturesStep(
+        categorical_transform_name="ordinal",
+        random_state=42,
+    )
+    pipeline = PreprocessingPipeline(steps=[(step, {FeatureModality.CATEGORICAL})])
+    result = pipeline.fit_transform(X, feature_schema)
+    assert result.X.shape == (n_samples, n_features)
+
+    num_indices = [i for i in range(n_features) if i not in cat_indices]
+    assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == cat_indices
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices

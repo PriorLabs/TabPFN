@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 
 from tabpfn.constants import NA_PLACEHOLDER
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -20,12 +22,45 @@ if TYPE_CHECKING:
 
     from sklearn.compose import ColumnTransformer
 
+    from tabpfn.preprocessing.torch import FeatureSchema
+
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
 
 NUMERIC_DTYPE_KINDS = "?bBiufm"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
+
+
+def clean_data(
+    X: np.ndarray,
+    feature_schema: FeatureSchema,
+) -> tuple[np.ndarray, ColumnTransformer, FeatureSchema]:
+    """Clean the data by converting dtypes and ordinally encoding categorical columns.
+
+    Args:
+        X: The data to clean.
+        feature_schema: The feature schema corresponding to the data.
+
+    Returns:
+        A tuple containing the cleaned data, the ordinal encoder, and the inferred
+        feature modalities.
+    """
+    # Will convert inferred categorical indices to category dtype,
+    # to be picked up by the ord_encoder, as well
+    # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
+    X_pandas: pd.DataFrame = fix_dtypes(
+        X=X,
+        cat_indices=feature_schema.indices_for(FeatureModality.CATEGORICAL),
+    )
+
+    # Ensure categories are ordinally encoded
+    ord_encoder = get_ordinal_encoder()
+    X_numpy = process_text_na_dataframe(
+        X=X_pandas, ord_encoder=ord_encoder, fit_encoder=True
+    )
+
+    return X_numpy, ord_encoder, feature_schema
 
 
 def fix_dtypes(  # noqa: D103

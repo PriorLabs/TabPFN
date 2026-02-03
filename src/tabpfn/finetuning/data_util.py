@@ -435,7 +435,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         feature_schema = FeatureSchema.from_only_categorical_indices(
             cat_ix, num_columns
         )
-        itr = fit_preprocessing(
+        preprocessing_iterator = fit_preprocessing(
             configs=conf,
             X_train=x_train_raw,
             y_train=y_train,
@@ -450,7 +450,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             X_trains_preprocessed,
             y_trains_preprocessed,
             feature_schema_preprocessed,
-        ) = list(zip(*itr))
+        ) = list(zip(*preprocessing_iterator))
         X_trains_preprocessed = list(X_trains_preprocessed)
         y_trains_preprocessed = list(y_trains_preprocessed)
 

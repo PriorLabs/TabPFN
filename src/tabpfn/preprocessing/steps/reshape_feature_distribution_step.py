@@ -136,6 +136,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     3. Can append transformed features to originals (`append_to_original`)
     4. Can add global features like SVD components
 
+    # TODO(ben): Add separate PreprocessingStep's for all of the above
+    # so that we can register this with modalities
+
     When using with PreprocessingPipeline, register as a bare step (no modalities):
         pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
 

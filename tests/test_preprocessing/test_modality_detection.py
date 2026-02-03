@@ -16,7 +16,7 @@ from tabpfn.preprocessing.modality_detection import (
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
 
-def test__dataset_view_end_to_end():
+def test__detect_feature_modalities_basic():
     df = pd.DataFrame(
         {
             "num": [1.0, 2.0, 3.0, 4.0, 5.0],
@@ -37,6 +37,74 @@ def test__dataset_view_end_to_end():
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
     assert feature_schema.indices_for(FeatureModality.TEXT) == [3]
     assert feature_schema.indices_for(FeatureModality.CONSTANT) == [4]
+    assert feature_schema.feature_names == df.columns.tolist()
+
+
+@pytest.mark.parametrize(
+    ("input_data", "expected_modalities"),
+    [
+        pytest.param(
+            np.array([[1.5, 2.3], [3.1, 4.7], [5.2, 6.8], [7.4, 8.1]]),
+            {FeatureModality.NUMERICAL: [0, 1], FeatureModality.CATEGORICAL: []},
+            id="float_array_all_numerical",
+        ),
+        pytest.param(
+            np.array([[1, 2], [3, 4], [5, 6], [7, 8]]),
+            {FeatureModality.NUMERICAL: [0, 1], FeatureModality.CATEGORICAL: []},
+            id="int_array_high_unique_numerical",
+        ),
+        pytest.param(
+            np.array([[0, 1], [1, 0], [0, 1], [1, 0]]),
+            {FeatureModality.NUMERICAL: [], FeatureModality.CATEGORICAL: [0, 1]},
+            id="int_array_low_unique_categorical",
+        ),
+        pytest.param(
+            np.array([[1.5, 0], [3.1, 1], [5.2, 0], [7.4, 1]]),
+            {FeatureModality.NUMERICAL: [0], FeatureModality.CATEGORICAL: [1]},
+            id="mixed_float_numerical_int_categorical",
+        ),
+        pytest.param(
+            np.array([["a", "x"], ["b", "y"], ["a", "x"], ["b", "y"]], dtype=object),
+            {FeatureModality.NUMERICAL: [], FeatureModality.CATEGORICAL: [0, 1]},
+            id="string_array_categorical",
+        ),
+        pytest.param(
+            np.array([[1.5, "a"], [3.1, "b"], [5.2, "a"], [7.4, "b"]], dtype=object),
+            {FeatureModality.NUMERICAL: [0], FeatureModality.CATEGORICAL: [1]},
+            id="mixed_numeric_string_object_array",
+        ),
+        pytest.param(
+            np.array([[1.5, np.nan], [3.1, 4.7], [np.nan, 6.8], [7.4, 8.1]]),
+            {FeatureModality.NUMERICAL: [0, 1], FeatureModality.CATEGORICAL: []},
+            id="float_array_with_nan_numerical",
+        ),
+        pytest.param(
+            np.array([[True, False], [False, True], [True, False], [False, True]]),
+            {FeatureModality.NUMERICAL: [], FeatureModality.CATEGORICAL: [0, 1]},
+            id="boolean_array_categorical",
+        ),
+    ],
+)
+def test__detect_feature_modalities__input_types(
+    input_data: np.ndarray,
+    expected_modalities: dict[FeatureModality, list[int]],
+) -> None:
+    """Test that different input types are correctly tagged and sanitized."""
+    feature_schema = detect_feature_modalities(
+        X=input_data,
+        feature_names=None,
+        min_samples_for_inference=1,
+        max_unique_for_category=3,
+        min_unique_for_numerical=4,  # small so we detect numericals
+    )
+    assert (
+        feature_schema.indices_for(FeatureModality.NUMERICAL)
+        == expected_modalities[FeatureModality.NUMERICAL]
+    )
+    assert (
+        feature_schema.indices_for(FeatureModality.CATEGORICAL)
+        == expected_modalities[FeatureModality.CATEGORICAL]
+    )
 
 
 def _for_test_detect_with_defaults(
@@ -307,7 +375,7 @@ def test__infer_categorical_features(
         min_samples_for_inference=min_samples_for_inference,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
-        reported_categorical_indices=provided,
+        provided_categorical_indices=provided,
     )
     assert (
         out_old_api

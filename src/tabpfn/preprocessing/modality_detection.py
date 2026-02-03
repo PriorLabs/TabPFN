@@ -21,7 +21,7 @@ def detect_feature_modalities(
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
-    reported_categorical_indices: Sequence[int] | None = None,
+    provided_categorical_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer the features modalities from the given data, based on heuristics
     and user-provided indices for categorical features.
@@ -34,7 +34,7 @@ def detect_feature_modalities(
     Args:
         X: The data to infer the categorical features from.\
         feature_names: The names of the features.
-        reported_categorical_indices: Any user provided indices of what is
+        provided_categorical_indices: Any user provided indices of what is
             considered categorical.
         min_samples_for_inference:
             The minimum number of samples required
@@ -55,7 +55,7 @@ def detect_feature_modalities(
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     for i, index in enumerate(range(X.shape[1])):
         X_slice: np.ndarray = X[:, index]
-        reported_categorical = index in (reported_categorical_indices or ())
+        reported_categorical = index in (provided_categorical_indices or ())
         feature_name = feature_names[i] if feature_names is not None else None
         feat_modality = _detect_feature_modality(
             s=pd.Series(X_slice, name=feature_name),

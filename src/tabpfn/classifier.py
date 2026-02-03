@@ -72,13 +72,14 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
     PreprocessorConfig,
+    clean_data,
     generate_classification_ensemble_configs,
-    tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -624,7 +625,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             devices=self.devices_,
         )
 
-        X, ordinal_encoder, feature_schema = tag_features_and_sanitize_data(
+        feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
@@ -632,8 +633,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
-        self.ordinal_encoder_ = ordinal_encoder
+        X, ordinal_encoder, feature_schema = clean_data(
+            X=X, feature_schema=feature_schema
+        )
         self.inferred_feature_schema_ = feature_schema
+        self.ordinal_encoder_ = ordinal_encoder
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 

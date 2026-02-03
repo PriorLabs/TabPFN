@@ -74,9 +74,11 @@ def create_preprocessing_pipeline(
                     ),
                     random_state=random_state,
                 ),
-                EncodeCategoricalFeaturesStep(
-                    config.preprocess_config.categorical_name,
-                    random_state=random_state,
+                (
+                    EncodeCategoricalFeaturesStep(
+                        config.preprocess_config.categorical_name,
+                        random_state=random_state,
+                    )
                 ),
             ],
         )

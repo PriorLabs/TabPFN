@@ -60,12 +60,13 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing import (
     EnsembleConfig,
     RegressorEnsembleConfig,
+    clean_data,
     generate_regression_ensemble_configs,
-    tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -614,7 +615,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 
-        X, ordinal_encoder, feature_modalities = tag_features_and_sanitize_data(
+        feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
@@ -622,8 +623,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
+        X, ordinal_encoder, feature_schema = clean_data(
+            X=X, feature_schema=feature_schema
+        )
+        self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.inferred_feature_schema_ = feature_modalities
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
