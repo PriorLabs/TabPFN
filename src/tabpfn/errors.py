@@ -39,27 +39,36 @@ class TabPFNHuggingFaceGatedRepoError(TabPFNError):
 
 
 class TabPFNCUDAOutOfMemoryError(TabPFNError):
-    """Error raised when CUDA runs out of memory during prediction.
+    """Error raised when GPU runs out of memory during prediction.
 
     This error provides guidance on how to handle large test sets that exceed
-    available GPU memory.
+    available GPU memory. Works for both CUDA and MPS devices.
     """
 
-    def __init__(self, original_error: Exception | None = None):
+    def __init__(
+        self,
+        original_error: Exception | None = None,
+        *,
+        n_test_samples: int | None = None,
+        model_type: str = "classifier",
+    ):
+        if model_type == "classifier":
+            predict_method = "predict_proba"
+        else:
+            predict_method = "predict"
+
+        size_info = f" with {n_test_samples:,} samples" if n_test_samples else ""
+
         message = (
-            "CUDA out of memory during prediction.\n\n"
-            "The test set is too large to process in a single batch. "
-            "To resolve this, split your test data into smaller batches:\n\n"
-            "    # Split predictions into batches\n"
-            "    batch_size = 10000  # Adjust based on your GPU memory\n"
-            "    predictions = []\n"
-            "    for i in range(0, len(X_test), batch_size):\n"
-            "        batch = X_test[i:i + batch_size]\n"
-            "        predictions.append(clf.predict_proba(batch))\n"
-            "    predictions = np.concatenate(predictions, axis=0)\n\n"
-            "Alternatively, reduce the number of test samples or use a GPU "
-            "with more memory."
+            f"GPU out of memory{size_info}.\n\n"
+            f"Solution: Split your test data into smaller batches:\n\n"
+            f"    batch_size = 1000\n"
+            f"    predictions = []\n"
+            f"    for i in range(0, len(X_test), batch_size):\n"
+            f"        predictions.append(model.{predict_method}(X_test[i:i + batch_size]))\n"
+            f"    predictions = np.vstack(predictions)"
         )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"
         super().__init__(message)
+        self.original_error = original_error

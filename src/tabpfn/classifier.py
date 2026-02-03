@@ -39,11 +39,10 @@ from tabpfn.base import (
     determine_precision,
     estimator_to_device,
     get_embeddings,
-    handle_prediction_memory_error,
     initialize_model_variables_helper,
     initialize_telemetry,
-    is_gpu_oom_error,
 )
+from tabpfn.errors import TabPFNCUDAOutOfMemoryError
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
     SKLEARN_16_DECIMAL_PRECISION,
@@ -51,7 +50,6 @@ from tabpfn.constants import (
     XType,
     YType,
 )
-from tabpfn.errors import TabPFNCUDAOutOfMemoryError
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
@@ -1054,7 +1052,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_raw_logits=return_raw_logits,
             )
         except torch.OutOfMemoryError as e:
-            raise TabPFNCUDAOutOfMemoryError(original_error=e) from e
+            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+            raise TabPFNCUDAOutOfMemoryError(
+                e, n_test_samples=n_samples, model_type="classifier"
+            ) from e
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:
