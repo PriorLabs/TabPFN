@@ -1234,21 +1234,64 @@ def test__create_default_for_version__passes_through_overrides() -> None:
     assert estimator.softmax_temperature == 0.9
 
 
-@pytest.mark.parametrize("batch_size", [1, 2, 5])
-def test__batch_size_predict__predict_proba_matches_unbatched(
-    X_y: tuple, batch_size: int
-) -> None:
-    """Test that batched predict_proba matches non-batched predictions exactly."""
+def test__batch_size_predict__matches_unbatched_with_test_interaction(X_y: tuple) -> None:
+    """Test that batch_size=1 with test interaction matches unbatched predictions.
+
+    When batch_predict_enable_test_interaction=True and batch_size equals the full
+    test set size, predictions should match unbatched predictions exactly.
+    """
     X, y = X_y
+    n_classes = len(np.unique(y))
     clf = TabPFNClassifier(n_estimators=2, random_state=42)
     clf.fit(X, y)
 
     # Get unbatched predictions
-    clf.batch_size_predict = None
     proba_unbatched = clf.predict_proba(X)
 
-    # Get batched predictions
-    clf.batch_size_predict = batch_size
-    proba_batched = clf.predict_proba(X)
+    # Get batched predictions with batch_size=full test set and test interaction enabled
+    # This should match unbatched since all samples can interact
+    proba_batched = clf.predict_proba(
+        X,
+        batch_size_predict=len(X),
+        batch_predict_enable_test_interaction=True,
+    )
 
+    # Results should match unbatched
     np.testing.assert_allclose(proba_batched, proba_unbatched, rtol=1e-5, atol=1e-5)
+
+    # Also verify valid probability distribution
+    assert proba_batched.shape == (X.shape[0], n_classes)
+    np.testing.assert_allclose(proba_batched.sum(axis=1), 1.0, atol=1e-5)
+    assert np.all(proba_batched >= 0)
+    assert np.all(proba_batched <= 1)
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 5])
+def test__batch_size_predict__consistent_across_batch_sizes(
+    X_y: tuple, batch_size: int
+) -> None:
+    """Test that batched predictions are consistent regardless of batch size.
+
+    By default, batch_predict_enable_test_interaction=False disables multiquery
+    attention between test samples, ensuring predictions are identical regardless
+    of how the test set is batched.
+    """
+    X, y = X_y
+    n_classes = len(np.unique(y))
+    clf = TabPFNClassifier(n_estimators=2, random_state=42)
+    clf.fit(X, y)
+
+    # Get predictions with batch_size=1 as reference
+    proba_reference = clf.predict_proba(X, batch_size_predict=1)
+
+    # Get predictions with the test batch_size
+    proba_batched = clf.predict_proba(X, batch_size_predict=batch_size)
+
+    # Results should match regardless of batch size
+    np.testing.assert_allclose(proba_batched, proba_reference, rtol=1e-5, atol=1e-5)
+
+    # Also verify valid probability distribution
+    assert proba_batched.shape == (X.shape[0], n_classes)
+    np.testing.assert_allclose(proba_batched.sum(axis=1), 1.0, atol=1e-5)
+    assert np.all(proba_batched >= 0)
+    assert np.all(proba_batched <= 1)

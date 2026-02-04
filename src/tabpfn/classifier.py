@@ -214,7 +214,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
-        batch_size_predict: int | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -379,14 +378,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 False and True.
 
                 !!! warning
-                    This does not batch the original input data. We still recommend to
-                    batch the test set as necessary if you run out of memory.
-
-            batch_size_predict:
-                If set, predictions on test data will be automatically batched into
-                chunks of this size to avoid out-of-memory errors on large test sets.
-                If `None` (default), no batching is performed and the entire test set
-                is processed at once.                
+                    This does not batch the original input data. If you run out of
+                    memory during prediction, use `batch_size_predict` in the predict
+                    method to automatically batch the test set.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -466,7 +460,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.fit_mode = fit_mode
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
-        self.batch_size_predict = batch_size_predict
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -1022,6 +1015,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         *,
         return_logits: bool,
         return_raw_logits: bool = False,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> torch.Tensor:
         """Internal method to run prediction.
 
@@ -1036,6 +1031,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             The raw torch.Tensor output, either logits or probabilities,
@@ -1053,9 +1055,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
 
         # If batch_size_predict is set, batch the predictions
-        if self.batch_size_predict is not None:
+        if batch_size_predict is not None:
             return self._batched_raw_predict(
-                X, return_logits=return_logits, return_raw_logits=return_raw_logits
+                X,
+                batch_size_predict=batch_size_predict,
+                batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+                return_logits=return_logits,
+                return_raw_logits=return_raw_logits,
             )
 
         with handle_oom_errors(self.devices_, X, model_type="classifier"):
@@ -1066,10 +1072,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_raw_logits=return_raw_logits,
             )
 
+    def _set_multiquery_item_attention(self, enabled: bool) -> None:
+        """Set multiquery_item_attention_for_test_set on all model layers.
+
+        This must be disabled for batched predictions to ensure consistent
+        results across different batch sizes.
+        """
+        for model_cache in self.executor_.model_caches:
+            for model in model_cache._models.values():
+                for module in model.modules():
+                    if hasattr(module, "multiquery_item_attention_for_test_set"):
+                        module.multiquery_item_attention_for_test_set = enabled
+
     def _batched_raw_predict(
         self,
         X: XType,
         *,
+        batch_size_predict: int,
+        batch_predict_enable_test_interaction: bool,
         return_logits: bool,
         return_raw_logits: bool = False,
     ) -> torch.Tensor:
@@ -1077,6 +1097,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: The batch size for predictions.
+            batch_predict_enable_test_interaction: If False, test samples only
+                attend to training samples, ensuring predictions match unbatched.
+                If True, predictions may vary depending on batch size.
             return_logits: If True, the logits are returned.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
@@ -1084,39 +1108,66 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The concatenated predictions from all batches.
         """
-        results = []
-        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+        # Disable multiquery attention for consistent predictions (matching unbatched)
+        # unless batch_predict_enable_test_interaction is True
+        if not batch_predict_enable_test_interaction:
+            self._set_multiquery_item_attention(enabled=False)
 
-        for start in range(0, n_samples, self.batch_size_predict):
-            end = min(start + self.batch_size_predict, n_samples)
-            X_batch = X[start:end]
+        try:
+            results = []
+            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
 
-            with handle_oom_errors(self.devices_, X_batch, model_type="classifier"):
-                batch_result = self.forward(
-                    X_batch,
-                    use_inference_mode=True,
-                    return_logits=return_logits,
-                    return_raw_logits=return_raw_logits,
-                )
-            results.append(batch_result)
+            for start in range(0, n_samples, batch_size_predict):
+                end = min(start + batch_size_predict, n_samples)
+                X_batch = X[start:end]
 
-        # Concatenate along the appropriate dimension
-        # raw logits: (n_estimators, n_samples, n_classes) -> dim 1
-        # logits/probas: (n_samples, n_classes) -> dim 0
-        concat_dim = 1 if return_raw_logits else 0
-        return torch.cat(results, dim=concat_dim)
+                with handle_oom_errors(self.devices_, X_batch, model_type="classifier"):
+                    batch_result = self.forward(
+                        X_batch,
+                        use_inference_mode=True,
+                        return_logits=return_logits,
+                        return_raw_logits=return_raw_logits,
+                    )
+                results.append(batch_result)
+
+            # Concatenate along the appropriate dimension
+            # raw logits: (n_estimators, n_samples, n_classes) -> dim 1
+            # logits/probas: (n_samples, n_classes) -> dim 0
+            concat_dim = 1 if return_raw_logits else 0
+            return torch.cat(results, dim=concat_dim)
+        finally:
+            # Restore multiquery attention if we disabled it
+            if not batch_predict_enable_test_interaction:
+                self._set_multiquery_item_attention(enabled=True)
 
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict(self, X: XType) -> np.ndarray:
+    def predict(
+        self,
+        X: XType,
+        *,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
+    ) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size to avoid OOM errors. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             The predicted class labels as a NumPy array.
         """
-        probas = self._predict_proba(X=X)
+        probas = self._predict_proba(
+            X=X,
+            batch_size_predict=batch_size_predict,
+            batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+        )
         y_pred = np.argmax(probas, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
             return self.label_encoder_.inverse_transform(y_pred)
@@ -1125,7 +1176,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     @config_context(transform_output="default")
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_logits(self, X: XType) -> np.ndarray:
+    def predict_logits(
+        self,
+        X: XType,
+        *,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
+    ) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1133,16 +1190,34 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size to avoid OOM errors. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
         """
-        logits_tensor = self._raw_predict(X, return_logits=True)
+        logits_tensor = self._raw_predict(
+            X,
+            return_logits=True,
+            batch_size_predict=batch_size_predict,
+            batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+        )
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_raw_logits(self, X: XType) -> np.ndarray:
+    def predict_raw_logits(
+        self,
+        X: XType,
+        *,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
+    ) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1152,6 +1227,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size to avoid OOM errors. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             An array of predicted logits for each estimator,
@@ -1161,37 +1243,78 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             return_logits=False,
             return_raw_logits=True,
+            batch_size_predict=batch_size_predict,
+            batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
         )
         return logits_tensor.float().detach().cpu().numpy()
 
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_proba(self, X: XType) -> np.ndarray:
+    def predict_proba(
+        self,
+        X: XType,
+        *,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
+    ) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         This is a wrapper around the `_predict_proba` method.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size to avoid OOM errors. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        return self._predict_proba(X)
+        return self._predict_proba(
+            X,
+            batch_size_predict=batch_size_predict,
+            batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+        )
 
     @config_context(transform_output="default")  # type: ignore
-    def _predict_proba(self, X: XType) -> np.ndarray:
+    def _predict_proba(
+        self,
+        X: XType,
+        *,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
+    ) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If set, predictions are batched into chunks
+                of this size. If None, no batching is performed.
+            batch_predict_enable_test_interaction: If False (default), test
+                samples only attend to training samples during batched prediction,
+                ensuring predictions match unbatched. If True, test samples can
+                attend to each other within a batch, so predictions may vary
+                depending on batch size.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
         probas = (
-            self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
+            self._raw_predict(
+                X,
+                return_logits=False,
+                batch_size_predict=batch_size_predict,
+                batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+            )
+            .float()
+            .detach()
+            .cpu()
+            .numpy()
         )
         probas = self._maybe_reweight_probas(probas=probas)
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:

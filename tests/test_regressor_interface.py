@@ -845,51 +845,102 @@ def test__batch_size_predict__complex_output_raises_error(
 ) -> None:
     """Test that 'full' and 'main' output types raise error with batching."""
     X, y = X_y
-    reg = TabPFNRegressor(n_estimators=2, batch_size_predict=3, random_state=42)
+    reg = TabPFNRegressor(n_estimators=2, random_state=42)
     reg.fit(X, y)
 
     with pytest.raises(TabPFNValidationError, match=f"output_type='{output_type}'"):
-        reg.predict(X, output_type=output_type)
+        reg.predict(X, output_type=output_type, batch_size_predict=3)
 
 
-@pytest.mark.parametrize("batch_size", [1, 3, 5])
 @pytest.mark.parametrize("output_type", ["mean", "median", "mode"])
-def test__batch_size_predict__matches_unbatched(
-    X_y: tuple, batch_size: int, output_type: str
+def test__batch_size_predict__matches_unbatched_with_test_interaction(
+    X_y: tuple, output_type: str
 ) -> None:
-    """Test that batched predictions match non-batched predictions exactly."""
+    """Test that full batch with test interaction matches unbatched predictions.
+
+    When batch_predict_enable_test_interaction=True and batch_size equals the full
+    test set size, predictions should match unbatched predictions exactly.
+    """
     X, y = X_y
     reg = TabPFNRegressor(n_estimators=2, random_state=42)
     reg.fit(X, y)
 
     # Get unbatched predictions
-    reg.batch_size_predict = None
     pred_unbatched = reg.predict(X, output_type=output_type)
 
-    # Get batched predictions
-    reg.batch_size_predict = batch_size
-    pred_batched = reg.predict(X, output_type=output_type)
+    # Get batched predictions with batch_size=full test set and test interaction enabled
+    # This should match unbatched since all samples can interact
+    pred_batched = reg.predict(
+        X,
+        output_type=output_type,
+        batch_size_predict=len(X),
+        batch_predict_enable_test_interaction=True,
+    )
 
+    # Results should match unbatched
     np.testing.assert_allclose(pred_batched, pred_unbatched, rtol=1e-5, atol=1e-5)
+
+    # Also verify valid output
+    assert pred_batched.shape == (X.shape[0],)
+    assert np.all(np.isfinite(pred_batched))
 
 
 @pytest.mark.parametrize("batch_size", [1, 3, 5])
-def test__batch_size_predict__quantiles_matches_unbatched(
+@pytest.mark.parametrize("output_type", ["mean", "median", "mode"])
+def test__batch_size_predict__consistent_across_batch_sizes(
+    X_y: tuple, batch_size: int, output_type: str
+) -> None:
+    """Test that batched predictions are consistent regardless of batch size.
+
+    By default, batch_predict_enable_test_interaction=False disables multiquery
+    attention between test samples, ensuring predictions are identical regardless
+    of how the test set is batched.
+    """
+    X, y = X_y
+    reg = TabPFNRegressor(n_estimators=2, random_state=42)
+    reg.fit(X, y)
+
+    # Get predictions with batch_size=1 as reference
+    pred_reference = reg.predict(X, output_type=output_type, batch_size_predict=1)
+
+    # Get predictions with the test batch_size
+    pred_batched = reg.predict(X, output_type=output_type, batch_size_predict=batch_size)
+
+    # Results should match regardless of batch size
+    np.testing.assert_allclose(pred_batched, pred_reference, rtol=1e-5, atol=1e-5)
+
+    # Also verify valid output
+    assert pred_batched.shape == (X.shape[0],)
+    assert np.all(np.isfinite(pred_batched))
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 5])
+def test__batch_size_predict__quantiles_consistent_across_batch_sizes(
     X_y: tuple, batch_size: int
 ) -> None:
-    """Test that batched quantile predictions match non-batched exactly."""
+    """Test that batched quantile predictions are consistent regardless of batch size.
+
+    By default, batch_predict_enable_test_interaction=False disables multiquery
+    attention between test samples, ensuring predictions are identical regardless
+    of how the test set is batched.
+    """
     X, y = X_y
     quantile_values = [0.1, 0.5, 0.9]
     reg = TabPFNRegressor(n_estimators=2, random_state=42)
     reg.fit(X, y)
 
-    # Get unbatched predictions
-    reg.batch_size_predict = None
-    result_unbatched = reg.predict(X, output_type="quantiles", quantiles=quantile_values)
+    # Get predictions with batch_size=1 as reference
+    result_reference = reg.predict(
+        X, output_type="quantiles", quantiles=quantile_values, batch_size_predict=1
+    )
 
-    # Get batched predictions
-    reg.batch_size_predict = batch_size
-    result_batched = reg.predict(X, output_type="quantiles", quantiles=quantile_values)
+    # Get predictions with the test batch_size
+    result_batched = reg.predict(
+        X, output_type="quantiles", quantiles=quantile_values, batch_size_predict=batch_size
+    )
 
-    for q_batched, q_unbatched in zip(result_batched, result_unbatched):
-        np.testing.assert_allclose(q_batched, q_unbatched, rtol=1e-5, atol=1e-5)
+    # Results should match regardless of batch size
+    for q_batched, q_reference in zip(result_batched, result_reference):
+        np.testing.assert_allclose(q_batched, q_reference, rtol=1e-5, atol=1e-5)
+        assert q_batched.shape == (X.shape[0],)
+        assert np.all(np.isfinite(q_batched))

@@ -224,7 +224,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
-        batch_size_predict: int | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -380,14 +379,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 False and True.
 
                 !!! warning
-                    This does not batch the original input data. We still recommend to
-                    batch the test set as necessary if you run out of memory.
-
-            batch_size_predict:
-                If set, predictions on test data will be automatically batched into
-                chunks of this size to avoid out-of-memory errors on large test sets.
-                If `None` (default), no batching is performed and the entire test set
-                is processed at once.            
+                    This does not batch the original input data. If you run out of
+                    memory during prediction, use `batch_size_predict` in the predict
+                    method to automatically batch the test set.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
@@ -455,7 +449,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "batched",
         ] = fit_mode
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
-        self.batch_size_predict = batch_size_predict
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -826,6 +819,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["mean", "median", "mode"] = "mean",
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> np.ndarray: ...
 
     @overload
@@ -835,6 +830,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["quantiles"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> list[np.ndarray]: ...
 
     @overload
@@ -844,6 +841,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["main"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> MainOutputDict: ...
 
     @overload
@@ -853,6 +852,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["full"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
@@ -864,6 +865,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # TODO: support "ei", "pi"
         output_type: OutputType = "mean",
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
+        batch_predict_enable_test_interaction: bool = False,
     ) -> RegressionResultType:
         """Runs the forward() method and then transform the logits
         from the binning space in order to predict target variable.
@@ -889,6 +892,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
+
+            batch_size_predict:
+                If set, predictions are batched into chunks of this size to avoid
+                OOM errors. If None, no batching is performed.
+
+            batch_predict_enable_test_interaction:
+                If False (default), test samples only attend to training samples
+                during batched prediction, ensuring predictions match unbatched.
+                If True, test samples can attend to each other within a batch,
+                so predictions may vary depending on batch size.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -921,9 +934,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         # If batch_size_predict is set, use batched prediction
-        if self.batch_size_predict is not None:
+        if batch_size_predict is not None:
             return self._batched_predict(
-                X, output_type=output_type, quantiles=quantiles
+                X,
+                batch_size_predict=batch_size_predict,
+                batch_predict_enable_test_interaction=batch_predict_enable_test_interaction,
+                output_type=output_type,
+                quantiles=quantiles,
             )
 
         # Runs over iteration engine
@@ -996,10 +1013,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
+    def _set_multiquery_item_attention(self, enabled: bool) -> None:
+        """Set multiquery_item_attention_for_test_set on all model layers.
+
+        This must be disabled for batched predictions to ensure consistent
+        results across different batch sizes.
+        """
+        for model_cache in self.executor_.model_caches:
+            for model in model_cache._models.values():
+                for module in model.modules():
+                    if hasattr(module, "multiquery_item_attention_for_test_set"):
+                        module.multiquery_item_attention_for_test_set = enabled
+
     def _batched_predict(
         self,
         X: XType,
         *,
+        batch_size_predict: int,
+        batch_predict_enable_test_interaction: bool,
         output_type: OutputType,
         quantiles: list[float],
     ) -> RegressionResultType:
@@ -1007,6 +1038,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction (already preprocessed).
+            batch_size_predict: The batch size for predictions.
+            batch_predict_enable_test_interaction: If False, test samples only
+                attend to training samples, ensuring predictions match unbatched.
+                If True, predictions may vary depending on batch size.
             output_type: The type of output to return.
             quantiles: The quantiles to compute if output_type is "quantiles".
 
@@ -1024,50 +1059,73 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 f"instead, or set batch_size_predict=None."
             )
 
-        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+        # Disable multiquery attention for consistent predictions (matching unbatched)
+        # unless batch_predict_enable_test_interaction is True
+        if not batch_predict_enable_test_interaction:
+            self._set_multiquery_item_attention(enabled=False)
 
-        if output_type == "quantiles":
-            # For quantiles, we need to collect results per quantile
-            all_quantile_results: list[list[np.ndarray]] = [[] for _ in quantiles]
+        try:
+            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
 
-            for start in range(0, n_samples, self.batch_size_predict):
-                end = min(start + self.batch_size_predict, n_samples)
+            if output_type == "quantiles":
+                # For quantiles, we need to collect results per quantile
+                all_quantile_results: list[list[np.ndarray]] = [
+                    [] for _ in quantiles
+                ]
+
+                for start in range(0, n_samples, batch_size_predict):
+                    end = min(start + batch_size_predict, n_samples)
+                    X_batch = X[start:end]
+
+                    with handle_oom_errors(
+                        self.devices_, X_batch, model_type="regressor"
+                    ):
+                        (_, outputs, borders) = self.forward(
+                            X_batch, use_inference_mode=True
+                        )
+
+                    logits = self._process_forward_outputs(outputs, borders)
+
+                    for i, q in enumerate(quantiles):
+                        q_result = (
+                            self.raw_space_bardist_.icdf(logits, q)
+                            .cpu()
+                            .detach()
+                            .numpy()
+                        )
+                        all_quantile_results[i].append(q_result)
+
+                return [
+                    np.concatenate(q_results) for q_results in all_quantile_results
+                ]
+
+            # For mean, median, mode
+            results = []
+            for start in range(0, n_samples, batch_size_predict):
+                end = min(start + batch_size_predict, n_samples)
                 X_batch = X[start:end]
 
-                with handle_oom_errors(self.devices_, X_batch, model_type="regressor"):
+                with handle_oom_errors(
+                    self.devices_, X_batch, model_type="regressor"
+                ):
                     (_, outputs, borders) = self.forward(
                         X_batch, use_inference_mode=True
                     )
 
                 logits = self._process_forward_outputs(outputs, borders)
+                batch_result = _logits_to_output(
+                    output_type=output_type,
+                    logits=logits,
+                    criterion=self.raw_space_bardist_,
+                    quantiles=quantiles,
+                )
+                results.append(batch_result)
 
-                for i, q in enumerate(quantiles):
-                    q_result = (
-                        self.raw_space_bardist_.icdf(logits, q).cpu().detach().numpy()
-                    )
-                    all_quantile_results[i].append(q_result)
-
-            return [np.concatenate(q_results) for q_results in all_quantile_results]
-
-        # For mean, median, mode
-        results = []
-        for start in range(0, n_samples, self.batch_size_predict):
-            end = min(start + self.batch_size_predict, n_samples)
-            X_batch = X[start:end]
-
-            with handle_oom_errors(self.devices_, X_batch, model_type="regressor"):
-                (_, outputs, borders) = self.forward(X_batch, use_inference_mode=True)
-
-            logits = self._process_forward_outputs(outputs, borders)
-            batch_result = _logits_to_output(
-                output_type=output_type,
-                logits=logits,
-                criterion=self.raw_space_bardist_,
-                quantiles=quantiles,
-            )
-            results.append(batch_result)
-
-        return np.concatenate(results)
+            return np.concatenate(results)
+        finally:
+            # Restore multiquery attention if we disabled it
+            if not batch_predict_enable_test_interaction:
+                self._set_multiquery_item_attention(enabled=True)
 
     def _process_forward_outputs(
         self,
