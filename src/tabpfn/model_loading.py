@@ -460,7 +460,6 @@ def _get_download_lock() -> FileLock:
     return FileLock(lock_path, timeout=-1)
 
 
-# download lock instance.
 _download_lock: FileLock = _get_download_lock()
 
 
