@@ -3,7 +3,6 @@
 #  Copyright (c) Prior Labs GmbH 2025.
 
 from __future__ import annotations
-from asyncio.timeouts import timeout
 
 import contextlib
 import inspect
@@ -18,7 +17,6 @@ import warnings
 import zipfile
 from dataclasses import asdict, dataclass
 from enum import Enum
-from filelock import FileLock
 from importlib import import_module
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
@@ -26,6 +24,7 @@ from urllib.error import URLError
 
 import joblib
 import torch
+from filelock import FileLock
 from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
@@ -466,11 +465,12 @@ _download_lock: FileLock = _get_download_lock()
 
 
 def _with_download_lock(func: Any) -> Any:
-    """Prevent race conditions when multiple threads/processes download the same model simultaneously.
+    """Prevent race conditions when multiple threads/processes download the same
+    model simultaneously.
 
-    Without the lock, concurrent downloads could corrupt the model file or waste bandwidth
-    downloading the same file multiple times. The file lock ensures only one download
-    proceeds at a time while others wait.
+    Without the lock, concurrent downloads could corrupt the model file or waste
+    bandwidth downloading the same file multiple times. The file lock ensures only
+    one download proceeds at a time while others wait.
     """
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
