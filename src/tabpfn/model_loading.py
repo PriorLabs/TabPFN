@@ -466,19 +466,24 @@ _download_lock: FileLock = _get_download_lock()
 
 
 def _with_download_lock(func: Any) -> Any:
-    """Decorator to wrap function with download lock and logging."""
+    """Prevent race conditions when multiple threads/processes download the same model simultaneously.
+
+    Without the lock, concurrent downloads could corrupt the model file or waste bandwidth
+    downloading the same file multiple times. The file lock ensures only one download
+    proceeds at a time while others wait.
+    """
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         lock_path = _download_lock.lock_file
         logger.info(f"Acquiring download lock: {lock_path}")
         _download_lock.acquire()
-        logger.info(f"Acquired download lock: {lock_path}")
+        logger.debug(f"Acquired download lock: {lock_path}")
         try:
             return func(*args, **kwargs)
         finally:
             logger.info(f"Releasing download lock: {lock_path}")
             _download_lock.release()
-            logger.info(f"Released download lock: {lock_path}")
+            logger.debug(f"Released download lock: {lock_path}")
 
     return wrapper
 

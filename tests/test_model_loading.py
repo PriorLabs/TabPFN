@@ -373,7 +373,9 @@ def test__prepend_cache_path__multiple_paths__filename_unchanged() -> None:
 
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
-def test_parallel_model_download(tmp_path: Path) -> None:
+def test__load_model_criterion_config__parallel_downloads_do_not_crash(
+    tmp_path: Path,
+) -> None:
     """Test that parallel model downloads are properly synchronized by the file lock.
 
     This test verifies that when multiple threads attempt to download the same
@@ -404,36 +406,32 @@ def test_parallel_model_download(tmp_path: Path) -> None:
         torch.save(fake_checkpoint, to)
         return "ok"
 
-    def attempt_load_model() -> bool:
-        """Attempt to load a model, returning success status."""
-        try:
-            # Use the same model path for all threads to test locking
-            shared_checkpoint_path: Path = tmp_path / "shared_model.ckpt"
+    def attempt_load_model() -> None:
+        """Attempt to load a model, raising any exceptions that occur."""
+        # Use the same model path for all threads to test locking
+        shared_checkpoint_path: Path = tmp_path / "shared_model.ckpt"
 
-            _, _, _, _ = model_loading.load_model_criterion_config(
-                model_path=shared_checkpoint_path,
-                check_bar_distribution_criterion=False,
-                cache_trainset_representation=False,
-                which="classifier",
-                version="v2",
-                download_if_not_exists=True,
-            )
-            return True
-        except _:
-            return False
+        _, _, _, _ = model_loading.load_model_criterion_config(
+            model_path=shared_checkpoint_path,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            which="classifier",
+            version="v2",
+            download_if_not_exists=True,
+        )
 
     with patch.object(model_loading, "download_model", side_effect=mock_download_model):
         num_threads = 5
-        results: list[bool] = []
+        completed = 0
         with ThreadPoolExecutor(max_workers=num_threads) as executor:
             futures = [executor.submit(attempt_load_model) for _ in range(num_threads)]
 
             for future in as_completed(futures):
-                results.append(future.result())
+                future.result()  # Raises exception if the thread failed
+                completed += 1
 
     # Verify that all threads completed successfully
-    assert len(results) == num_threads
-    assert all(results), "Some threads failed to load model"
+    assert completed == num_threads, "Some threads failed to load model"
 
     # asserts only one download happened across 5 thread.
     assert concurrent_downloads == 1, (
