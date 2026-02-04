@@ -429,6 +429,28 @@ def initialize_telemetry() -> None:
     capture_session()
 
 
+def set_multiquery_item_attention(
+    model: TabPFNClassifier | TabPFNRegressor,
+    *,
+    enabled: bool,
+) -> None:
+    """Set multiquery_item_attention_for_test_set on all model layers.
+
+    This controls whether test samples attend to each other during inference.
+    Disabling it ensures predictions are consistent across different batch sizes.
+
+    Args:
+        model: The fitted TabPFN model.
+        enabled: If True, test samples can attend to each other.
+            If False, test samples only attend to training samples.
+    """
+    for model_cache in model.executor_.model_caches:
+        for m in model_cache._models.values():
+            for module in m.modules():
+                if hasattr(module, "multiquery_item_attention_for_test_set"):
+                    module.multiquery_item_attention_for_test_set = enabled
+
+
 def get_embeddings(
     model: TabPFNClassifier | TabPFNRegressor,
     X: XType,

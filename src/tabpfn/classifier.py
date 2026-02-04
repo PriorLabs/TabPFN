@@ -41,6 +41,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    set_multiquery_item_attention,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -1072,18 +1073,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_raw_logits=return_raw_logits,
             )
 
-    def _set_multiquery_item_attention(self, enabled: bool) -> None:
-        """Set multiquery_item_attention_for_test_set on all model layers.
-
-        This must be disabled for batched predictions to ensure consistent
-        results across different batch sizes.
-        """
-        for model_cache in self.executor_.model_caches:
-            for model in model_cache._models.values():
-                for module in model.modules():
-                    if hasattr(module, "multiquery_item_attention_for_test_set"):
-                        module.multiquery_item_attention_for_test_set = enabled
-
     def _batched_raw_predict(
         self,
         X: XType,
@@ -1111,7 +1100,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # Disable multiquery attention for consistent predictions (matching unbatched)
         # unless batch_predict_enable_test_interaction is True
         if not batch_predict_enable_test_interaction:
-            self._set_multiquery_item_attention(enabled=False)
+            set_multiquery_item_attention(self, enabled=False)
 
         try:
             results = []
@@ -1138,7 +1127,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         finally:
             # Restore multiquery attention if we disabled it
             if not batch_predict_enable_test_interaction:
-                self._set_multiquery_item_attention(enabled=True)
+                set_multiquery_item_attention(self, enabled=True)
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(

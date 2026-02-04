@@ -1069,9 +1069,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             if output_type == "quantiles":
                 # For quantiles, we need to collect results per quantile
-                all_quantile_results: list[list[np.ndarray]] = [
-                    [] for _ in quantiles
-                ]
+                all_quantile_results: list[list[np.ndarray]] = [[] for _ in quantiles]
 
                 for start in range(0, n_samples, batch_size_predict):
                     end = min(start + batch_size_predict, n_samples)
@@ -1095,9 +1093,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                         )
                         all_quantile_results[i].append(q_result)
 
-                return [
-                    np.concatenate(q_results) for q_results in all_quantile_results
-                ]
+                return [np.concatenate(q_results) for q_results in all_quantile_results]
 
             # For mean, median, mode
             results = []
@@ -1105,9 +1101,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 end = min(start + batch_size_predict, n_samples)
                 X_batch = X[start:end]
 
-                with handle_oom_errors(
-                    self.devices_, X_batch, model_type="regressor"
-                ):
+                with handle_oom_errors(self.devices_, X_batch, model_type="regressor"):
                     (_, outputs, borders) = self.forward(
                         X_batch, use_inference_mode=True
                     )
