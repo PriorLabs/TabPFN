@@ -581,6 +581,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         # Minimal preprocessing for prompt tuning
+        if (
+            self.categorical_features_indices is not None
+            and len(self.categorical_features_indices) > 0
+        ):
+            raise ValueError(
+                "Categorical features are not supported for differentiable input."
+            )
         n_features = X.shape[1]
         features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
         self.inferred_feature_schema_ = FeatureSchema(features=features)

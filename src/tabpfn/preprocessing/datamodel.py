@@ -118,13 +118,12 @@ class FeatureSchema:
         Returns:
             New FeatureSchema instance with added features.
         """
-        if names is None:
-            names = [f"added_{i}" for i in range(num_new)]
-        if len(names) != num_new:
-            raise ValueError(f"Expected {num_new} names, got {len(names)}")
+        chosen_names = [None] * num_new if names is None else names
+        if len(chosen_names) != num_new:
+            raise ValueError(f"Expected {num_new} names, got {len(chosen_names)}")
 
         new_features = self.features + [
-            Feature(name=name, modality=modality) for name in names
+            Feature(name=name, modality=modality) for name in chosen_names
         ]
         return FeatureSchema(features=new_features)
 
@@ -179,4 +178,13 @@ class FeatureSchema:
 
     def apply_permutation(self, permutation: list[int]) -> FeatureSchema:
         """Apply a column permutation to the schema."""
+        _validate_permutation(permutation)
         return FeatureSchema(features=[self.features[i] for i in permutation])
+
+
+def _validate_permutation(permutation: list[int]) -> None:
+    """Ensure a permutation is valid."""
+    if len(permutation) != len(set(permutation)):
+        raise ValueError("Permutation is not valid: contains duplicates.")
+    if any(i < 0 or i >= len(permutation) for i in permutation):
+        raise ValueError("Permutation is not valid: contains indices out of range.")

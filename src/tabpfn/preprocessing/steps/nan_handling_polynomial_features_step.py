@@ -85,9 +85,7 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
                 self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
         # Polynomial features are appended as new numerical columns
-        return feature_schema.append_columns(
-            FeatureModality.NUMERICAL, num_new=n_polynomials
-        )
+        return feature_schema
 
     @override
     def _transform(
