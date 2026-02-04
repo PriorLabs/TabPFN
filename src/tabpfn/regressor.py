@@ -20,10 +20,10 @@ from __future__ import annotations
 import logging
 import typing
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, Iterator
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
 from typing_extensions import Self, TypedDict, deprecated, overload
 
 import numpy as np
@@ -849,7 +849,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict(
+    def predict(  # noqa: C901, PLR0912
         self,
         X: XType,
         *,
