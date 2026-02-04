@@ -63,19 +63,13 @@ class TabPFNOutOfMemoryError(TabPFNError):
         n_test_samples: int | None = None,
         model_type: str = "classifier",
     ):
-        predict_method = "predict_proba" if model_type == "classifier" else "predict"
-
         size_info = f" with {n_test_samples:,} test samples" if n_test_samples else ""
 
+        model_class = f"TabPFN{model_type.title()}"
         message = (
             f"{self.device_name} out of memory{size_info}.\n\n"
-            f"Solution: Split your test data into smaller batches:\n\n"
-            f"    batch_size = 1000  # depends on hardware\n"
-            f"    predictions = []\n"
-            f"    for i in range(0, len(X_test), batch_size):\n"
-            f"        batch = model.{predict_method}(X_test[i:i + batch_size])\n"
-            f"        predictions.append(batch)\n"
-            f"    predictions = np.vstack(predictions)"
+            f"Solution: Set batch_size_predict when creating the model:\n\n"
+            f"    model = {model_class}(batch_size_predict=1000)"
         )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"
