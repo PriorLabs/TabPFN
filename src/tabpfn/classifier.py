@@ -214,6 +214,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
+        batch_size_predict: int | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -381,6 +382,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     This does not batch the original input data. We still recommend to
                     batch the test set as necessary if you run out of memory.
 
+            batch_size_predict:
+                If set, predictions on test data will be automatically batched into
+                chunks of this size to avoid out-of-memory errors on large test sets.
+                If `None` (default), no batching is performed and the entire test set
+                is processed at once.                
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information. If
@@ -459,6 +466,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.fit_mode = fit_mode
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
+        self.batch_size_predict = batch_size_predict
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -1044,6 +1052,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
+        # If batch_size_predict is set, batch the predictions
+        if self.batch_size_predict is not None:
+            return self._batched_raw_predict(
+                X, return_logits=return_logits, return_raw_logits=return_raw_logits
+            )
+
         with handle_oom_errors(self.devices_, X, model_type="classifier"):
             return self.forward(
                 X,
@@ -1051,6 +1065,46 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_logits=return_logits,
                 return_raw_logits=return_raw_logits,
             )
+
+    def _batched_raw_predict(
+        self,
+        X: XType,
+        *,
+        return_logits: bool,
+        return_raw_logits: bool = False,
+    ) -> torch.Tensor:
+        """Run batched prediction to avoid OOM on large test sets.
+
+        Args:
+            X: The input data for prediction.
+            return_logits: If True, the logits are returned.
+            return_raw_logits: If True, returns the raw logits without
+                averaging estimators or temperature scaling.
+
+        Returns:
+            The concatenated predictions from all batches.
+        """
+        results = []
+        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+
+        for start in range(0, n_samples, self.batch_size_predict):
+            end = min(start + self.batch_size_predict, n_samples)
+            X_batch = X[start:end]
+
+            with handle_oom_errors(self.devices_, X_batch, model_type="classifier"):
+                batch_result = self.forward(
+                    X_batch,
+                    use_inference_mode=True,
+                    return_logits=return_logits,
+                    return_raw_logits=return_raw_logits,
+                )
+            results.append(batch_result)
+
+        # Concatenate along the appropriate dimension
+        # raw logits: (n_estimators, n_samples, n_classes) -> dim 1
+        # logits/probas: (n_samples, n_classes) -> dim 0
+        concat_dim = 1 if return_raw_logits else 0
+        return torch.cat(results, dim=concat_dim)
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:

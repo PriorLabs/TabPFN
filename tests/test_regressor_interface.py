@@ -21,6 +21,7 @@ from torch import nn
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -836,3 +837,59 @@ def test__create_default_for_version__passes_through_overrides() -> None:
 
     assert estimator.n_estimators == 16
     assert estimator.softmax_temperature == 0.9
+
+
+@pytest.mark.parametrize("output_type", ["full", "main"])
+def test__batch_size_predict__complex_output_raises_error(
+    X_y: tuple, output_type: str
+) -> None:
+    """Test that 'full' and 'main' output types raise error with batching."""
+    X, y = X_y
+    reg = TabPFNRegressor(n_estimators=2, batch_size_predict=3, random_state=42)
+    reg.fit(X, y)
+
+    with pytest.raises(TabPFNValidationError, match=f"output_type='{output_type}'"):
+        reg.predict(X, output_type=output_type)
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 5])
+@pytest.mark.parametrize("output_type", ["mean", "median", "mode"])
+def test__batch_size_predict__matches_unbatched(
+    X_y: tuple, batch_size: int, output_type: str
+) -> None:
+    """Test that batched predictions match non-batched predictions exactly."""
+    X, y = X_y
+    reg = TabPFNRegressor(n_estimators=2, random_state=42)
+    reg.fit(X, y)
+
+    # Get unbatched predictions
+    reg.batch_size_predict = None
+    pred_unbatched = reg.predict(X, output_type=output_type)
+
+    # Get batched predictions
+    reg.batch_size_predict = batch_size
+    pred_batched = reg.predict(X, output_type=output_type)
+
+    np.testing.assert_allclose(pred_batched, pred_unbatched, rtol=1e-5, atol=1e-5)
+
+
+@pytest.mark.parametrize("batch_size", [1, 3, 5])
+def test__batch_size_predict__quantiles_matches_unbatched(
+    X_y: tuple, batch_size: int
+) -> None:
+    """Test that batched quantile predictions match non-batched exactly."""
+    X, y = X_y
+    quantile_values = [0.1, 0.5, 0.9]
+    reg = TabPFNRegressor(n_estimators=2, random_state=42)
+    reg.fit(X, y)
+
+    # Get unbatched predictions
+    reg.batch_size_predict = None
+    result_unbatched = reg.predict(X, output_type="quantiles", quantiles=quantile_values)
+
+    # Get batched predictions
+    reg.batch_size_predict = batch_size
+    result_batched = reg.predict(X, output_type="quantiles", quantiles=quantile_values)
+
+    for q_batched, q_unbatched in zip(result_batched, result_unbatched):
+        np.testing.assert_allclose(q_batched, q_unbatched, rtol=1e-5, atol=1e-5)

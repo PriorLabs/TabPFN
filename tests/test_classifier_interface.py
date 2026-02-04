@@ -1232,3 +1232,23 @@ def test__create_default_for_version__passes_through_overrides() -> None:
 
     assert estimator.n_estimators == 16
     assert estimator.softmax_temperature == 0.9
+
+
+@pytest.mark.parametrize("batch_size", [1, 2, 5])
+def test__batch_size_predict__predict_proba_matches_unbatched(
+    X_y: tuple, batch_size: int
+) -> None:
+    """Test that batched predict_proba matches non-batched predictions exactly."""
+    X, y = X_y
+    clf = TabPFNClassifier(n_estimators=2, random_state=42)
+    clf.fit(X, y)
+
+    # Get unbatched predictions
+    clf.batch_size_predict = None
+    proba_unbatched = clf.predict_proba(X)
+
+    # Get batched predictions
+    clf.batch_size_predict = batch_size
+    proba_batched = clf.predict_proba(X)
+
+    np.testing.assert_allclose(proba_batched, proba_unbatched, rtol=1e-5, atol=1e-5)

@@ -224,6 +224,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
+        batch_size_predict: int | None = None,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -382,6 +383,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     This does not batch the original input data. We still recommend to
                     batch the test set as necessary if you run out of memory.
 
+            batch_size_predict:
+                If set, predictions on test data will be automatically batched into
+                chunks of this size to avoid out-of-memory errors on large test sets.
+                If `None` (default), no batching is performed and the entire test set
+                is processed at once.            
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information.
@@ -448,6 +455,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "batched",
         ] = fit_mode
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
+        self.batch_size_predict = batch_size_predict
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -912,6 +920,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ord_encoder=getattr(self, "ordinal_encoder_", None),
         )
 
+        # If batch_size_predict is set, use batched prediction
+        if self.batch_size_predict is not None:
+            return self._batched_predict(
+                X, output_type=output_type, quantiles=quantiles
+            )
+
         # Runs over iteration engine
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
             (
@@ -981,6 +995,113 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return main_outputs
 
         return logit_to_output(output_type=output_type)
+
+    def _batched_predict(
+        self,
+        X: XType,
+        *,
+        output_type: OutputType,
+        quantiles: list[float],
+    ) -> RegressionResultType:
+        """Run batched prediction to avoid OOM on large test sets.
+
+        Args:
+            X: The input data for prediction (already preprocessed).
+            output_type: The type of output to return.
+            quantiles: The quantiles to compute if output_type is "quantiles".
+
+        Returns:
+            The concatenated predictions from all batches.
+
+        Raises:
+            TabPFNValidationError: If output_type is "full" or "main" with batching,
+                as these return complex structures that can't be easily batched.
+        """
+        if output_type in ["full", "main"]:
+            raise TabPFNValidationError(
+                f"output_type='{output_type}' is not supported with "
+                f"batch_size_predict. Use 'mean', 'median', 'mode', or 'quantiles' "
+                f"instead, or set batch_size_predict=None."
+            )
+
+        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+
+        if output_type == "quantiles":
+            # For quantiles, we need to collect results per quantile
+            all_quantile_results: list[list[np.ndarray]] = [[] for _ in quantiles]
+
+            for start in range(0, n_samples, self.batch_size_predict):
+                end = min(start + self.batch_size_predict, n_samples)
+                X_batch = X[start:end]
+
+                with handle_oom_errors(self.devices_, X_batch, model_type="regressor"):
+                    (_, outputs, borders) = self.forward(
+                        X_batch, use_inference_mode=True
+                    )
+
+                logits = self._process_forward_outputs(outputs, borders)
+
+                for i, q in enumerate(quantiles):
+                    q_result = (
+                        self.raw_space_bardist_.icdf(logits, q).cpu().detach().numpy()
+                    )
+                    all_quantile_results[i].append(q_result)
+
+            return [np.concatenate(q_results) for q_results in all_quantile_results]
+
+        # For mean, median, mode
+        results = []
+        for start in range(0, n_samples, self.batch_size_predict):
+            end = min(start + self.batch_size_predict, n_samples)
+            X_batch = X[start:end]
+
+            with handle_oom_errors(self.devices_, X_batch, model_type="regressor"):
+                (_, outputs, borders) = self.forward(X_batch, use_inference_mode=True)
+
+            logits = self._process_forward_outputs(outputs, borders)
+            batch_result = _logits_to_output(
+                output_type=output_type,
+                logits=logits,
+                criterion=self.raw_space_bardist_,
+                quantiles=quantiles,
+            )
+            results.append(batch_result)
+
+        return np.concatenate(results)
+
+    def _process_forward_outputs(
+        self,
+        outputs: list[torch.Tensor],
+        borders: list[np.ndarray],
+    ) -> torch.Tensor:
+        """Process forward outputs into final logits.
+
+        Args:
+            outputs: List of tensors from forward pass.
+            borders: List of border arrays for each estimator.
+
+        Returns:
+            Processed logits tensor.
+        """
+        transformed_logits = [
+            translate_probs_across_borders(
+                logits,
+                frm=torch.as_tensor(borders_t, device=logits.device),
+                to=self.znorm_space_bardist_.borders.to(logits.device),
+            )
+            for logits, borders_t in zip(outputs, borders)
+        ]
+        stacked_logits = torch.stack(transformed_logits, dim=0)
+        if self.average_before_softmax:
+            logits = stacked_logits.log().mean(dim=0).softmax(dim=-1)
+        else:
+            logits = stacked_logits.mean(dim=0)
+
+        logits = logits.log()
+        if logits.dtype == torch.float16:
+            logits = logits.float()
+
+        return logits
 
     def forward(
         self,
