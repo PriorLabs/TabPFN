@@ -904,7 +904,9 @@ def test__batch_size_predict__consistent_across_batch_sizes(
     pred_reference = reg.predict(X, output_type=output_type, batch_size_predict=1)
 
     # Get predictions with the test batch_size
-    pred_batched = reg.predict(X, output_type=output_type, batch_size_predict=batch_size)
+    pred_batched = reg.predict(
+        X, output_type=output_type, batch_size_predict=batch_size
+    )
 
     # Results should match regardless of batch size
     np.testing.assert_allclose(pred_batched, pred_reference, rtol=1e-5, atol=1e-5)
@@ -936,7 +938,10 @@ def test__batch_size_predict__quantiles_consistent_across_batch_sizes(
 
     # Get predictions with the test batch_size
     result_batched = reg.predict(
-        X, output_type="quantiles", quantiles=quantile_values, batch_size_predict=batch_size
+        X,
+        output_type="quantiles",
+        quantiles=quantile_values,
+        batch_size_predict=batch_size,
     )
 
     # Results should match regardless of batch size

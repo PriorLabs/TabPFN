@@ -46,6 +46,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    set_multiquery_item_attention,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
@@ -1013,18 +1014,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
-    def _set_multiquery_item_attention(self, enabled: bool) -> None:
-        """Set multiquery_item_attention_for_test_set on all model layers.
-
-        This must be disabled for batched predictions to ensure consistent
-        results across different batch sizes.
-        """
-        for model_cache in self.executor_.model_caches:
-            for model in model_cache._models.values():
-                for module in model.modules():
-                    if hasattr(module, "multiquery_item_attention_for_test_set"):
-                        module.multiquery_item_attention_for_test_set = enabled
-
     def _batched_predict(
         self,
         X: XType,
@@ -1062,7 +1051,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Disable multiquery attention for consistent predictions (matching unbatched)
         # unless batch_predict_enable_test_interaction is True
         if not batch_predict_enable_test_interaction:
-            self._set_multiquery_item_attention(enabled=False)
+            set_multiquery_item_attention(self, enabled=False)
 
         try:
             n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
@@ -1119,7 +1108,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         finally:
             # Restore multiquery attention if we disabled it
             if not batch_predict_enable_test_interaction:
-                self._set_multiquery_item_attention(enabled=True)
+                set_multiquery_item_attention(self, enabled=True)
 
     def _process_forward_outputs(
         self,

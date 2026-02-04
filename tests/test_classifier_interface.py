@@ -1234,7 +1234,9 @@ def test__create_default_for_version__passes_through_overrides() -> None:
     assert estimator.softmax_temperature == 0.9
 
 
-def test__batch_size_predict__matches_unbatched_with_test_interaction(X_y: tuple) -> None:
+def test__batch_size_predict__matches_unbatched_with_test_interaction(
+    X_y: tuple,
+) -> None:
     """Test that batch_size=1 with test interaction matches unbatched predictions.
 
     When batch_predict_enable_test_interaction=True and batch_size equals the full
