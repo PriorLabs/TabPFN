@@ -992,7 +992,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
-    ) -> Iterator[tuple[np.ndaarray, torch.Tensor]]:
+    ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
             self.executor_, InferenceEngineBatchedNoPreprocessing
