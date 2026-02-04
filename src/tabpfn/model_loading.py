@@ -481,7 +481,7 @@ def _with_download_lock(func: Any) -> Any:
         try:
             return func(*args, **kwargs)
         finally:
-            logger.info(f"Releasing download lock: {lock_path}")
+            logger.debug(f"Releasing download lock: {lock_path}")
             _download_lock.release()
             logger.debug(f"Released download lock: {lock_path}")
 
