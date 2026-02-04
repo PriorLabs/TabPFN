@@ -22,6 +22,7 @@ dependencies = [
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
   "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
+  "filelock>=3.11.0",
 ]
 requires-python = ">=3.9"
 authors = [
