@@ -383,16 +383,16 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
     wait for the lock.
     """
     # Track download attempts
-    concurrent_downloads: int = 0
+    download_attempts: int = 0
     download_lock = threading.Lock()
 
     def mock_download_model(
         to: Path, **_kwargs: Any
     ) -> Literal["ok"] | list[Exception]:
         """Mock download that tracks concurrent access."""
-        nonlocal concurrent_downloads
+        nonlocal download_attempts
         with download_lock:
-            concurrent_downloads += 1
+            download_attempts += 1
 
         # Simulate a slow download to ensure overlap if locking doesn't work
         time.sleep(1)
@@ -436,7 +436,7 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
     assert completed == num_threads, "Some threads failed to load model"
 
     # asserts only one download happened across 5 thread.
-    assert concurrent_downloads == 1, (
-        f"Expected at most 1 concurrent download, got {concurrent_downloads}. "
+    assert download_attempts == 1, (
+        f"Expected at most 1 concurrent download, got {download_attempts}. "
         "The file lock is not working correctly."
     )
