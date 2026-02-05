@@ -93,6 +93,12 @@ class PreprocessingStep:
       main output.
     """
 
+    n_added_columns_: int | None
+    """Number of added columns from `_transform`. Set during first transform call."""
+
+    modality_added_: FeatureModality | None
+    """Modality of added columns from `_transform`. Set during first transform call."""
+
     @abstractmethod
     def _fit(
         self,
@@ -162,6 +168,7 @@ class PreprocessingStep:
             PreprocessingStepResult with transformed data and feature schema.
         """
         result, X_added, modality_added = self._transform(X, is_test=is_test)
+        self._validate_added_data(X_added=X_added, modality_added=modality_added)
 
         return PreprocessingStepResult(
             X=result,
@@ -169,6 +176,30 @@ class PreprocessingStep:
             X_added=X_added,
             modality_added=modality_added,
         )
+
+    def _validate_added_data(
+        self,
+        X_added: np.ndarray | None,
+        modality_added: FeatureModality | None,
+    ) -> None:
+        """Validate consistency of added columns across train/test transforms."""
+        n_added = X_added.shape[1] if X_added is not None else None
+
+        store_expected_values_on_first_call = not hasattr(self, "n_added_columns_")
+        if store_expected_values_on_first_call:
+            self.n_added_columns_ = n_added
+            self.modality_added_ = modality_added
+        else:
+            if n_added != self.n_added_columns_:
+                raise ValueError(
+                    f"Inconsistent number of added columns: expected "
+                    f"{self.n_added_columns_}, got {n_added}"
+                )
+            if modality_added != self.modality_added_:
+                raise ValueError(
+                    f"Inconsistent modality for added columns: expected "
+                    f"{self.modality_added_}, got {modality_added}"
+                )
 
 
 class PreprocessingPipeline:
@@ -264,6 +295,10 @@ class PreprocessingPipeline:
         Returns:
             Tuple of (transformed array, updated feature schema).
         """
+        # Single copy to preserve immutability for the caller, avoiding N copies
+        # inside the loop for steps that target specific modalities.
+        X = X.copy() if isinstance(X, np.ndarray) else X.clone()
+
         for step, modalities in self.steps:
             if modalities:
                 indices = feature_schema.indices_for_modalities(modalities)
@@ -287,7 +322,6 @@ class PreprocessingPipeline:
                         f"modalities must return the same number of columns."
                     )
 
-                X = X.copy() if isinstance(X, np.ndarray) else X.clone()
                 assert X.dtype == result.X.dtype
                 X[:, indices] = result.X
 
