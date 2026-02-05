@@ -98,7 +98,7 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
             n_classes=3,
             num_models=1,
         ),
-        rng=rng,
+        random_state=rng,
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.
@@ -156,7 +156,7 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
                 num_models=num_models,
                 outlier_removal_std=outlier_removal_std,
             ),
-            rng=rng,
+            random_state=rng,
             n_preprocessing_jobs=1,
         )
         engine = InferenceEngineOnDemand(
@@ -204,7 +204,7 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
             n_classes=3,
             num_models=num_models,
         ),
-        rng=rng,
+        random_state=rng,
         # We want to test n_preprocessing_jobs>1 as this might mean the outputs are not
         # in the same order as the input configs, and we want to check that the parallel
         # evaluation code behaves correctly in this scenario.

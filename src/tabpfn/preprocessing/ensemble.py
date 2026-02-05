@@ -76,7 +76,7 @@ class TabPFNEnsemblePreprocessor:
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
     ) -> None:
@@ -84,7 +84,8 @@ class TabPFNEnsemblePreprocessor:
 
         Args:
             configs: List of ensemble configurations.
-            rng: Random number generator.
+            random_state: Random state object for preprocessing. If int, the
+                preprocessing will always use the same random seed.
             n_preprocessing_jobs: Number of preprocessing jobs to use.
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
@@ -92,9 +93,9 @@ class TabPFNEnsemblePreprocessor:
         """
         super().__init__()
         self.configs = configs
-        self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
+        self.random_state = random_state
 
         # TODO:
         # 1. Create pipeline in init for balanced feature subsampling
@@ -108,7 +109,8 @@ class TabPFNEnsemblePreprocessor:
         during the fit_transform*() methods. Currently it is only used
         in the InferenceEngineOnDemand class.
         """
-        return self.rng.integers(0, int(np.iinfo(np.int32).max))
+        static_seed, _ = infer_random_state(self.random_state)
+        return static_seed
 
     def fit_transform_ensemble_members_iterator(
         self,
@@ -124,7 +126,7 @@ class TabPFNEnsemblePreprocessor:
             X_train=X_train,
             y_train=y_train,
             feature_schema=feature_schema,
-            random_state=override_random_state or self.rng,
+            random_state=override_random_state or self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
         )

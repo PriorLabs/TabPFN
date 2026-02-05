@@ -276,6 +276,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             only has an effect if `output_dir` is provided during the `fit()` call.
             If None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
+        use_fixed_preprocessing_seed: Whether to use a fixed preprocessing seed.
+            If True, the preprocessing will always use the same random seed throughout
+            data batches. This is helpful in most cases because, e.g., the column order
+            will stay the same across batches.
+            If False, the preprocessing will use a different random seed for each batch.
 
         FinetunedTabPFNRegressor specific arguments:
 
@@ -326,6 +331,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
+        use_fixed_preprocessing_seed: bool = True,
         extra_regressor_kwargs: dict[str, Any] | None = None,
         ce_loss_weight: float = 0.0,
         crps_loss_weight: float = 1.0,
@@ -358,6 +364,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             n_estimators_final_inference=n_estimators_final_inference,
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
+            use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.eval_metric = eval_metric
