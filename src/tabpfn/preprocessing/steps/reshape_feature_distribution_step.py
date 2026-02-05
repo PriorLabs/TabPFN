@@ -21,9 +21,10 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingStep,
+    PreprocessingStepResult,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
@@ -126,8 +127,38 @@ def _skew(x: np.ndarray) -> float:
     return float(3 * (np.nanmean(x, 0) - np.nanmedian(x, 0)) / np.std(x, 0))
 
 
-class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
-    """Reshape the feature distributions using different transformations."""
+class ReshapeFeatureDistributionsStep(PreprocessingStep):
+    """Reshape feature distributions using various transformations.
+
+    This step should receive ALL columns (not modality-sliced) because it:
+    1. Handles feature subsampling when too many features exist
+    2. Applies different logic based on `apply_to_categorical` flag
+    3. Can append transformed features to originals (`append_to_original`)
+    4. Can add global features like SVD components
+
+    # TODO(ben): Add separate PreprocessingStep's for all of the above
+    # so that we can register this with modalities
+
+    When using with PreprocessingPipeline, register as a bare step (no modalities):
+        pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
+
+    Configuration options:
+        - transform_name: The transformation to apply (e.g., "squashing_scaler_default",
+            "quantile_uni_coarse")
+        - apply_to_categorical: Whether to transform categorical columns too
+        - append_to_original: If True, keep original and append transformed as new
+            columns
+        - max_features_per_estimator: Subsample features if above this threshold
+        - global_transformer_name: Optional global transform like "svd" that adds
+            features
+
+    Output column ordering:
+        - With append_to_original=True: [original_cols, transformed_cols, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=False:
+            [categorical_passthrough, numerical_transformed, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=True:
+            [all_transformed, (svd_cols)]
+    """
 
     APPEND_TO_ORIGINAL_THRESHOLD = 500
 
@@ -180,16 +211,17 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
-    def _set_transformer_and_cat_ix(  # noqa: PLR0912
+    def _create_transformers_and_new_schema(  # noqa: PLR0912
         self,
         n_samples: int,
         n_features: int,
-        categorical_features: list[int],
-    ) -> tuple[Pipeline | ColumnTransformer, list[int]]:
+        feature_schema: FeatureSchema,
+    ) -> tuple[Pipeline | ColumnTransformer, FeatureSchema]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
         static_seed, rng = infer_random_state(self.random_state)
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
@@ -202,11 +234,13 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 subsample_features,
                 replace=False,
             )
-            categorical_features = [
-                new_idx
-                for new_idx, idx in enumerate(self.subsampled_features_)
-                if idx in categorical_features
-            ]
+            # Update modalities to reflect subsampled features
+            # Create a new schema with only the kept indices
+            kept_indices = list(self.subsampled_features_)
+            feature_schema = feature_schema.slice_for_indices(kept_indices)
+            categorical_features = feature_schema.indices_for(
+                FeatureModality.CATEGORICAL
+            )
             n_features = subsample_features
         else:
             self.subsampled_features_ = np.arange(n_features)
@@ -298,6 +332,7 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         # one column
         # NOTE: We assume global_transformer does not destroy the semantic meaning of
         # categorical_features_.
+        n_new_global_features = 0
         if global_transformer_:
             transformer = Pipeline(
                 [
@@ -305,45 +340,72 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                     ("global_transformer", global_transformer_),
                 ],
             )
+            # TODO: Find better way to get number of global features added
+            n_new_global_features = next(
+                s[1].n_components
+                for s in global_transformer_.transformer_list[1][1].steps
+                if isinstance(s[1], TruncatedSVD)
+            )
 
         self.transformer_ = transformer
+        self.n_new_global_features_ = n_new_global_features
 
-        return transformer, cat_ix
+        # Compute output feature count for modality update
+        # Include: base features + appended transformed (if append_to_original) + SVD
+        n_output_features = (
+            n_features + len(trans_ixs) if self.append_to_original else n_features
+        )
+        n_output_features += n_new_global_features
+
+        # Build the new metadata with updated categorical indices
+        # Non-categorical indices become numerical
+        # SVD features are numerical and appended at the end
+        new_schema = FeatureSchema.from_only_categorical_indices(
+            categorical_indices=sorted(cat_ix),
+            num_columns=n_output_features,
+        )
+
+        return transformer, new_schema
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         n_samples, n_features = X.shape
-        transformer, cat_ix = self._set_transformer_and_cat_ix(
+        transformer, output_schema = self._create_transformers_and_new_schema(
             n_samples,
             n_features,
-            categorical_features,
+            feature_schema,
         )
         transformer.fit(X[:, self.subsampled_features_])
-        self.categorical_features_after_transform_ = cat_ix
         self.transformer_ = transformer
-        return cat_ix
+        return output_schema
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> TransformResult:
+        feature_schema: FeatureSchema,
+    ) -> PreprocessingStepResult:
         n_samples, n_features = X.shape
-        transformer, cat_ix = self._set_transformer_and_cat_ix(
+        transformer, output_schema = self._create_transformers_and_new_schema(
             n_samples,
             n_features,
-            categorical_features,
+            feature_schema,
         )
         Xt = transformer.fit_transform(X[:, self.subsampled_features_])
-        self.categorical_features_after_transform_ = cat_ix
         self.transformer_ = transformer
-        return TransformResult(Xt, cat_ix)  # type: ignore
+        self.feature_schema_updated_ = output_schema
+        return PreprocessingStepResult(X=Xt, feature_schema=output_schema)  # type: ignore[arg-type]
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X[:, self.subsampled_features_])  # type: ignore
+        return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
 
 
 def get_all_global_transformers(

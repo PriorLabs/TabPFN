@@ -18,6 +18,7 @@ from tabpfn.preprocessing import (
     EnsembleConfig,
     fit_preprocessing,
 )
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
@@ -430,12 +431,16 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         else:
             y_train = y_train_raw
 
-        itr = fit_preprocessing(
+        num_columns = x_train_raw.shape[1]
+        feature_schema = FeatureSchema.from_only_categorical_indices(
+            cat_ix, num_columns
+        )
+        preprocessing_iterator = fit_preprocessing(
             configs=conf,
             X_train=x_train_raw,
             y_train=y_train,
+            feature_schema=feature_schema,
             random_state=self.rng,
-            cat_ix=cat_ix,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="block",
         )
@@ -444,8 +449,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             preprocessors,
             X_trains_preprocessed,
             y_trains_preprocessed,
-            cat_ixs,
-        ) = list(zip(*itr))
+            feature_schema_preprocessed,
+        ) = list(zip(*preprocessing_iterator))
         X_trains_preprocessed = list(X_trains_preprocessed)
         y_trains_preprocessed = list(y_trains_preprocessed)
 
@@ -479,6 +484,10 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         x_test_raw = torch.from_numpy(x_test_raw)
         y_test_raw = torch.from_numpy(y_test_raw)
 
+        cat_indices = [
+            m.indices_for(FeatureModality.CATEGORICAL)
+            for m in feature_schema_preprocessed
+        ]
         # Return structured batch data using dataclasses for clarity
         if is_regression_task:
             return RegressorBatch(
@@ -486,7 +495,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 X_query=X_tests_preprocessed,
                 y_context=y_trains_preprocessed,
                 y_query=y_test_standardized,
-                cat_indices=list(cat_ixs),
+                cat_indices=cat_indices,
                 configs=list(conf),
                 raw_space_bardist=raw_space_bardist_,
                 znorm_space_bardist=znorm_space_bardist_,
@@ -499,7 +508,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             X_query=X_tests_preprocessed,
             y_context=y_trains_preprocessed,
             y_query=y_test_raw,
-            cat_indices=list(cat_ixs),
+            cat_indices=cat_indices,
             configs=list(conf),
         )
 
@@ -791,8 +800,9 @@ def get_preprocessed_dataset_chunks(
             ensemble_configs, X_mod, y_mod = (
                 calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
             )
-            current_cat_ix = calling_instance.inferred_categorical_indices_
-
+            current_cat_ix = calling_instance.inferred_feature_schema_.indices_for(
+                FeatureModality.CATEGORICAL
+            )
             dataset_config = ClassifierDatasetConfig(
                 config=ensemble_configs,
                 X_raw=X_mod,
@@ -803,7 +813,9 @@ def get_preprocessed_dataset_chunks(
             ensemble_configs, X_mod, y_mod, bardist_ = (
                 calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
             )
-            current_cat_ix = calling_instance.inferred_categorical_indices_
+            current_cat_ix = calling_instance.inferred_feature_schema_.indices_for(
+                FeatureModality.CATEGORICAL
+            )
             dataset_config = RegressorDatasetConfig(
                 config=ensemble_configs,
                 X_raw=X_mod,

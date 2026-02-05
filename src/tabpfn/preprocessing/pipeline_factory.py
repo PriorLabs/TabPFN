@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingPipeline,
+    PreprocessingStep,
+    StepWithModalities,
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
@@ -37,13 +38,13 @@ def _polynomial_feature_settings(
     raise ValueError(f"Invalid polynomial_features value: {polynomial_features}")
 
 
-def build_pipeline(
+def create_preprocessing_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
-) -> SequentialFeatureTransformer:
+) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline."""
-    steps: list[FeaturePreprocessingTransformerStep] = []
+    steps: list[PreprocessingStep | StepWithModalities] = []
 
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
@@ -73,9 +74,11 @@ def build_pipeline(
                     ),
                     random_state=random_state,
                 ),
-                EncodeCategoricalFeaturesStep(
-                    config.preprocess_config.categorical_name,
-                    random_state=random_state,
+                (
+                    EncodeCategoricalFeaturesStep(
+                        config.preprocess_config.categorical_name,
+                        random_state=random_state,
+                    )
                 ),
             ],
         )
@@ -90,4 +93,4 @@ def build_pipeline(
             random_state=random_state,
         ),
     )
-    return SequentialFeatureTransformer(steps)
+    return PreprocessingPipeline(steps)

@@ -23,5 +23,5 @@ def test__packages_can_still_be_imported_from_old_location() -> None:
     assert hasattr(tabpfn.model.encoders, "TorchPreprocessingPipeline")
     assert hasattr(tabpfn.model.layer, "LayerNorm")
     assert hasattr(tabpfn.model.mlp, "MLP")
-    assert hasattr(tabpfn.model.preprocessing, "SequentialFeatureTransformer")
+    assert hasattr(tabpfn.model.preprocessing, "PreprocessingPipeline")
     assert hasattr(tabpfn.model.transformer, "PerFeatureTransformer")

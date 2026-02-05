@@ -22,9 +22,9 @@ from tabpfn.architectures.base.memory import (
     should_save_peak_mem,
 )
 from tabpfn.parallel_execute import parallel_execute
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.torch import (
-    ColumnMetadata,
+    FeatureSchema,
     TorchPreprocessingPipeline,
 )
 from tabpfn.utils import get_autocast_context
@@ -33,8 +33,8 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
+        TabPFNEnsembleMember,
         TabPFNEnsemblePreprocessor,
-        TabPFNPreprocessedEnsembleMember,
     )
 
 
@@ -295,7 +295,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -308,7 +308,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            cat_ix: The categorical indices.
+            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble preprocessor to use.
             models: The models to use.
             devices: A list of the devices to use for inference. If multiple devices are
@@ -330,7 +330,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
 
         self.X_train = X_train
         self.y_train = y_train
-        self.cat_ix = cat_ix
+        self.feature_schema = feature_schema
         self.static_seed = static_seed
         self.ensemble_preprocessor = ensemble_preprocessor
 
@@ -362,7 +362,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             self.ensemble_preprocessor.fit_transform_ensemble_members_iterator(
                 X_train=self.X_train,
                 y_train=self.y_train,
-                cat_ix=self.cat_ix,
+                feature_schema=self.feature_schema,
                 parallel_mode="in-order",
                 override_random_state=np.random.default_rng(self.static_seed),
             )
@@ -374,7 +374,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 X_train=ensemble_member.X_train,
                 X_test=ensemble_member.transform_X_test(X),
                 y_train=ensemble_member.y_train,
-                cat_ix=ensemble_member.cat_ix,
+                feature_schema=ensemble_member.feature_schema,
                 only_return_standard_out=only_return_standard_out,
                 autocast=autocast,
                 model_index=ensemble_member.config._model_index,
@@ -395,7 +395,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         autocast: bool,
         only_return_standard_out: bool,
         model_index: int,
@@ -412,7 +412,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
-        batched_cat_ix = [cat_ix]
+        batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
@@ -444,7 +444,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         X_trains: list[torch.Tensor],
         y_trains: list[torch.Tensor],
         *,
-        cat_ix: list[list[list[int]]],
+        feature_schema: list[list[FeatureSchema]],
         ensemble_configs: list[list[EnsembleConfig]],
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -458,7 +458,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         Args:
             X_trains: The training data.
             y_trains: The training target.
-            cat_ix: The categorical indices.
+            feature_schema: The feature schema.
             models: The models to use.
             devices: A list of devices, the first of which will be used to run the
                 model. The other devices will be ignored.
@@ -484,7 +484,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
 
         self.X_trains = X_trains
         self.y_trains = y_trains
-        self.cat_ix = cat_ix
+        self.feature_schema_list = feature_schema
         self.ensemble_configs = ensemble_configs
         self.inference_mode = inference_mode
 
@@ -516,7 +516,12 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                     train_x_full.transpose(0, 1),
                     train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
-                    categorical_inds=list([cat_item[i] for cat_item in self.cat_ix]),  # noqa: C411
+                    categorical_inds=list(  # noqa: C411
+                        [
+                            cat_item[i].indices_for(FeatureModality.CATEGORICAL)
+                            for cat_item in self.feature_schema_list
+                        ]
+                    ),
                 )
 
             yield output, self.ensemble_configs[i]
@@ -550,7 +555,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
         *,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -565,7 +570,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            cat_ix: The categorical indices.
+            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble preprocessor to use.
             models: The models to use.
             devices: A list of the devices to use for inference. If multiple devices are
@@ -589,12 +594,13 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = inference_mode
         self.no_preprocessing = no_preprocessing
         self.X_train_shape_before_preprocessing = X_train.shape
+        self.feature_schema = feature_schema
 
-        self.ensemble_members: list[TabPFNPreprocessedEnsembleMember] = (
+        self.ensemble_members: list[TabPFNEnsembleMember] = (
             ensemble_preprocessor.fit_transform_ensemble_members(
                 X_train=X_train,
                 y_train=y_train,
-                cat_ix=cat_ix,
+                feature_schema=feature_schema,
             )
         )
 
@@ -626,7 +632,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             save_peak_mem = False
 
         def _transform_X_test(
-            ensemble_member: TabPFNPreprocessedEnsembleMember,
+            ensemble_member: TabPFNEnsembleMember,
         ) -> np.ndarray | torch.Tensor:
             return X if self.no_preprocessing else ensemble_member.transform_X_test(X)
 
@@ -636,7 +642,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 X_train=ensemble_member.X_train,
                 X_test=_transform_X_test(ensemble_member),
                 y_train=ensemble_member.y_train,
-                cat_ix=ensemble_member.cat_ix,
+                feature_schema=ensemble_member.feature_schema,
                 autocast=autocast,
                 only_return_standard_out=only_return_standard_out,
                 model_index=ensemble_member.config._model_index,
@@ -657,7 +663,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         autocast: bool,
         only_return_standard_out: bool,
         model_index: int,
@@ -674,7 +680,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         X_full, y_train = _prepare_model_inputs(
             device, self.force_inference_dtype, X_train, X_test, y_train
         )
-        batched_cat_ix = [cat_ix]
+        batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
         save_peak_memory_factor = (
             DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
@@ -716,7 +722,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -731,7 +737,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            cat_ix: The categorical indices.
+            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble configurations to use.
             models: The models to use.
             devices: A list of devices, the first of which will be used to run the
@@ -749,13 +755,13 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             ensemble_preprocessor.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                cat_ix=cat_ix,
+                feature_schema=feature_schema,
                 parallel_mode="as-ready",
             )
         )
 
         ens_models: list[Architecture] = []
-        ensemble_members: list[TabPFNPreprocessedEnsembleMember] = []
+        ensemble_members: list[TabPFNEnsembleMember] = []
 
         for ensemble_member in ensemble_members_iterator:
             ensemble_members.append(ensemble_member)
@@ -771,7 +777,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             if not isinstance(y, torch.Tensor):
                 y = torch.as_tensor(y, dtype=torch.float32, device=device)
 
-            batched_preprocessor_cat_ix = [ensemble_member.cat_ix]
+            batched_preprocessor_cat_ix = [
+                ensemble_member.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+            ]
 
             X = _maybe_run_gpu_preprocessing(
                 X,
@@ -819,7 +827,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             X_test = ensemble_member.transform_X_test(X)
             X_test = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
             X_test = X_test.unsqueeze(1)
-            batched_cat_ix = [ensemble_member.cat_ix]
+            batched_cat_ix = [
+                ensemble_member.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+            ]
 
             X_test = _maybe_run_gpu_preprocessing(
                 X_test,
@@ -897,13 +907,13 @@ def _maybe_run_gpu_preprocessing(
     # TODO: Currently, we construct the metadata on-the-fly.
     # In a follow-up, this will become part of a DatasetView object
     # parsed to the inference engine class.
-    column_indices = list(range(X.shape[-1]))
-    metadata = ColumnMetadata(
-        indices_by_modality={FeatureModality.NUMERICAL: column_indices},
-    )
+    n_cols = X.shape[-1]
+    features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_cols
+    feature_schema = FeatureSchema(features=features)
+
     return gpu_preprocessor(
         X,
-        metadata=metadata,
+        feature_schema=feature_schema,
         num_train_rows=num_train_rows,
         use_fitted_cache=use_fitted_cache,
     ).x

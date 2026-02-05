@@ -10,7 +10,7 @@ from typing_extensions import override
 
 import torch
 
-from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 
 class TorchPreprocessingStep(abc.ABC):
@@ -133,7 +133,7 @@ class TorchPreprocessingPipeline:
     def __call__(
         self,
         x: torch.Tensor,
-        metadata: ColumnMetadata,
+        feature_schema: FeatureSchema,
         num_train_rows: int | None = None,
         *,
         use_fitted_cache: bool = False,
@@ -144,7 +144,7 @@ class TorchPreprocessingPipeline:
             x: Input tensor [num_rows, batch_size, num_columns] or
                 [num_rows, num_columns]. If 2D, a batch dimension is added
                 and removed after processing.
-            metadata: Column modality information.
+            feature_schema: Feature schema.
             num_train_rows: If provided, fit steps on x[:num_train_rows]. If
                 not provided, fits on the entire input tensor.
             use_fitted_cache: Whether to use the fitted cache from the previous call
@@ -152,7 +152,7 @@ class TorchPreprocessingPipeline:
                 data.
 
         Returns:
-            PipelineOutput with transformed tensor and updated metadata.
+            PipelineOutput with transformed tensor and updated schema.
         """
         self._validate_use_fitted_cache(use_fitted_cache=use_fitted_cache)
 
@@ -162,13 +162,13 @@ class TorchPreprocessingPipeline:
             squeeze_batch_dim = True
 
         num_columns = x.shape[-1]
-        self._validate_metadata(metadata=metadata, num_columns=num_columns)
+        self._validate_metadata(feature_schema=feature_schema, num_columns=num_columns)
 
         if num_train_rows is None:
             num_train_rows = x.shape[0]
 
         for i, (step, modalities) in enumerate(self.steps):
-            indices = metadata.indices_for_modalities(modalities)
+            indices = feature_schema.indices_for_modalities(modalities)
             if not indices:
                 continue
 
@@ -182,7 +182,7 @@ class TorchPreprocessingPipeline:
 
             if result.added_columns is not None:
                 x = torch.cat([x, result.added_columns], dim=-1)
-                metadata = metadata.add_columns(
+                feature_schema = feature_schema.append_columns(
                     result.added_modality or FeatureModality.NUMERICAL,
                     result.added_columns.shape[-1],
                 )
@@ -192,7 +192,7 @@ class TorchPreprocessingPipeline:
         if squeeze_batch_dim:
             x = x.squeeze(1)
 
-        return TorchPreprocessingPipelineOutput(x=x, metadata=metadata)
+        return TorchPreprocessingPipelineOutput(x=x, feature_schema=feature_schema)
 
     def _maybe_update_fitted_cache(
         self, i: int, result: TorchPreprocessingStepResult
@@ -220,61 +220,14 @@ class TorchPreprocessingPipeline:
                 "during initialization."
             )
 
-    def _validate_metadata(self, metadata: ColumnMetadata, num_columns: int) -> None:
-        if num_columns != metadata.num_columns:
+    def _validate_metadata(
+        self, feature_schema: FeatureSchema, num_columns: int
+    ) -> None:
+        if num_columns != feature_schema.num_columns:
             raise ValueError(
                 f"Number of columns in input tensor ({num_columns}) does not match "
-                f"number of columns in metadata ({metadata.num_columns})"
+                f"number of columns in schema ({feature_schema.num_columns})"
             )
-
-
-@dataclasses.dataclass
-class ColumnMetadata:
-    """Maps feature modalities to column indices in the tensor."""
-
-    indices_by_modality: dict[FeatureModality, list[int]] = dataclasses.field(
-        default_factory=dict
-    )
-
-    @property
-    def num_columns(self) -> int:
-        """Get the total number of columns."""
-        return sum(len(indices) for indices in self.indices_by_modality.values())
-
-    def indices_for(self, modality: FeatureModality) -> list[int]:
-        """Get column indices for a single modality."""
-        return self.indices_by_modality.get(modality, [])
-
-    def indices_for_modalities(self, modalities: set[FeatureModality]) -> list[int]:
-        """Get combined column indices for multiple modalities (sorted)."""
-        indices: list[int] = []
-        for modality in modalities:
-            indices.extend(self.indices_by_modality.get(modality, []))
-        return sorted(set(indices))
-
-    def add_columns(self, modality: FeatureModality, num_new: int) -> ColumnMetadata:
-        """Return new metadata with additional columns appended.
-
-        Args:
-            modality: The modality for the new columns.
-            num_new: Number of new columns to add.
-
-        Returns:
-            New ColumnMetadata instance with updated indices.
-        """
-        new_indices_by_modality = {
-            mod: list(indices) for mod, indices in self.indices_by_modality.items()
-        }
-
-        new_column_indices = list(range(self.num_columns, self.num_columns + num_new))
-        if modality in new_indices_by_modality:
-            new_indices_by_modality[modality].extend(new_column_indices)
-        else:
-            new_indices_by_modality[modality] = new_column_indices
-
-        return ColumnMetadata(
-            indices_by_modality=new_indices_by_modality,
-        )
 
 
 @dataclasses.dataclass
@@ -299,8 +252,8 @@ class TorchPreprocessingPipelineOutput:
 
     Attributes:
         x: The transformed tensor.
-        metadata: Updated column metadata (may have new columns added).
+        feature_schema: Updated feature schema (may have new columns added).
     """
 
     x: torch.Tensor
-    metadata: ColumnMetadata
+    feature_schema: FeatureSchema

@@ -60,16 +60,19 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing import (
     EnsembleConfig,
     RegressorEnsembleConfig,
+    clean_data,
     generate_regression_ensemble_configs,
-    tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
 from tabpfn.utils import (
     DevicesSpecification,
+    convert_batch_of_cat_ix_to_schema,
     transform_borders_one,
     translate_probs_across_borders,
 )
@@ -170,11 +173,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
-    inferred_categorical_indices_: list[int]
-    """The indices of the columns that were inferred to be categorical,
-    as a product of any features deemed categorical by the user and what would
-    work best for the model.
-    """
+    inferred_feature_schema_: FeatureSchema
+    """The inferred feature schema. This contains the feature modalities per column,
+    using heuristics and user-provided indices for categorical features."""
 
     n_outputs_: Literal[1]  # We only support single output
     """The number of outputs the model supports. Only 1 for now"""
@@ -600,10 +601,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        # TODO: Fix the types later.
-        # In the following code, we have multiple conversions between DataFrames and
-        # NumPy arrays. In a follow-up PR, we will fix this.
-        X, y, feature_names, n_features = ensure_compatible_fit_inputs(
+        X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -617,18 +615,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 
-        X, ordinal_encoder, inferred_categorical_indices = (
-            tag_features_and_sanitize_data(
-                X=X,
-                provided_categorical_indices=self.categorical_features_indices,
-                min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-                max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-                min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-            )
+        feature_schema = detect_feature_modalities(
+            X=X,
+            feature_names=feature_names,
+            provided_categorical_indices=self.categorical_features_indices,
+            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
+        X, ordinal_encoder, feature_schema = clean_data(
+            X=X, feature_schema=feature_schema
+        )
+        self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.inferred_categorical_indices_ = inferred_categorical_indices
 
+        # TODO: Introduce regressor target transformer that also keeps track of
+        # target name
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
             num_examples=y.shape[0],  # Use length of validated y
             random_state=rng,  # Use the provided rng
@@ -705,13 +707,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        # Directly create the inference engine here without using
-        # inference engine factory method because it's easier with type
-        # checking.
+        feature_schema = convert_batch_of_cat_ix_to_schema(
+            batch_of_cat_indices=cat_ix,
+            num_features=X_preprocessed[0].shape[1],
+        )
+
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
-            cat_ix=cat_ix,
+            feature_schema=feature_schema,
             ensemble_configs=configs,
             models=self.models_,
             devices=self.devices_,
@@ -798,7 +802,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            cat_ix=self.inferred_categorical_indices_,
+            feature_schema=self.inferred_feature_schema_,
             ensemble_preprocessor=ensemble_preprocessor,
             models=self.models_,
             devices_=self.devices_,
@@ -905,11 +909,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        # TODO: The below steps should be handled by a "data sanitizer object"
-        X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+        cat_indices = self.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        )
+        X = fix_dtypes(X, cat_indices=cat_indices)
         X = process_text_na_dataframe(
-            X,
-            ord_encoder=getattr(self, "ordinal_encoder_", None),
+            X, ord_encoder=getattr(self, "ordinal_encoder_", None)
         )
 
         # Runs over iteration engine
