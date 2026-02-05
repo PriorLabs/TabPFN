@@ -420,7 +420,6 @@ def test__preprocessing_large_dataset():
         apply_to_categorical=False,
         append_to_original=False,
         max_features_per_estimator=500,
-        global_transformer_name=None,
         random_state=42,
     )
 

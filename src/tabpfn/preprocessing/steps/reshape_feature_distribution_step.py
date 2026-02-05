@@ -130,7 +130,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         apply_to_categorical: bool = False,
         append_to_original: bool | Literal["auto"] = False,
         max_features_per_estimator: int = 500,
-        global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
     ):
         super().__init__()
@@ -143,7 +142,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
-        self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
     def _create_transformers_and_new_schema(
@@ -250,14 +248,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.transformer_ = transformer
 
         # Compute output feature count for modality update
-        # Include: base features + appended transformed (if append_to_original) + SVD
+        # Include: base features + appended transformed (if append_to_original)
         n_output_features = (
             n_features + len(trans_ixs) if self.append_to_original else n_features
         )
 
         # Build the new metadata with updated categorical indices
         # Non-categorical indices become numerical
-        # SVD features are numerical and appended at the end
         new_schema = FeatureSchema.from_only_categorical_indices(
             categorical_indices=sorted(cat_ix),
             num_columns=n_output_features,

@@ -139,7 +139,7 @@ def test__num_output_features__returns_correct_count() -> None:
 
     # For n_features=1 (less than 2), should return unchanged
     result_single = step.num_added_features(n_features=1, n_samples=100)
-    assert result_single == 1
+    assert result_single == 0
 
 
 def test__in_pipeline__returns_added_columns() -> None:

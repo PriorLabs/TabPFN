@@ -46,7 +46,6 @@ def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
             ReshapeFeatureDistributionsStep,
             transform_name="none",
             append_to_original=True,
-            global_transformer_name="svd",
             apply_to_categorical=False,
         )
     ]

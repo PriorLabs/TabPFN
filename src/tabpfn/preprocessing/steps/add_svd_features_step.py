@@ -37,7 +37,7 @@ class AddSVDFeaturesStep(PreprocessingStep):
     def num_added_features(self, n_samples: int, n_features: int) -> int:
         """Return the number of added features."""
         if n_features < 2:
-            return n_features
+            return 0
 
         transformer = get_svd_features_transformer(
             self.global_transformer_name,

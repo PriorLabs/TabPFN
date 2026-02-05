@@ -11,6 +11,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
+    AddSVDFeaturesStep,
     DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
     NanHandlingPolynomialFeaturesStep,
@@ -18,7 +19,6 @@ from tabpfn.preprocessing.steps import (
     ReshapeFeatureDistributionsStep,
     ShuffleFeaturesStep,
 )
-from tabpfn.preprocessing.steps.add_svd_features_step import AddSVDFeaturesStep
 
 if TYPE_CHECKING:
     import numpy as np
@@ -69,7 +69,6 @@ def create_preprocessing_pipeline(
                 transform_name=pconfig.name,
                 append_to_original=pconfig.append_original,
                 max_features_per_estimator=pconfig.max_features_per_estimator,
-                global_transformer_name=pconfig.global_transformer_name,
                 apply_to_categorical=(pconfig.categorical_name == "numeric"),
                 random_state=random_state,
             )
