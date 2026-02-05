@@ -176,7 +176,7 @@ def test__in_pipeline__transform_consistent_with_fit_transform() -> None:
     )
 
 
-def test__in_pipeline__with_no_modality_sepection() -> None:
+def test__in_pipeline__with_no_modality_selection() -> None:
     """Test that the step returns added columns when used in a pipeline."""
     data = _get_test_data(n_samples=50, n_features=6)
     schema = _get_schema(num_columns=6)
@@ -205,23 +205,6 @@ def test__random_state__produces_reproducible_results() -> None:
     assert result1.X_added is not None
     assert result2.X_added is not None
     np.testing.assert_array_almost_equal(result1.X_added, result2.X_added)
-
-
-def test__different_random_state__produces_different_results() -> None:
-    """Test that different random_state produces different results."""
-    data = _get_test_data(n_samples=50, n_features=6)
-    schema = _get_schema(num_columns=6)
-
-    step1 = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
-    result1 = step1.fit_transform(data, schema)
-
-    step2 = AddSVDFeaturesStep(global_transformer_name="svd", random_state=123)
-    result2 = step2.fit_transform(data, schema)
-
-    assert result1.X_added is not None
-    assert result2.X_added is not None
-    # Results may differ due to different random initialization
-    # (though for SVD with arpack, they might be similar if data is well-behaved)
 
 
 def test__get_svd_features_transformer__invalid_name_raises() -> None:
