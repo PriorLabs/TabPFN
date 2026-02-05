@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,6 +43,22 @@ class TabPFNSettings(BaseSettings):
         description="Allow running TabPFN on CPU with large datasets (>1000 samples). "
         "Set to True to override the CPU limitation.",
     )
+    mps_memory_fraction: float = Field(
+        default=0.7,
+        description="Fraction of recommended max MPS memory to allow (0.0 to 2.0). "
+        "Used to prevent macOS system crashes on Apple Silicon. "
+        "Values > 1.0 are not recommended.",
+    )
+
+    def model_post_init(self, _: Any) -> None:
+        """Configure MPS memory limits after settings are initialized.
+
+        To change the memory fraction, set the TABPFN_MPS_MEMORY_FRACTION
+        environment variable before importing tabpfn, e.g.:
+            export TABPFN_MPS_MEMORY_FRACTION=0.5
+        """
+        if torch.backends.mps.is_available():
+            torch.mps.set_per_process_memory_fraction(self.mps_memory_fraction)
 
 
 class PytorchSettings(BaseSettings):
