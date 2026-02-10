@@ -444,6 +444,14 @@
     ]
   ],
   "metadata": {
-    "categorical": []
+    "categorical": [],
+    "numerical": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ]
   }
 }
