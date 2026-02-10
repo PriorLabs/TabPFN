@@ -51,6 +51,13 @@ N_SAMPLES = 50
 N_TEST_SAMPLES = 5
 
 
+# TODO: Make consistency tests more robust by
+# - increase NaN occurence to 0.2
+# - categoricals not ordinally encoded
+# - add Nans to categories
+# - change order of SVD features and cat encoding
+
+
 def _get_random_data_with_categoricals(
     random_state: np.random.Generator,
     n_samples: int = 20,
@@ -68,10 +75,23 @@ def _get_random_data_with_categoricals(
     nan_mask = random_state.random((n_samples, n_numerical)) < 0.1
     X[:, :n_numerical][nan_mask] = np.nan
 
+    # # Categorical features: random integers representing categories
+    # for i in range(n_numerical, n_features):
+    #     num_categories = random_state.integers(2, 6)
+    #     # Don't make them ordinally encoded to test categorical encoding behavior
+    #     cats = random_state.integers(0, num_categories + 50, size=n_samples)
+    #     cats = cats.astype(float)
+    #     # Add some NaNs to categorical features to test NaN handling
+    #     X[:, i] = cats
+    #     nan_mask = random_state.random((n_samples,)) < 0.2
+    #     X[:, i][nan_mask] = np.nan
+
     # Categorical features: random integers representing categories
     for i in range(n_numerical, n_features):
         num_categories = random_state.integers(2, 6)
-        X[:, i] = random_state.integers(0, num_categories, size=n_samples).astype(float)
+        cats = random_state.integers(0, num_categories, size=n_samples)
+        cats = cats.astype(float)
+        X[:, i] = cats
 
     if NEW_PIPELINE_IMPLEMENTATION:
         # Build column metadata
@@ -155,6 +175,11 @@ _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
     "none_with_svd": PreprocessorConfig(
         name="none",
         categorical_name="numeric",
+        global_transformer_name="svd",
+    ),
+    "none_ordinal_with_svd": PreprocessorConfig(
+        name="none",
+        categorical_name="ordinal",
         global_transformer_name="svd",
     ),
     "squashing_with_svd_quarter": PreprocessorConfig(
