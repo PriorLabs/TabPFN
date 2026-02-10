@@ -11,7 +11,7 @@ from sklearn.preprocessing import StandardScaler
 
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import PreprocessingStep
-from tabpfn.preprocessing.steps.utils import make_standard_scaler_safe
+from tabpfn.preprocessing.steps.utils import make_scaler_safe
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -19,7 +19,13 @@ if TYPE_CHECKING:
 
 
 class AddSVDFeaturesStep(PreprocessingStep):
-    """Adds SVD features to the data."""
+    """Append low-rank SVD projection features to the input.
+
+    This keeps the original `X` and adds additional numerical features given by a
+    truncated SVD of (scaled) `X`, i.e. a compressed/global view of the feature
+    space. This can be used for numerical columns or other modalities that are encoded
+    as numericals (e.g. categoricals that use target encoding or one-hot encoding).
+    """
 
     def __init__(
         self,
@@ -44,11 +50,9 @@ class AddSVDFeaturesStep(PreprocessingStep):
             n_samples,
             n_features,
         )
-        return next(
-            s[1].n_components
-            for s in transformer.steps
-            if isinstance(s[1], TruncatedSVD)
-        )
+        svd_transformer = transformer.steps[1][1]
+        assert isinstance(svd_transformer, TruncatedSVD)
+        return svd_transformer.n_components
 
     @override
     def _fit(
@@ -107,9 +111,7 @@ def get_svd_features_transformer(
         steps=[
             (
                 "save_standard",
-                make_standard_scaler_safe(
-                    ("standard", StandardScaler(with_mean=False)),
-                ),
+                make_scaler_safe("standard", StandardScaler(with_mean=False)),
             ),
             (
                 "svd",

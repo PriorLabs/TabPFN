@@ -30,9 +30,7 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
-from tabpfn.preprocessing.steps.utils import (
-    add_safe_standard_to_safe_power_without_standard,
-)
+from tabpfn.preprocessing.steps.utils import wrap_with_safe_standard_scaler
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -315,7 +313,7 @@ def get_adaptive_preprocessors(
                 (
                     "skewed_pos",
                     _make_box_cox_safe(
-                        add_safe_standard_to_safe_power_without_standard(
+                        wrap_with_safe_standard_scaler(
                             SafePowerTransformer(
                                 standardize=False,
                                 method="box-cox",
@@ -326,7 +324,7 @@ def get_adaptive_preprocessors(
                 ),
                 (
                     "skewed",
-                    add_safe_standard_to_safe_power_without_standard(
+                    wrap_with_safe_standard_scaler(
                         SafePowerTransformer(
                             standardize=False,
                             method="yeo-johnson",
@@ -369,19 +367,19 @@ def get_all_reshape_feature_distribution_preprocessors(
 ) -> dict[str, TransformerMixin | Pipeline]:
     """Returns a dictionary of preprocessing to preprocess the data."""
     all_preprocessors = {
-        "power": add_safe_standard_to_safe_power_without_standard(
+        "power": wrap_with_safe_standard_scaler(
             PowerTransformer(standardize=False),
         ),
-        "safepower": add_safe_standard_to_safe_power_without_standard(
+        "safepower": wrap_with_safe_standard_scaler(
             SafePowerTransformer(standardize=False),
         ),
         "power_box": _make_box_cox_safe(
-            add_safe_standard_to_safe_power_without_standard(
+            wrap_with_safe_standard_scaler(
                 PowerTransformer(standardize=False, method="box-cox"),
             ),
         ),
         "safepower_box": _make_box_cox_safe(
-            add_safe_standard_to_safe_power_without_standard(
+            wrap_with_safe_standard_scaler(
                 SafePowerTransformer(standardize=False, method="box-cox"),
             ),
         ),
