@@ -16,6 +16,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 from tabpfn.utils import infer_random_state
 
 _CONSTANT = 10**12
+_MAX_COLLISION_RETRIES = 1000
 
 
 def _float_hash_arr(arr: np.ndarray, counter: int = 0) -> float:
@@ -101,8 +102,15 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
 
                 # Resolve remaining collisions (if row+k accidentally collides with
                 # another row)
+                retries = 0
                 while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
+                    retries += 1
+                    if retries > _MAX_COLLISION_RETRIES:
+                        raise RuntimeError(
+                            f"Fingerprint hash collision not resolved after "
+                            f"{_MAX_COLLISION_RETRIES} retries for row {i}."
+                        )
                     h = _float_hash_arr(row, add_to_hash)
 
                 X_h[i] = h
