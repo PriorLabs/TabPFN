@@ -112,6 +112,39 @@ def test__transform__returns_added_columns() -> None:
     assert result.modality_added == FeatureModality.NUMERICAL
 
 
+def test__transform__no_infinite_loop_with_inf_and_large_floats() -> None:
+    """Regression test: rows with inf/large floats must not cause an infinite loop.
+
+    Previously, collision resolution added the counter to float values
+    (row + add_to_hash), which is a no-op for inf and floats >= ~1e16 due to
+    float64 precision limits, causing the hash to never change.
+    """
+    data = np.array(
+        [
+            [np.inf, np.inf],
+            [np.inf, np.inf],
+            [1e20, 1e20],
+            [1e20, 1e20],
+            [np.nan, np.inf],
+            [np.nan, np.inf],
+            [np.nan, np.nan],
+            [np.nan, np.nan],
+        ],
+        dtype=np.float64,
+    )
+    schema = _get_schema(num_columns=2)
+    step = AddFingerprintFeaturesStep(random_state=42)
+    step._fit(data, schema)
+
+    # This must terminate (previously hung forever)
+    _, fingerprints, _ = step._transform(data, is_test=False)
+
+    assert fingerprints.shape == (8, 1)
+    # All 8 rows should get unique fingerprints (including all-NaN rows,
+    # which get different hashes via the hash_counter mechanism)
+    assert len(np.unique(fingerprints)) == 8
+
+
 def test__fit__does_not_modify_metadata() -> None:
     """Test that _fit returns metadata unchanged (pipeline handles added cols)."""
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float32)
