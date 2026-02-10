@@ -18,8 +18,11 @@ from tabpfn.utils import infer_random_state
 _CONSTANT = 10**12
 
 
-def _float_hash_arr(arr: np.ndarray) -> float:
-    _hash = int(hashlib.sha256(arr.tobytes()).hexdigest(), 16)
+def _float_hash_arr(arr: np.ndarray, counter: int = 0) -> float:
+    data = arr.tobytes()
+    if counter != 0:
+        data += counter.to_bytes(8, "little", signed=True)
+    _hash = int(hashlib.sha256(data).hexdigest(), 16)
     return _hash % _CONSTANT / _CONSTANT
 
 
@@ -94,13 +97,13 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
                 # Start checking from the last known count for this row content
                 add_to_hash = hash_counter[h_base]
 
-                h = _float_hash_arr(row + add_to_hash)
+                h = _float_hash_arr(row, add_to_hash)
 
                 # Resolve remaining collisions (if row+k accidentally collides with
                 # another row)
                 while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
-                    h = _float_hash_arr(row + add_to_hash)
+                    h = _float_hash_arr(row, add_to_hash)
 
                 X_h[i] = h
                 seen_hashes.add(h)
