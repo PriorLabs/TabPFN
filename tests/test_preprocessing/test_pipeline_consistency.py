@@ -51,13 +51,6 @@ N_SAMPLES = 50
 N_TEST_SAMPLES = 5
 
 
-# TODO: Make consistency tests more robust by
-# - increase NaN occurence to 0.2
-# - categoricals not ordinally encoded
-# - add Nans to categories
-# - change order of SVD features and cat encoding
-
-
 def _get_random_data_with_categoricals(
     random_state: np.random.Generator,
     n_samples: int = 20,
