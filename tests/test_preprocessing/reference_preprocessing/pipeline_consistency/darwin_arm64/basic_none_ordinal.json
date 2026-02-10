@@ -392,6 +392,11 @@
     "categorical": [
       0,
       1
+    ],
+    "numerical": [
+      2,
+      3,
+      4
     ]
   }
 }
