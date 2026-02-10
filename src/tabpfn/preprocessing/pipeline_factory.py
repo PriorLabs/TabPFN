@@ -74,6 +74,13 @@ def create_preprocessing_pipeline(
             )
         )
 
+        steps.append(
+            EncodeCategoricalFeaturesStep(
+                pconfig.categorical_name,
+                random_state=random_state,
+            )
+        )
+
         use_global_transformer = (
             pconfig.global_transformer_name is not None
             and pconfig.global_transformer_name != "None"
@@ -85,13 +92,6 @@ def create_preprocessing_pipeline(
                     random_state=random_state,
                 )
             )
-
-        steps.append(
-            EncodeCategoricalFeaturesStep(
-                pconfig.categorical_name,
-                random_state=random_state,
-            )
-        )
 
     if config.add_fingerprint_feature:
         steps.append(AddFingerprintFeaturesStep(random_state=random_state))
