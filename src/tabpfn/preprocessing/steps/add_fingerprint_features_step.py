@@ -24,7 +24,7 @@ def _float_hash_arr(arr: np.ndarray, counter: int = 0) -> float:
     if counter != 0:
         data += counter.to_bytes(8, "little", signed=True)
     _hash = int(hashlib.sha256(data).hexdigest(), 16)
-    return _hash % _CONSTANT / _CONSTANT
+    return (_hash & _CONSTANT) / _CONSTANT
 
 
 class AddFingerprintFeaturesStep(PreprocessingStep):
