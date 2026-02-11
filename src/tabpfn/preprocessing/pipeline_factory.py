@@ -94,7 +94,7 @@ def create_preprocessing_pipeline(
         )
 
     if config.add_fingerprint_feature:
-        steps.append(AddFingerprintFeaturesStep(random_state=random_state))
+        steps.append(AddFingerprintFeaturesStep())
 
     steps.append(
         ShuffleFeaturesStep(

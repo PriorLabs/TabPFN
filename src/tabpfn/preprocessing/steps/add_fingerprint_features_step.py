@@ -13,16 +13,16 @@ from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
-from tabpfn.utils import infer_random_state
 
-_CONSTANT = 2**64 - 1  # Use this to efficiently compute modulo 2** 64```
-_MAX_COLLISION_RETRIES = 1000
+_CONSTANT = 2**64 - 1  # Use this to efficiently compute modulo 2**64
+_MAX_COLLISION_RETRIES = 100
 
 
-def _float_hash_arr(arr: np.ndarray, counter: int = 0) -> float:
+def _float_hash_arr(arr: np.ndarray, offset: int = 0) -> float:
     data = arr.tobytes()
-    if counter != 0:
-        data += counter.to_bytes(8, "little", signed=True)
+    if offset != 0:
+        # Append offset as raw bytes (not numeric addition) to avoid precision issues
+        data += offset.to_bytes(8, "little", signed=False)
     _hash = int(hashlib.sha256(data).hexdigest(), 16)
     return (_hash & _CONSTANT) / _CONSTANT
 
@@ -42,9 +42,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     pipeline handles concatenation. The step does NOT modify the input array.
     """
 
-    def __init__(self, random_state: int | np.random.Generator | None = None):
+    def __init__(self):
         super().__init__()
-        self.random_state = random_state
         self.added_fingerprint: np.ndarray | torch.Tensor | None = None
 
     @override
@@ -53,8 +52,6 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
-        _, rng = infer_random_state(self.random_state)
-        self.rnd_salt_ = int(rng.integers(0, 2**16))
         # Return input schema unchanged - pipeline handles adding fingerprint column
         return feature_schema
 
@@ -80,9 +77,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
         if is_test:
             # Keep the first hash even if there are collisions
-            salted_X = X_det + self.rnd_salt_
-            for i, row in enumerate(salted_X):
-                h = _float_hash_arr(row + self.rnd_salt_)
+            for i, row in enumerate(X_det):
+                h = _float_hash_arr(row)
                 X_h[i] = h
         else:
             # Handle hash collisions by counting up and rehashing
@@ -90,8 +86,7 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
             # Map initial hash -> next candidate offset to avoid O(N^2) on duplicates
             hash_counter = defaultdict(int)
 
-            salted_X = X_det + self.rnd_salt_
-            for i, row in enumerate(salted_X):
+            for i, row in enumerate(X_det):
                 # Calculate the base hash to identify the row content
                 h_base = _float_hash_arr(row)
 
