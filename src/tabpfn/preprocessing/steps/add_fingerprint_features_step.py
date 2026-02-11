@@ -15,7 +15,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.utils import infer_random_state
 
-_CONSTANT = 10**12
+_CONSTANT = 2**64 - 1  # Use this to efficiently compute modulo 2** 64```
 _MAX_COLLISION_RETRIES = 1000
 
 
