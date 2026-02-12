@@ -87,8 +87,7 @@ def test__to__between_fits__outputs_equal(
     np.testing.assert_array_almost_equal(
         prediction_1,
         prediction_2,
-        # Relaxed comparison as cross-device (e.g. CPU vs CUDA) floating-point
-        # can differ at the ~1e-5 level due to different reduction orders.
+        # Use a slightly relaxed comparison as comparing between devices.
         decimal=4,
     )
 
