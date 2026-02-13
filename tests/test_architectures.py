@@ -56,7 +56,7 @@ def test__register_architecture__different_module_same_name__raises_value_error(
     module_a = _FakeArchitectureModule()
     module_b = _FakeArchitectureModule()
     register_architecture("test_arch", module_a)
-    with pytest.raises(ValueError, match="There is already an architecture registered"):
+    with pytest.raises(ValueError, match="There is already a different architecture"):
         register_architecture("test_arch", module_b)
     assert ARCHITECTURES["test_arch"] is module_a
 
