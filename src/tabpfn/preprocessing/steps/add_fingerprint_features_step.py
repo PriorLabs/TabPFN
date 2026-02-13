@@ -13,14 +13,23 @@ from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
-from tabpfn.utils import infer_random_state
 
-_CONSTANT = 10**12
+_CONSTANT = 2**64 - 1  # Use this to efficiently compute modulo 2**64
+_MAX_COLLISION_RETRIES = 100
+
+# Round to 12 decimal places before hashing to absorb floating-point
+# noise (~1e-16) that prior preprocessing steps may introduce between
+# batch and single-sample transforms.
+_HASH_ROUND_DECIMALS = 12
 
 
-def _float_hash_arr(arr: np.ndarray) -> float:
-    _hash = int(hashlib.sha256(arr.tobytes()).hexdigest(), 16)
-    return _hash % _CONSTANT / _CONSTANT
+def _float_hash_arr(arr: np.ndarray, offset: int = 0) -> float:
+    data = np.around(arr, decimals=_HASH_ROUND_DECIMALS).tobytes()
+    if offset != 0:
+        # Append offset as raw bytes (not numeric addition) to avoid precision issues
+        data += offset.to_bytes(8, "little", signed=False)
+    _hash = int(hashlib.sha256(data).hexdigest(), 16)
+    return (_hash & _CONSTANT) / _CONSTANT
 
 
 class AddFingerprintFeaturesStep(PreprocessingStep):
@@ -38,9 +47,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
     pipeline handles concatenation. The step does NOT modify the input array.
     """
 
-    def __init__(self, random_state: int | np.random.Generator | None = None):
+    def __init__(self):
         super().__init__()
-        self.random_state = random_state
         self.added_fingerprint: np.ndarray | torch.Tensor | None = None
 
     @override
@@ -49,8 +57,11 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
-        _, rng = infer_random_state(self.random_state)
-        self.rnd_salt_ = int(rng.integers(0, 2**16))
+        # Store n_cells as a deterministic salt appended to every hash input.
+        # This prevents the fingerprint for a given row from being the same
+        # across different datasets, reducing the chance the model learns to
+        # overfit on this feature.
+        self.n_cells_ = X.shape[0] * X.shape[1]
         # Return input schema unchanged - pipeline handles adding fingerprint column
         return feature_schema
 
@@ -74,11 +85,11 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
 
         # Compute fingerprint hash for each row
         X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
+        salt = self.n_cells_
         if is_test:
             # Keep the first hash even if there are collisions
-            salted_X = X_det + self.rnd_salt_
-            for i, row in enumerate(salted_X):
-                h = _float_hash_arr(row + self.rnd_salt_)
+            for i, row in enumerate(X_det):
+                h = _float_hash_arr(row, salt)
                 X_h[i] = h
         else:
             # Handle hash collisions by counting up and rehashing
@@ -86,21 +97,27 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
             # Map initial hash -> next candidate offset to avoid O(N^2) on duplicates
             hash_counter = defaultdict(int)
 
-            salted_X = X_det + self.rnd_salt_
-            for i, row in enumerate(salted_X):
+            for i, row in enumerate(X_det):
                 # Calculate the base hash to identify the row content
-                h_base = _float_hash_arr(row)
+                h_base = _float_hash_arr(row, salt)
 
                 # Start checking from the last known count for this row content
                 add_to_hash = hash_counter[h_base]
 
-                h = _float_hash_arr(row + add_to_hash)
+                h = _float_hash_arr(row, salt + add_to_hash)
 
                 # Resolve remaining collisions (if row+k accidentally collides with
                 # another row)
+                retries = 0
                 while h in seen_hashes and not np.isnan(row).all():
                     add_to_hash += 1
-                    h = _float_hash_arr(row + add_to_hash)
+                    retries += 1
+                    if retries > _MAX_COLLISION_RETRIES:
+                        raise RuntimeError(
+                            f"Fingerprint hash collision not resolved after "
+                            f"{_MAX_COLLISION_RETRIES} retries for row {i}."
+                        )
+                    h = _float_hash_arr(row, salt + add_to_hash)
 
                 X_h[i] = h
                 seen_hashes.add(h)
