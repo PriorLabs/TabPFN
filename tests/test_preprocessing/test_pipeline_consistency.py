@@ -71,7 +71,13 @@ def _get_random_data_with_categoricals(
     # Categorical features: random integers representing categories
     for i in range(n_numerical, n_features):
         num_categories = random_state.integers(2, 6)
-        X[:, i] = random_state.integers(0, num_categories, size=n_samples).astype(float)
+        # Don't make them ordinally encoded to test categorical encoding behavior
+        cats = random_state.integers(0, num_categories + 50, size=n_samples)
+        cats = cats.astype(float)
+        # Add some NaNs to categorical features to test NaN handling
+        X[:, i] = cats
+        nan_mask = random_state.random((n_samples,)) < 0.1
+        X[:, i][nan_mask] = np.nan
 
     if NEW_PIPELINE_IMPLEMENTATION:
         # Build column metadata
