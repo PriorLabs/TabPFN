@@ -737,9 +737,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
-        static_seed, rng = infer_random_state(self.random_state)
+        static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
-        ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
+        ensemble_configs, X, y = self._initialize_dataset_preprocessing(
+            X=X, y=y, random_state=static_seed
+        )
         self.ensemble_configs_ = ensemble_configs
 
         self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)

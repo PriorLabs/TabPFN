@@ -763,9 +763,6 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
         force_no_stratify: If True, do not stratify the data even if the model
             type is classification. If None, use the model type to determine whether
             to stratify.
-        use_fixed_preprocessing_seed: If True, use the same preprocessing seed for all
-            dataset chunks. This also means the column permutations are the same
-            for all dataset chunks.
     """
     # TODO: This will become very expensive for large datasets.
     # We need to change this strategy and do the preprocessing in a

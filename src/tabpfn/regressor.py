@@ -757,10 +757,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        static_seed, rng = infer_random_state(self.random_state)
+        static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist = (
-            self._initialize_dataset_preprocessing(X, y, rng)
+            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs

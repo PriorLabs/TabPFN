@@ -9,9 +9,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
 
 class FeatureModality(str, Enum):
     """The modality of a feature.

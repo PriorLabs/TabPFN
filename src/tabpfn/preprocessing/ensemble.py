@@ -85,7 +85,7 @@ class TabPFNEnsemblePreprocessor:
         Args:
             configs: List of ensemble configurations.
             random_state: Random state object for preprocessing. If int, the
-                preprocessing will always use the same random seed.
+                preprocessing will use the same random seed across calls to fit().
             n_preprocessing_jobs: Number of preprocessing jobs to use.
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
