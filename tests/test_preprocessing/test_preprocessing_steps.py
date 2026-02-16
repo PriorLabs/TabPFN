@@ -46,7 +46,6 @@ def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
             ReshapeFeatureDistributionsStep,
             transform_name="none",
             append_to_original=True,
-            global_transformer_name="svd",
             apply_to_categorical=False,
         )
     ]
@@ -146,7 +145,7 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     )
 
     # Create pipeline with fingerprint step
-    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    fingerprint_step = AddFingerprintFeaturesStep()
     pipeline = PreprocessingPipeline(steps=[fingerprint_step])
 
     result = pipeline.fit_transform(X, schema)
@@ -179,7 +178,7 @@ def test__pipeline__transform_also_handles_added_columns():
     )
 
     # Create and fit pipeline
-    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    fingerprint_step = AddFingerprintFeaturesStep()
     pipeline = PreprocessingPipeline(steps=[fingerprint_step])
     pipeline.fit_transform(X_train, schema)
 

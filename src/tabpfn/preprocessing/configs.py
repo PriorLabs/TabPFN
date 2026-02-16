@@ -99,7 +99,6 @@ class PreprocessorConfig:
     max_features_per_estimator: int = 500
     global_transformer_name: (
         Literal[
-            "scaler",
             "svd",
             "svd_quarter_components",
         ]
