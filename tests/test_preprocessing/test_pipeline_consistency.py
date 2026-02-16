@@ -166,7 +166,7 @@ _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
     "none_ordinal_with_svd": PreprocessorConfig(
         name="none",
         categorical_name="ordinal",
-        global_transformer_name="svd",
+        global_transformer_name="svd_quarter_components",
     ),
     "squashing_with_svd_quarter": PreprocessorConfig(
         name="squashing_scaler_default",
