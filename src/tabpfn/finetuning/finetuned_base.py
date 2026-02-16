@@ -203,6 +203,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 UserWarning,
                 stacklevel=2,
             )
+            self.n_estimators_validation = self.n_estimators_finetune
+            self.n_estimators_final_inference = self.n_estimators_finetune
 
     def _build_estimator_config(
         self,

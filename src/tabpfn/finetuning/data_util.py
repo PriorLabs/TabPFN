@@ -773,7 +773,8 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
         y_raw = [y_raw]
     assert len(X_raw) == len(y_raw), "X and y lists must have the same length."
 
-    calling_instance._initialize_model_variables()
+    if not hasattr(calling_instance, "models_") or calling_instance.models_ is None:
+        calling_instance._initialize_model_variables()
 
     X_split, y_split = [], []
     for X_item, y_item in zip(X_raw, y_raw):

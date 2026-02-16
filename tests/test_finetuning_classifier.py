@@ -153,10 +153,10 @@ def create_mock_architecture_forward(
         y: torch.Tensor | dict[str, torch.Tensor] | None,
         **_kwargs: bool,
     ) -> torch.Tensor:
+        """Mock forward pass that returns random logits."""
         if captured_x_inputs is not None:
             captured_x_inputs.append(x)
 
-        """Mock forward pass that returns random logits."""
         if isinstance(x, dict):
             x = x["main"]
 
@@ -1225,7 +1225,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     # Since columns have values [0, 1, 1, 1, ...] with different constants (1, 2, 3, 4),
     # after preprocessing, the relative ordering by mean should be preserved.
 
-    assert len(X_inputs_captured) > 3, "Expected at least four training batch"
+    assert len(X_inputs_captured) > 3, "Expected at least four training batches"
 
     def get_column_order_by_mean(x: torch.Tensor) -> list[int]:
         means = x.mean(dim=(0, 1))
