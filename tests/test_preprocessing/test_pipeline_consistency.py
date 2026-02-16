@@ -163,6 +163,11 @@ _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
         categorical_name="numeric",
         global_transformer_name="svd",
     ),
+    "none_ordinal_with_svd": PreprocessorConfig(
+        name="robust",
+        categorical_name="ordinal",
+        global_transformer_name="svd_quarter_components",
+    ),
     "squashing_with_svd_quarter": PreprocessorConfig(
         name="squashing_scaler_default",
         categorical_name="ordinal_very_common_categories_shuffled",
