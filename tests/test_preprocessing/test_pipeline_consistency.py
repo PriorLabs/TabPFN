@@ -164,7 +164,7 @@ _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
         global_transformer_name="svd",
     ),
     "none_ordinal_with_svd": PreprocessorConfig(
-        name="robust",
+        name="none",
         categorical_name="ordinal",
         global_transformer_name="svd_quarter_components",
     ),
