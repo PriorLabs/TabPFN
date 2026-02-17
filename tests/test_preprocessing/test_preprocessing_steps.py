@@ -223,9 +223,6 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
         pipeline.fit_transform(X, schema)
 
 
-# This is a test for the OrderPreservingColumnTransformer, which is not used currently
-# But might be used in the future, therefore I'll leave it in.
-@pytest.mark.skip
 def test__order_preserving_column_transformer():
     """Should raise AssertionError if column sets overlap."""
     ordinal_enc1 = OrdinalEncoder()
