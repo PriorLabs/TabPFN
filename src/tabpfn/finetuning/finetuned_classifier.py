@@ -398,11 +398,13 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         super().fit(X, y, X_val=X_val, y_val=y_val, output_dir=output_dir)
         return self
 
-    def predict_proba(self, X: XType) -> np.ndarray:
+    def predict_proba(self, X: XType, **kwargs) -> np.ndarray:
         """Predict class probabilities for X.
 
         Args:
             X: The input samples of shape (n_samples, n_features).
+            **kwargs: Additional keyword arguments to pass to the underlying
+                inference classifier.
 
         Returns:
             The class probabilities of the input samples with shape
@@ -410,18 +412,20 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         """
         check_is_fitted(self)
 
-        return self.finetuned_inference_classifier_.predict_proba(X)  # type: ignore
+        return self.finetuned_inference_classifier_.predict_proba(X, **kwargs)  # type: ignore
 
     @override
-    def predict(self, X: XType) -> np.ndarray:
+    def predict(self, X: XType, **kwargs) -> np.ndarray:
         """Predict the class for X.
 
         Args:
             X: The input samples of shape (n_samples, n_features).
+            **kwargs: Additional keyword arguments to pass to the underlying
+                inference classifier.
 
         Returns:
             The predicted classes with shape (n_samples,).
         """
         check_is_fitted(self)
 
-        return self.finetuned_inference_classifier_.predict(X)  # type: ignore
+        return self.finetuned_inference_classifier_.predict(X, **kwargs)  # type: ignore

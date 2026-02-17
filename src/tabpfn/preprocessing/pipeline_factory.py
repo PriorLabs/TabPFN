@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    SequentialFeatureTransformer,
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingPipeline,
+    PreprocessingStep,
+    StepWithModalities,
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
+    AddSVDFeaturesStep,
     DifferentiableZNormStep,
     EncodeCategoricalFeaturesStep,
     NanHandlingPolynomialFeaturesStep,
@@ -37,14 +39,15 @@ def _polynomial_feature_settings(
     raise ValueError(f"Invalid polynomial_features value: {polynomial_features}")
 
 
-def build_pipeline(
+def create_preprocessing_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
-) -> SequentialFeatureTransformer:
+) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline."""
-    steps: list[FeaturePreprocessingTransformerStep] = []
+    steps: list[PreprocessingStep | StepWithModalities] = []
 
+    pconfig = config.preprocess_config
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
     )
@@ -58,30 +61,40 @@ def build_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
-    if config.preprocess_config.differentiable:
+    if pconfig.differentiable:
         steps.append(DifferentiableZNormStep())
     else:
-        steps.extend(
-            [
-                ReshapeFeatureDistributionsStep(
-                    transform_name=config.preprocess_config.name,
-                    append_to_original=config.preprocess_config.append_original,
-                    max_features_per_estimator=config.preprocess_config.max_features_per_estimator,
-                    global_transformer_name=config.preprocess_config.global_transformer_name,
-                    apply_to_categorical=(
-                        config.preprocess_config.categorical_name == "numeric"
-                    ),
-                    random_state=random_state,
-                ),
-                EncodeCategoricalFeaturesStep(
-                    config.preprocess_config.categorical_name,
-                    random_state=random_state,
-                ),
-            ],
+        steps.append(
+            ReshapeFeatureDistributionsStep(
+                transform_name=pconfig.name,
+                append_to_original=pconfig.append_original,
+                max_features_per_estimator=pconfig.max_features_per_estimator,
+                apply_to_categorical=(pconfig.categorical_name == "numeric"),
+                random_state=random_state,
+            )
         )
 
+        steps.append(
+            EncodeCategoricalFeaturesStep(
+                pconfig.categorical_name,
+                random_state=random_state,
+            )
+        )
+
+        use_global_transformer = (
+            pconfig.global_transformer_name is not None
+            and pconfig.global_transformer_name != "None"
+        )
+        if use_global_transformer:
+            steps.append(
+                AddSVDFeaturesStep(
+                    global_transformer_name=pconfig.global_transformer_name,  # type: ignore
+                    random_state=random_state,
+                )
+            )
+
     if config.add_fingerprint_feature:
-        steps.append(AddFingerprintFeaturesStep(random_state=random_state))
+        steps.append(AddFingerprintFeaturesStep())
 
     steps.append(
         ShuffleFeaturesStep(
@@ -90,4 +103,4 @@ def build_pipeline(
             random_state=random_state,
         ),
     )
-    return SequentialFeatureTransformer(steps)
+    return PreprocessingPipeline(steps)

@@ -31,17 +31,17 @@ jobs:
           }
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@v7
 
       - name: Install Towncrier
         run: uv pip install --system towncrier
@@ -108,5 +108,4 @@ jobs:
           --base "${BASE_BRANCH}" \
           --head "${RELEASE_BRANCH}" \
           --title "Release v${VERSION}" \
-          --body "Automated release PR for v${VERSION}." \
-          --reviewer "PriorLabs/release-maintainers"
+          --body "Automated release PR for v${VERSION}."

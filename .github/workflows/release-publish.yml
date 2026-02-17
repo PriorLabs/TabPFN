@@ -17,7 +17,7 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Extract version from tag
         id: ver
@@ -46,7 +46,7 @@ jobs:
           PY
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
           enable-cache: true
@@ -82,14 +82,14 @@ jobs:
           PY
 
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
           retention-days: 7
 
       - name: Upload release notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release_notes
           path: release_notes.md
@@ -106,20 +106,20 @@ jobs:
       id-token: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
 
       - name: Publish to TestPyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+        uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
           repository-url: https://test.pypi.org/legacy/
           print-hash: true
           skip-existing: true
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           version: "latest"
           enable-cache: true
@@ -160,22 +160,22 @@ jobs:
       id-token: write
     steps:
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
 
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@v1.12.4
+        uses: pypa/gh-action-pypi-publish@v1.13.0
         with:
           print-hash: true
           skip-existing: true
 
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release_notes
           path: .

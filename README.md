@@ -478,7 +478,7 @@ We add the 🌍 emoji for checkpoints finetuned on real datasets. See the [TabPF
 
 - `tabpfn-v2.5-classifier-v2.5_default.ckpt` 🌍: default classification checkpoint, finetuned on real-data.
 - `tabpfn-v2.5-classifier-v2.5_default-2.ckpt`: best classification synthetic checkpoint. Use this to get the default TabPFN-2.5 classification model without real-data finetuning.
-- `tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt`: specialized for larger features (up to 500).
+- `tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt`: specialized for larger features (up to 500) and small samples (< 5K).
 - `tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt`: specialized for larger features (up to  1000, could support `max_features_per_estimator=1000`).
 - `tabpfn-v2.5-classifier-v2.5_large-samples.ckpt`: specialized for larger sample sizes (larger than 30K)
 - `tabpfn-v2.5-classifier-v2.5_real.ckpt` 🌍: other real-data finetuned classification checkpoint. Pretty good overall but bad on large features (>100-200).
@@ -528,7 +528,7 @@ The data is used exclusively to help us provide stability to the relevant produc
 - **No code, model inputs, or outputs are ever sent**
 - **Data is strictly anonymous and cannot be linked to individuals**
 
-For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy_policy/).
+For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
 **To opt out**, set the following environment variable:
 

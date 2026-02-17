@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.3.2] - 2026-01-30
+
+### Added
+
+- - Moved preprocessing-related code to dedicated modules inside `src/tabpfn/preprocessing/`
+  - Renamed public functions: 
+      - `validate_X_predict` → `ensure_compatible_predict_input_sklearn`
+      - `validate_Xy_fit` → `ensure_compatible_fit_inputs_sklearn`
+
+  ([#720](https://github.com/PriorLabs/TabPFN/pull/720))
+- - Add new features to finetuning (metric selection, time limit, passing validation data)
+    - Added `eval_metric` and `time_limit` parameters to `FinetunedTabPFNClassifier` and `FinetunedTabPFNRegressor` 
+    - Added `X_val`, `y_val` parameters to `.fit()` of `FinetunedTabPFNClassifier` and `FinetunedTabPFNRegressor` 
+  - Fix bug in finetuning for splitting very small datasets
+  - Ensure finetuning compares to the default checkpoint and does not accept worse models after finetuning
+
+  ([#730](https://github.com/PriorLabs/TabPFN/pull/730))
+- - Ensure `TabPFNValidationError` wraps both custom and sklearn's validate_data() errors ([#732](https://github.com/PriorLabs/TabPFN/pull/732))
+- Refactor of model encoder. Move imports from `tabpfn.architectures.base.encoders` to `tabpfn.architectures.encoders` ([#733](https://github.com/PriorLabs/TabPFN/pull/733))
+- Renamed the estimator's `preprocessor_` attribute to `ordinal_encoder_` ([#756](https://github.com/PriorLabs/TabPFN/pull/756))
+- Pass through kwargs in `FinetunedTabPFNClassifier` and `FinetunedTabPFNRegressor` predict and predict_proba methods to allow additional options like `output_type='full'` ([#772](https://github.com/PriorLabs/TabPFN/pull/772)) 
+
+
 ## [6.3.1] - 2026-01-14
 
 ### Added

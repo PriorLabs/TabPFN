@@ -19,6 +19,11 @@ from tabpfn.preprocessing.configs import (
     EnsembleConfig,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.torch import (
+    FeatureSchema,
+    TorchPreprocessingPipeline,
+    create_gpu_preprocessing_pipeline,
+)
 from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
@@ -29,34 +34,41 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
 
     from tabpfn.preprocessing.configs import PreprocessorConfig
-    from tabpfn.preprocessing.pipeline_interfaces import SequentialFeatureTransformer
+    from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
 T = TypeVar("T")
 
 
 @dataclasses.dataclass
-class TabPFNPreprocessedEnsembleMember:
-    """Holds preprocessed data, config, preprocessor for a single ensemble member."""
+class TabPFNEnsembleMember:
+    """Holds data, config, and preprocessors for a single ensemble member.
+
+    The data is preprocessed on the CPU but this member also holds a torch preprocessor
+    pipeline to be run before inference on the GPU.
+    """
 
     config: EnsembleConfig
-    preprocessor: SequentialFeatureTransformer
+    cpu_preprocessor: PreprocessingPipeline
+    gpu_preprocessor: TorchPreprocessingPipeline | None
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
-    cat_ix: list[int]
+    feature_schema: FeatureSchema
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
         """Transform the test data."""
-        return self.preprocessor.transform(X).X
+        return self.cpu_preprocessor.transform(X).X
 
 
 class TabPFNEnsemblePreprocessor:
-    """Generates pipelines and preprocesses the ensemble members.
+    """Orchestrates the creation of ensemble members.
 
-    This class has two main functionalities:
-    1. Can parallelize the preprocessing of multiple ensemble members
-    2. Can use global data information and pipelines to perform balanced data slicing
+    - Generates preprocessing pipelines.
+    - Iterates over cpu preprocessing.
+    - Creates TabPFNEnsembleMember objects with all necessary information to process
+        a single ensemble member.
+    - Can use global data information and pipelines to perform balanced data slicing
        (e.g. sample/feature subsampling) per ensemble member.
     """
 
@@ -66,6 +78,7 @@ class TabPFNEnsemblePreprocessor:
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
         rng: np.random.Generator,
         n_preprocessing_jobs: int,
+        keep_fitted_cache: bool = False,
     ) -> None:
         """Init.
 
@@ -73,11 +86,15 @@ class TabPFNEnsemblePreprocessor:
             configs: List of ensemble configurations.
             rng: Random number generator.
             n_preprocessing_jobs: Number of preprocessing jobs to use.
+            keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
+                For the cpu preprocessors, the cache is always kept implicitly in the
+                preprocessor objects.
         """
         super().__init__()
         self.configs = configs
         self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.keep_fitted_cache = keep_fitted_cache
 
         # TODO:
         # 1. Create pipeline in init for balanced feature subsampling
@@ -97,48 +114,57 @@ class TabPFNEnsemblePreprocessor:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        cat_ix: list[int],
+        feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
         override_random_state: int | np.random.Generator | None = None,
-    ) -> Iterator[TabPFNPreprocessedEnsembleMember]:
+    ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            cat_ix=cat_ix,
+            feature_schema=feature_schema,
             random_state=override_random_state or self.rng,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
         )
 
-        for (
+        gpu_preprocessors = []
+        for config in self.configs:
+            gpu_preprocessor = create_gpu_preprocessing_pipeline(
+                config=config,
+                keep_fitted_cache=self.keep_fitted_cache,
+            )
+            gpu_preprocessors.append(gpu_preprocessor)
+
+        for i, (
             config,
-            preprocessor,
+            cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
-            cat_ix_preprocessed,
-        ) in preprocessed_data_iterator:
-            yield TabPFNPreprocessedEnsembleMember(
+            feature_schema_preprocessed,
+        ) in enumerate(preprocessed_data_iterator):
+            yield TabPFNEnsembleMember(
                 config=config,
-                preprocessor=preprocessor,
+                cpu_preprocessor=cpu_preprocessor,
+                gpu_preprocessor=gpu_preprocessors[i],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
-                cat_ix=cat_ix_preprocessed,
+                feature_schema=feature_schema_preprocessed,
             )
 
     def fit_transform_ensemble_members(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        cat_ix: list[int],
-    ) -> list[TabPFNPreprocessedEnsembleMember]:
+        feature_schema: FeatureSchema,
+    ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                cat_ix=cat_ix,
+                feature_schema=feature_schema,
                 parallel_mode="block",
             )
         )
@@ -317,6 +343,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     n_classes: int,
     random_state: int | np.random.Generator | None,
     num_models: int,
+    outlier_removal_std: float | None,
 ) -> list[ClassifierEnsembleConfig]:
     """Generate ensemble configurations for classification.
 
@@ -335,6 +362,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
         n_classes: Number of classes.
         random_state: Random number generator.
         num_models: Number of models to use.
+        outlier_removal_std: The standard deviation to remove outliers.
 
     Returns:
         List of ensemble configurations.
@@ -378,6 +406,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
             feature_shift_decoder=feature_shift_decoder,
             subsample_ix=subsample_ix,
             _model_index=model_index,
+            outlier_removal_std=outlier_removal_std,
         )
         for (
             featshift,
@@ -395,7 +424,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     ]
 
 
-def generate_regression_ensemble_configs(
+def generate_regression_ensemble_configs(  # noqa: PLR0913
     *,
     num_estimators: int,
     subsample_samples: int | float | list[np.ndarray] | None,
@@ -407,6 +436,7 @@ def generate_regression_ensemble_configs(
     target_transforms: Sequence[TransformerMixin | Pipeline | None],
     random_state: int | np.random.Generator | None,
     num_models: int,
+    outlier_removal_std: float | None,
 ) -> list[RegressorEnsembleConfig]:
     """Generate ensemble configurations for regression.
 
@@ -424,6 +454,7 @@ def generate_regression_ensemble_configs(
         target_transforms: Target transformations to apply.
         random_state: Random number generator.
         num_models: Number of models to use.
+        outlier_removal_std: The standard deviation to remove outliers.
 
     Returns:
         List of ensemble configurations.
@@ -460,6 +491,7 @@ def generate_regression_ensemble_configs(
             feature_shift_decoder=feature_shift_decoder,
             subsample_ix=subsample_ix,
             target_transform=target_transform,
+            outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
         )
         for featshift, subsample_ix, (

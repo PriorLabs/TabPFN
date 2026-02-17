@@ -24,6 +24,7 @@ from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
 )
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
@@ -357,68 +358,25 @@ def translate_probs_across_borders(
     return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
 
 
-def update_encoder_params(
+def remove_non_differentiable_preprocessing_from_models(
     models: list[Architecture],
-    remove_outliers_std: float | None,
-    *,
-    differentiable_input: bool = False,
 ) -> None:
-    """Update the loaded encoder elements and setting to be compatible with inference
-    requirements. This concerns handling outliers in the model and also removes
-    non-differentiable steps from the label encoder.
-
-    !!! warning
-
-        This only happens inplace.
+    """Remove non-differentiable encoder steps from the model.
 
     Args:
         models: The models to update.
-        remove_outliers_std: The standard deviation to remove outliers.
-        inplace: Whether to do the operation inplace.
-        differentiable_input: Whether the entire model including forward pass should
-            be differentiable with pt autograd. This disables non-differentiable
-            encoder steps.
     """
-    if remove_outliers_std is not None and remove_outliers_std <= 0:
-        raise ValueError("remove_outliers_std must be greater than 0")
-
     for model in models:
-        # TODO: find a less hacky way to change settings during training
-        # and inference
-        if not hasattr(model, "encoder"):
-            raise ValueError(
-                "Model does not have an encoder, this breaks the TabPFN sklearn "
-                "wrapper."
-            )
+        diffable_steps = []  # only differentiable encoder steps.
+        for module in model.y_encoder:
+            if isinstance(module, MulticlassClassificationTargetEncoderStep):
+                pass
+            else:
+                diffable_steps.append(module)
 
-        encoder = model.encoder
-
-        # TODO: maybe check that norm_layer even exists
-        norm_layer = next(
-            e for e in encoder if "FeatureTransformEncoderStep" in str(e.__class__)
+        model.y_encoder = TorchPreprocessingPipeline(
+            steps=diffable_steps, output_key="output"
         )
-        if not hasattr(norm_layer, "remove_outliers"):
-            raise ValueError(
-                "FeatureTransformEncoderStep does not have a remove_outliers "
-                "attribute, this will break the TabPFN sklearn wrapper."
-            )
-        norm_layer.remove_outliers = (remove_outliers_std is not None) and (
-            remove_outliers_std > 0
-        )
-        if norm_layer.remove_outliers:
-            norm_layer.remove_outliers_sigma = remove_outliers_std
-
-        if differentiable_input:
-            diffable_steps = []  # only differentiable encoder steps.
-            for module in model.y_encoder:
-                if isinstance(module, MulticlassClassificationTargetEncoderStep):
-                    pass
-                else:
-                    diffable_steps.append(module)
-
-            model.y_encoder = TorchPreprocessingPipeline(
-                steps=diffable_steps, output_key="output"
-            )
 
 
 def transform_borders_one(
@@ -520,3 +478,26 @@ def balance_probas_by_class_counts(
         probas.device
     )
     return balanced_probas / balanced_probas.sum(dim=-1, keepdim=True)
+
+
+def convert_batch_of_cat_ix_to_schema(
+    batch_of_cat_indices: list[list[list[int]]],
+    num_features: int,
+) -> list[list[FeatureSchema]]:
+    """Convert a batch of categorical indices to a schema."""
+    feature_schema = []
+    for ibatch in batch_of_cat_indices:
+        feature_schema.append([])
+        for cat_indices in ibatch:
+            features = [
+                Feature(
+                    name=f"c{i}",
+                    modality=FeatureModality.CATEGORICAL
+                    if i in cat_indices
+                    else FeatureModality.NUMERICAL,
+                )
+                for i in range(num_features)
+            ]
+            feature_schema[-1].append(FeatureSchema(features=features))
+
+    return feature_schema

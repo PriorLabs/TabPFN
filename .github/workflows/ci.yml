@@ -14,7 +14,7 @@ jobs:
     name: Ruff Linting & Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
       - uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
         with:
           version-file: pyproject.toml
@@ -56,16 +56,16 @@ jobs:
       HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 
@@ -86,7 +86,7 @@ jobs:
       - &restore-model-cache
         name: Restore model cache
         id: restore-model-cache
-        uses: actions/cache/restore@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ${{ github.workspace }}/model_cache
           key: model-cache-${{ hashFiles('model_cache/**') }}
@@ -100,7 +100,7 @@ jobs:
 
       - &save-model-cache
         name: Save model cache
-        uses: actions/cache/save@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ${{ github.workspace }}/model_cache
           key: model-cache-${{ hashFiles('model_cache/**') }}
@@ -141,16 +141,16 @@ jobs:
       HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
 
       - name: Set up Python 3.14
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 
@@ -193,27 +193,27 @@ jobs:
 
     steps:
       - name: Checkout TabPFN at current ref
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
         with:
           path: TabPFN
 
       - name: Checkout ${{ matrix.repo-name }}
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
         with:
           repository: PriorLabs/${{ matrix.repo-name }}
           path: ${{ matrix.repo-name }}
 
       - name: Set up Python
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
 
       - name: Restore model cache
         id: restore-model-cache
-        uses: actions/cache/restore@8b402f58fbc84540c8b491a91e594a4576fec3d7 # v5.0.2
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: ${{ github.workspace }}/model_cache
           key: model-cache-${{ hashFiles('model_cache/**') }}
@@ -261,16 +261,16 @@ jobs:
       HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@e797f83bcb11b83ae66e0230d6156d7c80228e7c # v6.0.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 

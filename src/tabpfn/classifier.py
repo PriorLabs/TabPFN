@@ -30,7 +30,6 @@ import numpy as np
 import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
-from sklearn.preprocessing import LabelEncoder
 from tabpfn_common_utils.telemetry import track_model_call
 
 from tabpfn.base import (
@@ -49,7 +48,12 @@ from tabpfn.constants import (
     XType,
     YType,
 )
-from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
+from tabpfn.errors import handle_oom_errors
+from tabpfn.inference import (
+    InferenceEngine,
+    InferenceEngineBatchedNoPreprocessing,
+    InferenceEngineCachePreprocessing,
+)
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
@@ -69,20 +73,25 @@ from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
     PreprocessorConfig,
+    clean_data,
     generate_classification_ensemble_configs,
-    tag_features_and_sanitize_data,
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
+    convert_batch_of_cat_ix_to_schema,
     infer_random_state,
+    remove_non_differentiable_preprocessing_from_models,
 )
 from tabpfn.validation import (
-    ensure_compatible_differentiable_inputs,
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    validate_dataset_size,
     validate_num_classes,
 )
 
@@ -139,11 +148,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
-    inferred_categorical_indices_: list[int]
-    """The indices of the columns that were inferred to be categorical,
-    as a product of any features deemed categorical by the user and what would
-    work best for the model.
-    """
+    inferred_feature_schema_: FeatureSchema
+    """The inferred feature schema. This contains the feature modalities per column,
+    using heuristics and user-provided indices for categorical features."""
 
     classes_: npt.NDArray[Any]
     """The unique classes found in the target data during `fit()`."""
@@ -166,11 +173,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    label_encoder_: LabelEncoder
+    label_encoder_: TabPFNLabelEncoder
     """The label encoder used to encode the target variable."""
 
-    preprocessor_: ColumnTransformer
-    """The column transformer used to preprocess the input data to be numeric."""
+    ordinal_encoder_: ColumnTransformer
+    """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -506,6 +513,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return cls(**options)
 
     @property
+    def estimator_type(self) -> Literal["classifier"]:
+        """The type of the model."""
+        return "classifier"
+
+    @property
     def model_(self) -> Architecture:
         """The model used for inference.
 
@@ -533,14 +545,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def __sklearn_tags__(self) -> Tags:  # type: ignore
         tags = super().__sklearn_tags__()
         tags.input_tags.allow_nan = True
-        tags.estimator_type = "classifier"
+        tags.estimator_type = self.estimator_type
         return tags
 
     def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
         """Perform initialization of the model, return determined byte_size
         and RNG object.
         """
-        return initialize_model_variables_helper(self, "classifier")
+        return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_for_differentiable_input(
         self,
@@ -549,13 +561,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], torch.Tensor, torch.Tensor]:
         """Initialize the model for differentiable input."""
-        X, y = ensure_compatible_differentiable_inputs(
+        validate_dataset_size(
             X=X,
             y=y,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
-            ignore_pretraining_limits=self.ignore_pretraining_limits,
             devices=self.devices_,
+            ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
         # We use the convention that the class labels are [0, ..., n-1]
@@ -570,7 +582,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         # Minimal preprocessing for prompt tuning
-        self.inferred_categorical_indices_ = []
+        if (
+            self.categorical_features_indices is not None
+            and len(self.categorical_features_indices) > 0
+        ):
+            raise ValueError(
+                "Categorical features are not supported for differentiable input."
+            )
+        n_features = X.shape[1]
+        features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
+        self.inferred_feature_schema_ = FeatureSchema(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
         ensemble_configs = generate_classification_ensemble_configs(
@@ -585,22 +606,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 
         return ensemble_configs, X, y
 
-    def _initialize_for_standard_input(
+    def _initialize_dataset_preprocessing(
         self,
         X: XType,
         y: YType,
         rng: np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
-        # TODO: Fix the types later.
-        # In the following code, we have multiple conversions between DataFrames and
-        # NumPy arrays. In a follow-up PR, we will fix this.
-        X, y, feature_names, n_features = ensure_compatible_fit_inputs(
+        # Data validation and cleaning
+        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -610,40 +632,34 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ensure_y_numeric=False,
             devices=self.devices_,
         )
-        # Set class variables for sklearn compatibility
+
+        feature_schema = detect_feature_modalities(
+            X=X,
+            feature_names=feature_names,
+            provided_categorical_indices=self.categorical_features_indices,
+            min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
+            max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
+            min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+        )
+        X, ordinal_encoder, feature_schema = clean_data(
+            X=X, feature_schema=feature_schema
+        )
+        self.inferred_feature_schema_ = feature_schema
+        self.ordinal_encoder_ = ordinal_encoder
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
 
-        # TODO(investigate): We do count the class before the
-        # label encoding. This could introduce subtle bugs if the
-        # class indices change after label encoding.
-        _, counts = np.unique(y, return_counts=True)
-        self.class_counts_ = counts
-
-        self.label_encoder_ = LabelEncoder()
-        y = self.label_encoder_.fit_transform(y)
-        self.classes_ = self.label_encoder_.classes_
-        self.n_classes_ = len(self.classes_)
-
-        validate_num_classes(
-            num_classes=self.n_classes_,
-            max_num_classes=self.inference_config_.MAX_NUMBER_OF_CLASSES,
+        # Label encoding
+        self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name)
+        y, label_metadata = self.label_encoder_.fit_transform(
+            y=y, max_num_classes=self.inference_config_.MAX_NUMBER_OF_CLASSES
         )
+        self.classes_ = label_metadata.classes
+        self.n_classes_ = label_metadata.n_classes
+        self.class_counts_ = label_metadata.class_counts
 
-        X, ordinal_encoder, inferred_categorical_indices = (
-            tag_features_and_sanitize_data(
-                X=X,
-                provided_categorical_indices=self.categorical_features_indices,
-                min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
-                max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
-                min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-            )
-        )
-        self.preprocessor_ = ordinal_encoder
-        self.inferred_categorical_indices_ = inferred_categorical_indices
-
+        # Ensemble definition
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
-
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
@@ -656,23 +672,98 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_classes=self.n_classes_,
             random_state=rng,
             num_models=len(self.models_),
+            outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
+                estimator_type=self.estimator_type
+            ),
         )
         assert len(ensemble_configs) == self.n_estimators
 
         return ensemble_configs, X, y
 
-    def _initialize_dataset_preprocessing(
-        self,
-        X: XType,
-        y: YType,
-        rng: np.random.Generator,
-    ) -> tuple[list[ClassifierEnsembleConfig], XType, YType]:
-        if self.differentiable_input:
-            assert isinstance(X, torch.Tensor)
-            assert isinstance(y, torch.Tensor)
-            return self._initialize_for_differentiable_input(X=X, y=y, rng=rng)
+    def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
+        """Return a fresh classifier configured for holdout tuning."""
+        params = self.get_params(deep=False)
 
-        return self._initialize_for_standard_input(X=X, y=y, rng=rng)
+        # Avoids sharing mutable config across instances
+        for key in params:
+            try:
+                if isinstance(params.get(key), dict):
+                    params[key] = copy.deepcopy(params[key])
+            except Exception as e:  # noqa: BLE001
+                logging.warning(
+                    "Error during initialization of tuning classifier when trying "
+                    f"to deepcopy configuration with name `{key}`: {e}. "
+                    "Falling back to original configuration"
+                )
+
+        forced = {
+            "fit_mode": "fit_preprocessors",
+            "differentiable_input": False,
+            "tuning_config": None,  # never tune inside tuning
+        }
+
+        params.update(forced)
+        params.update(overwrite_kwargs)
+
+        return TabPFNClassifier(**params)
+
+    @config_context(transform_output="default")  # type: ignore
+    @track_model_call(model_method="fit", param_names=["X", "y"])
+    def fit(self, X: XType, y: YType) -> Self:
+        """Fit the model.
+
+        Args:
+            X: The input data.
+            y: The target variable.
+
+        Returns:
+            self
+        """
+        # Validate eval_metric here instead of in __init__ as per sklearn convention
+        self.eval_metric_ = _validate_eval_metric(self.eval_metric)
+
+        if self.fit_mode == "batched":
+            logging.warning(
+                "The model was in 'batched' mode, likely after finetuning. "
+                "Automatically switching to 'fit_preprocessors' mode for standard "
+                "prediction. The model will be re-initialized."
+            )
+            self.fit_mode: Literal[
+                "low_memory",
+                "fit_preprocessors",
+                "fit_with_cache",
+                "batched",
+            ] = "fit_preprocessors"
+
+        byte_size, rng = self._initialize_model_variables()
+        ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
+        self.ensemble_configs_ = ensemble_configs
+
+        self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
+
+        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
+            configs=ensemble_configs,
+            rng=rng,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
+            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+        )
+
+        self.executor_ = create_inference_engine(
+            fit_mode=self.fit_mode,
+            X_train=X,
+            y_train=y,
+            feature_schema=self.inferred_feature_schema_,
+            models=self.models_,
+            ensemble_preprocessor=self.ensemble_preprocessor_,
+            devices_=self.devices_,
+            byte_size=byte_size,
+            forced_inference_dtype_=self.forced_inference_dtype_,
+            memory_saving_mode=self.memory_saving_mode,
+            use_autocast_=self.use_autocast_,
+            inference_mode=True,
+        )
+
+        return self
 
     @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
@@ -704,7 +795,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "The model was not in 'batched' mode. "
                 "Automatically switching to 'batched' mode for finetuning."
             )
-            self.fit_mode = "batched"
+        self.fit_mode = "batched"
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
@@ -714,13 +805,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
-        # Directly create the inference engine here without using
-        # inference engine factory method because it's easier with type
-        # checking.
+        feature_schema = convert_batch_of_cat_ix_to_schema(
+            batch_of_cat_indices=cat_ix,
+            num_features=X_preprocessed[0].shape[1],
+        )
+
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
-            cat_ix=cat_ix,
+            feature_schema=feature_schema,
             ensemble_configs=configs,
             models=self.models_,
             devices=self.devices_,
@@ -732,41 +825,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    def _get_tuning_classifier(self, **overwrite_kwargs: Any) -> TabPFNClassifier:
-        """Return a fresh classifier configured for holdout tuning."""
-        params = self.get_params(deep=False)
-
-        # Avoids sharing mutable config across instances
-        for key in params:
-            try:
-                if isinstance(params.get(key), dict):
-                    params[key] = copy.deepcopy(params[key])
-            except Exception as e:  # noqa: BLE001
-                logging.warning(
-                    "Error during initialization of tuning classifier when trying "
-                    f"to deepcopy configuration with name `{key}`: {e}. "
-                    "Falling back to original configuration"
-                )
-
-        forced = {
-            "fit_mode": "fit_preprocessors",
-            "differentiable_input": False,
-            "tuning_config": None,  # never tune inside tuning
-        }
-
-        params.update(forced)
-        params.update(overwrite_kwargs)
-
-        return TabPFNClassifier(**params)
-
-    @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="fit", param_names=["X", "y"])
-    def fit(
-        self,
-        X: XType,
-        y: YType,
-    ) -> Self:
-        """Fit the model.
+    def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
+        """Fit the model with differentiable input.
 
         Args:
             X: The input data.
@@ -775,40 +836,28 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             self
         """
-        # Validate eval_metric here instead of in __init__ as per sklearn convention
-        self.eval_metric_ = _validate_eval_metric(self.eval_metric)
-
-        if self.fit_mode == "batched":
+        if self.fit_mode != "fit_preprocessors":
             logging.warning(
-                "The model was in 'batched' mode, likely after finetuning. "
-                "Automatically switching to 'fit_preprocessors' mode for standard "
-                "prediction. The model will be re-initialized."
+                "The model was not in 'fit_preprocessors' mode. "
+                "Automatically switching to 'fit_preprocessors' mode for differentiable"
+                " input."
             )
-            self.fit_mode: Literal[
-                "low_memory",
-                "fit_preprocessors",
-                "fit_with_cache",
-                "batched",
-            ] = "fit_preprocessors"
+            self.fit_mode = "fit_preprocessors"
 
-        is_differentiable_input_and_already_fitted = (
-            self.differentiable_input and hasattr(self, "models_")
-        )
-        if is_differentiable_input_and_already_fitted:
+        is_first_fit_call = not hasattr(self, "models_")
+        if is_first_fit_call:
+            byte_size, rng = self._initialize_model_variables()
+            ensemble_configs, X, y = self._initialize_for_differentiable_input(
+                X=X, y=y, rng=rng
+            )
+            self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
+            remove_non_differentiable_preprocessing_from_models(models=self.models_)
+        else:
             _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
-        else:
-            byte_size, rng = self._initialize_model_variables()
-            ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
-            self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
-
-        self._maybe_calibrate_temperature_and_tune_decision_thresholds(
-            X=X,
-            y=y,
-        )
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
@@ -816,19 +865,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )
 
-        self.executor_ = create_inference_engine(
-            fit_mode=self.fit_mode,
+        self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
             y_train=y,
-            cat_ix=self.inferred_categorical_indices_,
+            feature_schema=self.inferred_feature_schema_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
-            devices_=self.devices_,
-            byte_size=byte_size,
-            forced_inference_dtype_=self.forced_inference_dtype_,
-            memory_saving_mode=self.memory_saving_mode,
-            use_autocast_=self.use_autocast_,
-            inference_mode=not self.differentiable_input,
+            devices=self.devices_,
+            dtype_byte_size=byte_size,
+            force_inference_dtype=self.forced_inference_dtype_,
+            save_peak_mem=self.memory_saving_mode,
+            inference_mode=False,
         )
 
         return self
@@ -994,19 +1041,24 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
-            # TODO: The below steps should be handled by a "data sanitizer object"
-            X = fix_dtypes(X, cat_indices=self.inferred_categorical_indices_)
+            X = fix_dtypes(
+                X,
+                cat_indices=self.inferred_feature_schema_.indices_for(
+                    FeatureModality.CATEGORICAL
+                ),
+            )
             X = process_text_na_dataframe(
                 X=X,
-                ord_encoder=getattr(self, "preprocessor_", None),
+                ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        return self.forward(
-            X,
-            use_inference_mode=True,
-            return_logits=return_logits,
-            return_raw_logits=return_raw_logits,
-        )
+        with handle_oom_errors(self.devices_, X, model_type="classifier"):
+            return self.forward(
+                X,
+                use_inference_mode=True,
+                return_logits=return_logits,
+                return_raw_logits=return_raw_logits,
+            )
 
     @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:
@@ -1304,9 +1356,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         assert is_standard_inference or is_batched_for_grads, (
-            "Invalid forward pass: Bad combination of inference mode, input X, "
-            "or executor type. Ensure call is from standard predict or a "
-            "batched fine-tuning context."
+            f"Invalid forward pass: Bad combination of inference mode "
+            f"({use_inference_mode=}), input X, "
+            f"or executor type ({type(self.executor_)}). Ensure call is from standard "
+            f"predict ({is_standard_inference=}) or a batched fine-tuning context."
+            f"({is_batched_for_grads=})."
         )
 
         # Specific check for float64 incompatibility if the batched engine is being
@@ -1320,8 +1374,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         if self.fit_mode in ["fit_preprocessors", "batched"]:
-            # only these two modes support this option
-            self.executor_.use_torch_inference_mode(use_inference=use_inference_mode)
+            # Don't enable inference mode when differentiable_input=True (prompt tuning)
+            # to allow gradients to flow through
+            actual_inference_mode = use_inference_mode and not self.differentiable_input
+            self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
         for output, config in self.executor_.iter_outputs(

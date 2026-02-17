@@ -31,6 +31,8 @@ from tabpfn_common_utils.telemetry import (
     ModelLoadEvent,
     set_model_config,
 )
+from filelock import FileLock
+
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
@@ -506,6 +508,39 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
     return use_instead_path
 
 
+def _get_download_lock() -> FileLock:
+    lock_path = get_cache_dir() / ".download.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    return FileLock(lock_path, timeout=-1)
+
+
+_download_lock: FileLock = _get_download_lock()
+
+
+def _with_download_lock(func: Any) -> Any:
+    """Prevent race conditions when multiple threads/processes download the same
+    model simultaneously.
+
+    Without the lock, concurrent downloads could corrupt the model file or waste
+    bandwidth downloading the same file multiple times. The file lock ensures only
+    one download proceeds at a time while others wait.
+    """
+
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        lock_path = _download_lock.lock_file
+        logger.info(f"Acquiring download lock: {lock_path}")
+        _download_lock.acquire()
+        logger.debug(f"Acquired download lock: {lock_path}")
+        try:
+            return func(*args, **kwargs)
+        finally:
+            logger.debug(f"Releasing download lock: {lock_path}")
+            _download_lock.release()
+            logger.debug(f"Released download lock: {lock_path}")
+
+    return wrapper
+
+
 P = TypeVar("P", bound=Union[str, list[str]])
 
 
@@ -554,6 +589,7 @@ def load_model_criterion_config(
 ]: ...
 
 
+@_with_download_lock
 def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,

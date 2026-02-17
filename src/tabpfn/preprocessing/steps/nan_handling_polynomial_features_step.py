@@ -9,13 +9,14 @@ from sklearn.preprocessing import (
     StandardScaler,
 )
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingStep,
 )
 from tabpfn.utils import infer_random_state
 
 
-class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
+class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
     """Nan Handling Polynomial Features Step."""
 
     def __init__(
@@ -31,16 +32,22 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
 
         self.poly_factor_1_idx: np.ndarray | None = None
         self.poly_factor_2_idx: np.ndarray | None = None
+        self.n_polynomials_: int = 0
 
         self.standardizer = StandardScaler(with_mean=False)
 
     @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
+    def _fit(
+        self,
+        X: np.ndarray,
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)
 
         if X.shape[0] == 0 or X.shape[1] == 0:
-            return [*categorical_features]
+            self.n_polynomials_ = 0
+            return feature_schema
 
         # How many polynomials can we create?
         n_polynomials = (X.shape[1] * (X.shape[1] - 1)) // 2 + X.shape[1]
@@ -49,6 +56,7 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
             if self.max_poly_features
             else n_polynomials
         )
+        self.n_polynomials_ = n_polynomials
 
         X = self.standardizer.fit_transform(X)
 
@@ -76,17 +84,20 @@ class NanHandlingPolynomialFeaturesStep(FeaturePreprocessingTransformerStep):
                     continue
                 self.poly_factor_2_idx[i] = rng.choice(list(indices_))
 
-        return categorical_features
+        # Polynomial features are appended as new numerical columns
+        return feature_schema
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
 
         if X.shape[0] == 0 or X.shape[1] == 0:
-            return X
+            return X, None, None
 
         X = self.standardizer.transform(X)  # type: ignore
 
         poly_features_xs = X[:, self.poly_factor_1_idx] * X[:, self.poly_factor_2_idx]
 
-        return np.hstack((X, poly_features_xs))
+        return X, poly_features_xs, FeatureModality.NUMERICAL

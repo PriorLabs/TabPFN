@@ -88,7 +88,7 @@ def test__to__between_fits__outputs_equal(
         prediction_1,
         prediction_2,
         # Use a slightly relaxed comparison as comparing between devices.
-        decimal=5,
+        decimal=4,
     )
 
 

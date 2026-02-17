@@ -174,8 +174,9 @@ class InferenceConfig:
     _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0
 
-    def override_with_user_input(
-        self, user_config: dict | InferenceConfig | None
+    def override_with_user_input_and_resolve_auto(
+        self,
+        user_config: dict | InferenceConfig | None,
     ) -> InferenceConfig:
         """Return a new config with fields specified in `user_config` overwritten.
 
@@ -196,6 +197,23 @@ class InferenceConfig:
         raise ValueError(
             f"{user_config=}\nUnknown user config provided, see config above."
         )
+
+    def get_resolved_outlier_removal_std(
+        self,
+        estimator_type: Literal["regressor", "classifier"],
+    ) -> float | None:
+        """Get the resolved outlier removal std."""
+        if self.OUTLIER_REMOVAL_STD == "auto":
+            return (
+                self._REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD
+                if estimator_type == "regressor"
+                else self._CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD
+            )
+
+        if self.OUTLIER_REMOVAL_STD is not None and self.OUTLIER_REMOVAL_STD <= 0:
+            raise ValueError("OUTLIER_REMOVAL_STD must be greater than 0")
+
+        return self.OUTLIER_REMOVAL_STD
 
     @classmethod
     def get_default(
