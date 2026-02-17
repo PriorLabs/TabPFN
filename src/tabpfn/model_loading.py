@@ -26,13 +26,12 @@ from urllib.error import URLError
 
 import joblib
 import torch
+from filelock import FileLock
 from tabpfn_common_utils.telemetry import (
-    capture_event,
     ModelLoadEvent,
+    capture_event,
     set_model_config,
 )
-from filelock import FileLock
-
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
