@@ -136,7 +136,7 @@ def get_ordinal_encoder(
     # Despite the column shuffling introduced by the vanilla ColumnTransformer, we
     # observed better overall performance when using it. Therefore, we keep it.
 
-    return ColumnTransformer(
+    return OrderPreservingColumnTransformer(
         transformers=[("encoder", oe, make_column_selector(dtype_include=to_convert))],
         remainder=FunctionTransformer(),
         sparse_threshold=0.0,
