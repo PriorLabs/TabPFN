@@ -26,7 +26,7 @@ def test_adaptive_quantile_transformer_with_numpy_generator():
     )
 
     # ACT & ASSERT: Ensure that fitting the transformer does not raise an error
-    transformer.fit(X)
+    transformer.fit_transform(X)
 
     # Further assertion to ensure the transformer is functional
     assert hasattr(transformer, "quantiles_")

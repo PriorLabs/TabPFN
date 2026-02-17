@@ -25,14 +25,18 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-from tabpfn.preprocessing.pipeline_factory import build_pipeline
-from tabpfn.preprocessing.pipeline_interfaces import TransformResult
+from tabpfn.preprocessing.datamodel import Feature
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 
 try:
-    from tabpfn.preprocessing.datamodel import ColumnMetadata, FeatureModality
+    from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
     NEW_PIPELINE_IMPLEMENTATION = True
 except ImportError:
+    try:
+        from tabpfn.preprocessing.pipeline_interface import TransformResult
+    except ImportError:
+        pytest.skip("Pipeline consistency tests cannot be run", allow_module_level=True)
     NEW_PIPELINE_IMPLEMENTATION = False
 
 logger = logging.getLogger(__name__)
@@ -52,7 +56,7 @@ def _get_random_data_with_categoricals(
     n_samples: int = 20,
     n_numerical: int = 3,
     n_categorical: int = 2,
-) -> tuple[np.ndarray, ColumnMetadata | list[int]]:
+) -> tuple[np.ndarray, FeatureSchema | list[int]]:
     """Generate random data with both numerical and categorical features."""
     n_features = n_numerical + n_categorical
     X = np.zeros((n_samples, n_features), dtype=np.float64)
@@ -67,17 +71,25 @@ def _get_random_data_with_categoricals(
     # Categorical features: random integers representing categories
     for i in range(n_numerical, n_features):
         num_categories = random_state.integers(2, 6)
-        X[:, i] = random_state.integers(0, num_categories, size=n_samples).astype(float)
+        # Don't make them ordinally encoded to test categorical encoding behavior
+        cats = random_state.integers(0, num_categories + 50, size=n_samples)
+        cats = cats.astype(float)
+        # Add some NaNs to categorical features to test NaN handling
+        X[:, i] = cats
+        nan_mask = random_state.random((n_samples,)) < 0.1
+        X[:, i][nan_mask] = np.nan
 
     if NEW_PIPELINE_IMPLEMENTATION:
         # Build column metadata
-        metadata = ColumnMetadata.from_dict(  # type: ignore
-            {
-                FeatureModality.NUMERICAL: list(range(n_numerical)),  # type: ignore
-                FeatureModality.CATEGORICAL: list(range(n_numerical, n_features)),  # type: ignore
-            }
-        )
-        return X, metadata
+        features = [
+            Feature(name=None, modality=FeatureModality.NUMERICAL)  # type: ignore
+            for _ in range(n_numerical)
+        ] + [
+            Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
+            for _ in range(n_categorical)
+        ]
+        schema = FeatureSchema(features=features)  # type: ignore
+        return X, schema
     categorical_indices = list(range(n_numerical, n_features))
     return X, categorical_indices
 
@@ -150,6 +162,11 @@ _PREPROCESSOR_CONFIGS: dict[str, PreprocessorConfig] = {
         name="none",
         categorical_name="numeric",
         global_transformer_name="svd",
+    ),
+    "none_ordinal_with_svd": PreprocessorConfig(
+        name="none",
+        categorical_name="ordinal",
+        global_transformer_name="svd_quarter_components",
     ),
     "squashing_with_svd_quarter": PreprocessorConfig(
         name="squashing_scaler_default",
@@ -270,26 +287,28 @@ def _transform_with_pipeline(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, list[int]]]:
     """Run the preprocessing pipeline and return transformed data."""
     rng = np.random.default_rng(RANDOM_STATE)
-    X_train, metadata_or_cat_indices = _get_random_data_with_categoricals(
+    X_train, schema_or_cat_indices = _get_random_data_with_categoricals(
         rng, n_samples=N_SAMPLES
     )
     X_test, _ = _get_random_data_with_categoricals(rng, n_samples=N_TEST_SAMPLES)
 
     config = test_case.config_factory()
-    pipeline = build_pipeline(config, random_state=RANDOM_STATE)
+    pipeline = create_preprocessing_pipeline(config, random_state=RANDOM_STATE)
 
-    result_train = pipeline.fit_transform(X_train, metadata_or_cat_indices)
+    result_train = pipeline.fit_transform(X_train, schema_or_cat_indices)
     result_test = pipeline.transform(X_test)
 
     if NEW_PIPELINE_IMPLEMENTATION:
-        metadata_dict = {
-            modality.value: indices
-            for modality, indices in result_train.metadata.indices_by_modality.items()
-        }
+        schema_dict: dict[str, list[int]] = {"categorical": []}
+        for idx, feature in enumerate(result_train.feature_schema.features):
+            key = feature.modality.value
+            if key not in schema_dict:
+                schema_dict[key] = []
+            schema_dict[key].append(idx)
     else:
         assert isinstance(result_train, TransformResult)
         _, categorical_indices = result_train
-        metadata_dict = {
+        schema_dict = {
             "categorical": categorical_indices,
         }
 
@@ -297,7 +316,7 @@ def _transform_with_pipeline(
     X_train_out = np.asarray(result_train.X)
     X_test_out = np.asarray(result_test.X)
 
-    return X_train_out, X_test_out, metadata_dict
+    return X_train_out, X_test_out, schema_dict
 
 
 def _load_json_to_array(data: list) -> np.ndarray:
@@ -368,7 +387,7 @@ def test__pipeline__output_matches_reference(
 ) -> None:
     """Test that pipeline output matches saved reference data."""
     X_train_ref, X_test_ref, metadata_ref = _load_reference_or_fail(test_case_name)
-    X_train, X_test, metadata = _transform_with_pipeline(test_case)
+    X_train, X_test, schema = _transform_with_pipeline(test_case)
 
     assert X_train.shape == X_train_ref.shape, (
         f"Training data shape mismatch: {X_train.shape} vs {X_train_ref.shape}\n"
@@ -379,8 +398,8 @@ def test__pipeline__output_matches_reference(
         f"{HOW_TO_FIX_MESSAGE}"
     )
 
-    assert metadata["categorical"] == metadata_ref["categorical"], (
-        f"Metadata mismatch:\nGot: {metadata['categorical']}\nExpected: "
+    assert schema["categorical"] == metadata_ref["categorical"], (
+        f"Metadata mismatch:\nGot: {schema['categorical']}\nExpected: "
         f"{metadata_ref['categorical']}\n"
         f"{HOW_TO_FIX_MESSAGE}"
     )
@@ -409,8 +428,8 @@ def save_reference_data() -> None:
 
     for test_case_name, test_case in test_cases.items():
         try:
-            X_train, X_test, metadata = _transform_with_pipeline(test_case)
-            _save_reference(test_case_name, X_train, X_test, metadata)
+            X_train, X_test, schema = _transform_with_pipeline(test_case)
+            _save_reference(test_case_name, X_train, X_test, schema)
         except Exception as e:
             logger.error(f"Failed to generate reference for {test_case_name}: {e}")
             raise

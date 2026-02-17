@@ -3,27 +3,23 @@
 from __future__ import annotations
 
 import contextlib
-from copy import deepcopy
-from typing import TYPE_CHECKING, Literal, TypeVar
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
 import numpy as np
 from scipy.stats import shapiro
 from sklearn.compose import ColumnTransformer, make_column_selector
-from sklearn.decomposition import TruncatedSVD
-from sklearn.impute import SimpleImputer
 from sklearn.pipeline import FeatureUnion, Pipeline
 from sklearn.preprocessing import (
     FunctionTransformer,
     MinMaxScaler,
     PowerTransformer,
     RobustScaler,
-    StandardScaler,
 )
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingStep,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
@@ -34,62 +30,15 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
+from tabpfn.preprocessing.steps.utils import wrap_with_safe_standard_scaler
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
 
-T = TypeVar("T")
-
-
-def _identity(x: T) -> T:
-    return x
-
-
-def _inf_to_nan_func(x: np.ndarray) -> np.ndarray:
-    return np.nan_to_num(x, nan=np.nan, neginf=np.nan, posinf=np.nan)
-
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
     return np.exp(x) - 1  # type: ignore
-
-
-inf_to_nan_transformer = FunctionTransformer(
-    func=_inf_to_nan_func,
-    inverse_func=_identity,
-    check_inverse=False,
-)
-nan_impute_transformer = SimpleImputer(
-    missing_values=np.nan,
-    strategy="mean",
-    # keep empty features for inverse to function
-    keep_empty_features=True,
-)
-nan_impute_transformer.inverse_transform = (
-    _identity  # do not inverse np.nan values.  # type: ignore
-)
-
-_make_finite_transformer = [
-    ("inf_to_nan", inf_to_nan_transformer),
-    ("nan_impute", nan_impute_transformer),
-]
-
-
-def _make_standard_scaler_safe(
-    _name_scaler_tuple: tuple[str, TransformerMixin],
-    *,
-    no_name: bool = False,
-) -> Pipeline:
-    # Make sure that all data that enters and leaves a scaler is finite.
-    # This is needed in edge cases where, for example, a division by zero
-    # occurs while scaling or when the input contains not number values.
-    return Pipeline(
-        steps=[
-            *[(n + "_pre ", deepcopy(t)) for n, t in _make_finite_transformer],
-            ("placeholder", _name_scaler_tuple) if no_name else _name_scaler_tuple,
-            *[(n + "_post", deepcopy(t)) for n, t in _make_finite_transformer],
-        ],
-    )
 
 
 def _make_box_cox_safe(input_transformer: TransformerMixin | Pipeline) -> Pipeline:
@@ -107,27 +56,42 @@ def _make_box_cox_safe(input_transformer: TransformerMixin | Pipeline) -> Pipeli
     )
 
 
-def _add_safe_standard_to_safe_power_without_standard(
-    input_transformer: TransformerMixin,
-) -> Pipeline:
-    """In edge cases PowerTransformer can create inf values and similar. Then, the post
-    standard scale crashes. This fixes this issue.
-    """
-    return Pipeline(
-        steps=[
-            ("input_transformer", input_transformer),
-            ("standard", _make_standard_scaler_safe(("standard", StandardScaler()))),
-        ],
-    )
-
-
 def _skew(x: np.ndarray) -> float:
     """skewness: 3 * (mean - median) / std."""
     return float(3 * (np.nanmean(x, 0) - np.nanmedian(x, 0)) / np.std(x, 0))
 
 
-class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
-    """Reshape the feature distributions using different transformations."""
+class ReshapeFeatureDistributionsStep(PreprocessingStep):
+    """Reshape feature distributions using various transformations.
+
+    This step should receive ALL columns (not modality-sliced) because it:
+    1. Handles feature subsampling when too many features exist
+    2. Applies different logic based on `apply_to_categorical` flag
+    3. Can append transformed features to originals (`append_to_original`)
+
+    # TODO(ben): Add separate PreprocessingStep's for all of the above
+    # so that we can register this with modalities
+
+    When using with PreprocessingPipeline, register as a bare step (no modalities):
+        pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
+
+    Configuration options:
+        - transform_name: The transformation to apply (e.g., "squashing_scaler_default",
+            "quantile_uni_coarse")
+        - apply_to_categorical: Whether to transform categorical columns too
+        - append_to_original: If True, keep original and append transformed as new
+            columns
+        - max_features_per_estimator: Subsample features if above this threshold
+        - global_transformer_name: Optional global transform like "svd" that adds
+            features
+
+    Output column ordering:
+        - With append_to_original=True: [original_cols, transformed_cols, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=False:
+            [categorical_passthrough, numerical_transformed, (svd_cols)]
+        - With append_to_original=False, apply_to_categorical=True:
+            [all_transformed, (svd_cols)]
+    """
 
     APPEND_TO_ORIGINAL_THRESHOLD = 500
 
@@ -164,7 +128,6 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         apply_to_categorical: bool = False,
         append_to_original: bool | Literal["auto"] = False,
         max_features_per_estimator: int = 500,
-        global_transformer_name: str | None = None,
         random_state: int | np.random.Generator | None = None,
     ):
         super().__init__()
@@ -177,19 +140,19 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
         self.append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
-        self.global_transformer_name = global_transformer_name
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
-    def _set_transformer_and_cat_ix(  # noqa: PLR0912
+    def _create_transformers_and_new_schema(
         self,
         n_samples: int,
         n_features: int,
-        categorical_features: list[int],
-    ) -> tuple[Pipeline | ColumnTransformer, list[int]]:
+        feature_schema: FeatureSchema,
+    ) -> tuple[Pipeline | ColumnTransformer, FeatureSchema]:
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
         static_seed, rng = infer_random_state(self.random_state)
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
@@ -202,30 +165,16 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
                 subsample_features,
                 replace=False,
             )
-            categorical_features = [
-                new_idx
-                for new_idx, idx in enumerate(self.subsampled_features_)
-                if idx in categorical_features
-            ]
+            # Update modalities to reflect subsampled features
+            # Create a new schema with only the kept indices
+            kept_indices = list(self.subsampled_features_)
+            feature_schema = feature_schema.slice_for_indices(kept_indices)
+            categorical_features = feature_schema.indices_for(
+                FeatureModality.CATEGORICAL
+            )
             n_features = subsample_features
         else:
             self.subsampled_features_ = np.arange(n_features)
-
-        if (
-            self.global_transformer_name is not None
-            and self.global_transformer_name != "None"
-            and not (
-                self.global_transformer_name in ["svd", "svd_quarter_components"]
-                and n_features < 2
-            )
-        ):
-            global_transformer_ = get_all_global_transformers(
-                n_samples,
-                n_features,
-                random_state=static_seed,
-            )[self.global_transformer_name]
-        else:
-            global_transformer_ = None
 
         all_feats_ix = list(range(n_features))
         transformers = []
@@ -294,132 +243,45 @@ class ReshapeFeatureDistributionsStep(FeaturePreprocessingTransformerStep):
             sparse_threshold=0.0,  # No sparse
         )
 
-        # Apply a global transformer which accepts the entire dataset instead of
-        # one column
-        # NOTE: We assume global_transformer does not destroy the semantic meaning of
-        # categorical_features_.
-        if global_transformer_:
-            transformer = Pipeline(
-                [
-                    ("preprocess", transformer),
-                    ("global_transformer", global_transformer_),
-                ],
-            )
-
         self.transformer_ = transformer
 
-        return transformer, cat_ix
-
-    @override
-    def _fit(self, X: np.ndarray, categorical_features: list[int]) -> list[int]:
-        n_samples, n_features = X.shape
-        transformer, cat_ix = self._set_transformer_and_cat_ix(
-            n_samples,
-            n_features,
-            categorical_features,
+        # Compute output feature count for modality update
+        # Include: base features + appended transformed (if append_to_original)
+        n_output_features = (
+            n_features + len(trans_ixs) if self.append_to_original else n_features
         )
-        transformer.fit(X[:, self.subsampled_features_])
-        self.categorical_features_after_transform_ = cat_ix
-        self.transformer_ = transformer
-        return cat_ix
+
+        # Build the new metadata with updated categorical indices
+        # Non-categorical indices become numerical
+        new_schema = FeatureSchema.from_only_categorical_indices(
+            categorical_indices=sorted(cat_ix),
+            num_columns=n_output_features,
+        )
+
+        return transformer, new_schema
 
     @override
-    def fit_transform(
+    def _fit(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> TransformResult:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
         n_samples, n_features = X.shape
-        transformer, cat_ix = self._set_transformer_and_cat_ix(
+        transformer, output_schema = self._create_transformers_and_new_schema(
             n_samples,
             n_features,
-            categorical_features,
+            feature_schema,
         )
-        Xt = transformer.fit_transform(X[:, self.subsampled_features_])
-        self.categorical_features_after_transform_ = cat_ix
+        transformer.fit(X[:, self.subsampled_features_])
         self.transformer_ = transformer
-        return TransformResult(Xt, cat_ix)  # type: ignore
+        return output_schema
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X[:, self.subsampled_features_])  # type: ignore
-
-
-def get_all_global_transformers(
-    num_examples: int,
-    num_features: int,
-    random_state: int | None = None,
-) -> dict[str, FeatureUnion | Pipeline]:
-    """Returns a dictionary of global transformers to transform the data."""
-    return {
-        "scaler": _make_standard_scaler_safe(("standard", StandardScaler())),
-        "svd": FeatureUnion(
-            [
-                # default FunctionTransformer yields the identity function
-                ("passthrough", FunctionTransformer()),
-                (
-                    "svd",
-                    Pipeline(
-                        steps=[
-                            (
-                                "save_standard",
-                                _make_standard_scaler_safe(
-                                    ("standard", StandardScaler(with_mean=False)),
-                                ),
-                            ),
-                            (
-                                "svd",
-                                TruncatedSVD(
-                                    algorithm="arpack",
-                                    n_components=max(
-                                        1,
-                                        min(
-                                            num_examples // 10 + 1,
-                                            num_features // 2,
-                                        ),
-                                    ),
-                                    random_state=random_state,
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        ),
-        "svd_quarter_components": FeatureUnion(
-            [
-                ("passthrough", FunctionTransformer(func=_identity)),
-                (
-                    "svd",
-                    Pipeline(
-                        steps=[
-                            (
-                                "save_standard",
-                                _make_standard_scaler_safe(
-                                    ("standard", StandardScaler(with_mean=False)),
-                                ),
-                            ),
-                            (
-                                "svd",
-                                TruncatedSVD(
-                                    algorithm="arpack",
-                                    n_components=max(
-                                        1,
-                                        min(
-                                            num_examples // 10 + 1,
-                                            num_features // 4,
-                                        ),
-                                    ),
-                                    random_state=random_state,
-                                ),
-                            ),
-                        ],
-                    ),
-                ),
-            ],
-        ),
-    }
+        return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
 
 
 def get_adaptive_preprocessors(
@@ -451,7 +313,7 @@ def get_adaptive_preprocessors(
                 (
                     "skewed_pos",
                     _make_box_cox_safe(
-                        _add_safe_standard_to_safe_power_without_standard(
+                        wrap_with_safe_standard_scaler(
                             SafePowerTransformer(
                                 standardize=False,
                                 method="box-cox",
@@ -462,7 +324,7 @@ def get_adaptive_preprocessors(
                 ),
                 (
                     "skewed",
-                    _add_safe_standard_to_safe_power_without_standard(
+                    wrap_with_safe_standard_scaler(
                         SafePowerTransformer(
                             standardize=False,
                             method="yeo-johnson",
@@ -505,19 +367,19 @@ def get_all_reshape_feature_distribution_preprocessors(
 ) -> dict[str, TransformerMixin | Pipeline]:
     """Returns a dictionary of preprocessing to preprocess the data."""
     all_preprocessors = {
-        "power": _add_safe_standard_to_safe_power_without_standard(
+        "power": wrap_with_safe_standard_scaler(
             PowerTransformer(standardize=False),
         ),
-        "safepower": _add_safe_standard_to_safe_power_without_standard(
+        "safepower": wrap_with_safe_standard_scaler(
             SafePowerTransformer(standardize=False),
         ),
         "power_box": _make_box_cox_safe(
-            _add_safe_standard_to_safe_power_without_standard(
+            wrap_with_safe_standard_scaler(
                 PowerTransformer(standardize=False, method="box-cox"),
             ),
         ),
         "safepower_box": _make_box_cox_safe(
-            _add_safe_standard_to_safe_power_without_standard(
+            wrap_with_safe_standard_scaler(
                 SafePowerTransformer(standardize=False, method="box-cox"),
             ),
         ),

@@ -4,6 +4,9 @@ from .adaptive_quantile_transformer import (
 from .add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
+from .add_svd_features_step import (
+    AddSVDFeaturesStep,
+)
 from .differentiable_z_norm_step import (
     DifferentiableZNormStep,
 )
@@ -31,6 +34,7 @@ from .squashing_scaler_transformer import SquashingScaler
 __all__ = [
     "AdaptiveQuantileTransformer",
     "AddFingerprintFeaturesStep",
+    "AddSVDFeaturesStep",
     "DifferentiableZNormStep",
     "EncodeCategoricalFeaturesStep",
     "KDITransformerWithNaN",

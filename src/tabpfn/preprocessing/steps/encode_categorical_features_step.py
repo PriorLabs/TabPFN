@@ -9,9 +9,10 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.pipeline_interfaces import (
-    FeaturePreprocessingTransformerStep,
-    TransformResult,
+from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_interface import (
+    PreprocessingStep,
+    PreprocessingStepResult,
 )
 from tabpfn.utils import infer_random_state
 
@@ -23,8 +24,20 @@ def _get_least_common_category_count(x_column: np.ndarray) -> int:
     return int(counts.min())
 
 
-class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
-    """Encode Categorical Features Step."""
+class EncodeCategoricalFeaturesStep(PreprocessingStep):
+    """Encode categorical features using ordinal or one-hot encoding.
+
+    When using with PreprocessingPipeline, register as a bare step (no modalities):
+        pipeline = PreprocessingPipeline(steps=[EncodeCategoricalFeaturesStep()])
+
+    NOT as a modality-targeted step:
+        pipeline = PreprocessingPipeline(steps=[
+            (EncodeCategoricalFeaturesStep(), {FeatureModality.CATEGORICAL})
+        ])
+
+    This is needed for the pipeline with onehot encoding to work.
+    It will be updated in future versions.
+    """
 
     def __init__(
         self,
@@ -113,12 +126,16 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
     def _fit(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> list[int]:
+        feature_schema: FeatureSchema,
+    ) -> FeatureSchema:
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
+        n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return categorical_features
+            return FeatureSchema.from_only_categorical_indices(
+                categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -140,7 +157,8 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             if Xt.size >= 1_000_000:
                 ct = None
             else:
-                categorical_features = list(range(Xt.shape[1]))[
+                n_features = Xt.shape[1]
+                categorical_features = list(range(n_features))[
                     ct.output_indices_["one_hot_encoder"]
                 ]
         else:
@@ -149,17 +167,24 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             )
 
         self.categorical_transformer_ = ct
-        return categorical_features
 
-    def _fit_transform(
+        return FeatureSchema.from_only_categorical_indices(
+            categorical_features, n_features
+        )
+
+    def _fit_transform_internal(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> tuple[np.ndarray, list[int]]:
+        feature_schema: FeatureSchema,
+    ) -> tuple[np.ndarray, FeatureSchema]:
+        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
+        n_features = X.shape[1]  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, categorical_features
+            return X, FeatureSchema.from_only_categorical_indices(
+                categorical_features, n_features
+            )
 
         _, rng = infer_random_state(self.random_state)
 
@@ -188,7 +213,8 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
                 ct = None
                 Xt = X
             else:
-                categorical_features = list(range(Xt.shape[1]))[
+                n_features = Xt.shape[1]
+                categorical_features = list(range(n_features))[
                     ct.output_indices_["one_hot_encoder"]
                 ]
         else:
@@ -197,22 +223,26 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, categorical_features  # type: ignore
+        return Xt, FeatureSchema.from_only_categorical_indices(
+            categorical_features, n_features
+        )
 
     @override
     def fit_transform(
         self,
         X: np.ndarray,
-        categorical_features: list[int],
-    ) -> TransformResult:
-        Xt, cat_ix = self._fit_transform(X, categorical_features)
-        self.categorical_features_after_transform_ = cat_ix
-        return TransformResult(Xt, cat_ix)
+        feature_schema: FeatureSchema,
+    ) -> PreprocessingStepResult:
+        Xt, output_feature_schema = self._fit_transform_internal(X, feature_schema)
+        self.feature_schema_updated_ = output_feature_schema
+        return PreprocessingStepResult(X=Xt, feature_schema=output_feature_schema)
 
     @override
-    def _transform(self, X: np.ndarray, *, is_test: bool = False) -> np.ndarray:
+    def _transform(
+        self, X: np.ndarray, *, is_test: bool = False
+    ) -> tuple[np.ndarray, None, None]:
         if self.categorical_transformer_ is None:
-            return X
+            return X, None, None
 
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -225,7 +255,7 @@ class EncodeCategoricalFeaturesStep(FeaturePreprocessingTransformerStep):
                 transformed[:, col][not_nan_mask] = mapping[
                     transformed[:, col][not_nan_mask].astype(int)
                 ].astype(transformed[:, col].dtype)
-        return transformed  # type: ignore
+        return transformed, None, None  # type: ignore
 
 
 __all__ = [
