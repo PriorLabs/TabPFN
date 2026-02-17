@@ -807,6 +807,82 @@ def test__TabPFNRegressor__few_features__works(n_features: int) -> None:
         )
 
 
+@pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
+@pytest.mark.parametrize("output_type", ["mean", "median", "mode"])
+def test__predict__batch_size_predict__matches_unbatched(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+    output_type: str,
+) -> None:
+    """Test that batch_size_predict matches unbatched prediction."""
+    X, y = X_y
+
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    pred_all = model.predict(X, output_type=output_type)
+    pred_batched = model.predict(
+        X, output_type=output_type, batch_size_predict=batch_size_predict
+    )
+    np.testing.assert_allclose(
+        pred_all, pred_batched, atol=1e-3, rtol=1e-3
+    )
+
+
+@pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
+def test__predict__batch_size_predict__quantiles_matches_unbatched(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+) -> None:
+    """Test that batch_size_predict matches unbatched quantiles."""
+    X, y = X_y
+
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    quantiles_list = [0.1, 0.5, 0.9]
+    quant_all = model.predict(
+        X, output_type="quantiles", quantiles=quantiles_list
+    )
+    quant_batched = model.predict(
+        X,
+        output_type="quantiles",
+        quantiles=quantiles_list,
+        batch_size_predict=batch_size_predict,
+    )
+    for q_all, q_batched in zip(quant_all, quant_batched):
+        np.testing.assert_allclose(
+            q_all, q_batched, atol=1e-3, rtol=1e-3
+        )
+
+
+@pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
+def test__predict__batch_size_predict__main_matches_unbatched(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+) -> None:
+    """Test that batch_size_predict matches unbatched main output."""
+    X, y = X_y
+
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    main_all = model.predict(X, output_type="main")
+    main_batched = model.predict(
+        X, output_type="main", batch_size_predict=batch_size_predict
+    )
+    for key in ["mean", "median", "mode"]:
+        np.testing.assert_allclose(
+            main_all[key], main_batched[key], atol=1e-3, rtol=1e-3
+        )
+    for q_all, q_batched in zip(
+        main_all["quantiles"], main_batched["quantiles"]
+    ):
+        np.testing.assert_allclose(
+            q_all, q_batched, atol=1e-3, rtol=1e-3
+        )
+
+
 def test__create_default_for_version__v2__uses_correct_defaults() -> None:
     estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 

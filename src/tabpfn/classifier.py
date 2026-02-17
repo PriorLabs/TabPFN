@@ -40,6 +40,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    predict_in_batches,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -1061,15 +1062,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
 
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict(self, X: XType) -> np.ndarray:
+    def predict(self, X: XType, *, batch_size_predict: int | None = None) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The predicted class labels as a NumPy array.
         """
+        if batch_size_predict is not None:
+            return predict_in_batches(self.predict, X, batch_size_predict)
+
         probas = self._predict_proba(X=X)
         y_pred = np.argmax(probas, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
@@ -1079,7 +1085,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     @config_context(transform_output="default")
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_logits(self, X: XType) -> np.ndarray:
+    def predict_logits(
+        self, X: XType, *, batch_size_predict: int | None = None
+    ) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1087,16 +1095,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
         """
+        if batch_size_predict is not None:
+            return predict_in_batches(self.predict_logits, X, batch_size_predict)
+
         logits_tensor = self._raw_predict(X, return_logits=True)
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_raw_logits(self, X: XType) -> np.ndarray:
+    def predict_raw_logits(
+        self, X: XType, *, batch_size_predict: int | None = None
+    ) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
         Logits represent the unnormalized log-probabilities of the classes
@@ -1106,11 +1121,21 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             An array of predicted logits for each estimator,
             Shape (n_estimators, n_samples, n_classes).
         """
+        if batch_size_predict is not None:
+            return predict_in_batches(
+                self.predict_raw_logits,
+                X,
+                batch_size_predict,
+                concat_fn=lambda results: np.concatenate(results, axis=1),
+            )
+
         logits_tensor = self._raw_predict(
             X,
             return_logits=False,
@@ -1119,18 +1144,25 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return logits_tensor.float().detach().cpu().numpy()
 
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict_proba(self, X: XType) -> np.ndarray:
+    def predict_proba(
+        self, X: XType, *, batch_size_predict: int | None = None
+    ) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         This is a wrapper around the `_predict_proba` method.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
+        if batch_size_predict is not None:
+            return predict_in_batches(self.predict_proba, X, batch_size_predict)
+
         return self._predict_proba(X)
 
     @config_context(transform_output="default")  # type: ignore
