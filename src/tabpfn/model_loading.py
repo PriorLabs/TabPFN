@@ -307,70 +307,6 @@ def _try_direct_downloads(
     raise Exception("Direct download failed!") from last_error
 
 
-def download_model(
-    to: Path,
-    *,
-    version: ModelVersion,
-    which: Literal["classifier", "regressor"],
-    model_name: str | None = None,
-) -> Literal["ok"] | list[Exception]:
-    """Download a TabPFN model, trying all available sources.
-
-    Args:
-        to: The file path to download the model to.
-        version: The version of the model to download.
-        which: The type of model to download.
-        model_name: Optional specific model name to download.
-
-    Returns:
-        "ok" if the model was downloaded successfully, otherwise a list of
-        exceptions that occurred that can be handled as desired.
-    """
-    errors: list[Exception] = []
-
-    try:
-        model_source = _get_model_source(version, ModelType(which))
-    except ValueError as e:
-        return [e]
-
-    try:
-        _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
-        return "ok"
-    except Exception as e:  # noqa: BLE001
-        if isinstance(
-            e, TabPFNHuggingFaceGatedRepoError
-        ) and not _version_has_direct_download_option(version):
-            filename_for_logs = model_name or model_source.default_filename
-            # We wrap the HF error in the RuntimeError with a commercial message
-            # to make it easier for the user to see the instructions about
-            # authenticating with HuggingFace.
-            errors.append(
-                RuntimeError(
-                    f"Failed to download TabPFN {version} model '{filename_for_logs}'."
-                    f"\n\nDetails and instructions:\n{e!s}\n\n"
-                    f"For commercial usage, we provide alternative download options "
-                    f"for TabPFN {version}; please reach out to us at "
-                    "sales@priorlabs.ai."
-                )
-            )
-            return errors
-
-        logger.warning("HuggingFace download failed.")
-        errors.append(e)
-
-    # For Version 2.5 we require gating, which we don't have in place for direct
-    # downloads.
-    if _version_has_direct_download_option(version):
-        try:
-            _try_direct_downloads(to, model_source, model_name)
-            return "ok"
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"Direct URL downloads failed: {e!s}")
-            errors.append(e)
-
-    return errors
-
-
 def download_all_models(to: Path) -> None:
     """Download all available classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
@@ -454,13 +390,10 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
     return use_instead_path
 
 
-def _get_download_lock() -> FileLock:
-    lock_path = get_cache_dir() / ".download.lock"
+def _get_download_lock(to: Path) -> FileLock:
+    lock_path = to.parent / f".{to.name}.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     return FileLock(lock_path, timeout=-1)
-
-
-_download_lock: FileLock = _get_download_lock()
 
 
 def _with_download_lock(func: Any) -> Any:
@@ -469,22 +402,89 @@ def _with_download_lock(func: Any) -> Any:
 
     Without the lock, concurrent downloads could corrupt the model file or waste
     bandwidth downloading the same file multiple times. The file lock ensures only
-    one download proceeds at a time while others wait.
+    one download of a given file proceeds at a time while others wait.
     """
 
     def wrapper(*args: Any, **kwargs: Any) -> Any:
-        lock_path = _download_lock.lock_file
+        to: Path = args[0] if args else kwargs["to"]
+        lock = _get_download_lock(to)
+        lock_path = lock.lock_file
         logger.info(f"Acquiring download lock: {lock_path}")
-        _download_lock.acquire()
+        lock.acquire()
         logger.debug(f"Acquired download lock: {lock_path}")
         try:
             return func(*args, **kwargs)
         finally:
             logger.debug(f"Releasing download lock: {lock_path}")
-            _download_lock.release()
+            lock.release()
             logger.debug(f"Released download lock: {lock_path}")
 
     return wrapper
+
+
+@_with_download_lock
+def download_model(
+    to: Path,
+    *,
+    version: ModelVersion,
+    which: Literal["classifier", "regressor"],
+    model_name: str | None = None,
+) -> Literal["ok"] | list[Exception]:
+    """Download a TabPFN model, trying all available sources.
+
+    Args:
+        to: The file path to download the model to.
+        version: The version of the model to download.
+        which: The type of model to download.
+        model_name: Optional specific model name to download.
+
+    Returns:
+        "ok" if the model was downloaded successfully, otherwise a list of
+        exceptions that occurred that can be handled as desired.
+    """
+    errors: list[Exception] = []
+
+    try:
+        model_source = _get_model_source(version, ModelType(which))
+    except ValueError as e:
+        return [e]
+
+    try:
+        _try_huggingface_downloads(to, model_source, model_name, suppress_warnings=True)
+        return "ok"
+    except Exception as e:  # noqa: BLE001
+        if isinstance(
+            e, TabPFNHuggingFaceGatedRepoError
+        ) and not _version_has_direct_download_option(version):
+            filename_for_logs = model_name or model_source.default_filename
+            # We wrap the HF error in the RuntimeError with a commercial message
+            # to make it easier for the user to see the instructions about
+            # authenticating with HuggingFace.
+            errors.append(
+                RuntimeError(
+                    f"Failed to download TabPFN {version} model '{filename_for_logs}'."
+                    f"\n\nDetails and instructions:\n{e!s}\n\n"
+                    f"For commercial usage, we provide alternative download options "
+                    f"for TabPFN {version}; please reach out to us at "
+                    "sales@priorlabs.ai."
+                )
+            )
+            return errors
+
+        logger.warning("HuggingFace download failed.")
+        errors.append(e)
+
+    # For Version 2.5 we require gating, which we don't have in place for direct
+    # downloads.
+    if _version_has_direct_download_option(version):
+        try:
+            _try_direct_downloads(to, model_source, model_name)
+            return "ok"
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"Direct URL downloads failed: {e!s}")
+            errors.append(e)
+
+    return errors
 
 
 P = TypeVar("P", bound=Union[str, list[str]])
@@ -535,7 +535,6 @@ def load_model_criterion_config(
 ]: ...
 
 
-@_with_download_lock
 def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
