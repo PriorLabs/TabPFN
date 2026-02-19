@@ -390,12 +390,6 @@ def get_cache_dir() -> Path:  # noqa: PLR0911
     return use_instead_path
 
 
-def _get_download_lock(to: Path) -> FileLock:
-    lock_path = to.parent / f".{to.name}.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    return FileLock(lock_path, timeout=-1)
-
-
 def download_model(
     to: Path,
     *,
@@ -415,7 +409,9 @@ def download_model(
         "ok" if the model was downloaded successfully, otherwise a list of
         exceptions that occurred that can be handled as desired.
     """
-    lock = _get_download_lock(to)
+    lock_path = to.parent / f".{to.name}.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = FileLock(lock_path, timeout=-1)
     logger.debug(f"Acquiring download lock: {lock.lock_file}")
     with lock:
         logger.debug(f"Acquired download lock: {lock.lock_file}")
