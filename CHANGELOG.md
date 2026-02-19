@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-02-19
+
+### Changed
+
+- Download lock is now scoped to the target file path, allowing concurrent downloads of different model files to proceed in parallel instead of serializing all downloads behind a single global lock. ([#790](https://github.com/PriorLabs/TabPFN/pull/790))
+
+
 ## [6.4.0] - 2026-02-18
 
 ### Added
