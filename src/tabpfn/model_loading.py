@@ -396,33 +396,6 @@ def _get_download_lock(to: Path) -> FileLock:
     return FileLock(lock_path, timeout=-1)
 
 
-def _with_download_lock(func: Any) -> Any:
-    """Prevent race conditions when multiple threads/processes download the same
-    model simultaneously.
-
-    Without the lock, concurrent downloads could corrupt the model file or waste
-    bandwidth downloading the same file multiple times. The file lock ensures only
-    one download of a given file proceeds at a time while others wait.
-    """
-
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        to: Path = args[0] if args else kwargs["to"]
-        lock = _get_download_lock(to)
-        lock_path = lock.lock_file
-        logger.info(f"Acquiring download lock: {lock_path}")
-        lock.acquire()
-        logger.debug(f"Acquired download lock: {lock_path}")
-        try:
-            return func(*args, **kwargs)
-        finally:
-            logger.debug(f"Releasing download lock: {lock_path}")
-            lock.release()
-            logger.debug(f"Released download lock: {lock_path}")
-
-    return wrapper
-
-
-@_with_download_lock
 def download_model(
     to: Path,
     *,
@@ -442,6 +415,23 @@ def download_model(
         "ok" if the model was downloaded successfully, otherwise a list of
         exceptions that occurred that can be handled as desired.
     """
+    lock = _get_download_lock(to)
+    logger.debug(f"Acquiring download lock: {lock.lock_file}")
+    with lock:
+        logger.debug(f"Acquired download lock: {lock.lock_file}")
+        if to.exists():
+            logger.debug(f"Model already downloaded by another thread: {to}")
+            return "ok"
+        return _download_model(to, version=version, which=which, model_name=model_name)
+
+
+def _download_model(
+    to: Path,
+    *,
+    version: ModelVersion,
+    which: Literal["classifier", "regressor"],
+    model_name: str | None = None,
+) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
 
     try:
