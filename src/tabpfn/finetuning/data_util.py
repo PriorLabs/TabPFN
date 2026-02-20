@@ -308,7 +308,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         configs (Sequence[Union[RegressorDatasetConfig, ClassifierDatasetConfig]]):
             Stores the input dataset configuration collection.
         split_fn (Callable): Stores the splitting function.
-        rng (np.random.Generator): Stores the random number generator.
+        random_state (int | np.random.Generator): Stores the random number generator.
+            If int, the preprocessing will always use the same random seed.
         n_preprocessing_jobs (int): The number of worker processes that will be used for
             the preprocessing.
         stratify (bool): Whether to stratify the data when splitting with split_fn.
@@ -317,7 +318,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
     def __init__(
         self,
         split_fn: Callable,
-        rng: np.random.Generator,
+        random_state: np.random.Generator | int,
         dataset_config_collection: Sequence[
             RegressorDatasetConfig | ClassifierDatasetConfig
         ],
@@ -327,7 +328,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
-        self.rng = rng
+        self.random_state = random_state
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.stratify = stratify
 
@@ -440,7 +441,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             X_train=x_train_raw,
             y_train=y_train,
             feature_schema=feature_schema,
-            random_state=self.rng,
+            random_state=self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode="block",
         )
@@ -724,7 +725,7 @@ def shuffle_and_chunk_data(
     )
 
 
-def get_preprocessed_dataset_chunks(
+def get_preprocessed_dataset_chunks(  # noqa: PLR0913
     calling_instance: Any,
     X_raw: XType | list[XType],
     y_raw: YType | list[YType],
@@ -733,7 +734,8 @@ def get_preprocessed_dataset_chunks(
     model_type: Literal["regressor", "classifier"],
     *,
     equal_split_size: bool,
-    seed: int,
+    data_shuffle_seed: int,
+    preprocessing_random_state: int | np.random.Generator,
     shuffle: bool = True,
     force_no_stratify: bool = False,
 ) -> DatasetCollectionWithPreprocessing:
@@ -755,7 +757,8 @@ def get_preprocessed_dataset_chunks(
             If False, splits into chunks of size `max_data_size`, with
             the last chunk having the remainder samples but is dropped if its
             size is less than 2.
-        seed: int. Random seed to use for the data shuffling and splitting.
+        data_shuffle_seed: int. Random seed to use for the data shuffling and splitting.
+        preprocessing_random_state: Random state to use for the preprocessing.
         shuffle: If True, shuffle the data before splitting.
         force_no_stratify: If True, do not stratify the data even if the model
             type is classification. If None, use the model type to determine whether
@@ -771,9 +774,7 @@ def get_preprocessed_dataset_chunks(
     assert len(X_raw) == len(y_raw), "X and y lists must have the same length."
 
     if not hasattr(calling_instance, "models_") or calling_instance.models_ is None:
-        _, rng = calling_instance._initialize_model_variables()
-    else:
-        _, rng = infer_random_state(calling_instance.random_state)
+        calling_instance._initialize_model_variables()
 
     X_split, y_split = [], []
     for X_item, y_item in zip(X_raw, y_raw):
@@ -783,7 +784,7 @@ def get_preprocessed_dataset_chunks(
                 y_item,
                 max_chunk_size=max_data_size,
                 equal_split_size=equal_split_size,
-                seed=seed,
+                seed=data_shuffle_seed,
                 task=("multiclass" if model_type == "classifier" else "regression"),
                 shuffle=shuffle,
             )
@@ -798,7 +799,11 @@ def get_preprocessed_dataset_chunks(
     for X_item, y_item in zip(X_split, y_split):
         if model_type == "classifier":
             ensemble_configs, X_mod, y_mod = (
-                calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
+                calling_instance._initialize_dataset_preprocessing(
+                    X=X_item,
+                    y=y_item,
+                    random_state=preprocessing_random_state,
+                )
             )
             current_cat_ix = calling_instance.inferred_feature_schema_.indices_for(
                 FeatureModality.CATEGORICAL
@@ -811,7 +816,11 @@ def get_preprocessed_dataset_chunks(
             )
         elif model_type == "regressor":
             ensemble_configs, X_mod, y_mod, bardist_ = (
-                calling_instance._initialize_dataset_preprocessing(X_item, y_item, rng)
+                calling_instance._initialize_dataset_preprocessing(
+                    X=X_item,
+                    y=y_item,
+                    random_state=preprocessing_random_state,
+                )
             )
             current_cat_ix = calling_instance.inferred_feature_schema_.indices_for(
                 FeatureModality.CATEGORICAL
@@ -830,7 +839,7 @@ def get_preprocessed_dataset_chunks(
 
     return DatasetCollectionWithPreprocessing(
         split_fn,
-        rng=rng,
+        random_state=preprocessing_random_state,
         dataset_config_collection=dataset_config_collection,
         stratify=False if force_no_stratify else (model_type == "classifier"),
     )
