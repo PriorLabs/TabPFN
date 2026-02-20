@@ -69,13 +69,10 @@ class TabPFNOutOfMemoryError(TabPFNError):
 
         message = (
             f"{self.device_name} out of memory{size_info}.\n\n"
-            f"Solution: Split your test data into smaller batches:\n\n"
-            f"    batch_size = 1000  # depends on hardware\n"
-            f"    predictions = []\n"
-            f"    for i in range(0, len(X_test), batch_size):\n"
-            f"        batch = model.{predict_method}(X_test[i:i + batch_size])\n"
-            f"        predictions.append(batch)\n"
-            f"    predictions = np.vstack(predictions)"
+            f"Solution: Use batch_size_predict to split test data"
+            f" into smaller batches:\n\n"
+            f"    model.{predict_method}("
+            f"X_test, batch_size_predict=100)"
         )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"
