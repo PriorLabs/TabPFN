@@ -159,7 +159,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         lr_warmup_only: bool = False,
         n_estimators_finetune: int = 2,
         n_estimators_validation: int = 2,
-        n_estimators_final_inference: int = 8,
+        n_estimators_final_inference: int = 2,
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
@@ -195,16 +195,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             == self.n_estimators_final_inference
         ):
             warnings.warn(
-                "`use_fixed_preprocessing_seed` is only supported if "
-                "`n_estimators_finetune` == `n_estimators_validation` == "
-                "`n_estimators_final_inference`. We are setting the number of "
+                "`use_fixed_preprocessing_seed` should only be used "
+                "if `n_estimators_finetune` == `n_estimators_validation` == "
+                "`n_estimators_final_inference`. Consider setting the number of "
                 "estimators for validation and final inference to the same value "
                 f"as `n_estimators_finetune`(={self.n_estimators_finetune}).",
                 UserWarning,
                 stacklevel=2,
             )
-            self.n_estimators_validation = self.n_estimators_finetune
-            self.n_estimators_final_inference = self.n_estimators_finetune
 
     def _build_estimator_config(
         self,
