@@ -333,7 +333,7 @@ def download_all_models(to: Path) -> None:
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
     """Determine if a version has a direct download option."""
-    return version == ModelVersion.V2
+    return version in (ModelVersion.V2, ModelVersion.V2_5)
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
@@ -429,6 +429,15 @@ def _download_model(
     model_name: str | None = None,
 ) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
+
+    # v2.5 requires browser-based license acceptance before download.
+    if version != ModelVersion.V2:
+        try:
+            from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
+
+            ensure_license_accepted()
+        except Exception as e:  # noqa: BLE001
+            return [e]
 
     try:
         model_source = _get_model_source(version, ModelType(which))
