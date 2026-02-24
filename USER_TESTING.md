@@ -11,7 +11,9 @@ pip install git+https://github.com/PriorLabs/TabPFN.git@brendan/hf-ungating
 ```bash
 # simulate gating removal by setting a token
 export HF_TOKEN=...
-python tests/quick_test.py
+# grab testing script
+curl -L -o quick_test.py https://raw.githubusercontent.com/PriorLabs/TabPFN/brendan/hf-ungating/tests/quick_test.py
+python quick_test.py
 ```
 
 ## Reset login / cached models
