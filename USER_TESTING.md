@@ -3,7 +3,7 @@
 ## Install from this branch
 
 ```bash
-pip install git+https://github.com/PriorLabs/TabPFN.git@main
+pip install git+https://github.com/PriorLabs/TabPFN.git@brendan/hf-ungating
 ```
 
 ## Run the quick test
