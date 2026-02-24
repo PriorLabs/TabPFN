@@ -1019,6 +1019,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         *,
         return_logits: bool,
         return_raw_logits: bool = False,
+        batch_size_predict: int | None = None,
     ) -> torch.Tensor:
         """Internal method to run prediction.
 
@@ -1033,11 +1034,26 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                            post-processing steps.
             return_raw_logits: If True, returns the raw logits without
                 averaging estimators or temperature scaling.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The raw torch.Tensor output, either logits or probabilities,
             depending on `return_logits` and `return_raw_logits`.
         """
+        if batch_size_predict is not None:
+            concat_dim = 1 if return_raw_logits else 0
+            return predict_in_batches(
+                lambda chunk: self._raw_predict(
+                    chunk,
+                    return_logits=return_logits,
+                    return_raw_logits=return_raw_logits,
+                ),
+                X,
+                batch_size_predict,
+                concat_fn=lambda results: torch.cat(results, dim=concat_dim),
+            )
+
         check_is_fitted(self)
 
         if not self.differentiable_input:
@@ -1073,10 +1089,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The predicted class labels as a NumPy array.
         """
-        if batch_size_predict is not None:
-            return predict_in_batches(self.predict, X, batch_size_predict)
-
-        probas = self._predict_proba(X=X)
+        probas = self._predict_proba(X=X, batch_size_predict=batch_size_predict)
         y_pred = np.argmax(probas, axis=1)
         if hasattr(self, "label_encoder_") and self.label_encoder_ is not None:
             return self.label_encoder_.inverse_transform(y_pred)
@@ -1101,10 +1114,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             The predicted logits as a NumPy array. Shape (n_samples, n_classes).
         """
-        if batch_size_predict is not None:
-            return predict_in_batches(self.predict_logits, X, batch_size_predict)
-
-        logits_tensor = self._raw_predict(X, return_logits=True)
+        logits_tensor = self._raw_predict(
+            X, return_logits=True, batch_size_predict=batch_size_predict
+        )
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")
@@ -1128,18 +1140,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             An array of predicted logits for each estimator,
             Shape (n_estimators, n_samples, n_classes).
         """
-        if batch_size_predict is not None:
-            return predict_in_batches(
-                self.predict_raw_logits,
-                X,
-                batch_size_predict,
-                concat_fn=lambda results: np.concatenate(results, axis=1),
-            )
-
         logits_tensor = self._raw_predict(
             X,
             return_logits=False,
             return_raw_logits=True,
+            batch_size_predict=batch_size_predict,
         )
         return logits_tensor.float().detach().cpu().numpy()
 
@@ -1160,24 +1165,35 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
-        if batch_size_predict is not None:
-            return predict_in_batches(self.predict_proba, X, batch_size_predict)
-
-        return self._predict_proba(X)
+        return self._predict_proba(X, batch_size_predict=batch_size_predict)
 
     @config_context(transform_output="default")  # type: ignore
-    def _predict_proba(self, X: XType) -> np.ndarray:
+    def _predict_proba(
+        self,
+        X: XType,
+        batch_size_predict: int | None = None,
+    ) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 
         Args:
             X: The input data for prediction.
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The predicted probabilities of the classes as a NumPy array.
             Shape (n_samples, n_classes).
         """
         probas = (
-            self._raw_predict(X, return_logits=False).float().detach().cpu().numpy()
+            self._raw_predict(
+                X,
+                return_logits=False,
+                batch_size_predict=batch_size_predict,
+            )
+            .float()
+            .detach()
+            .cpu()
+            .numpy()
         )
         probas = self._maybe_reweight_probas(probas=probas)
         if self.inference_config_.USE_SKLEARN_16_DECIMAL_PRECISION:
