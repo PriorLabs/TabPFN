@@ -37,6 +37,16 @@ class TabPFNSettings(BaseSettings):
         description="The version of the TabPFN model to use by default.",
     )
 
+    # Auth URLs (for browser-based license acceptance)
+    auth_gui_url: str = Field(
+        default="https://ux.priorlabs.ai",
+        description="URL for the PriorLabs login GUI (browser-based license acceptance).",
+    )
+    auth_api_url: str = Field(
+        default="https://api.priorlabs.ai",
+        description="URL for the PriorLabs API (token verification).",
+    )
+
     # Performance/Memory Settings
     allow_cpu_large_dataset: bool = Field(
         default=False,
