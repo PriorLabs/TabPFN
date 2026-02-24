@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -107,24 +108,24 @@ jobs:
           enableCrossOsArchive: true
 
       - name: Run Tests (all tests)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
 
       - name: Run Tests (all tests, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' }}
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
+        if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
