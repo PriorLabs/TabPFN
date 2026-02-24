@@ -9,6 +9,8 @@ pip install git+https://github.com/PriorLabs/TabPFN.git@main
 ## Run the quick test
 
 ```bash
+# simulate gating removal by setting a token
+export HF_TOKEN=...
 python tests/quick_test.py
 ```
 
