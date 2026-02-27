@@ -824,7 +824,7 @@ def test__predict__batch_size_predict__matches_unbatched(
     pred_batched = model.predict(
         X, output_type=output_type, batch_size_predict=batch_size_predict
     )
-    np.testing.assert_allclose(pred_all, pred_batched, atol=1e-3, rtol=1e-3)
+    np.testing.assert_allclose(pred_all, pred_batched, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
@@ -847,7 +847,7 @@ def test__predict__batch_size_predict__quantiles_matches_unbatched(
         batch_size_predict=batch_size_predict,
     )
     for q_all, q_batched in zip(quant_all, quant_batched):
-        np.testing.assert_allclose(q_all, q_batched, atol=1e-3, rtol=1e-3)
+        np.testing.assert_allclose(q_all, q_batched, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
@@ -867,10 +867,10 @@ def test__predict__batch_size_predict__main_matches_unbatched(
     )
     for key in ["mean", "median", "mode"]:
         np.testing.assert_allclose(
-            main_all[key], main_batched[key], atol=1e-3, rtol=1e-3
+            main_all[key], main_batched[key], atol=1e-5, rtol=1e-5
         )
     for q_all, q_batched in zip(main_all["quantiles"], main_batched["quantiles"]):
-        np.testing.assert_allclose(q_all, q_batched, atol=1e-3, rtol=1e-3)
+        np.testing.assert_allclose(q_all, q_batched, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
@@ -890,13 +890,13 @@ def test__predict__batch_size_predict__full_matches_unbatched(
     )
     for key in ["mean", "median", "mode"]:
         np.testing.assert_allclose(
-            full_all[key], full_batched[key], atol=1e-3, rtol=1e-3
+            full_all[key], full_batched[key], atol=1e-5, rtol=1e-5
         )
     for q_all, q_batched in zip(full_all["quantiles"], full_batched["quantiles"]):
-        np.testing.assert_allclose(q_all, q_batched, atol=1e-3, rtol=1e-3)
+        np.testing.assert_allclose(q_all, q_batched, atol=1e-5, rtol=1e-5)
     # logits should match
     torch.testing.assert_close(
-        full_all["logits"], full_batched["logits"], atol=1e-3, rtol=1e-3
+        full_all["logits"], full_batched["logits"], atol=1e-5, rtol=1e-5
     )
     # criterion is a model-level attribute, should be the same object
     assert full_all["criterion"] is full_batched["criterion"]
