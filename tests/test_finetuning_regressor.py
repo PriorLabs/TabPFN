@@ -417,7 +417,8 @@ def test_regressor_dataset_and_collator_batches_type(
         100,
         model_type="regressor",
         equal_split_size=True,
-        seed=42,
+        data_shuffle_seed=42,
+        preprocessing_random_state=0,
     )
 
     dl = DataLoader(

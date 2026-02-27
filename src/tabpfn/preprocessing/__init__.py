@@ -11,9 +11,7 @@ from .ensemble import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
 )
-from .pipeline_interface import (
-    PreprocessingPipeline,
-)
+from .pipeline_interface import PreprocessingPipeline
 from .presets import (
     default_classifier_preprocessor_configs,
     default_regressor_preprocessor_configs,

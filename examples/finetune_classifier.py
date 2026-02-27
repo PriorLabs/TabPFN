@@ -1,7 +1,6 @@
 """Example of fine-tuning a TabPFN classifier using the FinetunedTabPFNClassifier wrapper.
 
-Note: We recommend running the fine-tuning scripts on a CUDA-enabled GPU, as full
-support for the Apple Silicon (MPS) backend is still under development.
+Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80 GB of VRAM.
 """
 
 import logging
@@ -47,7 +46,7 @@ NUM_ESTIMATORS_FINETUNE = 2
 # number of estimators to use during trian time validation
 NUM_ESTIMATORS_VALIDATION = 2
 # number of estimators to use during final inference
-NUM_ESTIMATORS_FINAL_INFERENCE = 8
+NUM_ESTIMATORS_FINAL_INFERENCE = 2
 
 # Reproducibility
 RANDOM_STATE = 0
@@ -86,6 +85,7 @@ def main() -> None:
         n_estimators=NUM_ESTIMATORS_FINAL_INFERENCE,
         ignore_pretraining_limits=True,
         inference_config={"SUBSAMPLE_SAMPLES": 50_000},
+        random_state=RANDOM_STATE,
     )
     base_clf.fit(X_train, y_train)
 
@@ -107,6 +107,7 @@ def main() -> None:
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
+        random_state=RANDOM_STATE,
     )
 
     # 4. Call .fit() to start the fine-tuning process on the training data

@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from unittest import mock
 from unittest.mock import patch
 
@@ -25,6 +25,7 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
+from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
     DatasetCollectionWithPreprocessing,
@@ -126,6 +127,7 @@ for param in finetuned_param_order:
 
 def create_mock_architecture_forward(
     n_classes: int,
+    captured_x_inputs: list | None = None,
 ) -> Callable[..., torch.Tensor]:
     """Create a side_effect function for mocking the Architecture forward method.
 
@@ -139,6 +141,7 @@ def create_mock_architecture_forward(
 
     Args:
         n_classes: Number of classes for the classification task.
+        captured_x_inputs: List to capture the x inputs passed to the forward method.
 
     Returns:
         A mock forward function that returns random logits with correct shape.
@@ -151,6 +154,9 @@ def create_mock_architecture_forward(
         **_kwargs: bool,
     ) -> torch.Tensor:
         """Mock forward pass that returns random logits."""
+        if captured_x_inputs is not None:
+            captured_x_inputs.append(x)
+
         if isinstance(x, dict):
             x = x["main"]
 
@@ -245,6 +251,32 @@ def classifier_instance(request: pytest.FixtureRequest) -> TabPFNClassifier:
     )
 
 
+def _get_classifier_dataset_chunks(
+    clf: TabPFNClassifier,
+    X: np.ndarray | list[np.ndarray],
+    y: np.ndarray | list[np.ndarray],
+    split_fn: Callable[..., Any] = train_test_split,
+    max_data_size: int | None = 100,
+    **kwargs: Any,
+) -> DatasetCollectionWithPreprocessing:
+    """Helper to create preprocessed dataset chunks with common test defaults."""
+    defaults = {
+        "model_type": "classifier",
+        "equal_split_size": True,
+        "data_shuffle_seed": 42,
+        "preprocessing_random_state": 42,
+    }
+    defaults.update(kwargs)
+    return get_preprocessed_dataset_chunks(
+        clf,
+        X,
+        y,
+        split_fn,
+        max_data_size,
+        **defaults,
+    )
+
+
 def create_classifier(
     n_estimators: int,
     device: str,
@@ -293,7 +325,7 @@ def variable_synthetic_dataset_collection() -> list[tuple[np.ndarray, np.ndarray
     ("device", "early_stopping", "use_lr_scheduler"),
     mark_mps_configs_as_slow(finetuned_combinations),
 )
-def test_finetuned_tabpfn_classifier_fit_and_predict(
+def test__finetuned_tabpfn_classifier__fit_and_predict(
     device: str,
     early_stopping: bool,
     use_lr_scheduler: bool,
@@ -337,8 +369,9 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -364,7 +397,7 @@ def test_finetuned_tabpfn_classifier_fit_and_predict(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_saving_and_loading(
+def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -400,8 +433,9 @@ def test_checkpoint_saving_and_loading(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -443,7 +477,7 @@ def test_checkpoint_saving_and_loading(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_resumption(
+def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -481,8 +515,9 @@ def test_checkpoint_resumption(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -514,8 +549,9 @@ def test_checkpoint_resumption(
         save_checkpoint_interval=2,
     )
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -537,7 +573,9 @@ def test_checkpoint_resumption(
     assert finetuned_clf_resumed.is_fitted_
 
 
-def test_checkpoint_epoch_offset_extraction(tmp_path: Path) -> None:
+def test__get_checkpoint_path_and_epoch_from_output_dir__epoch_offset_extraction(
+    tmp_path: Path,
+) -> None:
     """Test that epoch offset is correctly extracted from checkpoint filenames."""
     # Test with no checkpoints
     output_folder = tmp_path / "no_checkpoints"
@@ -582,7 +620,7 @@ def test_checkpoint_epoch_offset_extraction(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_checkpoint_interval_configuration(
+def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -619,8 +657,9 @@ def test_checkpoint_interval_configuration(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -646,7 +685,7 @@ def test_checkpoint_interval_configuration(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
-def test_best_checkpoint_saving(
+def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     device: str,
     tmp_path: Path,
     synthetic_data: tuple[np.ndarray, np.ndarray],
@@ -683,8 +722,9 @@ def test_best_checkpoint_saving(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -706,22 +746,13 @@ def test_best_checkpoint_saving(
 # =============================================================================
 
 
-def test_get_preprocessed_datasets_basic() -> None:
+def test__get_preprocessed_dataset_chunks__returns_classifierbatch() -> None:
     """Test basic functionality of get_preprocessed_datasets_helper."""
     X = rng.normal(size=(100, 4)).astype(np.float32)
     y = rng.integers(0, 3, size=100)
 
     clf = TabPFNClassifier()
-    dataset = get_preprocessed_dataset_chunks(
-        clf,
-        X,
-        y,
-        train_test_split,
-        100,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
-    )
+    dataset = _get_classifier_dataset_chunks(clf, X, y)
     assert hasattr(dataset, "__getitem__")
     assert hasattr(dataset, "__len__")
     assert len(dataset) > 0
@@ -735,7 +766,7 @@ def test_get_preprocessed_datasets_basic() -> None:
     assert hasattr(item, "configs")
 
 
-def test_datasetcollectionwithpreprocessing_classification_single_dataset(
+def test__datasetcollectionwithpreprocessing__classification_single_dataset(
     synthetic_data: tuple[np.ndarray, np.ndarray],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -746,15 +777,8 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     test_size = 0.3
 
     split_fn = partial(train_test_split, test_size=test_size, shuffle=True)
-    dataset_collection = get_preprocessed_dataset_chunks(
-        classifier_instance,
-        X_raw,
-        y_raw,
-        split_fn=split_fn,
-        max_data_size=None,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
+    dataset_collection = _get_classifier_dataset_chunks(
+        classifier_instance, X_raw, y_raw, split_fn, max_data_size=None
     )
 
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
@@ -774,7 +798,7 @@ def test_datasetcollectionwithpreprocessing_classification_single_dataset(
     assert batch.X_context[0].shape[0] == expected_n_train
 
 
-def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
+def test__datasetcollectionwithpreprocessing__classification_multiple_datasets(
     uniform_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
@@ -788,15 +812,8 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
     X_list = [X for X, _ in datasets]
     y_list = [y for _, y in datasets]
 
-    dataset_collection = get_preprocessed_dataset_chunks(
-        clf,
-        X_list,
-        y_list,
-        split_fn=split_fn,
-        max_data_size=None,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
+    dataset_collection = _get_classifier_dataset_chunks(
+        clf, X_list, y_list, split_fn, max_data_size=None
     )
 
     assert isinstance(dataset_collection, DatasetCollectionWithPreprocessing)
@@ -816,22 +833,15 @@ def test_datasetcollectionwithpreprocessing_classification_multiple_datasets(
         assert batch.X_context[0].shape[0] == expected_n_train
 
 
-def test_dataset_and_collator_with_dataloader_uniform(
+def test__meta_dataset_collator__dataloader_integration_uniform_data(
     uniform_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test dataset and collator integration with DataLoader using uniform data."""
     X_list = [X for X, _ in uniform_synthetic_dataset_collection]
     y_list = [y for _, y in uniform_synthetic_dataset_collection]
-    dataset_collection = get_preprocessed_dataset_chunks(
-        classifier_instance,
-        X_list,
-        y_list,
-        train_test_split,
-        100,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
+    dataset_collection = _get_classifier_dataset_chunks(
+        classifier_instance, X_list, y_list
     )
     batch_size = 1
     dl = DataLoader(
@@ -854,22 +864,15 @@ def test_dataset_and_collator_with_dataloader_uniform(
         break  # Only check one batch
 
 
-def test_classifier_dataset_and_collator_batches_type(
+def test__meta_dataset_collator__batches_have_expected_types(
     variable_synthetic_dataset_collection: list[tuple[np.ndarray, np.ndarray]],
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test that batches from dataset and collator have correct types."""
     X_list = [X for X, _ in variable_synthetic_dataset_collection]
     y_list = [y for _, y in variable_synthetic_dataset_collection]
-    dataset_collection = get_preprocessed_dataset_chunks(
-        classifier_instance,
-        X_list,
-        y_list,
-        train_test_split,
-        100,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
+    dataset_collection = _get_classifier_dataset_chunks(
+        classifier_instance, X_list, y_list
     )
     batch_size = 1
     dl = DataLoader(
@@ -892,7 +895,7 @@ def test_classifier_dataset_and_collator_batches_type(
         break
 
 
-def test_get_preprocessed_datasets_multiple_datasets(
+def test__get_preprocessed_dataset_chunks__multiple_datasets(
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test get_preprocessed_datasets_helper with multiple datasets."""
@@ -900,41 +903,31 @@ def test_get_preprocessed_datasets_multiple_datasets(
     y1 = rng.integers(0, 2, size=10)
     X2 = rng.standard_normal((8, 4))
     y2 = rng.integers(0, 2, size=8)
-    datasets = get_preprocessed_dataset_chunks(
+    datasets = _get_classifier_dataset_chunks(
         classifier_instance,
         [X1, X2],
         [y1, y2],
         split_fn=lambda x, y: (x, y),
         max_data_size=10_000,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
     )
     assert hasattr(datasets, "__getitem__")
     assert len(datasets) == 2
 
 
-def test_get_preprocessed_datasets_categorical_features(
+def test__get_preprocessed_dataset_chunks__categorical_features(
     classifier_instance: TabPFNClassifier,
 ) -> None:
     """Test get_preprocessed_datasets_helper with categorical features."""
     X = np.array([[0, 1.2, 3.4], [1, 2.3, 4.5], [0, 0.1, 2.2], [2, 1.1, 3.3]])
     y = np.array([0, 1, 0, 1])
     classifier_instance.categorical_features_indices = [0]
-    datasets = get_preprocessed_dataset_chunks(
-        classifier_instance,
-        X,
-        y,
-        split_fn=lambda x, y: (x, y),
-        model_type="classifier",
-        max_data_size=None,
-        equal_split_size=True,
-        seed=42,
+    datasets = _get_classifier_dataset_chunks(
+        classifier_instance, X, y, split_fn=lambda x, y: (x, y), max_data_size=None
     )
     assert hasattr(datasets, "__getitem__")
 
 
-def test_forward_runs(
+def test__tabpfn_classifier__forward_runs_after_fit(
     classifier_instance: TabPFNClassifier,
     classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
@@ -955,7 +948,7 @@ def test_forward_runs(
     )
 
 
-def test_fit_from_preprocessed_runs(
+def test__tabpfn_classifier__fit_from_preprocessed_runs(
     classifier_instance: TabPFNClassifier,
     classification_data: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray],
 ) -> None:
@@ -965,16 +958,7 @@ def test_fit_from_preprocessed_runs(
 
     split_fn = partial(train_test_split, test_size=0.3, random_state=42)
 
-    datasets_list = get_preprocessed_dataset_chunks(
-        clf,
-        X_train,
-        y_train,
-        split_fn,
-        100,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
-    )
+    datasets_list = _get_classifier_dataset_chunks(clf, X_train, y_train, split_fn)
     batch_size = 1
     dl = DataLoader(
         datasets_list, batch_size=batch_size, collate_fn=meta_dataset_collator
@@ -982,8 +966,9 @@ def test_fit_from_preprocessed_runs(
 
     for batch in dl:
         assert isinstance(batch, ClassifierBatch)
+        cat_indices = cast(list[list[list[int]]], batch.cat_indices)
         clf.fit_from_preprocessed(
-            batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+            batch.X_context, batch.y_context, cat_indices, batch.configs
         )
         preds = clf.forward(batch.X_query)
         assert preds.ndim == 3, f"Expected 3D output, got {preds.shape}"
@@ -998,7 +983,7 @@ def test_fit_from_preprocessed_runs(
         break
 
 
-def test_finetuning_consistency_preprocessing_classifier() -> None:
+def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() -> None:
     """Test consistency between standard and finetuning preprocessing pipelines.
 
     Compares tensors entering the internal model for:
@@ -1090,17 +1075,15 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     # Step 3a: Get preprocessed datasets using the *full* dataset
     # Requires fit_mode='batched' on clf_batched
     # Make sure default max_data_size is large enough.
-    datasets_list = get_preprocessed_dataset_chunks(
+    datasets_list = _get_classifier_dataset_chunks(
         clf_batched,
         X,
         y,
-        split_fn=splitfn,  # Use the full X, y and the split function
+        splitfn,
         max_data_size=10_000,
-        model_type="classifier",
-        equal_split_size=True,
-        seed=42,
         force_no_stratify=True,
         shuffle=False,
+        preprocessing_random_state=common_seed,
     )
     assert len(datasets_list) > 0, "get_preprocessed_datasets returned empty list."
 
@@ -1114,8 +1097,9 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     assert batch is not None, "DataLoader yielded no batches."
     assert isinstance(batch, ClassifierBatch)
 
+    cat_indices = cast(list[list[list[int]]], batch.cat_indices)
     clf_batched.fit_from_preprocessed(
-        batch.X_context, batch.y_context, batch.cat_indices, batch.configs
+        batch.X_context, batch.y_context, cat_indices, batch.configs
     )
     assert hasattr(clf_batched, "models_"), (
         "Batched classifier models_ not found after fit_from_preprocessed."
@@ -1170,12 +1154,98 @@ def test_finetuning_consistency_preprocessing_classifier() -> None:
     # Floating point ops might introduce tiny differences.
     atol = 1e-6
     rtol = 1e-5
-    tensors_match = torch.allclose(tensor_p1_full, tensor_p2_full, atol=atol, rtol=rtol)
+    assert torch.allclose(tensor_p1_full, tensor_p2_full, atol=atol, rtol=rtol)
 
-    if not tensors_match:
-        diff = torch.abs(tensor_p1_full - tensor_p2_full)
-        # Find where they differ most
-        _max_diff_val, max_diff_idx = torch.max(diff.flatten(), dim=0)
-        np.unravel_index(max_diff_idx.item(), tensor_p1_full.shape)
 
-    assert tensors_match, "Mismatch between final model input tensors."
+@pytest.mark.parametrize("use_fixed_preprocessing_seed", [True, False])
+def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
+    use_fixed_preprocessing_seed: bool,
+) -> None:
+    """Tests if the fixed preprocessing seed keeps column order across batches.
+
+    Tests whether a fixed preprocessing seed produces consistent column ordering
+    by capturing the preprocessed data passed to fit_from_preprocessed.
+
+    Step 1:
+    Generate data where columns have distinct mean values (1, 2, 3, 4).
+    The first row is 0 so the feature is not fully constant (which would cause
+    removal in the preprocessing pipeline).
+
+    Step 2:
+    Hook into fit_from_preprocessed to capture the preprocessed X_context data
+    that's passed to the model during training batches.
+
+    Step 3:
+    Validate that all batches have the same column ordering by comparing
+    the relative order of column means.
+    """
+    # Create a larger dataset where columns have distinct mean values
+    # Column values: 1, 2, 3, 4 (with first row being 0 to avoid constant columns)
+    X = np.array([[0, 0, 0, 0], [1, 2, 3, 4], [1, 2, 3, 4], [1, 2, 3, 4]] * 20)
+    y = np.array([0, 1, 2, 3] * 20)
+    n_finetune_ctx_plus_query_samples = 8
+    n_samples = X.shape[0]
+    n_classes = 4
+
+    finetuned_clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=2,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=n_finetune_ctx_plus_query_samples,
+        finetune_ctx_query_split_ratio=0.2,
+        n_inference_subsample_samples=n_samples,
+        random_state=42,
+        early_stopping=False,
+        early_stopping_patience=2,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+        lr_warmup_only=False,
+        use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
+    )
+
+    # Lists to capture inputs to forward pass
+    X_inputs_captured: list[Any] = []
+    mock_forward = create_mock_architecture_forward(
+        n_classes=n_classes, captured_x_inputs=X_inputs_captured
+    )
+
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
+        autospec=True,
+        side_effect=mock_forward,
+    ):
+        finetuned_clf.fit(X, y)
+
+    # Step 3: Validate that columns are in the same order across all batches.
+    # The column order can be identified by the mean of each column.
+    # Since columns have values [0, 1, 1, 1, ...] with different constants (1, 2, 3, 4),
+    # after preprocessing, the relative ordering by mean should be preserved.
+
+    assert len(X_inputs_captured) > 3, "Expected at least four training batches"
+
+    def get_column_order_by_mean(x: torch.Tensor) -> list[int]:
+        means = x.mean(dim=(0, 1))
+        return torch.argsort(means).tolist()
+
+    # Get the column order from the first batch as reference
+    reference_order = get_column_order_by_mean(X_inputs_captured[0])
+
+    column_order_comparisons = []
+    for x_context in X_inputs_captured:
+        current_order = get_column_order_by_mean(x_context)
+        column_order_comparisons.append(current_order == reference_order)
+
+    if use_fixed_preprocessing_seed:
+        assert all(column_order_comparisons), (
+            "Column order is not the same for all batches! Fixed preprocessing seed is "
+            "not working."
+        )
+    else:
+        assert not all(column_order_comparisons), (
+            "Column order is not different for any batch! Fixed preprocessing seed is "
+            "not working."
+        )
