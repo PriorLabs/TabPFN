@@ -64,9 +64,9 @@ class TabPFNSettings(BaseSettings):
 class PytorchSettings(BaseSettings):
     """PyTorch settings for TabPFN."""
 
-    pytorch_cuda_alloc_conf: str = Field(
+    pytorch_alloc_conf: str = Field(
         default="max_split_size_mb:512",
-        description="PyTorch CUDA memory allocation configuration. "
+        description="PyTorch memory allocation configuration. "
         "Used to optimize GPU memory usage.",
     )
 
