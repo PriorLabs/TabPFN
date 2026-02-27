@@ -1203,6 +1203,37 @@ def _create_dummy_classifier_model_specs(
     )
 
 
+@pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
+def test__predict__batch_size_predict__matches_unbatched(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+) -> None:
+    """Test that batch_size_predict matches unbatched prediction."""
+    X, y = X_y
+
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    # Unbatched predictions
+    pred_all = model.predict(X)
+    proba_all = model.predict_proba(X)
+    logits_all = model.predict_logits(X)
+    raw_logits_all = model.predict_raw_logits(X)
+
+    # Batched predictions
+    pred_batched = model.predict(X, batch_size_predict=batch_size_predict)
+    proba_batched = model.predict_proba(X, batch_size_predict=batch_size_predict)
+    logits_batched = model.predict_logits(X, batch_size_predict=batch_size_predict)
+    raw_logits_batched = model.predict_raw_logits(
+        X, batch_size_predict=batch_size_predict
+    )
+
+    np.testing.assert_array_equal(pred_all, pred_batched)
+    np.testing.assert_allclose(proba_all, proba_batched, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(logits_all, logits_batched, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(raw_logits_all, raw_logits_batched, atol=1e-5, rtol=1e-5)
+
+
 def test__create_default_for_version__v2__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
 

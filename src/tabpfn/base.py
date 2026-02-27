@@ -487,3 +487,37 @@ def get_embeddings(
         embeddings.append(embed.squeeze().cpu().numpy())
 
     return np.array(embeddings)
+
+
+def predict_in_batches(
+    predict_fn: typing.Callable,
+    X: XType,
+    batch_size: int,
+    concat_fn: typing.Callable | None = None,
+) -> typing.Any:
+    """Split X into batches, apply predict_fn to each, and concatenate results.
+
+    Args:
+        predict_fn: A callable that takes a data slice and returns predictions.
+        X: The full input data.
+        batch_size: The number of samples per batch.
+        concat_fn: Optional custom function to concatenate results.
+            If None, uses ``np.concatenate(..., axis=0)``.
+
+    Returns:
+        The concatenated predictions.
+
+    Raises:
+        ValueError: If batch_size is not a positive integer.
+    """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+
+    n_samples = X.shape[0]
+    results = [
+        predict_fn(X[start : min(start + batch_size, n_samples)])
+        for start in range(0, n_samples, batch_size)
+    ]
+    if concat_fn is not None:
+        return concat_fn(results)
+    return np.concatenate(results, axis=0)

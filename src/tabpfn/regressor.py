@@ -46,6 +46,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    predict_in_batches,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
@@ -830,6 +831,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["mean", "median", "mode"] = "mean",
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> np.ndarray: ...
 
     @overload
@@ -839,6 +841,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["quantiles"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> list[np.ndarray]: ...
 
     @overload
@@ -848,6 +851,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["main"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> MainOutputDict: ...
 
     @overload
@@ -857,6 +861,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["full"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
@@ -868,6 +873,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # TODO: support "ei", "pi"
         output_type: OutputType = "mean",
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> RegressionResultType:
         """Runs the forward() method and then transform the logits
         from the binning space in order to predict target variable.
@@ -893,6 +899,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 By default, the `[0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]`
                 quantiles are returned. The predictions per quantile match
                 the input order.
+
+            batch_size_predict: If not None, split the test data into
+                chunks of this size and predict each chunk independently.
 
         Returns:
             The prediction, which can be a numpy array, a list of arrays (for
@@ -925,6 +934,39 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X, ord_encoder=getattr(self, "ordinal_encoder_", None)
         )
 
+        if batch_size_predict is not None:
+            return predict_in_batches(
+                lambda chunk: self._predict_core(
+                    chunk, output_type=output_type, quantiles=quantiles
+                ),
+                X,
+                batch_size_predict,
+                concat_fn=lambda results: _concatenate_regression_results(
+                    results, output_type
+                ),
+            )
+
+        return self._predict_core(X, output_type=output_type, quantiles=quantiles)
+
+    def _predict_core(
+        self,
+        X: XType,
+        output_type: OutputType,
+        quantiles: list[float],
+    ) -> RegressionResultType:
+        """Core prediction logic on already-preprocessed data.
+
+        Runs the forward pass, translates logits, and formats the output.
+        This method assumes X has already been validated and preprocessed.
+
+        Args:
+            X: The preprocessed input data.
+            output_type: The type of output to return.
+            quantiles: The quantiles to compute.
+
+        Returns:
+            The prediction result.
+        """
         # Runs over iteration engine
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
             (
@@ -1241,3 +1283,40 @@ def _logits_to_output(
         raise ValueError(f"Invalid output type: {output_type}")
 
     return output.cpu().detach().numpy()
+
+
+def _concatenate_regression_results(
+    results: list[RegressionResultType],
+    output_type: str,
+) -> RegressionResultType:
+    """Concatenate batched regression prediction results."""
+    if output_type in _OUTPUT_TYPES_BASIC:
+        return np.concatenate(results, axis=0)
+
+    if output_type == "quantiles":
+        return [
+            np.concatenate([r[q] for r in results], axis=0)
+            for q in range(len(results[0]))
+        ]
+
+    if output_type in ("main", "full"):
+        main = MainOutputDict(
+            mean=np.concatenate([r["mean"] for r in results], axis=0),
+            median=np.concatenate([r["median"] for r in results], axis=0),
+            mode=np.concatenate([r["mode"] for r in results], axis=0),
+            quantiles=[
+                np.concatenate([r["quantiles"][q] for r in results], axis=0)
+                for q in range(len(results[0]["quantiles"]))
+            ],
+        )
+        if output_type == "main":
+            return main
+        # criterion is a model-level attribute (raw_space_bardist_), identical
+        # across all batches, so we take it from the first result.
+        return FullOutputDict(
+            **main,
+            criterion=results[0]["criterion"],
+            logits=torch.cat([r["logits"] for r in results], dim=0),
+        )
+
+    raise ValueError(f"Invalid output type: {output_type}")
