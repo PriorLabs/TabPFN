@@ -402,7 +402,7 @@ def _get_pip_packages(run_lambda, patterns=None):
 
 
 def _get_cachingallocator_config():
-    return settings.pytorch.pytorch_cuda_alloc_conf
+    return settings.pytorch.pytorch_alloc_conf
 
 
 def _get_cuda_module_loading_config():

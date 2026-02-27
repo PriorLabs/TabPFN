@@ -11,7 +11,7 @@ import torch
 
 from tabpfn.settings import settings
 
-os.environ["PYTORCH_ALLOC_CONF"] = settings.pytorch.pytorch_cuda_alloc_conf
+os.environ["PYTORCH_ALLOC_CONF"] = settings.pytorch.pytorch_alloc_conf
 DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
 
 
