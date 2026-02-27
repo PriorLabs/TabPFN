@@ -66,8 +66,6 @@ class PytorchSettings(BaseSettings):
 
     pytorch_alloc_conf: str = Field(
         default="max_split_size_mb:512",
-        alias="PYTORCH_ALLOC_CONF",
-        validation_alias="PYTORCH_ALLOC_CONF",
         description="PyTorch memory allocation configuration. "
         "Used to optimize GPU memory usage.",
     )
