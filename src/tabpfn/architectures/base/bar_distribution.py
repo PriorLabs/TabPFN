@@ -576,7 +576,7 @@ class FullSupportBarDistribution(BarDistribution):
 
     def pdf(self, logits: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
         """Probability density function at y."""
-        return torch.exp(self.forward(logits, y))
+        return torch.exp(-self.forward(logits, y))
 
     def sample(self, logits: torch.Tensor, t: float = 1.0) -> torch.Tensor:
         """Samples values from the distribution.
