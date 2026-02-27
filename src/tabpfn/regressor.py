@@ -831,6 +831,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["mean", "median", "mode"] = "mean",
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> np.ndarray: ...
 
     @overload
@@ -840,6 +841,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["quantiles"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> list[np.ndarray]: ...
 
     @overload
@@ -849,6 +851,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["main"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> MainOutputDict: ...
 
     @overload
@@ -858,6 +861,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         *,
         output_type: Literal["full"],
         quantiles: list[float] | None = None,
+        batch_size_predict: int | None = None,
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
@@ -903,18 +907,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             The prediction, which can be a numpy array, a list of arrays (for
             quantiles), or a dictionary with detailed outputs.
         """
-        if batch_size_predict is not None:
-            return predict_in_batches(
-                lambda chunk: self.predict(
-                    chunk, output_type=output_type, quantiles=quantiles
-                ),
-                X,
-                batch_size_predict,
-                concat_fn=lambda results: _concatenate_regression_results(
-                    results, output_type
-                ),
-            )
-
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
@@ -942,6 +934,39 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X, ord_encoder=getattr(self, "ordinal_encoder_", None)
         )
 
+        if batch_size_predict is not None:
+            return predict_in_batches(
+                lambda chunk: self._predict_core(
+                    chunk, output_type=output_type, quantiles=quantiles
+                ),
+                X,
+                batch_size_predict,
+                concat_fn=lambda results: _concatenate_regression_results(
+                    results, output_type
+                ),
+            )
+
+        return self._predict_core(X, output_type=output_type, quantiles=quantiles)
+
+    def _predict_core(
+        self,
+        X: XType,
+        output_type: OutputType,
+        quantiles: list[float],
+    ) -> RegressionResultType:
+        """Core prediction logic on already-preprocessed data.
+
+        Runs the forward pass, translates logits, and formats the output.
+        This method assumes X has already been validated and preprocessed.
+
+        Args:
+            X: The preprocessed input data.
+            output_type: The type of output to return.
+            quantiles: The quantiles to compute.
+
+        Returns:
+            The prediction result.
+        """
         # Runs over iteration engine
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
             (
@@ -1286,6 +1311,8 @@ def _concatenate_regression_results(
         )
         if output_type == "main":
             return main
+        # criterion is a model-level attribute (raw_space_bardist_), identical
+        # across all batches, so we take it from the first result.
         return FullOutputDict(
             **main,
             criterion=results[0]["criterion"],

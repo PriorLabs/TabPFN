@@ -883,6 +883,39 @@ def test__predict__batch_size_predict__main_matches_unbatched(
         )
 
 
+@pytest.mark.parametrize("batch_size_predict", [1, 3, 5])
+def test__predict__batch_size_predict__full_matches_unbatched(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+) -> None:
+    """Test that batch_size_predict matches unbatched full output."""
+    X, y = X_y
+
+    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    full_all = model.predict(X, output_type="full")
+    full_batched = model.predict(
+        X, output_type="full", batch_size_predict=batch_size_predict
+    )
+    for key in ["mean", "median", "mode"]:
+        np.testing.assert_allclose(
+            full_all[key], full_batched[key], atol=1e-3, rtol=1e-3
+        )
+    for q_all, q_batched in zip(
+        full_all["quantiles"], full_batched["quantiles"]
+    ):
+        np.testing.assert_allclose(
+            q_all, q_batched, atol=1e-3, rtol=1e-3
+        )
+    # logits should match
+    torch.testing.assert_close(
+        full_all["logits"], full_batched["logits"], atol=1e-3, rtol=1e-3
+    )
+    # criterion is a model-level attribute, should be the same object
+    assert full_all["criterion"] is full_batched["criterion"]
+
+
 def test__create_default_for_version__v2__uses_correct_defaults() -> None:
     estimator = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 

@@ -506,7 +506,13 @@ def predict_in_batches(
 
     Returns:
         The concatenated predictions.
+
+    Raises:
+        ValueError: If batch_size is not a positive integer.
     """
+    if batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
+
     n_samples = X.shape[0]
     results = [
         predict_fn(X[start : min(start + batch_size, n_samples)])
