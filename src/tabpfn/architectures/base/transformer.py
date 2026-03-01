@@ -523,7 +523,10 @@ class PerFeatureTransformer(Architecture):
             )
         del embedded_y, embedded_x
 
-        if self.add_thinking_tokens is not None:
+        is_kv_cache_prediction = (
+            self.cache_trainset_representation and single_eval_pos == 0
+        )
+        if self.add_thinking_tokens is not None and not is_kv_cache_prediction:
             embedded_input, single_eval_pos = self.add_thinking_tokens(
                 embedded_input,
                 single_eval_pos,
