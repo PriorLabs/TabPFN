@@ -527,9 +527,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
 
 
-@pytest.mark.skip(
-    "fit_mode='low_memory' produces different results to 'fit_preprocessors'"
-)
 @pytest.mark.parametrize("model_version", list(ModelVersion))
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])

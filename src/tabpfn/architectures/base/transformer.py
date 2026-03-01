@@ -523,9 +523,6 @@ class PerFeatureTransformer(Architecture):
         is_kv_cache_prediction = (
             self.cache_trainset_representation and single_eval_pos == 0
         )
-
-        # The thinking tokens are added when the cache is populated, so we don't add
-        # them again when using the cache.
         if self.add_thinking_tokens is not None and not is_kv_cache_prediction:
             embedded_input, single_eval_pos = self.add_thinking_tokens(
                 embedded_input,
