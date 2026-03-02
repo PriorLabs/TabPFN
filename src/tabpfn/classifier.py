@@ -148,6 +148,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
+    n_train_samples_: int
+    """The number of training samples used during `fit()`."""
+
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
@@ -650,6 +653,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.ordinal_encoder_ = ordinal_encoder
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
+        self.n_train_samples_ = len(X)
 
         # Label encoding
         self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name)
@@ -1062,7 +1066,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        with handle_oom_errors(self.devices_, X, model_type="classifier"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="classifier",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+            n_features=getattr(self, "n_features_in_", None),
+        ):
             return self.forward(
                 X,
                 use_inference_mode=True,
