@@ -74,7 +74,7 @@ class TabPFNOutOfMemoryError(TabPFNError):
             f"apply its In-Context Learning capability, so memory "
             f"scales with both training and test set size.\n\n"
             f"If your test set is large compared to the training "
-            f"set size, splitting into smaller batches often "
+            f"set size, splitting test into smaller batches often "
             f"resolves the issue:\n\n"
             f"    batch_size = 100  # adjust for your hardware\n"
             f"    predictions = []\n"
