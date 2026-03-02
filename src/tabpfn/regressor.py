@@ -174,6 +174,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
+    n_train_samples_: int
+    """The number of training samples used during `fit()`."""
+
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
@@ -619,6 +622,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Set class variables for sklearn compatibility
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
+        self.n_train_samples_ = len(X)
 
         feature_schema = detect_feature_modalities(
             X=X,
@@ -926,7 +930,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         # Runs over iteration engine
-        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="regressor",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+            n_features=getattr(self, "n_features_in_", None),
+        ):
             (
                 _,
                 # list of tensors [N_est, N_samples, N_borders] (after forward)
