@@ -75,22 +75,43 @@ class TabPFNOutOfMemoryError(TabPFNError):
         self,
         original_error: Exception | None = None,
         *,
+        n_train_samples: int | None = None,
         n_test_samples: int | None = None,
+        n_features: int | None = None,
         model_type: str = "classifier",
     ):
         predict_method = "predict_proba" if model_type == "classifier" else "predict"
 
         size_info = f" with {n_test_samples:,} test samples" if n_test_samples else ""
 
+        size_line = ""
+        if n_train_samples is not None and n_test_samples is not None:
+            size_line = (
+                f"Your sizes: {n_train_samples:,} train / "
+                f"{n_test_samples:,} test samples"
+            )
+            if n_features is not None:
+                size_line += f", {n_features} features"
+            size_line += ".\n"
+
         message = (
             f"{self.device_name} out of memory{size_info}.\n\n"
-            f"Solution: Split your test data into smaller batches:\n\n"
-            f"    batch_size = 1000  # depends on hardware\n"
+            f"This is issue is usually caused by one of the following two reasons:\n\n"
+            f"1) Large test set — split into batches:\n\n"
             f"    predictions = []\n"
-            f"    for i in range(0, len(X_test), batch_size):\n"
-            f"        batch = model.{predict_method}(X_test[i:i + batch_size])\n"
-            f"        predictions.append(batch)\n"
-            f"    predictions = np.vstack(predictions)"
+            f"    for i in range(0, len(X_test), 100):\n"
+            f"        pred = model.{predict_method}("
+            f"X_test[i:i + 100])\n"
+            f"        predictions.append(pred)\n"
+            f"    predictions = np.vstack(predictions)\n\n"
+            f"2) Large training set — batching won't help.\n"
+            f"   You need subsampling or ensembling, see:\n"
+            f"   https://github.com/PriorLabs/tabpfn-extensions/"
+            f"blob/main/examples/large_datasets/"
+            f"large_datasets_example.py\n\n"
+            f"{size_line}"
+            f"Not sure which? If model.{predict_method}(X_test[:1]) "
+            f"also fails, it's (2)."
         )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"
@@ -115,6 +136,8 @@ def handle_oom_errors(
     devices: tuple[torch.device, ...],
     X: XType,
     model_type: str,
+    n_train_samples: int | None = None,
+    n_features: int | None = None,
 ) -> Generator[None, None, None]:
     """Context manager to catch OOM errors and raise helpful TabPFN exceptions.
 
@@ -122,6 +145,8 @@ def handle_oom_errors(
         devices: The devices the model is running on.
         X: The input data (used to get n_samples for the error message).
         model_type: Either "classifier" or "regressor".
+        n_train_samples: Number of training samples (for the error message).
+        n_features: Number of features (for the error message).
 
     Raises:
         TabPFNCUDAOutOfMemoryError: If a CUDA OOM error occurs.
@@ -130,16 +155,24 @@ def handle_oom_errors(
     try:
         yield
     except torch.OutOfMemoryError as e:
-        n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+        n_test_samples = X.shape[0] if hasattr(X, "shape") else len(X)
         raise TabPFNCUDAOutOfMemoryError(
-            e, n_test_samples=n_samples, model_type=model_type
+            e,
+            n_train_samples=n_train_samples,
+            n_test_samples=n_test_samples,
+            n_features=n_features,
+            model_type=model_type,
         ) from None
     except RuntimeError as e:
         is_mps = any(d.type == "mps" for d in devices)
         is_oom = "out of memory" in str(e).lower()
         if is_mps and is_oom:
-            n_samples = X.shape[0] if hasattr(X, "shape") else len(X)
+            n_test_samples = X.shape[0] if hasattr(X, "shape") else len(X)
             raise TabPFNMPSOutOfMemoryError(
-                e, n_test_samples=n_samples, model_type=model_type
+                e,
+                n_train_samples=n_train_samples,
+                n_test_samples=n_test_samples,
+                n_features=n_features,
+                model_type=model_type,
             ) from None
         raise
