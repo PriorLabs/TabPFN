@@ -90,23 +90,31 @@ class ClassifierEvalMetrics(str, Enum):
 
 
 METRIC_NAME_TO_OBJECTIVE = {
-    "f1": lambda y_true, y_pred: -f1_score(
-        y_true,
-        y_pred,
-        average="binary",
-        zero_division=0,
+    "f1": lambda y_true, y_pred: (
+        -f1_score(
+            y_true,
+            y_pred,
+            average="binary",
+            zero_division=0,
+        )
     ),
-    "accuracy": lambda y_true, y_pred: -accuracy_score(
-        y_true,
-        y_pred,
+    "accuracy": lambda y_true, y_pred: (
+        -accuracy_score(
+            y_true,
+            y_pred,
+        )
     ),
-    "balanced_accuracy": lambda y_true, y_pred: -balanced_accuracy_score(
-        y_true,
-        y_pred,
+    "balanced_accuracy": lambda y_true, y_pred: (
+        -balanced_accuracy_score(
+            y_true,
+            y_pred,
+        )
     ),
-    "roc_auc": lambda y_true, y_pred: -roc_auc_score(
-        y_true,
-        y_pred,
+    "roc_auc": lambda y_true, y_pred: (
+        -roc_auc_score(
+            y_true,
+            y_pred,
+        )
     ),
     "log_loss": log_loss,
 }
