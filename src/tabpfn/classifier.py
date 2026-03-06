@@ -1506,8 +1506,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def to(self, device: DevicesSpecification) -> None:
         """Move the estimator to the given device(s).
 
-        If "auto": a single device is selected based on availability in the
-        following order of priority: "cuda:0", "mps", "cpu".
+        If "auto": devices are selected based on availability in the
+        following order of priority: all available CUDA GPUs, "mps", "cpu".
 
         To manually select a single device: specify a PyTorch device string e.g.
         "cuda:1". See PyTorch's documentation for information about supported

@@ -47,14 +47,14 @@ def test__parse_config__unused_keys__returns_unused_config(
 
 
 @dataclass
-class FakeConfig(ArchitectureConfig):
-    a: int = 1
-    b: FakeSubConfig = field(default_factory=lambda: FakeSubConfig())
+class FakeSubConfig:
+    c: int = 2
 
 
 @dataclass
-class FakeSubConfig:
-    c: int = 2
+class FakeConfig(ArchitectureConfig):
+    a: int = 1
+    b: FakeSubConfig = field(default_factory=FakeSubConfig)
 
 
 class FakeArchitectureModule(ArchitectureModule):
