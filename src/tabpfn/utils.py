@@ -146,8 +146,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
     if devices == "auto":
         if "cuda" not in exclude_devices and torch.cuda.is_available():
             return tuple(
-                torch.device(f"cuda:{i}")
-                for i in range(torch.cuda.device_count())
+                torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())
             )
 
         if _is_mps_supported() and "mps" not in exclude_devices:
