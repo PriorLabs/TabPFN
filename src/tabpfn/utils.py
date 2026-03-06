@@ -117,7 +117,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
     """Selects the appropriate PyTorch devices for inference.
 
     If `device` is "auto" then the devices are selected as follows:
-    1. If CUDA is available and not excluded, returns the first "cuda" device
+    1. If CUDA is available and not excluded, returns all available "cuda" devices
     2. Otherwise, if MPS is available and not excluded, returns the "mps" device
     3. Otherwise, returns the "cpu" device
 
@@ -145,7 +145,10 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
 
     if devices == "auto":
         if "cuda" not in exclude_devices and torch.cuda.is_available():
-            return (torch.device("cuda:0"),)
+            return tuple(
+                torch.device(f"cuda:{i}")
+                for i in range(torch.cuda.device_count())
+            )
 
         if _is_mps_supported() and "mps" not in exclude_devices:
             return (torch.device("mps"),)
