@@ -435,7 +435,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         y_query_batch = batch.y_query
         bardist_loss_fn = self._bardist_loss
 
-        _, per_estim_logits, _ = self.finetuned_estimator_.forward(X_query_batch)
+        _, per_estim_logits, _ = self._training_forward(X_query_batch)
         # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits

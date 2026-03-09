@@ -8,7 +8,9 @@ scikit-learn .fit() and .predict() API.
 from __future__ import annotations
 
 import copy
+import datetime
 import logging
+import os
 import time
 import warnings
 from abc import ABC, abstractmethod
@@ -19,11 +21,14 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 import torch
+import torch.distributed as dist
 from sklearn.base import BaseEstimator
 from sklearn.model_selection import train_test_split
+from torch.nn.parallel import DistributedDataParallel
 from torch.nn.utils import clip_grad_norm_
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
 from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
@@ -54,6 +59,103 @@ META_BATCH_SIZE = 1
 # This is used to avoid spending too much time on validation
 # and prevent OOM issues for very large datasets.
 MAX_VALIDATION_SAMPLES = 50_000
+
+
+def _init_distributed_if_needed(
+    device: str,
+) -> tuple[bool, int, str]:
+    """Initialize NCCL process group from torchrun env vars (single-node).
+
+    Returns:
+        (using_ddp, local_rank, device_str)
+    """
+    local_rank_str = os.environ.get("LOCAL_RANK")
+    if local_rank_str is None:
+        return False, 0, device
+
+    local_rank = int(local_rank_str)
+
+    if not dist.is_initialized():
+        dist.init_process_group(
+            backend="nccl",
+            timeout=datetime.timedelta(minutes=30),
+        )
+
+    device_str = f"cuda:{local_rank}"
+    torch.cuda.set_device(device_str)
+    return True, local_rank, device_str
+
+
+def _maybe_setup_ddp(
+    device: str,
+) -> tuple[bool, bool, int, str, bool]:
+    """Entry point for optional DDP setup (single-node only).
+
+    Auto-detects torchrun via LOCAL_RANK env var. No-op on single GPU.
+
+    Returns:
+        (using_ddp, created_process_group, local_rank,
+         device_str, is_main_process)
+    """
+    already_initialized = dist.is_initialized()
+    using_ddp, local_rank, device_str = _init_distributed_if_needed(device)
+
+    if not using_ddp:
+        return False, False, 0, device, True
+
+    created_process_group = not already_initialized
+    is_main_process = local_rank == 0
+
+    if is_main_process:
+        logger.info(
+            "DDP enabled: world_size=%d, local_rank=%d, device=%s",
+            dist.get_world_size(),
+            local_rank,
+            device_str,
+        )
+
+    return (
+        using_ddp,
+        created_process_group,
+        local_rank,
+        device_str,
+        is_main_process,
+    )
+
+
+def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:
+    """Move cached executor X_trains/y_trains to the given device.
+
+    During DDP training, ``fit_from_preprocessed`` stores context tensors on
+    whatever device was current at call time, but the DDP wrapper may need them
+    on a specific GPU.
+    """
+    executor = getattr(estimator, "executor_", None)
+    if executor is None:
+        return
+    x_trains = getattr(executor, "X_trains", None)
+    y_trains = getattr(executor, "y_trains", None)
+    target = torch.device(device)
+    if x_trains is not None:
+        executor.X_trains = [
+            t.to(target) if t.device != target else t for t in x_trains
+        ]
+    if y_trains is not None:
+        executor.y_trains = [
+            t.to(target) if t.device != target else t for t in y_trains
+        ]
+
+
+class _TabPFNDDPWrapper(torch.nn.Module):
+    """Thin wrapper that registers estimator.model_ as a submodule for DDP."""
+
+    def __init__(self, estimator: Any) -> None:
+        super().__init__()
+        self.estimator = estimator
+        self.model = estimator.model_
+
+    def forward(self, *args: Any, **kwargs: Any) -> Any:
+        return self.estimator.forward(*args, **kwargs)
 
 
 @dataclass
@@ -188,6 +290,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.save_checkpoint_interval = save_checkpoint_interval
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
+        self._ddp_module_: DistributedDataParallel | None = None
 
         if self.use_fixed_preprocessing_seed and not (
             self.n_estimators_finetune
@@ -226,6 +329,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         existing["SUBSAMPLE_SAMPLES"] = self.n_inference_subsample_samples
         config["inference_config"] = existing
         return config
+
+    def _training_forward(self, *args: Any, **kwargs: Any) -> Any:
+        """Forward pass that routes through DDP wrapper during training if active."""
+        if self._ddp_module_ is not None:
+            return self._ddp_module_(*args, **kwargs)
+        return self.finetuned_estimator_.forward(*args, **kwargs)
 
     @property
     @abstractmethod
@@ -428,6 +537,18 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         output_dir: Path | None = None,
     ) -> FinetunedTabPFNBase:
         """Internal implementation of fit that runs the finetuning loop."""
+        # --- DDP setup ---
+        (
+            using_ddp,
+            created_process_group,
+            local_rank,
+            device_str,
+            is_main_process,
+        ) = _maybe_setup_ddp(self.device)
+
+        if using_ddp:
+            self.device = device_str
+
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
         start_time = time.monotonic()
@@ -461,7 +582,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             self.n_estimators_final_inference,
         )
 
-        eval_devices = infer_devices(self.device)
+        if using_ddp:
+            # Use all GPUs participating in DDP for eval inference.
+            eval_devices = tuple(
+                torch.device("cuda", i) for i in range(dist.get_world_size())
+            )
+        else:
+            eval_devices = infer_devices(self.device)
         validation_eval_config["device"] = eval_devices
         final_inference_eval_config["device"] = eval_devices
 
@@ -517,8 +644,22 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         if self.use_activation_checkpointing:
             self.finetuned_estimator_.model_.recompute_layer = True  # type: ignore
 
+        # --- DDP model wrapping ---
+        model_for_optimization = self.finetuned_estimator_.model_
+        self._ddp_module_ = None
+        if using_ddp:
+            ddp_wrapper = _TabPFNDDPWrapper(self.finetuned_estimator_)
+            self._ddp_module_ = DistributedDataParallel(
+                ddp_wrapper,
+                device_ids=[local_rank],
+                output_device=local_rank,
+                broadcast_buffers=False,
+                find_unused_parameters=False,
+            )
+            model_for_optimization = self._ddp_module_
+
         optimizer = get_and_init_optimizer(
-            model_parameters=self.finetuned_estimator_.model_.parameters(),  # type: ignore
+            model_parameters=model_for_optimization.parameters(),  # type: ignore
             learning_rate=self.learning_rate,
             weight_decay=self.weight_decay,
             checkpoint_path=checkpoint_path,
@@ -528,27 +669,51 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         use_amp = self.device.startswith("cuda") and torch.cuda.is_available()
         scaler = GradScaler() if use_amp else None  # type: ignore
 
-        logger.info("--- 🚀 Eval default model ---")
-        eval_result = self._evaluate_model(
-            validation_eval_config,
-            X_train,  # pyright: ignore[reportArgumentType]
-            y_train,  # pyright: ignore[reportArgumentType]
-            X_val,  # pyright: ignore[reportArgumentType]
-            y_val,  # pyright: ignore[reportArgumentType]
-        )
-        self._log_epoch_evaluation(-1, eval_result, mean_train_loss=None)
-        best_metric: float = eval_result.primary
+        # --- DDP helpers ---
+        def _synchronize_epoch_timer() -> float:
+            """Return a synchronized start time across ranks."""
+            if using_ddp:
+                dist.barrier()
+            return time.monotonic()
+
+        def _ddp_broadcast_primary_metric(metric: float) -> float:
+            """Broadcast primary metric from rank 0 to all ranks."""
+            if not using_ddp:
+                return metric
+            t = torch.tensor([metric], dtype=torch.float64, device=self.device)
+            dist.broadcast(t, src=0)
+            return float(t.item())
+
+        # --- Initial eval (rank 0 only) ---
+        if is_main_process:
+            logger.info("--- 🚀 Eval default model ---")
+            eval_result = self._evaluate_model(
+                validation_eval_config,
+                X_train,  # pyright: ignore[reportArgumentType]
+                y_train,  # pyright: ignore[reportArgumentType]
+                X_val,  # pyright: ignore[reportArgumentType]
+                y_val,  # pyright: ignore[reportArgumentType]
+            )
+            self._log_epoch_evaluation(-1, eval_result, mean_train_loss=None)
+            best_metric: float = eval_result.primary
+        else:
+            best_metric = self._get_initial_best_metric()
+
+        best_metric = _ddp_broadcast_primary_metric(best_metric)
 
         static_seed, rng = infer_random_state(self.random_state)
         preprocessing_random_state = (
             static_seed if self.use_fixed_preprocessing_seed else rng
         )
 
-        logger.info("--- 🚀 Starting Fine-tuning ---")
+        if is_main_process:
+            logger.info("--- 🚀 Starting Fine-tuning ---")
         patience_counter = 0
-        best_model = None
+        best_model_state: dict[str, torch.Tensor] | None = None
 
         scheduler: LambdaLR | None = None
+
+        start_time = _synchronize_epoch_timer()
 
         finetuning_query_size = self._get_valid_finetuning_query_size(
             query_size=int(
@@ -582,14 +747,30 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 preprocessing_random_state=preprocessing_random_state,
             )
 
-            dataloader_generator = torch.Generator().manual_seed(epoch_random_state)
-            finetuning_dataloader = DataLoader(
-                training_datasets,
-                batch_size=self.meta_batch_size,
-                collate_fn=meta_dataset_collator,
-                shuffle=True,
-                generator=dataloader_generator,
-            )
+            if using_ddp:
+                sampler = DistributedSampler(
+                    training_datasets,
+                    num_replicas=dist.get_world_size(),
+                    rank=local_rank,
+                    shuffle=True,
+                    seed=epoch_random_state,
+                )
+                sampler.set_epoch(epoch)
+                finetuning_dataloader = DataLoader(
+                    training_datasets,
+                    batch_size=self.meta_batch_size,
+                    collate_fn=meta_dataset_collator,
+                    sampler=sampler,
+                )
+            else:
+                dataloader_generator = torch.Generator().manual_seed(epoch_random_state)
+                finetuning_dataloader = DataLoader(
+                    training_datasets,
+                    batch_size=self.meta_batch_size,
+                    collate_fn=meta_dataset_collator,
+                    shuffle=True,
+                    generator=dataloader_generator,
+                )
 
             # Instantiate the LR scheduler only once
             if self.use_lr_scheduler and scheduler is None:
@@ -610,23 +791,32 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 )
                 scheduler = LambdaLR(optimizer, lr_lambda=lrate_schedule_fn)
 
-                logger.info(
-                    "Using LambdaLR %s schedule: total_steps=%d, warmup_steps=%d",
-                    "warmup-only (constant LR after warmup)"
-                    if self.lr_warmup_only
-                    else "warmup+cosine",
-                    total_steps,
-                    warmup_steps,
-                )
+                if is_main_process:
+                    logger.info(
+                        "Using LambdaLR %s schedule: total_steps=%d, warmup_steps=%d",
+                        "warmup-only (constant LR after warmup)"
+                        if self.lr_warmup_only
+                        else "warmup+cosine",
+                        total_steps,
+                        warmup_steps,
+                    )
 
             progress_bar = tqdm(
                 finetuning_dataloader,
                 desc=f"Finetuning Epoch {epoch + 1}/{self.epochs}",
+                disable=using_ddp and not is_main_process,
             )
             for batch in progress_bar:
                 optimizer.zero_grad()
 
-                if self._should_skip_batch(batch):
+                should_skip = self._should_skip_batch(batch)
+                if using_ddp:
+                    # All ranks must agree — if any rank skips, all skip,
+                    # otherwise DDP all-reduce in backward will deadlock.
+                    skip_t = torch.tensor([int(should_skip)], device=self.device)
+                    dist.all_reduce(skip_t, op=dist.ReduceOp.MAX)
+                    should_skip = bool(skip_t.item())
+                if should_skip:
                     continue
 
                 self._setup_batch(batch)
@@ -637,6 +827,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     batch.cat_indices,
                     batch.configs,
                 )
+
+                if using_ddp:
+                    _move_tabpfn_cached_contexts_to_device(
+                        self.finetuned_estimator_, self.device
+                    )
 
                 use_scaler = use_amp and scaler is not None
 
@@ -650,7 +845,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                     if self.grad_clip_value is not None:
                         clip_grad_norm_(
-                            self.finetuned_estimator_.model_.parameters(),  # type: ignore
+                            model_for_optimization.parameters(),
                             self.grad_clip_value,
                         )
 
@@ -662,7 +857,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                     if self.grad_clip_value is not None:
                         clip_grad_norm_(
-                            self.finetuned_estimator_.model_.parameters(),  # type: ignore
+                            model_for_optimization.parameters(),
                             self.grad_clip_value,
                         )
 
@@ -680,23 +875,43 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     loss=f"{loss_scalar:.4f}",
                 )
 
+            # --- Epoch loss aggregation across ranks ---
+            if using_ddp:
+                loss_tensor = torch.tensor(
+                    [epoch_loss_sum, float(epoch_batches)],
+                    dtype=torch.float64,
+                    device=self.device,
+                )
+                dist.all_reduce(loss_tensor, op=dist.ReduceOp.SUM)
+                epoch_loss_sum = float(loss_tensor[0].item())
+                epoch_batches = int(loss_tensor[1].item())
+
             mean_train_loss = (
                 epoch_loss_sum / epoch_batches if epoch_batches > 0 else None
             )
 
-            eval_result = self._evaluate_model(
-                validation_eval_config,
-                X_train,  # pyright: ignore[reportArgumentType]
-                y_train,  # pyright: ignore[reportArgumentType]
-                X_val,  # pyright: ignore[reportArgumentType]
-                y_val,  # pyright: ignore[reportArgumentType]
-            )
+            # --- Validation (rank 0 only), broadcast metric ---
+            if is_main_process:
+                eval_result = self._evaluate_model(
+                    validation_eval_config,
+                    X_train,  # pyright: ignore[reportArgumentType]
+                    y_train,  # pyright: ignore[reportArgumentType]
+                    X_val,  # pyright: ignore[reportArgumentType]
+                    y_val,  # pyright: ignore[reportArgumentType]
+                )
+                self._log_epoch_evaluation(epoch, eval_result, mean_train_loss)
+                primary_metric = eval_result.primary
+            else:
+                primary_metric = self._get_initial_best_metric()
+                eval_result = EvalResult(primary=primary_metric)
 
-            self._log_epoch_evaluation(epoch, eval_result, mean_train_loss)
+            primary_metric = _ddp_broadcast_primary_metric(primary_metric)
 
-            primary_metric = eval_result.primary
-
-            if output_dir is not None and not np.isnan(primary_metric):
+            if (
+                output_dir is not None
+                and not np.isnan(primary_metric)
+                and (not using_ddp or is_main_process)
+            ):
                 save_interval_checkpoint = (
                     self.save_checkpoint_interval is not None
                     and (epoch + 1) % self.save_checkpoint_interval == 0
@@ -720,47 +935,64 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 if self._is_improvement(primary_metric, best_metric):
                     best_metric = primary_metric
                     patience_counter = 0
-                    best_model = copy.deepcopy(self.finetuned_estimator_)
+                    model_sd = self.finetuned_estimator_.model_.state_dict()
+                    best_model_state = {
+                        k: v.detach().cpu().clone() for k, v in model_sd.items()
+                    }
                 else:
                     patience_counter += 1
-                    logger.info(
-                        "⚠️  No improvement for %s epochs. Best %s: %.4f",
-                        patience_counter,
-                        self._metric_name,
-                        best_metric,
-                    )
+                    if is_main_process:
+                        logger.info(
+                            "⚠️  No improvement for %s epochs. Best %s: %.4f",
+                            patience_counter,
+                            self._metric_name,
+                            best_metric,
+                        )
 
                 if patience_counter >= self.early_stopping_patience:
-                    logger.info(
-                        "🛑 Early stopping triggered. Best %s: %.4f",
-                        self._metric_name,
-                        best_metric,
-                    )
-                    if best_model is not None:
-                        self.finetuned_estimator_ = best_model
+                    if is_main_process:
+                        logger.info(
+                            "🛑 Early stopping triggered. Best %s: %.4f",
+                            self._metric_name,
+                            best_metric,
+                        )
+                    if best_model_state is not None:
+                        self.finetuned_estimator_.model_.load_state_dict(
+                            best_model_state
+                        )
                     break
 
             if self.time_limit is not None:
                 elapsed_time = time.monotonic() - start_time
                 if elapsed_time > self.time_limit:
-                    logger.info(
-                        "🛑 Time limit of %d seconds reached. Stopping training.",
-                        self.time_limit,
-                    )
+                    if is_main_process:
+                        logger.info(
+                            "🛑 Time limit of %d seconds reached. Stopping training.",
+                            self.time_limit,
+                        )
                     break
 
                 n_epochs_run = epoch + 1 - epoch_to_start_from
                 if elapsed_time + (elapsed_time / n_epochs_run) > self.time_limit:
-                    logger.info(
-                        "🛑 Not enough time remaining for another epoch. Stopping "
-                        "training.",
-                    )
+                    if is_main_process:
+                        logger.info(
+                            "🛑 Not enough time remaining for another epoch. "
+                            "Stopping training.",
+                        )
                     break
 
-        if self.early_stopping and best_model is not None:
-            self.finetuned_estimator_ = best_model
+        if self.early_stopping and best_model_state is not None:
+            self.finetuned_estimator_.model_.load_state_dict(best_model_state)
 
-        logger.info("--- ✅ Fine-tuning Finished ---")
+        # --- DDP cleanup ---
+        self._ddp_module_ = None
+        if using_ddp:
+            dist.barrier()
+            if created_process_group:
+                dist.destroy_process_group()
+
+        if is_main_process:
+            logger.info("--- ✅ Fine-tuning Finished ---")
 
         self._setup_inference_model(final_inference_eval_config)
 
