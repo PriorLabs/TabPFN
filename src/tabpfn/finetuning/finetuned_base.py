@@ -659,7 +659,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             model_for_optimization = self._ddp_module_
 
         optimizer = get_and_init_optimizer(
-            model_parameters=self.finetuned_estimator_.model_.parameters(),  # type: ignore
+            model_parameters=model_for_optimization.parameters(),  # type: ignore
             learning_rate=self.learning_rate,
             weight_decay=self.weight_decay,
             checkpoint_path=checkpoint_path,
