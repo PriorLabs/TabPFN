@@ -5,6 +5,7 @@ Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80 
 Multi-GPU: torchrun --nproc-per-node=N examples/finetune_regressor.py
 """
 
+import gc
 import logging
 import os
 import warnings
@@ -88,6 +89,10 @@ def main() -> None:
 
         print(f"📊 Default TabPFN Test MSE: {mse:.4f}")
         print(f"📊 Default TabPFN Test R²: {r2:.4f}\n")
+
+        del base_reg
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # 3. Initialize and run fine-tuning
     if is_main_process:
