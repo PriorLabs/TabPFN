@@ -803,7 +803,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             for batch in progress_bar:
                 optimizer.zero_grad()
 
-                if self._should_skip_batch(batch):
+                should_skip = self._should_skip_batch(batch)
+                if using_ddp:
+                    # All ranks must agree — if any rank skips, all skip,
+                    # otherwise DDP all-reduce in backward will deadlock.
+                    skip_t = torch.tensor([int(should_skip)], device=self.device)
+                    dist.all_reduce(skip_t, op=dist.ReduceOp.MAX)
+                    should_skip = bool(skip_t.item())
+                if should_skip:
                     continue
 
                 self._setup_batch(batch)
@@ -863,7 +870,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 )
 
             # --- Epoch loss aggregation across ranks ---
-            if using_ddp and epoch_batches > 0:
+            if using_ddp:
                 loss_tensor = torch.tensor(
                     [epoch_loss_sum, float(epoch_batches)],
                     dtype=torch.float64,
