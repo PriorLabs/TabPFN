@@ -135,10 +135,15 @@ def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:
         return
     x_trains = getattr(executor, "X_trains", None)
     y_trains = getattr(executor, "y_trains", None)
+    target = torch.device(device)
     if x_trains is not None:
-        executor.X_trains = [t.to(device) for t in x_trains]
+        executor.X_trains = [
+            t.to(target) if t.device != target else t for t in x_trains
+        ]
     if y_trains is not None:
-        executor.y_trains = [t.to(device) for t in y_trains]
+        executor.y_trains = [
+            t.to(target) if t.device != target else t for t in y_trains
+        ]
 
 
 class _TabPFNDDPWrapper(torch.nn.Module):
@@ -285,6 +290,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.save_checkpoint_interval = save_checkpoint_interval
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
+        self._ddp_module_: DistributedDataParallel | None = None
 
         if self.use_fixed_preprocessing_seed and not (
             self.n_estimators_finetune
