@@ -34,7 +34,7 @@ def test__infer_devices__auto__single_cuda_gpu_available__selects_it(
     assert infer_devices(devices="auto") == (torch.device("cuda:0"),)
 
 
-def test__infer_devices__auto__multiple_cuda_gpus_available__selects_first(
+def test__infer_devices__auto__multiple_cuda_gpus_available__selects_all(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("TABPFN_EXCLUDE_DEVICES", "")
@@ -43,7 +43,11 @@ def test__infer_devices__auto__multiple_cuda_gpus_available__selects_first(
     mock_cuda.device_count.return_value = 3
     mocker.patch("torch.backends.mps").is_available.return_value = True
 
-    assert infer_devices(devices="auto") == (torch.device("cuda:0"),)
+    assert infer_devices(devices="auto") == (
+        torch.device("cuda:0"),
+        torch.device("cuda:1"),
+        torch.device("cuda:2"),
+    )
 
 
 def test__infer_devices__auto__cuda_and_mps_available_but_excluded__selects_cpu(
