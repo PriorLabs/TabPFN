@@ -20,7 +20,6 @@ from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.finetuned_classifier import (
     FinetunedTabPFNClassifier,
 )
-from tabpfn.finetuning.logging import WandbLogger
 
 warnings.filterwarnings(
     "ignore",
