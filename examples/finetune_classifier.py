@@ -20,6 +20,7 @@ from tabpfn import TabPFNClassifier
 from tabpfn.finetuning.finetuned_classifier import (
     FinetunedTabPFNClassifier,
 )
+from tabpfn.finetuning.logging import WandbLogger
 
 warnings.filterwarnings(
     "ignore",
@@ -113,6 +114,8 @@ def main() -> None:
         print("--- 2. Initializing and Fitting Model ---\n")
 
     # Instantiate the wrapper with your desired hyperparameters
+    # To enable WandB logging, pass an experiment_logger:
+    #   experiment_logger=WandbLogger(project="my-project", run_name="my-run")
     finetuned_clf = FinetunedTabPFNClassifier(
         device="cuda",
         epochs=NUM_EPOCHS,
