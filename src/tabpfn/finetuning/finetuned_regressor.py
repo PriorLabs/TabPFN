@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
     from tabpfn.finetuning.data_util import RegressorBatch
+    from tabpfn.finetuning.logging import FinetuningLogger
     from tabpfn.regressor import RegressionResultType
 
 
@@ -333,6 +334,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
+        experiment_logger: FinetuningLogger | None = None,
         extra_regressor_kwargs: dict[str, Any] | None = None,
         ce_loss_weight: float = 0.0,
         crps_loss_weight: float = 1.0,
@@ -366,6 +368,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
+            experiment_logger=experiment_logger,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.eval_metric = eval_metric
