@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
     from tabpfn.finetuning.data_util import ClassifierBatch
+    from tabpfn.finetuning.logging import FinetuningLogger
 
 
 def _compute_classification_loss(
@@ -150,6 +151,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
+        experiment_logger: FinetuningLogger | None = None,
         extra_classifier_kwargs: dict[str, Any] | None = None,
         eval_metric: Literal["roc_auc", "log_loss"] | None = None,
     ):
@@ -176,6 +178,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
+            experiment_logger=experiment_logger,
         )
         self.extra_classifier_kwargs = extra_classifier_kwargs
         self.eval_metric = eval_metric
@@ -255,7 +258,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         y_query_batch = batch.y_query
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        logits_QBEL = self.finetuned_estimator_.forward(
+        logits_QBEL = self._training_forward(
             X_query_batch,
             return_raw_logits=True,
         )
