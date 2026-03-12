@@ -282,6 +282,10 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             data batches. This is helpful in most cases because, e.g., the column order
             will stay the same across batches.
             If False, the preprocessing will use a different random seed for each batch.
+        validation_frequency: How often (in epochs) to run validation. If set to
+            an integer N, validation is run every N epochs. If None, validation is
+            disabled entirely, which also disables early stopping. Defaults to 1
+            (validate every epoch).
 
         FinetunedTabPFNRegressor specific arguments:
 
@@ -333,6 +337,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
+        validation_frequency: int | None = 1,
         extra_regressor_kwargs: dict[str, Any] | None = None,
         ce_loss_weight: float = 0.0,
         crps_loss_weight: float = 1.0,
@@ -366,6 +371,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
+            validation_frequency=validation_frequency,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.eval_metric = eval_metric
