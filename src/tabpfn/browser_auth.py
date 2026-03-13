@@ -355,11 +355,10 @@ def ensure_license_accepted() -> Literal[True]:
             # Fall through to browser login so the GUI can show the acceptance form.
             logger.info("Token valid but license not accepted; opening browser for acceptance.")
         elif status is None:
-            # Server unreachable — accept optimistically (token may still be valid).
-            logger.info(
-                "Could not reach the license server; accepting cached token."
+            raise TabPFNLicenseError(
+                "Could not reach the license server to verify your token.\n\n"
+                "Please check your internet connection and try again."
             )
-            return True
         else:
             # status is False — invalid/expired token.
             logger.info("Cached token is invalid; deleting and re-authenticating.")
