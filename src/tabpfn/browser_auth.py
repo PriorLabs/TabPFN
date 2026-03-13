@@ -9,12 +9,14 @@ Stdlib-only (no dependency on tabpfn-client).
 from __future__ import annotations
 
 import http.server
+import json
 import logging
 import os
 import select
 import socketserver
 import sys
 import threading
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
@@ -98,6 +100,39 @@ def verify_token(token: str, api_url: str) -> bool | None:
         return None
     except Exception:  # noqa: BLE001
         logger.debug("Token verification endpoint unreachable", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# License acceptance check
+# ---------------------------------------------------------------------------
+
+
+def check_license_accepted(token: str, api_url: str) -> bool | None:
+    """Check whether the user has accepted the TabPFN-2.5 license.
+
+    Returns
+    -------
+    True
+        License has been accepted.
+    False
+        License has not been accepted (or token invalid).
+    None
+        Server is unreachable — cannot verify.
+    """
+    url = f"{api_url.rstrip('/')}/tabpfn/license/"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+            return data.get("accepted", False)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return False
+        logger.warning("Unexpected HTTP %s from license check endpoint", exc.code)
+        return None
+    except Exception:  # noqa: BLE001
+        logger.debug("License check endpoint unreachable", exc_info=True)
         return None
 
 
@@ -306,18 +341,29 @@ def ensure_license_accepted() -> Literal[True]:
     if token is not None:
         status = verify_token(token, api_url)
         if status is True:
-            # Token from env var or file is valid — make sure it's persisted.
-            save_token(token)
-            return True
-        if status is None:
-            # Server unreachable — accept optimistically.
+            # Token is valid — now check license acceptance.
+            license_status = check_license_accepted(token, api_url)
+            if license_status is True:
+                save_token(token)
+                return True
+            if license_status is None:
+                raise TabPFNLicenseError(
+                    "Could not reach the license server to verify acceptance.\n\n"
+                    "Please check your internet connection and try again."
+                )
+            # license_status is False — license not yet accepted.
+            # Fall through to browser login so the GUI can show the acceptance form.
+            logger.info("Token valid but license not accepted; opening browser for acceptance.")
+        elif status is None:
+            # Server unreachable — accept optimistically (token may still be valid).
             logger.info(
                 "Could not reach the license server; accepting cached token."
             )
             return True
-        # status is False — invalid/expired token.
-        logger.info("Cached token is invalid; deleting and re-authenticating.")
-        delete_cached_token()
+        else:
+            # status is False — invalid/expired token.
+            logger.info("Cached token is invalid; deleting and re-authenticating.")
+            delete_cached_token()
 
     # No valid cached token — need browser login.
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
