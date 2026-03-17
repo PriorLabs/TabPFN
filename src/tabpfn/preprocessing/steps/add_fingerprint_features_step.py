@@ -32,6 +32,12 @@ def _float_hash_arr(arr: np.ndarray, offset: int = 0) -> float:
     return (_hash & _CONSTANT) / _CONSTANT
 
 
+def _hash_row_bytes(row_data: bytes, salt_bytes: bytes) -> float:
+    """Hash pre-rounded row bytes with salt. Avoids repeated rounding."""
+    _hash = int(hashlib.sha256(row_data + salt_bytes).hexdigest(), 16)
+    return (_hash & _CONSTANT) / _CONSTANT
+
+
 class AddFingerprintFeaturesStep(PreprocessingStep):
     """Adds a fingerprint feature to the features based on hash of each row.
 
@@ -83,33 +89,44 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         """
         X_det = X.detach().cpu().numpy() if isinstance(X, torch.Tensor) else X
 
-        # Compute fingerprint hash for each row
-        X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
+        # Round once for all rows instead of per-row
+        X_rounded = np.ascontiguousarray(
+            np.around(X_det, decimals=_HASH_ROUND_DECIMALS)
+        )
+
         salt = self.n_cells_
+        salt_bytes = salt.to_bytes(8, "little", signed=False)
+
+        X_h = np.zeros(X.shape[0], dtype=X_det.dtype)
         if is_test:
-            # Keep the first hash even if there are collisions
-            for i, row in enumerate(X_det):
-                h = _float_hash_arr(row, salt)
-                X_h[i] = h
+            for i in range(X_rounded.shape[0]):
+                row_data = X_rounded[i].tobytes()
+                X_h[i] = _hash_row_bytes(row_data, salt_bytes)
         else:
             # Handle hash collisions by counting up and rehashing
             seen_hashes = set()
-            # Map initial hash -> next candidate offset to avoid O(N^2) on duplicates
-            hash_counter = defaultdict(int)
+            hash_counter: dict[float, int] = defaultdict(int)
 
-            for i, row in enumerate(X_det):
+            for i in range(X_rounded.shape[0]):
+                row_data = X_rounded[i].tobytes()
+
                 # Calculate the base hash to identify the row content
-                h_base = _float_hash_arr(row, salt)
+                h_base = _hash_row_bytes(row_data, salt_bytes)
 
                 # Start checking from the last known count for this row content
                 add_to_hash = hash_counter[h_base]
 
-                h = _float_hash_arr(row, salt + add_to_hash)
+                if add_to_hash == 0:
+                    h = h_base
+                else:
+                    offset_bytes = (salt + add_to_hash).to_bytes(
+                        8, "little", signed=False
+                    )
+                    h = _hash_row_bytes(row_data, offset_bytes)
 
-                # Resolve remaining collisions (if row+k accidentally collides with
-                # another row)
+                # Resolve remaining collisions
                 retries = 0
-                while h in seen_hashes and not np.isnan(row).all():
+                while h in seen_hashes and not np.isnan(X_det[i]).all():
                     add_to_hash += 1
                     retries += 1
                     if retries > _MAX_COLLISION_RETRIES:
@@ -117,12 +134,13 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
                             f"Fingerprint hash collision not resolved after "
                             f"{_MAX_COLLISION_RETRIES} retries for row {i}."
                         )
-                    h = _float_hash_arr(row, salt + add_to_hash)
+                    offset_bytes = (salt + add_to_hash).to_bytes(
+                        8, "little", signed=False
+                    )
+                    h = _hash_row_bytes(row_data, offset_bytes)
 
                 X_h[i] = h
                 seen_hashes.add(h)
-
-                # Update counter so next identical row starts checking from new offset
                 hash_counter[h_base] = add_to_hash + 1
 
         if isinstance(X, torch.Tensor):
