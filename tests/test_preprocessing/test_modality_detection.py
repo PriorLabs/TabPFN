@@ -185,8 +185,14 @@ def test__numerical_series_from_strings():
     assert result == FeatureModality.NUMERICAL
 
 
-def test__detect_numerical_as_string_with_nulles():
-    s = pd.Series([None, np.nan, "1.0", "2.0", "3.0"])
+def test__detect_numerical_as_string_with_nulls():
+    # Use enough distinct numeric values to exceed min_unique_for_numerical=5.
+
+    # Previously [None, np.nan, "1.0", "2.0", "3.0"] worked in pandas 2.x because
+    # None and np.nan were counted as two separate unique values in object dtype,
+    # giving n_unique=5. In pandas 3.0 they both become pd.NA (n_unique=4 < 5),
+    # triggering the categorical heuristic. Be explicit about the value count.
+    s = pd.Series([None, np.nan, "1.0", "2.0", "3.0", "4.0", "5.0"])
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.NUMERICAL
 
