@@ -185,9 +185,11 @@ def test__numerical_series_from_strings():
     assert result == FeatureModality.NUMERICAL
 
 
-def test__detect_numerical_as_string_with_nulles():
+def test__detect_numerical_as_string_with_nulls():
+    # Note that in pandas 3.0, None and np.nan both become pd.NA, so n_unique=4.
+    # Ideally tests shouldn't depend on pandas version
     s = pd.Series([None, np.nan, "1.0", "2.0", "3.0"])
-    result = _for_test_detect_with_defaults(s)
+    result = _for_test_detect_with_defaults(s, min_unique_for_numerical=4)
     assert result == FeatureModality.NUMERICAL
 
 
