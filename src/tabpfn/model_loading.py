@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -807,6 +808,18 @@ def get_loss_criterion(
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
 
 
+@functools.cache
+def _load_checkpoint(path: str) -> dict:
+    """Load and cache a checkpoint from disk.
+
+    Cached so that repeated ``load_model`` calls with the same path skip disk
+    I/O.  Use ``_load_checkpoint.cache_clear()`` to free memory.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        return torch.load(path, map_location="cpu", weights_only=None)
+
+
 def load_model(
     *,
     path: Path,
@@ -819,26 +832,24 @@ def load_model(
 ]:
     """Loads a model from a given path. Only for inference.
 
+    The raw checkpoint is cached so that repeated calls with the same path
+    skip disk I/O.  Each call returns a fresh model instance so callers can
+    mutate it freely (finetuning, differentiable input, KV caching, etc.).
+
     Args:
         path: Path to the checkpoint
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
     """
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weightes_only=None` is the default value. In the future this will default to
-    # `True`, dissallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint: dict = torch.load(path, map_location="cpu", weights_only=None)
+    checkpoint = _load_checkpoint(str(path))
 
     try:
         architecture_name = checkpoint["architecture_name"]
     except KeyError:
         architecture_name = "base"
     architecture = ARCHITECTURES[architecture_name]
-    state_dict = checkpoint["state_dict"]
+    # Shallow-copy so the pop() below doesn't mutate the cached checkpoint.
+    state_dict = dict(checkpoint["state_dict"])
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
     logger.debug(
         "Keys in config that were not parsed by architecture config: "
