@@ -171,12 +171,11 @@ class InferenceConfig:
      after the transformation. This can happen due to multiple reasons and should in
      general always be done."""
 
-    _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: None = None
+    _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: float | None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0
 
     def override_with_user_input_and_resolve_auto(
-        self,
-        user_config: dict | InferenceConfig | None,
+        self, user_config: dict | InferenceConfig | None
     ) -> InferenceConfig:
         """Return a new config with fields specified in `user_config` overwritten.
 

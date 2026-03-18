@@ -193,6 +193,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The softmax temperature used for prediction. This is set to the default softmax
     temperature if no temperature tuning is done"""
 
+    ensemble_configs_: list[ClassifierEnsembleConfig]
+    """The ensemble configurations used during fit.
+    Stored for reuse in prompt tuning."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,

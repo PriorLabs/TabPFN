@@ -273,10 +273,10 @@ class PreprocessingPipeline:
         )
         assert self.final_feature_schema_ is not None
 
-        X, _ = self._process_steps(X, self.initial_feature_schema_, is_fitting=False)
-        return PreprocessingPipelineResult(
-            X=X, feature_schema=self.final_feature_schema_
+        X, updated_schema = self._process_steps(
+            X, self.initial_feature_schema_, is_fitting=False
         )
+        return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
 
     def _process_steps(
         self,
@@ -313,7 +313,6 @@ class PreprocessingPipeline:
                     if is_fitting
                     else step.transform(X_slice)
                 )
-
                 if result.X.shape[1] != len(indices):
                     raise ValueError(
                         f"Step {step.__class__.__name__} registered with modalities "
@@ -322,7 +321,8 @@ class PreprocessingPipeline:
                         f"modalities must return the same number of columns."
                     )
 
-                assert X.dtype == result.X.dtype
+                self._validate_expected_dtype(pre_x=X, post_x=result.X, step=step)
+
                 X[:, indices] = result.X
 
                 X, feature_schema = self._maybe_append_added_columns(
@@ -347,6 +347,18 @@ class PreprocessingPipeline:
                 )
 
         return X, feature_schema
+
+    def _validate_expected_dtype(
+        self, pre_x: np.ndarray, post_x: np.ndarray, step: PreprocessingStep
+    ) -> None:
+        """Validate that the input and output dtypes are as expected."""
+        is_dtype_preserving_step = step.__class__.__name__ != "TokenizeTextStep"
+        if is_dtype_preserving_step:
+            assert pre_x.dtype == post_x.dtype
+        else:
+            assert pre_x.dtype != post_x.dtype
+            assert pre_x.dtype in ("U", "O")
+            assert post_x.dtype in ("float", "int")
 
     def _maybe_append_added_columns(
         self,
