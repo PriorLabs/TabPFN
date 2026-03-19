@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 
 
 @pydantic.dataclasses.dataclass
-class TabPFNV2p5Config(ArchitectureConfig):
-    """Configuration for the single-file TabPFN v2.5 architecture."""
+class TabPFNV2p6Config(ArchitectureConfig):
+    """Configuration for the single-file TabPFN v2.6 architecture."""
 
     name: str = "TabPFN-v2.6"
     emsize: int = 192
@@ -495,13 +495,13 @@ class TabPFNBlock(nn.Module):
         )
 
 
-class TabPFNV2p5(Architecture):
-    """TabPFN V2.5 with post-layernorm and self-attention on test-items."""
+class TabPFNV2p6(Architecture):
+    """TabPFN V2.6 with post-layernorm and self-attention on test-items."""
 
     def __init__(
         self,
         *,
-        config: TabPFNV2p5Config,
+        config: TabPFNV2p6Config,
         task_type: TaskType,
         n_out: int = 1,
         feature_positional_embedding: Literal["subspace"] | None = "subspace",
@@ -564,7 +564,7 @@ class TabPFNV2p5(Architecture):
         # this a proper API.
         self.ninp = config.emsize
 
-    def _get_feature_group_embedder(self, config: TabPFNV2p5Config) -> nn.Module:
+    def _get_feature_group_embedder(self, config: TabPFNV2p6Config) -> nn.Module:
         """Get the feature group embedder."""
         encoding_size = config.features_per_group * ENCODING_SIZE_MULTIPLIER
         hidden_dim = config.encoder_mlp_hidden_dim
@@ -798,7 +798,7 @@ class TabPFNV2p5(Architecture):
         return embedded_y_RiBX.transpose(0, 1)
 
 
-def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p5Config, dict[str, Any]]:
+def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p6Config, dict[str, Any]]:
     """Parse the config dict into a TabPFNV2Config, return unused keys.
 
     Args:
@@ -811,7 +811,7 @@ def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p5Config, dict[str, An
     Raises:
         pydantic.ValidationError: one or more of the values have the wrong type
     """
-    parsed_config = TabPFNV2p5Config(**config)
+    parsed_config = TabPFNV2p6Config(**config)
     return parsed_config, parsed_config.get_unused_config(config)
 
 
@@ -820,8 +820,8 @@ def get_architecture(
     *,
     n_out: int,
     cache_trainset_representation: bool = False,
-) -> TabPFNV2p5:
-    """Construct TabPFNV2.5 based on the given config.
+) -> TabPFNV2p6:
+    """Construct TabPFNV2.6 based on the given config.
 
     This factory method implements the interface defined in
     tabpfn.architectures.interface.ArchitectureModule.get_architecture().
@@ -836,10 +836,10 @@ def get_architecture(
 
     Returns: the constructed architecture
     """
-    assert isinstance(config, TabPFNV2p5Config)
+    assert isinstance(config, TabPFNV2p6Config)
     if cache_trainset_representation:
-        raise NotImplementedError("TabPFNV2.5 does not support kv cache yet.")
-    return TabPFNV2p5(
+        raise NotImplementedError("TabPFNV2.6 does not support kv cache yet.")
+    return TabPFNV2p6(
         config=config,
         n_out=n_out,
         task_type="multiclass" if config.max_num_classes > 2 else "regression",
@@ -886,105 +886,6 @@ def _prepare_targets(
         (0, 0, 0, 0, 0, num_train_rows - num_train_labels),
         value=float("nan"),
     )
-
-
-def _replace_keys_from_base_architecture(
-    state_dict: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    """Translate a base-architecture state dict to the v2.5 key names.
-
-    Keys not present in the mapping are passed through unchanged.
-    """
-    n_layers = sum(k.endswith("self_attn_between_features._w_qkv") for k in state_dict)
-
-    base_to_v2_mapping = [
-        ("encoder.5.layer.weight", "feature_group_embedder.weight"),
-        ("encoder.5.mlp.0.weight", "feature_group_embedder.0.weight"),
-        ("encoder.5.mlp.2.weight", "feature_group_embedder.2.weight"),
-        # regression: target linear projection was at position 1
-        ("y_encoder.1.layer.weight", "target_embedder.weight"),
-        ("y_encoder.1.layer.bias", "target_embedder.bias"),
-        # multiclass: target linear projection was at position 2
-        ("y_encoder.2.layer.weight", "target_embedder.weight"),
-        ("y_encoder.2.layer.bias", "target_embedder.bias"),
-        ("decoder_dict.standard.0.weight", "output_projection.0.weight"),
-        ("decoder_dict.standard.0.bias", "output_projection.0.bias"),
-        ("decoder_dict.standard.2.weight", "output_projection.2.weight"),
-        ("decoder_dict.standard.2.bias", "output_projection.2.bias"),
-        (
-            "feature_positional_embedding_embeddings.weight",
-            "feature_positional_embedding_embeddings.weight",
-        ),
-        (
-            "feature_positional_embedding_embeddings.bias",
-            "feature_positional_embedding_embeddings.bias",
-        ),
-        (
-            "add_thinking_tokens.row_token_values",
-            "add_thinking_rows.row_token_values_TE",
-        ),
-    ]
-    for i in range(n_layers):
-        base_to_v2_mapping.extend(
-            [
-                (
-                    f"transformer_encoder.layers.{i}.mlp.linear1.weight",
-                    f"blocks.{i}.mlp.0.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.mlp.linear2.weight",
-                    f"blocks.{i}.mlp.2.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_qkv",
-                    f"blocks.{i}.per_sample_attention_between_features.qkv_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_out",
-                    f"blocks.{i}.per_sample_attention_between_features.out_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_qkv",
-                    f"blocks.{i}.per_column_attention_between_cells.qkv_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_out",
-                    f"blocks.{i}.per_column_attention_between_cells.out_projection.weight",
-                ),
-            ]
-        )
-
-    new_state_dict: dict[str, torch.Tensor] = {}
-    known_base_keys: set[str] = set()
-    for base_key, v2_key in base_to_v2_mapping:
-        known_base_keys.add(base_key)
-        if base_key not in state_dict:
-            continue
-
-        # QKV weight has shape (3, num_heads, head_size, input_size).
-        # Split into q/k/v weights of shape (num_heads * head_size, input_size).
-        if "qkv_projection.weight" in v2_key:
-            q_key = v2_key.replace("qkv_projection", "q_projection")
-            k_key = v2_key.replace("qkv_projection", "k_projection")
-            v_key = v2_key.replace("qkv_projection", "v_projection")
-            new_state_dict[q_key] = state_dict[base_key][0].flatten(0, 1)
-            new_state_dict[k_key] = state_dict[base_key][1].flatten(0, 1)
-            new_state_dict[v_key] = state_dict[base_key][2].flatten(0, 1)
-            continue
-
-        # Out-projection weight has shape (num_heads, head_size, output_size).
-        # Flatten heads and transpose to match nn.Linear convention (output, input).
-        if "out_projection.weight" in v2_key:
-            new_state_dict[v2_key] = state_dict[base_key].flatten(0, 1).T
-            continue
-
-        new_state_dict[v2_key] = state_dict[base_key]
-
-    for key, value in state_dict.items():
-        if key not in known_base_keys:
-            new_state_dict[key] = value
-
-    return new_state_dict
 
 
 def _remove_constant_features(x_RiBC: torch.Tensor) -> torch.Tensor:
