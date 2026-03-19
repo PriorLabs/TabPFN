@@ -1225,6 +1225,17 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
     assert "-v2.5-" in estimator.model_path
 
 
+def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "classifier" in estimator.model_path
+    assert "-v2.6-" in estimator.model_path
+
+
 def test__create_default_for_version__passes_through_overrides() -> None:
     estimator = TabPFNClassifier.create_default_for_version(
         ModelVersion.V2_5, n_estimators=16

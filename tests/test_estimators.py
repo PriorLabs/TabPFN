@@ -129,7 +129,9 @@ def test__to__after_fit__no_tensors_left_on_old_device(
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
-@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
+)
 def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
