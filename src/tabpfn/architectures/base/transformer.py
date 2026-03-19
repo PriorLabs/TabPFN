@@ -6,7 +6,6 @@ import logging
 import warnings
 from collections.abc import Callable, Iterable
 from functools import partial
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, overload
 from typing_extensions import Self, override
 
@@ -25,6 +24,7 @@ from tabpfn.architectures.encoders import (
     TorchPreprocessingPipeline,
 )
 from tabpfn.architectures.interface import Architecture
+from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.errors import TabPFNValidationError
 
 if TYPE_CHECKING:
@@ -32,11 +32,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-# Hard coded "random" embeddings (seed=42) used during training of size
-# 2000 x 48.
-col_embedding_path = Path(__file__).parent / "tabpfn_col_embedding.pt"
-COL_EMBEDDING = torch.load(col_embedding_path, weights_only=True)
 
 
 class LayerStack(nn.Module):
@@ -275,6 +270,7 @@ class PerFeatureTransformer(Architecture):
         self.dag_pos_enc_dim = config.dag_pos_enc_dim
         self.cached_feature_positional_embeddings: torch.Tensor | None = None
         self.random_embedding_seed = config.seed
+        self.pre_generated_column_embeddings = load_column_embeddings()
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         state.setdefault("features_per_group", 1)
@@ -661,11 +657,11 @@ class PerFeatureTransformer(Architecture):
                 dtype=x.dtype,
                 generator=positional_embedding_rng,
             )
-            # Random numbers on CPU and GPU are different. We fixed the seed, so these
-            # are not actually random, leading to a performance drop on CPU without
-            # hardcoding them.
+            # Random numbers vary between different devices, even with a fixed seed.
+            # Thus we use the pregenerated column embeddings where possible to ensure
+            # they are consistent between pretraining and inference.
             if embs.shape[1] == 48 and self.random_embedding_seed == 42:  # 192 // 4
-                embs[:2000] = COL_EMBEDDING[: embs.shape[0]].to(
+                embs[:2000] = self.pre_generated_column_embeddings[: embs.shape[0]].to(
                     device=embs.device, dtype=embs.dtype
                 )
             embs = self.feature_positional_embedding_embeddings(embs)

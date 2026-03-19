@@ -593,9 +593,13 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                # Later: Add improved error handling here, reenabling
-                #  the old offline download (only raise when Gating)
-                raise res[0]
+                repo_type = "clf" if which == "classifier" else "reg"
+                raise RuntimeError(
+                    f"Failed to download model to {path}!\n\n"
+                    f"For offline usage, please download the model manually from:\n"
+                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                    f"Then place it at: {path}",
+                ) from res[0]
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
@@ -635,14 +639,6 @@ def load_model_criterion_config(
             )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config
-
-
-def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
-    if model_path is None:
-        return settings.tabpfn.model_version
-    if V_2_5_IDENTIFIER in Path(model_path).name:
-        return ModelVersion.V2_5
-    return ModelVersion.V2
 
 
 def _log_model_config(
@@ -721,6 +717,14 @@ def log_model_init_params(
             set_init_params(logged_params)
         except ImportError:
             pass
+
+
+def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
+    if model_path is None:
+        return settings.tabpfn.model_version
+    if V_2_5_IDENTIFIER in Path(model_path).name:
+        return ModelVersion.V2_5
+    return ModelVersion.V2
 
 
 def resolve_model_version(

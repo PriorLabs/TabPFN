@@ -84,11 +84,11 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
         """
         del kwargs
         x = state[self.in_keys[0]]
-        nans_indicator: torch.Tensor | None = None
+        nans_inf_indicator: torch.Tensor | None = None
         if self.keep_nans:
             # TODO: There is a bug here: The values arriving here are already mapped
             # to nan if they were inf before
-            nans_indicator = (
+            nans_inf_indicator = (
                 torch.isnan(x) * NanHandlingEncoderStep.nan_indicator
                 + torch.logical_and(torch.isinf(x), torch.sign(x) == 1)
                 * NanHandlingEncoderStep.inf_indicator
@@ -102,8 +102,8 @@ class NanHandlingEncoderStep(TorchPreprocessingStep):
         x[nan_mask] = self.feature_means_.unsqueeze(0).expand_as(x)[nan_mask]
 
         outputs = {self.out_keys[0]: x}
-        if nans_indicator is not None:
-            outputs[self.out_keys[1]] = nans_indicator
+        if nans_inf_indicator is not None:
+            outputs[self.out_keys[1]] = nans_inf_indicator
         return outputs
 
     def _validate_keys(

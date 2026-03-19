@@ -109,6 +109,9 @@ def get_architecture(
     )
 
 
+EncoderType = Literal["linear", "mlp"]
+
+
 def get_encoder(  # noqa: PLR0913
     *,
     num_features_per_group: int,
@@ -122,7 +125,7 @@ def get_encoder(  # noqa: PLR0913
     remove_outliers: bool,
     normalize_by_used_features: bool,
     encoder_use_bias: bool,
-    encoder_type: Literal["linear", "mlp"] = "linear",
+    encoder_type: EncoderType = "linear",
     encoder_mlp_hidden_dim: int | None = None,
     encoder_mlp_num_layers: int = 2,
 ) -> TorchPreprocessingPipeline:
