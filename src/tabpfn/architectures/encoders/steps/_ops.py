@@ -249,19 +249,39 @@ def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
     if B == 1:
         return x[:, :, sel[0]]
 
-    new_x = x.detach().clone()
+    num_rows = x.shape[0]
 
-    # For each batch, compute the number of selected features.
-    sel_counts = sel.sum(dim=-1)  # shape: (B,)
+    # Compute destination indices using cumsum
+    # (It would be easier to do argsort but that's not ONNX compatible).
+    # Selected features go to positions [0, num_selected), unselected go to
+    # [num_selected, total_features).
+    sel_cumsum_BF = sel.cumsum(dim=-1)
+    not_sel_cumsum_BF = (~sel).cumsum(dim=-1)
+    num_selected_B1 = sel.sum(dim=-1, keepdim=True)
 
-    for b in range(B):
-        s = int(sel_counts[b])
-        if s != total_features:
-            if s > 0:
-                new_x[:, b, :s] = x[:, b, sel[b]]
-            new_x[:, b, s:] = 0
+    # For selected features: destination = cumsum - 1
+    # For unselected features: destination = num_selected + not_sel_cumsum - 1
+    dest_indices_BF = torch.where(
+        sel,
+        sel_cumsum_BF - 1,
+        num_selected_B1 + not_sel_cumsum_BF - 1,
+    )
 
-    return new_x
+    # Compute source indices (inverse permutation) using scatter.
+    # For each destination position, this tells us which source position it comes from.
+    source_positions_BF = torch.arange(total_features, device=x.device).expand(B, -1)
+    src_indices_BF = torch.zeros(B, total_features, dtype=torch.long, device=x.device)
+    src_indices_BF.scatter_(dim=-1, index=dest_indices_BF, src=source_positions_BF)
+
+    # Use gather to reorder features
+    src_indices_RBF = src_indices_BF.unsqueeze(0).expand(num_rows, -1, -1)
+    new_x_RBF = torch.gather(x, dim=2, index=src_indices_RBF)
+
+    # Create a mask to zero out the padding positions.
+    position_indices_F = torch.arange(total_features, device=x.device)
+    padding_mask_BF = position_indices_F >= num_selected_B1
+
+    return new_x_RBF.masked_fill(padding_mask_BF.unsqueeze(0), 0)
 
 
 def remove_outliers(
@@ -271,6 +291,7 @@ def remove_outliers(
     lower: None | torch.Tensor = None,
     upper: None | torch.Tensor = None,
 ) -> tuple[torch.Tensor, tuple[torch.Tensor, torch.Tensor]]:
+    """Remove outliers from the input tensor."""
     # Expects T, B, H
     assert (lower is None) == (upper is None), "Either both or none of lower and upper"
     assert len(X.shape) == 3, "X must be T,B,H"
