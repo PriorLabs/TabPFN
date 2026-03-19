@@ -1,16 +1,12 @@
-"""The TabPFN v2.5 architecture.
+"""The TabPFN v2.6 architecture.
 
-Compared to v2, this adds thinking rows, supports different input encoders, and reduces
-the MLP hidden layer size.
-
-Note that this version does not support a KV cache.
+Compared to v2.5, this uses RMSNorm instead of LayerNorm.
 
 Copyright (c) Prior Labs GmbH 2025.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
@@ -47,7 +43,7 @@ if TYPE_CHECKING:
 class TabPFNV2p5Config(ArchitectureConfig):
     """Configuration for the single-file TabPFN v2.5 architecture."""
 
-    name: str = "TabPFN-v2.5"
+    name: str = "TabPFN-v2.6"
     emsize: int = 192
     nlayers: int = 24
     nhead: int = 3
@@ -329,10 +325,10 @@ def _batched_scaled_dot_product_attention(
     return output_BHSD.permute(0, 2, 1, 3)
 
 
-class LowerPrecisionLayerNorm(torch.nn.LayerNorm):
-    """LayerNorm that maintains FP16 precision in autocast mode.
+class LowerPrecisionRMSNorm(torch.nn.RMSNorm):
+    """RMSNorm that maintains FP16/BF16 precision in autocast mode.
 
-    PyTorch autocast runs LayerNorm in FP32, which has bad effects on our performance
+    PyTorch autocast runs RMSNorm in FP32, which has bad effects on our performance
     (we observed 2x slower) and uses more memory. This layer instead disabled autocast
     for the layer norm, so FP16 is maintained if this is the input format.
 
@@ -392,10 +388,10 @@ class TabPFNBlock(nn.Module):
             **device_and_dtype,
         )
 
-        layer_norm_args = {**device_and_dtype, "elementwise_affine": False}
-        self.layernorm_mha1 = LowerPrecisionLayerNorm(emsize, **layer_norm_args)
-        self.layernorm_mha2 = LowerPrecisionLayerNorm(emsize, **layer_norm_args)
-        self.layernorm_mlp = LowerPrecisionLayerNorm(emsize, **layer_norm_args)
+        layer_norm_args = {**device_and_dtype, "elementwise_affine": True}
+        self.layernorm_mha1 = LowerPrecisionRMSNorm(emsize, **layer_norm_args)
+        self.layernorm_mha2 = LowerPrecisionRMSNorm(emsize, **layer_norm_args)
+        self.layernorm_mlp = LowerPrecisionRMSNorm(emsize, **layer_norm_args)
 
         self.mlp = nn.Sequential(
             torch.nn.Linear(emsize, dim_feedforward, bias=False, **device_and_dtype),
@@ -800,26 +796,6 @@ class TabPFNV2p5(Architecture):
         embedded_y_RiBX = self.target_embedder(y_RiB1_concat)
 
         return embedded_y_RiBX.transpose(0, 1)
-
-    @override
-    def load_state_dict(
-        self,
-        state_dict: Mapping[str, Any],
-        strict: bool = True,
-        assign: bool = False,
-    ) -> Any:
-        """Load a state dict, automatically translating base-architecture key names.
-
-        If the state dict uses the old base-architecture naming convention, the
-        keys are remapped to the v2.5 names before loading.
-        """
-        has_base_keys = any(
-            k.startswith(("transformer_encoder.", "decoder_dict.", "y_encoder."))
-            for k in state_dict
-        )
-        if has_base_keys:
-            state_dict = _replace_keys_from_base_architecture(dict(state_dict))
-        return super().load_state_dict(state_dict, strict=strict, assign=assign)
 
 
 def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p5Config, dict[str, Any]]:
