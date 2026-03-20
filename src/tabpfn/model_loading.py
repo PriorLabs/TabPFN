@@ -815,6 +815,11 @@ def _load_checkpoint(path: str) -> dict:
     Cached so that repeated ``load_model`` calls with the same path skip disk
     I/O.  Use ``_load_checkpoint.cache_clear()`` to free memory.
     """
+    # Catch the `FutureWarning` that torch raises. This should be dealt with!
+    # The warning is raised due to `torch.load`, which advises against ckpt
+    # files that contain non-tensor data.
+    # This `weights_only=None` is the default value. In the future this will
+    # default to `True`, disallowing loading of arbitrary objects.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=FutureWarning)
         return torch.load(path, map_location="cpu", weights_only=None)
@@ -841,38 +846,37 @@ def load_model(
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
     """
-    checkpoint = _load_checkpoint(str(path))
+    checkpoint = _load_checkpoint(str(path.resolve()))
 
     try:
         architecture_name = checkpoint["architecture_name"]
     except KeyError:
         architecture_name = "base"
     architecture = ARCHITECTURES[architecture_name]
-    # Shallow-copy so the pop() below doesn't mutate the cached checkpoint.
-    state_dict = dict(checkpoint["state_dict"])
+    full_state = checkpoint["state_dict"]
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
     logger.debug(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
 
-    criterion_state_keys = [k for k in state_dict if "criterion." in k]
+    criterion_state_keys = [k for k in full_state if "criterion." in k]
     loss_criterion = get_loss_criterion(model_config)
     if isinstance(loss_criterion, FullSupportBarDistribution):
-        # Remove from state dict
         criterion_state = {
-            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
+            k.replace("criterion.", ""): full_state[k] for k in criterion_state_keys
         }
         loss_criterion.load_state_dict(criterion_state)
     else:
         assert len(criterion_state_keys) == 0, criterion_state_keys
 
+    model_state = {k: v for k, v in full_state.items() if k not in criterion_state_keys}
     model = architecture.get_architecture(
         model_config,
         n_out=get_n_out(model_config, loss_criterion),
         cache_trainset_representation=cache_trainset_representation,
     )
-    model.load_state_dict(state_dict)
+    model.load_state_dict(model_state)
     model.eval()
 
     inference_config = _get_inference_config_from_checkpoint(checkpoint, loss_criterion)
