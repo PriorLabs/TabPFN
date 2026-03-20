@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Callable
 from copy import deepcopy
 from typing import Literal
 
@@ -218,7 +217,7 @@ class InferenceConfig:
         return self.OUTLIER_REMOVAL_STD
 
     @classmethod
-    def get_default(
+    def get_default(  # noqa: C901, PLR0911
         cls, task_type: TaskType, model_version: ModelVersion | Literal["latest"]
     ) -> InferenceConfig:
         """Return the default config for the given model version and task type.
@@ -231,37 +230,21 @@ class InferenceConfig:
         compatiblity, we define the v2 and v2.5 configs here and use those during
         inference.
         """
-        config_factories: dict[
-            tuple[ModelVersion | Literal["latest"], TaskType],
-            Callable[[], InferenceConfig],
-        ] = {
-            (ModelVersion.V2, "multiclass"): lambda: _get_v2_config(
-                v2_classifier_preprocessor_configs()
-            ),
-            (ModelVersion.V2, "regression"): lambda: _get_v2_config(
-                v2_regressor_preprocessor_configs()
-            ),
-            (ModelVersion.V2_5, "multiclass"): lambda: _get_v2_5_or_2_6_config(
-                v2_5_classifier_preprocessor_configs()
-            ),
-            (ModelVersion.V2_5, "regression"): lambda: _get_v2_5_or_2_6_config(
-                v2_5_regressor_preprocessor_configs()
-            ),
-            (ModelVersion.V2_6, "multiclass"): lambda: _get_v2_5_or_2_6_config(
-                v2_6_classifier_preprocessor_configs()
-            ),
-            (ModelVersion.V2_6, "regression"): lambda: _get_v2_5_or_2_6_config(
-                v2_6_regressor_preprocessor_configs()
-            ),
-            ("latest", "multiclass"): lambda: _get_v2_5_or_2_6_config(
-                v2_5_classifier_preprocessor_configs()
-            ),
-            ("latest", "regression"): lambda: _get_v2_5_or_2_6_config(
-                v2_5_regressor_preprocessor_configs()
-            ),
-        }
-        if factory := config_factories.get((model_version, task_type)):
-            return factory()
+        if model_version == ModelVersion.V2:
+            if task_type == "multiclass":
+                return _get_v2_config(v2_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_config(v2_regressor_preprocessor_configs())
+        if model_version in (ModelVersion.V2_5, "latest"):
+            if task_type == "multiclass":
+                return _get_v2_5_or_2_6_config(v2_5_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_5_or_2_6_config(v2_5_regressor_preprocessor_configs())
+        if model_version == ModelVersion.V2_6:
+            if task_type == "multiclass":
+                return _get_v2_5_or_2_6_config(v2_6_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_5_or_2_6_config(v2_6_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
