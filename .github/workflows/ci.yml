@@ -38,10 +38,12 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
-            # https://github.com/actions/setup-python/issues/855
-            python-version: "3.9"
-            dependency-set: lowest-direct
+          # Note that new pytorch versions >= 2.5 don't support x86 on mac anymore,
+          # but python 3.9 only works on x86, so we disable this runner.
+          # https://github.com/actions/setup-python/issues/855
+          # - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
+          #  python-version: "3.9"
+          #  dependency-set: lowest-direct
           - os: windows-latest
             python-version: "3.9"
             dependency-set: lowest-direct
