@@ -6,7 +6,6 @@ build-backend = "setuptools.build_meta"
 name = "tabpfn"
 version = "6.4.2.dev0"
 dependencies = [
-  # Potentially need to upgrade to 2.5
   "torch>=2.5",
   "numpy>=1.21.6",
   "scikit-learn>=1.2.0",
