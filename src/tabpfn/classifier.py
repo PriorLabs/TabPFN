@@ -512,6 +512,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
+        elif version == ModelVersion.V2_6:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_classifier_v2_6().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 

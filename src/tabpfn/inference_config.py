@@ -17,6 +17,8 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
+    v2_6_classifier_preprocessor_configs,
+    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -215,7 +217,7 @@ class InferenceConfig:
         return self.OUTLIER_REMOVAL_STD
 
     @classmethod
-    def get_default(
+    def get_default(  # noqa: C901, PLR0911
         cls, task_type: TaskType, model_version: ModelVersion | Literal["latest"]
     ) -> InferenceConfig:
         """Return the default config for the given model version and task type.
@@ -233,11 +235,16 @@ class InferenceConfig:
                 return _get_v2_config(v2_classifier_preprocessor_configs())
             if task_type == "regression":
                 return _get_v2_config(v2_regressor_preprocessor_configs())
-        if model_version == ModelVersion.V2_5:
+        if model_version in (ModelVersion.V2_5, "latest"):
             if task_type == "multiclass":
-                return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
+                return _get_v2_5_or_2_6_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
-                return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
+                return _get_v2_5_or_2_6_config(v2_5_regressor_preprocessor_configs())
+        if model_version == ModelVersion.V2_6:
+            if task_type == "multiclass":
+                return _get_v2_5_or_2_6_config(v2_6_classifier_preprocessor_configs())
+            if task_type == "regression":
+                return _get_v2_5_or_2_6_config(v2_6_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
@@ -279,7 +286,7 @@ def _get_v2_config(
     )
 
 
-def _get_v2_5_config(
+def _get_v2_5_or_2_6_config(
     preprocessor_configs: list[PreprocessorConfig],
 ) -> InferenceConfig:
     return InferenceConfig(
