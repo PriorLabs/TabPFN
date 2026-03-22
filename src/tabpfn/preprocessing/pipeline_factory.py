@@ -78,6 +78,7 @@ def create_preprocessing_pipeline(
             EncodeCategoricalFeaturesStep(
                 pconfig.categorical_name,
                 random_state=random_state,
+                max_onehot_cardinality=pconfig.max_onehot_cardinality,
             )
         )
 
@@ -92,6 +93,20 @@ def create_preprocessing_pipeline(
                     random_state=random_state,
                 )
             )
+
+        # Second subsampling after expansion to cap blowup from one-hot/SVD
+        max_after = pconfig.max_features_after_expansion
+        if max_after is None:
+            max_after = 2 * pconfig.max_features_per_estimator
+        steps.append(
+            ReshapeFeatureDistributionsStep(
+                transform_name="none",
+                append_to_original=False,
+                max_features_per_estimator=max_after,
+                apply_to_categorical=True,
+                random_state=random_state,
+            )
+        )
 
     if config.add_fingerprint_feature:
         steps.append(AddFingerprintFeaturesStep())

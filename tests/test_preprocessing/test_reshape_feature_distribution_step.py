@@ -7,7 +7,9 @@ from typing import Literal
 import numpy as np
 import pytest
 
+from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
@@ -476,3 +478,77 @@ def test__reshape_step_append_original_logic(
 
     assert result.X.shape[0] == num_samples
     assert result.X.shape[1] == expected_output_features
+
+
+def test__post_expansion_subsampling_caps_feature_blowup():
+    """Test that the second ReshapeFeatureDistributionsStep in the pipeline
+    caps feature count after expansion (append_original + SVD).
+    """
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 200, 50
+    X = rng.random((n_samples, n_features))
+    schema = _make_metadata(n_features, [])
+
+    # append_original=True doubles features, SVD adds more -> exceeds 2*max
+    max_feat = 10
+    pconfig = PreprocessorConfig(
+        name="none",
+        categorical_name="numeric",
+        global_transformer_name="svd",
+        max_features_per_estimator=max_feat,
+        append_original=True,
+    )
+    econfig = EnsembleConfig(
+        preprocess_config=pconfig,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_count=0,
+        feature_shift_decoder=None,
+        subsample_ix=None,
+        outlier_removal_std=None,
+        _model_index=0,
+    )
+
+    pipeline = create_preprocessing_pipeline(econfig, random_state=42)
+    result = pipeline.fit_transform(X, schema)
+
+    # Second subsample should cap at 2 * max_features_per_estimator
+    assert result.X.shape[1] <= 2 * max_feat
+    assert result.X.shape[0] == n_samples
+
+    # Verify transform on test data produces same shape
+    X_test = rng.random((20, n_features))
+    result_test = pipeline.transform(X_test)
+    assert result_test.X.shape[1] == result.X.shape[1]
+
+
+def test__post_expansion_subsampling_noop_when_under_threshold():
+    """Second subsampling is a no-op when features don't exceed 2*max."""
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 100, 200
+    X = rng.random((n_samples, n_features))
+    schema = _make_metadata(n_features, [])
+
+    # No append, no SVD -> features only decrease from first subsample
+    max_feat = 50
+    pconfig = PreprocessorConfig(
+        name="none",
+        categorical_name="numeric",
+        max_features_per_estimator=max_feat,
+    )
+    econfig = EnsembleConfig(
+        preprocess_config=pconfig,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_count=0,
+        feature_shift_decoder=None,
+        subsample_ix=None,
+        outlier_removal_std=None,
+        _model_index=0,
+    )
+
+    pipeline = create_preprocessing_pipeline(econfig, random_state=42)
+    result = pipeline.fit_transform(X, schema)
+
+    # First subsample caps at 50, no expansion, so second subsample (cap=100) is no-op
+    assert result.X.shape[1] == max_feat
