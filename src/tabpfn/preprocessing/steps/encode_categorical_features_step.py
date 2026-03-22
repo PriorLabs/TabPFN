@@ -43,10 +43,12 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         self,
         categorical_transform_name: str = "ordinal",
         random_state: int | np.random.Generator | None = None,
+        max_onehot_cardinality: int | None = None,
     ):
         super().__init__()
         self.categorical_transform_name = categorical_transform_name
         self.random_state = random_state
+        self.max_onehot_cardinality = max_onehot_cardinality
 
         self.categorical_transformer_ = None
 
@@ -98,6 +100,13 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             return ct, categorical_features
 
         if self.categorical_transform_name == "onehot":
+            # Only one-hot encode features with cardinality <= max_onehot_cardinality
+            if self.max_onehot_cardinality is not None:
+                categorical_features = [
+                    i
+                    for i in categorical_features
+                    if len(np.unique(X[:, i])) <= self.max_onehot_cardinality
+                ]
             # Create a column transformer
             ct = ColumnTransformer(
                 [

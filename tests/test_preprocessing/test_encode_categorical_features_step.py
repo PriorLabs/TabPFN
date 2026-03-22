@@ -333,3 +333,41 @@ def test__in_pipeline__with_modality_selection_works():
     num_indices = [i for i in range(n_features) if i not in cat_indices]
     assert result.feature_schema.indices_for(FeatureModality.CATEGORICAL) == cat_indices
     assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == num_indices
+
+
+def test__encode_categorical__onehot__max_cardinality_filters_high_cardinality():
+    """Test that max_onehot_cardinality skips high-cardinality features.
+
+    With 2 categorical features (cardinality 5 and 50) and max_onehot_cardinality=30,
+    only the low-cardinality feature should be one-hot encoded.
+    """
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 100, 4
+    cat_indices = [0, 1]
+
+    X = rng.random((n_samples, n_features))
+    X[:, 0] = rng.integers(0, 5, size=n_samples).astype(float)  # cardinality 5
+    X[:, 1] = rng.integers(0, 50, size=n_samples).astype(float)  # cardinality 50
+    feature_schema = _make_feature_schema(n_features, cat_indices)
+
+    # With limit: only col 0 (card=5) gets one-hot encoded
+    step = EncodeCategoricalFeaturesStep(
+        categorical_transform_name="onehot",
+        random_state=42,
+        max_onehot_cardinality=30,
+    )
+    result = step.fit_transform(X, feature_schema)
+
+    # Col 0: 5 categories -> 5 onehot cols (drop="if_binary" keeps all for non-binary)
+    # Col 1: skipped (card 50 > 30), passed through as 1 col
+    # Cols 2,3: numerical, passed through
+    # Total: 5 + 1 + 2 = 8
+    assert result.X.shape == (n_samples, 8)
+
+    # Without limit: both get one-hot encoded -> more features
+    step_no_limit = EncodeCategoricalFeaturesStep(
+        categorical_transform_name="onehot",
+        random_state=42,
+    )
+    result_no_limit = step_no_limit.fit_transform(X, feature_schema)
+    assert result_no_limit.X.shape[1] > result.X.shape[1]
