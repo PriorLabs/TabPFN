@@ -7,7 +7,9 @@ from typing import Literal
 import numpy as np
 import pytest
 
+from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
@@ -480,10 +482,8 @@ def test__reshape_step_append_original_logic(
 
 def test__post_expansion_subsampling_caps_feature_blowup():
     """Test that the second ReshapeFeatureDistributionsStep in the pipeline
-    caps feature count after expansion (append_original + SVD)."""
-    from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-    from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-
+    caps feature count after expansion (append_original + SVD).
+    """
     rng = np.random.default_rng(42)
     n_samples, n_features = 200, 50
     X = rng.random((n_samples, n_features))
@@ -524,9 +524,6 @@ def test__post_expansion_subsampling_caps_feature_blowup():
 
 def test__post_expansion_subsampling_noop_when_under_threshold():
     """Second subsampling is a no-op when features don't exceed 2*max."""
-    from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-    from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-
     rng = np.random.default_rng(42)
     n_samples, n_features = 100, 200
     X = rng.random((n_samples, n_features))
