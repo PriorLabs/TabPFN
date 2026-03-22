@@ -364,6 +364,14 @@ def test__encode_categorical__onehot__max_cardinality_filters_high_cardinality()
     # Total: 5 + 1 + 2 = 8
     assert result.X.shape == (n_samples, 8)
 
+    # Skipped high-cardinality col 1 should retain categorical modality
+    cat_out = result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    num_out = result.feature_schema.indices_for(FeatureModality.NUMERICAL)
+    # 5 onehot cols + 1 skipped categorical = 6 categorical
+    assert len(cat_out) == 6
+    # 2 numerical cols remain numerical
+    assert len(num_out) == 2
+
     # Without limit: both get one-hot encoded -> more features
     step_no_limit = EncodeCategoricalFeaturesStep(
         categorical_transform_name="onehot",
