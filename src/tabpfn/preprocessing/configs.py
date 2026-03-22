@@ -104,6 +104,7 @@ class PreprocessorConfig:
         ]
         | None
     ) = None
+    max_features_after_expansion: int | None = None
     differentiable: bool = False
 
     @override
