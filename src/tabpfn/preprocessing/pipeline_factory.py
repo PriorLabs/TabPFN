@@ -78,6 +78,7 @@ def create_preprocessing_pipeline(
             EncodeCategoricalFeaturesStep(
                 pconfig.categorical_name,
                 random_state=random_state,
+                max_onehot_cardinality=pconfig.max_onehot_cardinality,
             )
         )
 
