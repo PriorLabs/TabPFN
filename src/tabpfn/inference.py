@@ -318,9 +318,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
         """
-        # We save it as a static seed to be reproducible across predicts
-        static_seed = ensemble_preprocessor.next_static_seed()
-
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
             save_peak_mem=save_peak_mem,
@@ -331,7 +328,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         self.X_train = X_train
         self.y_train = y_train
         self.feature_schema = feature_schema
-        self.static_seed = static_seed
         self.ensemble_preprocessor = ensemble_preprocessor
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
@@ -364,7 +360,11 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 y_train=self.y_train,
                 feature_schema=self.feature_schema,
                 parallel_mode="in-order",
-                override_random_state=np.random.default_rng(self.static_seed),
+                # reproducible across predicts.
+                # TODO: this should be the case for all inference engines.
+                override_random_state=np.random.default_rng(
+                    self.ensemble_preprocessor.static_seed
+                ),
             )
         )
 

@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [6.4.1] - 2026-02-19
+
+### Changed
+
+- Download lock is now scoped to the target file path, allowing concurrent downloads of different model files to proceed in parallel instead of serializing all downloads behind a single global lock. ([#790](https://github.com/PriorLabs/TabPFN/pull/790))
+
+
+## [6.4.0] - 2026-02-18
+
+### Added
+
+- Introduces dedicated method for fitting with differentiable input called `fit_with_differentiable_input()` ([#752](https://github.com/PriorLabs/TabPFN/pull/752))
+- Pass through kwargs in FinetunedTabPFNClassifier and FinetunedTabPFNRegressor predict and predict_proba methods to allow additional options like output_type='full' ([#772](https://github.com/PriorLabs/TabPFN/pull/772))
+- Add MPS memory limiting to prevent macOS system crashes when using Apple Silicon GPUs. Memory is automatically limited to 70% of recommended max on import. Configurable via `TABPFN_MPS_MEMORY_FRACTION` environment variable. ([#773](https://github.com/PriorLabs/TabPFN/pull/773))
+- Added `TabPFNCUDAOutOfMemoryError` and `TabPFNMPSOutOfMemoryError` for GPU out-of-memory errors during prediction with large test sets, providing helpful guidance on batching predictions. ([#774](https://github.com/PriorLabs/TabPFN/pull/774))
+
+### Changed
+
+- Remove upper version limits on dependencies ([#764](https://github.com/PriorLabs/TabPFN/pull/764))
+- Refactored preprocessing pipeline:
+  * Introduced `FeatureSchema` system to track column metadata through transformations, replacing raw categorical index lists.
+  * Added `PreprocessingPipeline` and `PreprocessingStep` interfaces for modular transformations and updated all preprocessing steps.
+  * Added `TabPFNLabelEncoder` for centralized label validation and metadata extraction.
+
+  ([#767](https://github.com/PriorLabs/TabPFN/pull/767))
+- * Introduces AddSVDFeaturesStep as a dedicated preprocessing step for SVD feature generation
+  * Removes SVD-related functionality from ReshapeFeatureDistributionsStep
+  * Extracts utility functions to a new `tabpfn/preprocessing/steps/utils.py` module
+
+  ([#768](https://github.com/PriorLabs/TabPFN/pull/768))
+- SVD preprocessing is now applied after categorical encoding for more robustness. Note that this may result in slight variations in final outcomes compared to previous versions. ([#779](https://github.com/PriorLabs/TabPFN/pull/779))
+- Remove `random_state` parameter from `AddFingerprintFeaturesStep`; fingerprint hashing is now fully deterministic and no longer uses a random salt. Predictions will differ slightly from previous versions due to the changed fingerprint values. ([#780](https://github.com/PriorLabs/TabPFN/pull/780))
+- Fix bug related to column ordering in ordinal encoder by introducing `OrderPreservingColumnTransformer`. Note that this change can cause slight differences in final outcomes compared to previous versions. ([#788](https://github.com/PriorLabs/TabPFN/pull/788))
+
+### Fixed
+
+- Fix race condition when model is downloaded simultaneously by multiple processes ([#738](https://github.com/PriorLabs/TabPFN/pull/738))
+- Fix infinite loop in fingerprint hashing when rows contain inf or very large floats ([#780](https://github.com/PriorLabs/TabPFN/pull/780))
+
+### Deprecated
+
+- Removes "scaler" as an option for `global_transformer_name` in `PreprocessorConfig` ([#768](https://github.com/PriorLabs/TabPFN/pull/768))
+
+
 ## [6.3.2] - 2026-01-30
 
 ### Added

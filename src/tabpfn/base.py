@@ -37,7 +37,6 @@ from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
     infer_fp16_inference_mode,
-    infer_random_state,
 )
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
@@ -367,7 +366,7 @@ def create_inference_engine(  # noqa: PLR0913
 def initialize_model_variables_helper(
     calling_instance: TabPFNRegressor | TabPFNClassifier,
     model_type: Literal["regressor", "classifier"],
-) -> tuple[int, np.random.Generator]:
+) -> int:
     """Set attributes on the given model to prepare it for inference.
 
     This includes selecting the device and the inference precision.
@@ -376,7 +375,6 @@ def initialize_model_variables_helper(
         a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
         dtype, and rng is a NumPy random Generator for use during inference.
     """
-    _, rng = infer_random_state(calling_instance.random_state)
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
@@ -397,7 +395,7 @@ def initialize_model_variables_helper(
 
     calling_instance.inference_config_ = inference_config
 
-    return byte_size, rng
+    return byte_size
 
 
 def estimator_to_device(

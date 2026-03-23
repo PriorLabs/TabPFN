@@ -159,7 +159,7 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     )
 
     # Create pipeline with fingerprint step
-    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    fingerprint_step = AddFingerprintFeaturesStep()
     pipeline = PreprocessingPipeline(steps=[fingerprint_step])
 
     result = pipeline.fit_transform(X, schema)
@@ -192,7 +192,7 @@ def test__pipeline__transform_also_handles_added_columns():
     )
 
     # Create and fit pipeline
-    fingerprint_step = AddFingerprintFeaturesStep(random_state=42)
+    fingerprint_step = AddFingerprintFeaturesStep()
     pipeline = PreprocessingPipeline(steps=[fingerprint_step])
     pipeline.fit_transform(X_train, schema)
 
@@ -237,9 +237,6 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
         pipeline.fit_transform(X, schema)
 
 
-# This is a test for the OrderPreservingColumnTransformer, which is not used currently
-# But might be used in the future, therefore I'll leave it in.
-@pytest.mark.skip
 def test__order_preserving_column_transformer():
     """Should raise AssertionError if column sets overlap."""
     ordinal_enc1 = OrdinalEncoder()

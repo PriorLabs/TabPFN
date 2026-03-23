@@ -422,7 +422,9 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
             download_if_not_exists=True,
         )
 
-    with patch.object(model_loading, "download_model", side_effect=mock_download_model):
+    with patch.object(
+        model_loading, "_download_model", side_effect=mock_download_model
+    ):
         num_threads = 5
         completed = 0
         with ThreadPoolExecutor(max_workers=num_threads) as executor:

@@ -148,6 +148,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
 
+    n_train_samples_: int
+    """The number of training samples used during `fit()`."""
+
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
     using heuristics and user-provided indices for categorical features."""
@@ -189,6 +192,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     softmax_temperature_: float
     """The softmax temperature used for prediction. This is set to the default softmax
     temperature if no temperature tuning is done"""
+
+    ensemble_configs_: list[ClassifierEnsembleConfig]
+    """The ensemble configurations used during fit.
+    Stored for reuse in prompt tuning."""
 
     def __init__(  # noqa: PLR0913
         self,
@@ -548,9 +555,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
-        """Perform initialization of the model, return determined byte_size
-        and RNG object.
+    def _initialize_model_variables(self) -> int:
+        """Initializes the model and configurations.
+
+        Returns:
+            The determined byte_size.
         """
         return initialize_model_variables_helper(self, self.estimator_type)
 
@@ -618,7 +627,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         X: XType,
         y: YType,
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Data validation and cleaning
@@ -648,6 +657,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.ordinal_encoder_ = ordinal_encoder
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
+        self.n_train_samples_ = len(X)
 
         # Label encoding
         self.label_encoder_ = TabPFNLabelEncoder(original_target_name=original_y_name)
@@ -670,7 +680,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
             n_classes=self.n_classes_,
-            random_state=rng,
+            random_state=random_state,
             num_models=len(self.models_),
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
@@ -735,8 +745,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
-        byte_size, rng = self._initialize_model_variables()
-        ensemble_configs, X, y = self._initialize_dataset_preprocessing(X, y, rng)
+        static_seed, _ = infer_random_state(self.random_state)
+        byte_size = self._initialize_model_variables()
+        ensemble_configs, X, y = self._initialize_dataset_preprocessing(
+            X=X, y=y, random_state=static_seed
+        )
         self.ensemble_configs_ = ensemble_configs
 
         self._maybe_calibrate_temperature_and_tune_decision_thresholds(X=X, y=y)
@@ -745,7 +758,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             configs=ensemble_configs,
             n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
@@ -801,7 +816,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, _ = self._initialize_model_variables()
+            byte_size = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
@@ -846,16 +861,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
+        static_seed, rng = infer_random_state(self.random_state)
+
         is_first_fit_call = not hasattr(self, "models_")
         if is_first_fit_call:
-            byte_size, rng = self._initialize_model_variables()
+            byte_size = self._initialize_model_variables()
             ensemble_configs, X, y = self._initialize_for_differentiable_input(
                 X=X, y=y, rng=rng
             )
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
             remove_non_differentiable_preprocessing_from_models(models=self.models_)
         else:
-            _, rng = infer_random_state(self.random_state)
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
             )
@@ -865,7 +881,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             configs=ensemble_configs,
             n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
         )
 
@@ -1056,7 +1074,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
             )
 
-        with handle_oom_errors(self.devices_, X, model_type="classifier"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="classifier",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+            n_features=getattr(self, "n_features_in_", None),
+        ):
             return self.forward(
                 X,
                 use_inference_mode=True,
@@ -1490,8 +1514,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def to(self, device: DevicesSpecification) -> None:
         """Move the estimator to the given device(s).
 
-        If "auto": a single device is selected based on availability in the
-        following order of priority: "cuda:0", "mps", "cpu".
+        If "auto": devices are selected based on availability in the
+        following order of priority: all available CUDA GPUs, "mps", "cpu".
 
         To manually select a single device: specify a PyTorch device string e.g.
         "cuda:1". See PyTorch's documentation for information about supported

@@ -11,10 +11,31 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import base
+from . import base, tabpfn_v2_5, tabpfn_v2_6
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import ArchitectureModule
 
-ARCHITECTURES: dict[str, ArchitectureModule] = {"base": base}
+ARCHITECTURES: dict[str, ArchitectureModule] = {
+    "base": base,
+    "tabpfn_v2_5": tabpfn_v2_5,
+    "tabpfn_v2_6": tabpfn_v2_6,
+}
 """Map from architecture names to the corresponding module."""
+
+
+def register_architecture(name: str, module: ArchitectureModule) -> None:
+    """Add an architecture, from an external source, to the available architectures.
+
+    This allows checkpoints containing this architecture to be loaded by tabpfn.
+
+    Raises:
+        ValueError: If a module different from the one specified is already registered
+            for the given name.
+    """
+    if name in ARCHITECTURES and ARCHITECTURES[name] is not module:
+        raise ValueError(
+            f"There is already a different architecture registered for '{name}': "
+            f"{ARCHITECTURES[name]}"
+        )
+    ARCHITECTURES[name] = module

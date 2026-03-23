@@ -73,6 +73,7 @@ from tabpfn.preprocessing.steps import (
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
+    infer_random_state,
     transform_borders_one,
     translate_probs_across_borders,
 )
@@ -172,6 +173,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     n_features_in_: int
     """The number of features in the input data used during `fit()`."""
+
+    n_train_samples_: int
+    """The number of training samples used during `fit()`."""
 
     inferred_feature_schema_: FeatureSchema
     """The inferred feature schema. This contains the feature modalities per column,
@@ -580,15 +584,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(self) -> tuple[int, np.random.Generator]:
-        """Initializes the model, returning byte_size and RNG object."""
+    def _initialize_model_variables(self) -> int:
+        """Initializes the model and configurations.
+
+        Returns:
+            The determined byte_size.
+        """
         return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_dataset_preprocessing(
         self,
         X: XType,
         y: YType,
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
     ) -> tuple[
         list[RegressorEnsembleConfig],
         np.ndarray,
@@ -614,6 +622,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Set class variables for sklearn compatibility
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
+        self.n_train_samples_ = len(X)
 
         feature_schema = detect_feature_modalities(
             X=X,
@@ -633,7 +642,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # target name
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
             num_examples=y.shape[0],  # Use length of validated y
-            random_state=rng,  # Use the provided rng
+            random_state=random_state,  # Use the provided rng
         )
         target_preprocessors: list[TransformerMixin | Pipeline | None] = []
         for (
@@ -654,7 +663,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             max_index=len(X),
             preprocessor_configs=self.inference_config_.PREPROCESS_TRANSFORMS,
             target_transforms=target_preprocessors,
-            random_state=rng,
+            random_state=random_state,
             num_models=len(self.models_),
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
@@ -701,7 +710,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # If there is a model, and we are lazy, we skip reinitialization
         if not hasattr(self, "models_") or not no_refit:
-            byte_size, _ = self._initialize_model_variables()
+            byte_size = self._initialize_model_variables()
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
@@ -752,9 +761,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        byte_size, rng = self._initialize_model_variables()
+        static_seed, _ = infer_random_state(self.random_state)
+        byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist = (
-            self._initialize_dataset_preprocessing(X, y, rng)
+            self._initialize_dataset_preprocessing(X=X, y=y, random_state=static_seed)
         )
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
@@ -795,7 +805,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             configs=ensemble_configs,
             n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
-            rng=rng,
+            # Note: we use the static_seed so we're independent of the random generation
+            # inside the initialize function above
+            random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
         )
@@ -920,7 +932,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
 
         # Runs over iteration engine
-        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="regressor",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+            n_features=getattr(self, "n_features_in_", None),
+        ):
             (
                 _,
                 # list of tensors [N_est, N_samples, N_borders] (after forward)
@@ -1187,8 +1205,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def to(self, device: DevicesSpecification) -> None:
         """Move the estimator to the given device(s).
 
-        If "auto": a single device is selected based on availability in the
-        following order of priority: "cuda:0", "mps", "cpu".
+        If "auto": devices are selected based on availability in the
+        following order of priority: all available CUDA GPUs, "mps", "cpu".
 
         To manually select a single device: specify a PyTorch device string e.g.
         "cuda:1". See PyTorch's documentation for information about supported

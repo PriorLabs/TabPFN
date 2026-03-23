@@ -3,6 +3,7 @@ on:
   pull_request:
   push:
     branches: [main]
+  merge_group:
   workflow_dispatch:
 
 concurrency:
@@ -15,10 +16,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
-      - uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
+      - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6 # v3.6.1
         with:
           version-file: pyproject.toml
-      - uses: astral-sh/ruff-action@57714a7c8a2e59f32539362ba31877a1957dded1 # v3.5.1
+      - uses: astral-sh/ruff-action@4919ec5cf1f49eff0871dbcea0da843445b837e6 # v3.6.1
         with:
           args: "format --check"
           version-file: pyproject.toml
@@ -37,10 +38,12 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.9"
             dependency-set: lowest-direct
-          - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
-            # https://github.com/actions/setup-python/issues/855
-            python-version: "3.9"
-            dependency-set: lowest-direct
+          # Note that new pytorch versions >= 2.5 don't support x86 on mac anymore,
+          # but python 3.9 only works on x86, so we disable this runner.
+          # https://github.com/actions/setup-python/issues/855
+          # - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
+          #  python-version: "3.9"
+          #  dependency-set: lowest-direct
           - os: windows-latest
             python-version: "3.9"
             dependency-set: lowest-direct
@@ -65,7 +68,7 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 
@@ -107,24 +110,24 @@ jobs:
           enableCrossOsArchive: true
 
       - name: Run Tests (all tests)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only)
-        if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name == 'pull_request' }}
+        if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
 
       - name: Run Tests (all tests, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' }}
+        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest tests/
 
       - name: Run Tests (PR tests only, MPS disabled)
-        if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name == 'pull_request' }}
+        if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
@@ -150,7 +153,7 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 
@@ -209,7 +212,7 @@ jobs:
           python-version: "3.13"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
 
       - name: Restore model cache
         id: restore-model-cache
@@ -270,7 +273,7 @@ jobs:
           architecture: x64
 
       - name: Install uv
-        uses: astral-sh/setup-uv@61cb8a9741eeb8a550a1b8544337180c0fc8476b # v7.2.0
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
         with:
           enable-cache: true
 

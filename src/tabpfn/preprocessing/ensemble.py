@@ -80,7 +80,7 @@ class TabPFNEnsemblePreprocessor:
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
         n_samples: int,
         feature_schema: FeatureSchema,
-        rng: np.random.Generator,
+        random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
     ) -> None:
@@ -90,7 +90,8 @@ class TabPFNEnsemblePreprocessor:
             configs: List of ensemble configurations.
             n_samples: Number of samples in the dataset.
             feature_schema: Feature schema of the dataset.
-            rng: Random number generator.
+            random_state: Random state object for preprocessing. If int, the
+                preprocessing will use the same random seed across calls to fit().
             n_preprocessing_jobs: Number of preprocessing jobs to use.
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
@@ -100,12 +101,15 @@ class TabPFNEnsemblePreprocessor:
         self.configs = configs
         self.n_samples = n_samples
         self.feature_schema = feature_schema
-        self.rng = rng
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
+        # TODO: think about how to handle random state here
+        # Also next_static_seed() method may not be needed anymore.
+        self.random_state = random_state
+        self.static_seed, self.rng = infer_random_state(random_state)
 
         self.pipelines = [
-            create_preprocessing_pipeline(config, random_state=self.rng)
+            create_preprocessing_pipeline(config, random_state=self.static_seed)
             for config in self.configs
         ]
 
@@ -117,15 +121,6 @@ class TabPFNEnsemblePreprocessor:
             max_features_per_estimator=max_features,
             rng=self.rng,
         )
-
-    def next_static_seed(self) -> int:
-        """Get a static seed for the ensemble data processor.
-
-        This can be used to redo the preprocessing with the same random state
-        during the fit_transform*() methods. Currently it is only used
-        in the InferenceEngineOnDemand class.
-        """
-        return self.rng.integers(0, int(np.iinfo(np.int32).max))
 
     def fit_transform_ensemble_members_iterator(
         self,
@@ -141,7 +136,7 @@ class TabPFNEnsemblePreprocessor:
             X_train=X_train,
             y_train=y_train,
             feature_schema=feature_schema,
-            random_state=override_random_state or self.rng,
+            random_state=override_random_state or self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
             # TODO:

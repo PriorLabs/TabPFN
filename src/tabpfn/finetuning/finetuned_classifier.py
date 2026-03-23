@@ -110,6 +110,11 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             only has an effect if `output_dir` is provided during the `fit()` call.
             If None, no intermediate checkpoints are saved. The best model checkpoint
             is always saved regardless of this setting. Defaults to 10.
+        use_fixed_preprocessing_seed: Whether to use a fixed preprocessing seed.
+            If True, the preprocessing will always use the same random seed throughout
+            data batches. This is helpful in most cases because, e.g., the column order
+            will stay the same across batches.
+            If False, the preprocessing will use a different random seed for each batch.
 
         FinetunedTabPFNClassifier specific arguments:
 
@@ -144,6 +149,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
+        use_fixed_preprocessing_seed: bool = True,
         extra_classifier_kwargs: dict[str, Any] | None = None,
         eval_metric: Literal["roc_auc", "log_loss"] | None = None,
     ):
@@ -169,6 +175,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             n_estimators_final_inference=n_estimators_final_inference,
             use_activation_checkpointing=use_activation_checkpointing,
             save_checkpoint_interval=save_checkpoint_interval,
+            use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
         )
         self.extra_classifier_kwargs = extra_classifier_kwargs
         self.eval_metric = eval_metric
@@ -332,7 +339,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
 
     @override
     def _get_valid_finetuning_query_size(
-        self, *, query_size: int, y_train: np.ndarray
+        self, *, query_size: int, y_train: np.ndarray | None
     ) -> int:
         """Calculate a valid finetuning query size."""
         # finetuning_query_size should be greater or equal to the number of classes
