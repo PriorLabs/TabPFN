@@ -16,6 +16,33 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.utils import infer_random_state
 
+ONE_HOT_ENCODER_NAME = "one_hot_encoder"
+
+
+def _get_all_cat_indices_after_onehot(
+    ct: ColumnTransformer,
+    n_output_features: int,
+    all_cat_indices: list[int],
+) -> list[int]:
+    """Return output indices of all categorical features after one-hot encoding.
+
+    Includes both one-hot encoded columns and high-cardinality categoricals
+    that were passed through in the remainder.
+    """
+    onehot_input_cols = set(ct.transformers_[0][2])
+    onehot_out = list(range(n_output_features))[
+        ct.output_indices_[ONE_HOT_ENCODER_NAME]
+    ]
+    # Find skipped categoricals in the remainder output
+    remainder_start = ct.output_indices_["remainder"].start
+    remainder_input_cols = sorted(set(range(ct.n_features_in_)) - onehot_input_cols)
+    skipped_cat_out = [
+        remainder_start + remainder_input_cols.index(i)
+        for i in all_cat_indices
+        if i not in onehot_input_cols
+    ]
+    return sorted(onehot_out + skipped_cat_out)
+
 
 def _get_least_common_category_count(x_column: np.ndarray) -> int:
     if len(x_column) == 0:
@@ -43,10 +70,12 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         self,
         categorical_transform_name: str = "ordinal",
         random_state: int | np.random.Generator | None = None,
+        max_onehot_cardinality: int | None = None,
     ):
         super().__init__()
         self.categorical_transform_name = categorical_transform_name
         self.random_state = random_state
+        self.max_onehot_cardinality = max_onehot_cardinality
 
         self.categorical_transformer_ = None
 
@@ -98,17 +127,25 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             return ct, categorical_features
 
         if self.categorical_transform_name == "onehot":
+            # Only one-hot encode features with cardinality <= max_onehot_cardinality
+            onehot_features = categorical_features
+            if self.max_onehot_cardinality is not None:
+                onehot_features = [
+                    i
+                    for i in categorical_features
+                    if len(np.unique(X[:, i])) <= self.max_onehot_cardinality
+                ]
             # Create a column transformer
             ct = ColumnTransformer(
                 [
                     (
-                        "one_hot_encoder",
+                        ONE_HOT_ENCODER_NAME,
                         OneHotEncoder(
                             drop="if_binary",
                             sparse_output=False,
                             handle_unknown="ignore",
                         ),
-                        categorical_features,
+                        onehot_features,
                     ),
                 ],
                 # The column numbers to be transformed
@@ -158,9 +195,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 ct = None
             else:
                 n_features = Xt.shape[1]
-                categorical_features = list(range(n_features))[
-                    ct.output_indices_["one_hot_encoder"]
-                ]
+                categorical_features = _get_all_cat_indices_after_onehot(
+                    ct, n_features, categorical_features
+                )
         else:
             raise ValueError(
                 f"Unknown categorical transform {self.categorical_transform_name}",
@@ -214,9 +251,9 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 Xt = X
             else:
                 n_features = Xt.shape[1]
-                categorical_features = list(range(n_features))[
-                    ct.output_indices_["one_hot_encoder"]
-                ]
+                categorical_features = _get_all_cat_indices_after_onehot(
+                    ct, n_features, categorical_features
+                )
         else:
             raise ValueError(
                 f"Unknown categorical transform {self.categorical_transform_name}",
