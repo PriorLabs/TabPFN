@@ -16,6 +16,8 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.utils import infer_random_state
 
+ONE_HOT_ENCODER_NAME = "one_hot_encoder"
+
 
 def _get_all_cat_indices_after_onehot(
     ct: ColumnTransformer,
@@ -28,7 +30,7 @@ def _get_all_cat_indices_after_onehot(
     that were passed through in the remainder.
     """
     onehot_input_cols = set(ct.transformers_[0][2])
-    onehot_out = list(range(n_output_features))[ct.output_indices_["one_hot_encoder"]]
+    onehot_out = list(range(n_output_features))[ct.output_indices_[ONE_HOT_ENCODER_NAME]]
     # Find skipped categoricals in the remainder output
     remainder_start = ct.output_indices_["remainder"].start
     remainder_input_cols = sorted(set(range(ct.n_features_in_)) - onehot_input_cols)
@@ -135,7 +137,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             ct = ColumnTransformer(
                 [
                     (
-                        "one_hot_encoder",
+                        ONE_HOT_ENCODER_NAME,
                         OneHotEncoder(
                             drop="if_binary",
                             sparse_output=False,
