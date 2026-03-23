@@ -7,9 +7,7 @@ from typing import Literal
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
@@ -478,5 +476,3 @@ def test__reshape_step_append_original_logic(
 
     assert result.X.shape[0] == num_samples
     assert result.X.shape[1] == expected_output_features
-
-
