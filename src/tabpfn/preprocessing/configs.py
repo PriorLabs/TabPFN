@@ -37,7 +37,8 @@ class PreprocessorConfig:
         global_transformer_name: Name of the global transformer to use.
         max_onehot_cardinality: Maximum number of unique values a categorical feature
             can have to be one-hot encoded. Features with higher cardinality are passed
-            through unchanged. If None, all categorical features are one-hot encoded.
+            through unchanged to ordinal encoding. If None, all categorical features
+            are one-hot encoded.
     """
 
     name: Literal[
