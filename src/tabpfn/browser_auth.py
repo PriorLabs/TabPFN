@@ -28,6 +28,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# In-process cache: set to True only after check_license_accepted() returns True.
+# Short-circuits repeated calls within the same Python process.
+_license_accepted: bool = False
+
 # ---------------------------------------------------------------------------
 # Token cache helpers
 # ---------------------------------------------------------------------------
@@ -331,6 +335,12 @@ def ensure_license_accepted() -> Literal[True]:
         If the license cannot be accepted (no browser, server unreachable
         without cached token, etc.).
     """
+    global _license_accepted  # noqa: PLW0603
+
+    # In-process cache: if license was already confirmed this session, skip API call.
+    if _license_accepted:
+        return True
+
     from tabpfn.errors import TabPFNLicenseError  # noqa: PLC0415
     from tabpfn.settings import settings  # noqa: PLC0415
 
@@ -345,6 +355,7 @@ def ensure_license_accepted() -> Literal[True]:
             license_status = check_license_accepted(token, api_url)
             if license_status is True:
                 save_token(token)
+                _license_accepted = True
                 return True
             if license_status is None:
                 raise TabPFNLicenseError(
@@ -383,7 +394,7 @@ def ensure_license_accepted() -> Literal[True]:
             "https://ux.priorlabs.ai"
         )
 
-    # Verify the token we just received.
+    # Verify the token we just received from the browser.
     status = verify_token(token, api_url)
     if status is False:
         raise TabPFNLicenseError(
@@ -391,6 +402,21 @@ def ensure_license_accepted() -> Literal[True]:
             "server.  Please try again or contact support@priorlabs.ai"
         )
 
+    # Token is valid (status is True or None/unreachable — save it regardless).
     save_token(token)
-    print("License accepted — token cached for future sessions.\n")
-    return True
+
+    license_status = check_license_accepted(token, api_url)
+    if license_status is True:
+        print("License accepted — token cached for future sessions.\n")
+        _license_accepted = True
+        return True
+    if license_status is None:
+        raise TabPFNLicenseError(
+            "Could not reach the license server to verify acceptance.\n\n"
+            "Please check your internet connection and try again."
+        )
+    # license_status is False
+    raise TabPFNLicenseError(
+        "License not yet accepted. Please complete the acceptance form at\n"
+        f"{gui_url}/accept-license and try again."
+    )
