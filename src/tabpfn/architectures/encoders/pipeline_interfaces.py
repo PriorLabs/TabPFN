@@ -36,17 +36,6 @@ class TorchPreprocessingPipeline(torch.nn.Sequential):
         super().__init__(*steps)
         self.output_key = output_key
 
-        # If we are in backwards compatibility mode, we expect the last step to
-        # be a LinearInputEncoderStep or MLPInputEncoderStep that combine
-        # the entries of the state dict parsed through the encoder.
-        if self.output_key is not None:
-            assert any(
-                s.__class__.__name__
-                # Avoid circular import by checking the class name instead of importing
-                in ("LinearInputEncoderStep", "MLPInputEncoderStep")
-                for s in self
-            ), "output_key is only supported for LinearInputEncoderStep"
-
     # For now, we disable compilation for the preprocessing pipeline because
     # there are multiple data-dependent control flows in the steps that break the graph.
     @torch.compiler.disable
