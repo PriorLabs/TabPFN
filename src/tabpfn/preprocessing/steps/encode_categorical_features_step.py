@@ -257,6 +257,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 ].astype(transformed[:, col].dtype)
         return transformed, None, None  # type: ignore
 
+    # TODO: add num_added_features for one-hot-encodings.
+
 
 __all__ = [
     "EncodeCategoricalFeaturesStep",

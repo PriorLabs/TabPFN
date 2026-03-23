@@ -301,7 +301,7 @@ def test__pipeline__num_added_features():
                 random_state=42,
                 max_features_per_estimator=500,
             ),
-            AddFingerprintFeaturesStep(random_state=42),
+            AddFingerprintFeaturesStep(),
         ]
     )
     assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 11
@@ -323,7 +323,7 @@ def test__pipeline__num_added_features():
     pipeline = PreprocessingPipeline(
         steps=[
             RemoveConstantFeaturesStep(),
-            AddFingerprintFeaturesStep(random_state=42),
+            AddFingerprintFeaturesStep(),
         ]
     )
     # Note that we currently don't count the removed features as -1.

@@ -177,5 +177,5 @@ def test__in_pipeline__returns_correct_shape_and_metadata() -> None:
 
 def test__num_added_features() -> None:
     """Test that the step returns the correct number of added features."""
-    step = AddFingerprintFeaturesStep(random_state=42)
+    step = AddFingerprintFeaturesStep()
     assert step.num_added_features(-1, _get_schema(num_columns=1)) == 1
