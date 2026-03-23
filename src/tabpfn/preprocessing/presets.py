@@ -125,24 +125,12 @@ def v2_5_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     ]
 
 
-def v2_6_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Get the preprocessor configuration for classification in v2.6 of the model."""
-    return v2_5_classifier_preprocessor_configs()
-
-
-def v2_6_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Get the preprocessor configuration for regression in v2.6 of the model."""
-    return v2_5_regressor_preprocessor_configs()
-
-
 __all__ = [
     "_V2_FEATURE_SUBSAMPLING_THRESHOLD",
     "default_classifier_preprocessor_configs",
     "default_regressor_preprocessor_configs",
     "v2_5_classifier_preprocessor_configs",
     "v2_5_regressor_preprocessor_configs",
-    "v2_6_classifier_preprocessor_configs",
-    "v2_6_regressor_preprocessor_configs",
     "v2_classifier_preprocessor_configs",
     "v2_regressor_preprocessor_configs",
 ]

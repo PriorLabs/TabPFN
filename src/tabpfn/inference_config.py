@@ -17,8 +17,6 @@ from tabpfn.preprocessing import (
     default_regressor_preprocessor_configs,
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
-    v2_6_classifier_preprocessor_configs,
-    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -217,7 +215,7 @@ class InferenceConfig:
         return self.OUTLIER_REMOVAL_STD
 
     @classmethod
-    def get_default(  # noqa: C901, PLR0911
+    def get_default(
         cls, task_type: TaskType, model_version: ModelVersion | Literal["latest"]
     ) -> InferenceConfig:
         """Return the default config for the given model version and task type.
@@ -230,6 +228,12 @@ class InferenceConfig:
         compatiblity, we define the v2 and v2.5 configs here and use those during
         inference.
         """
+        if model_version not in (ModelVersion.V2, ModelVersion.V2_5):
+            raise ValueError(
+                f"The inference config for {model_version=} needs to be part of the "
+                "checkpoint. Please make sure you are using a correct model checkpoint."
+            )
+
         if model_version == ModelVersion.V2:
             if task_type == "multiclass":
                 return _get_v2_config(v2_classifier_preprocessor_configs())
@@ -237,14 +241,9 @@ class InferenceConfig:
                 return _get_v2_config(v2_regressor_preprocessor_configs())
         if model_version in (ModelVersion.V2_5, "latest"):
             if task_type == "multiclass":
-                return _get_v2_5_or_2_6_config(v2_5_classifier_preprocessor_configs())
+                return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
-                return _get_v2_5_or_2_6_config(v2_5_regressor_preprocessor_configs())
-        if model_version == ModelVersion.V2_6:
-            if task_type == "multiclass":
-                return _get_v2_5_or_2_6_config(v2_6_classifier_preprocessor_configs())
-            if task_type == "regression":
-                return _get_v2_5_or_2_6_config(v2_6_regressor_preprocessor_configs())
+                return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
 
         if task_type == "multiclass":
             return InferenceConfig(
@@ -286,7 +285,7 @@ def _get_v2_config(
     )
 
 
-def _get_v2_5_or_2_6_config(
+def _get_v2_5_config(
     preprocessor_configs: list[PreprocessorConfig],
 ) -> InferenceConfig:
     return InferenceConfig(
