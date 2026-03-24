@@ -422,6 +422,7 @@ ignore_packages = [
     "tabpfn*",
     # LICENSEREF-NVIDIA-SOFTWARE-LICENSE, introduced by torch>=2.10
     "cuda-bindings",
+    "cuda-toolkit",
 ]
 
 [tool.changelog-bot.towncrier_changelog]
