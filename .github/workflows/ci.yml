@@ -262,7 +262,7 @@ jobs:
             # `The NVIDIA driver on your system is too old` error.
             # TODO: Update the runner
             extra-uv-flags: |
-              --upgrade-package "torch==2.10.0" \
+              --upgrade-package "torch==2.10.0+cu128" \
               --extra-index-url https://download.pytorch.org/whl/cu128
 
     runs-on: ubuntu-22.04-4core-gpu
