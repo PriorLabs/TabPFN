@@ -220,23 +220,20 @@ class InferenceConfig:
     ) -> InferenceConfig:
         """Return the default config for the given model version and task type.
 
-        For model versions after v2.5, the inference config stored in the checkpoint and
-        this function raises an error and shouldn't be used.
-
-        For v2 and v2.5, the config is not stored in the checkpoint. This function
-        returns the v2 and v2.5 configs to be used during inference.
+        Note that for for model versions after v2, the inference config is stored in
+        the checkpoints itself and this function is not called.
         """
         if model_version == ModelVersion.V2:
             if task_type == "multiclass":
                 return _get_v2_config(v2_classifier_preprocessor_configs())
             if task_type == "regression":
                 return _get_v2_config(v2_regressor_preprocessor_configs())
-        elif model_version in (ModelVersion.V2_5):
+        elif model_version == ModelVersion.V2_5:
             if task_type == "multiclass":
                 return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
                 return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
-        elif model_version in (ModelVersion.V2_6):
+        elif model_version == ModelVersion.V2_6:
             if task_type == "multiclass":
                 return _get_v2_6_config(
                     preprocessor_configs=v2_6_classifier_preprocessor_configs(),
