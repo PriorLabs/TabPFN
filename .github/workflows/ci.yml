@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -141,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -192,7 +192,7 @@ jobs:
           - tabpfn-time-series
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
 
     steps:
       - name: Checkout TabPFN at current ref
@@ -255,13 +255,21 @@ jobs:
         include:
           - python-version: "3.9"
             dependency-set: lowest-direct
+            torch-override: ""
           - python-version: "3.14"
             dependency-set: highest
+            # Pin torch to 2.10.0 for now, otherwise the runner raises a
+            # `The NVIDIA driver on your system is too old` error.
+            # TODO: Update the runner
+            # We install torch separately (post-sync) to avoid uv trying to
+            # re-resolve the lock for all requires-python versions (>=3.9),
+            # which fails because torch>=2.10.0 only supports Python>=3.10.
+            torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_HF_TOKEN }}
+      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -279,6 +287,13 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
+
+      - name: Override torch for GPU compatibility
+        if: ${{ matrix.torch-override != '' }}
+        run: |
+          uv pip install "${{ matrix.torch-override }}" \
+            --extra-index-url https://download.pytorch.org/whl/cu128 \
+            --index-strategy unsafe-best-match
 
       - *restore-model-cache
       - *download-models
