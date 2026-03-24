@@ -255,16 +255,16 @@ jobs:
         include:
           - python-version: "3.9"
             dependency-set: lowest-direct
-            extra-uv-flags: ""
+            torch-override: ""
           - python-version: "3.14"
             dependency-set: highest
             # Pin torch to 2.10.0 for now, otherwise the runner raises a
             # `The NVIDIA driver on your system is too old` error.
             # TODO: Update the runner
-            extra-uv-flags: |
-              --upgrade-package "torch==2.10.0" \
-              --extra-index-url https://download.pytorch.org/whl/cu128 \
-              --index-strategy unsafe-best-match
+            # We install torch separately (post-sync) to avoid uv trying to
+            # re-resolve the lock for all requires-python versions (>=3.9),
+            # which fails because torch>=2.10.0 only supports Python>=3.10.
+            torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
@@ -286,10 +286,14 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
+        run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
+
+      - name: Override torch for GPU compatibility
+        if: ${{ matrix.torch-override != '' }}
         run: |
-          uv sync --group ci \
-            --resolution ${{ matrix.dependency-set }} \
-            ${{ matrix.extra-uv-flags }}
+          uv pip install "${{ matrix.torch-override }}" \
+            --extra-index-url https://download.pytorch.org/whl/cu128 \
+            --index-strategy unsafe-best-match
 
       - *restore-model-cache
       - *download-models
