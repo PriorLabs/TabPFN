@@ -260,8 +260,10 @@ jobs:
             dependency-set: highest
             # Pin torch to 2.10.0 for now, otherwise the runner raises a
             # `The NVIDIA driver on your system is too old` error.
-            # TODO: Update the runner to ubuntu-24.04-gpu
-            extra-uv-flags: "" # '--upgrade-package "torch==2.10.0"'
+            # TODO: Update the runner
+            extra-uv-flags: |
+              --upgrade-package "torch==2.10.0" \
+              --extra-index-url https://download.pytorch.org/whl/cu128
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
@@ -286,8 +288,7 @@ jobs:
         run: |
           uv sync --group ci \
             --resolution ${{ matrix.dependency-set }} \
-            ${{ matrix.extra-uv-flags }} \
-            --extra-index-url https://download.pytorch.org/whl/cu128
+            ${{ matrix.extra-uv-flags }}
 
       - *restore-model-cache
       - *download-models
