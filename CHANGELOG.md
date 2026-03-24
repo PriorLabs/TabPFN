@@ -11,23 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- - Added argument `use_fixed_preprocessing_seed` to `FinetunedTabPFNClassifier` and `FinetunedTabPFNRegressor` for improved finetuning performance.
-  - This PR changes the random seeds used in the preprocessing, which may cause slight differences in final outcomes compared to previous versions.
-
+- Introduce TabPFN-2.6 model and use as default ([#831](https://github.com/PriorLabs/TabPFN/pull/831))
+- Added argument `use_fixed_preprocessing_seed` to `FinetunedTabPFNClassifier` and `FinetunedTabPFNRegressor` for improved finetuning performance.
+- This PR changes the random seeds used in the preprocessing, which may cause slight differences in final outcomes compared to previous versions.
   ([#771](https://github.com/PriorLabs/TabPFN/pull/771))
 - More informative Out-Of-Memory error message. ([#805](https://github.com/PriorLabs/TabPFN/pull/805))
-- Add 2.6 model ([#831](https://github.com/PriorLabs/TabPFN/pull/831))
 - Added `max_onehot_cardinality` option to cap one-hot encoding expansion for high-cardinality categorical features. ([#833](https://github.com/PriorLabs/TabPFN/pull/833))
 
 ### Changed
 
+- Introduces TabPFN-2.6 as the new default model for TabPFNClassifier and TabPFNRegressor ([#831](https://github.com/PriorLabs/TabPFN/pull/831))
+- Remove unused functions `default_classifier_preprocessor_configs()` and `default_regressor_preprocessor_configs()` ([#831](https://github.com/PriorLabs/TabPFN/pull/831))
 - "auto" device selection now uses all available CUDA GPUs instead of only the first one ([#808](https://github.com/PriorLabs/TabPFN/pull/808))
 - Optimize fingerprint hashing in preprocessing: round feature matrix once instead of per-row, avoid redundant SHA-256 calls. Speeds up fit by up to 2x for large datasets. ([#818](https://github.com/PriorLabs/TabPFN/pull/818))
 - Bump minimum torch version from 2.1 to 2.5 ([#823](https://github.com/PriorLabs/TabPFN/pull/823))
-- - Introduces TabPFN-2.6 as the new default model for TabPFNClassifier and TabPFNRegressor
-  - Remove unused functions default_classifier_preprocessor_configs() and default_regressor_preprocessor_configs()
-
-  ([#831](https://github.com/PriorLabs/TabPFN/pull/831))
 - Cache loaded checkpoints across fit calls: skip redundant disk I/O when the same model is loaded repeatedly (e.g. cross-validation, hyperparameter search). ([#832](https://github.com/PriorLabs/TabPFN/pull/832))
 
 ### Fixed
