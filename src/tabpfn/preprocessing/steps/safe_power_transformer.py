@@ -141,9 +141,11 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     transform with parameter lambda.
     """
     dtype = x.dtype if np.issubdtype(x.dtype, np.floating) else np.float64
-    # Compute in float64 to avoid overflow when the inverse produces values
-    # exceeding a lower-precision dtype's range (e.g., float32).
-    x_inv = np.zeros_like(x, dtype=np.float64)
+    # Compute in at least float64 to avoid overflow when the inverse produces
+    # values exceeding a lower-precision dtype's range (e.g., float32), while
+    # preserving higher precision (e.g., float128) if the input provides it.
+    compute_dtype = np.promote_types(dtype, np.float64)
+    x_inv = np.zeros_like(x, dtype=compute_dtype)
     pos = x >= 0
 
     # when x >= 0
@@ -161,7 +163,7 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
         x_inv[~pos] = -np.expm1(-x[~pos])
 
     # Clip to representable range before casting to avoid overflow warning
-    if dtype != np.float64:
+    if compute_dtype != dtype:
         finfo = np.finfo(dtype)
         np.clip(x_inv, finfo.min, finfo.max, out=x_inv)
     return x_inv.astype(dtype, copy=False)
