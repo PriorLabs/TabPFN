@@ -30,10 +30,7 @@ from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.bar_distribution import (
-    BarDistribution,
-    FullSupportBarDistribution,
-)
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine

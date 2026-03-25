@@ -21,7 +21,6 @@ from sklearn.utils.validation import check_is_fitted
 from tabpfn import TabPFNRegressor
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
-from tabpfn.model_loading import get_n_out
 
 logger = logging.getLogger(__name__)
 

@@ -72,7 +72,7 @@ def get_architecture(
     Returns: the constructed architecture
     """
     assert isinstance(config, ModelConfig)
-    n_out = config.num_buckets if config.max_num_classes == 0 else config.max_num_classes
+    n_out = config.max_num_classes or config.num_buckets
     return PerFeatureTransformer(
         config=config,
         # Things that were explicitly passed inside `build_model()`
