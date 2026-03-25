@@ -994,7 +994,8 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         if is_main_process:
             logger.info("--- ✅ Fine-tuning Finished ---")
 
-        self._setup_inference_model(final_inference_eval_config)
+        if is_main_process:
+            self._setup_inference_model(final_inference_eval_config)
 
         self.is_fitted_ = True
         return self
