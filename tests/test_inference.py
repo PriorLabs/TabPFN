@@ -83,6 +83,39 @@ class TestModel(Architecture):
         pass
 
 
+class TestModelWithTaskType(TestModel):
+    """A test model whose forward pass accepts a task_type argument."""
+
+    def __init__(self) -> None:
+        """Create a new instance."""
+        super().__init__()
+        self.parameter = torch.nn.Parameter(torch.tensor(1.0))
+        self.received_task_type: str | None = None
+
+    @override
+    def forward(
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        force_recompute_layer: bool = False,
+        save_peak_memory_factor: int | None = None,
+        task_type: str | None = None,
+    ) -> Tensor | dict[str, Tensor]:
+        """Perform a forward pass, recording the task_type argument."""
+        self.received_task_type = task_type
+        return super().forward(
+            x,
+            y,
+            only_return_standard_out=only_return_standard_out,
+            categorical_inds=categorical_inds,
+            force_recompute_layer=force_recompute_layer,
+            save_peak_memory_factor=save_peak_memory_factor,
+        )
+
+
 def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     rng = default_rng(seed=0)
     n_train = 100
@@ -118,13 +151,17 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     )
 
     engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
-    outputs_sequential = list(engine.iter_outputs(X_test, autocast=False))
+    outputs_sequential = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
     engine.to(
         [torch.device("cpu"), torch.device("cpu")],
         force_inference_dtype=None,
         dtype_byte_size=4,
     )
-    outputs_parallel = list(engine.iter_outputs(X_test, autocast=False))
+    outputs_parallel = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
 
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:
@@ -171,7 +208,7 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
             save_peak_mem=True,
         )
         engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
-        return list(engine.iter_outputs(X_test, autocast=False))
+        return list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
 
     outputs_outlier_removed = get_outputs(outlier_removal_std=1.0)
     outputs_outlier_not_removed = get_outputs(outlier_removal_std=None)
@@ -223,13 +260,17 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     )
 
     engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
-    outputs_sequential = list(engine.iter_outputs(X_test, autocast=False))
+    outputs_sequential = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
     engine.to(
         [torch.device("cpu"), torch.device("cpu")],
         force_inference_dtype=None,
         dtype_byte_size=4,
     )
-    outputs_parallel = list(engine.iter_outputs(X_test, autocast=False))
+    outputs_parallel = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
 
     assert len(outputs_sequential) == len(outputs_parallel)
     for par_output, par_config in outputs_parallel:
@@ -237,6 +278,58 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
         assert isinstance(seq_output, Tensor)
         assert isinstance(par_output, Tensor)
         assert torch.allclose(seq_output, par_output)
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "task_type"),
+    [
+        (TestModel, "multiclass"),
+        (TestModel, "regression"),
+        (TestModelWithTaskType, "multiclass"),
+        (TestModelWithTaskType, "regression"),
+    ],
+)
+def test__iter_outputs__task_type_forwarded(
+    model_cls: type[TestModel | TestModelWithTaskType],
+    task_type: str,
+) -> None:
+    """task_type is forwarded to model.forward only when the model expects it."""
+    rng = default_rng(seed=0)
+    n_train = 50
+    n_features = 4
+    n_classes = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
+
+    model = model_cls()
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=2, n_classes=n_classes, num_models=1
+        ),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    engine = InferenceEngineOnDemand(
+        X_train,
+        y_train,
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[model],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=True,
+    )
+    engine.to([torch.device("cpu")], force_inference_dtype=None, dtype_byte_size=4)
+    outputs = list(engine.iter_outputs(X_test, autocast=False, task_type=task_type))
+    assert len(outputs) > 0
+
+    if isinstance(model, TestModelWithTaskType):
+        assert model.received_task_type == task_type
+    else:
+        # Models without task_type in forward should still produce outputs
+        assert all(isinstance(out, Tensor) for out, _ in outputs)
 
 
 def _create_test_ensemble_configs(
