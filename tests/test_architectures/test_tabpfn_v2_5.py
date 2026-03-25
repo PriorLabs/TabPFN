@@ -45,9 +45,7 @@ def _create_identical_small_v2_5_and_base() -> tuple[
     arch_v2_5 = tabpfn_v2_5.get_architecture(
         configv2, cache_trainset_representation=False
     )
-    arch_base = base.get_architecture(
-        config_base, cache_trainset_representation=False
-    )
+    arch_base = base.get_architecture(config_base, cache_trainset_representation=False)
     # Overwrite zero-initialized outputs to make sure we catch differences in
     # attention outputs.
     for param in arch_base.parameters():
