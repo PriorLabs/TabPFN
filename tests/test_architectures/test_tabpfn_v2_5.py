@@ -43,10 +43,10 @@ def _create_identical_small_v2_5_and_base() -> tuple[
 
     # Get the architectures
     arch_v2_5 = tabpfn_v2_5.get_architecture(
-        configv2, n_out=10, cache_trainset_representation=False
+        configv2, cache_trainset_representation=False
     )
     arch_base = base.get_architecture(
-        config_base, n_out=10, cache_trainset_representation=False
+        config_base, cache_trainset_representation=False
     )
     # Overwrite zero-initialized outputs to make sure we catch differences in
     # attention outputs.
@@ -96,13 +96,8 @@ class TestTabPFNv2p5NewVsOldImplementation:
         arch_base = cast(PerFeatureTransformer, loaded_models[0])
         config_base = loaded_configs[0]
 
-        if model_type == "classifier":
-            n_out = config_base.max_num_classes
-        else:
-            n_out = config_base.num_buckets
         arch_v2_5 = tabpfn_v2_5.get_architecture(
             tabpfn_v2_5.TabPFNV2p5Config(**asdict(config_base)),
-            n_out=n_out,
             cache_trainset_representation=False,
         )
         arch_v2_5.load_state_dict(arch_base.state_dict(), strict=True)

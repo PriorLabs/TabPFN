@@ -442,7 +442,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         logits_QBEL = torch.stack(per_estim_logits, dim=2)
 
         Q, B, E, L = logits_QBEL.shape
-        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], bardist_loss_fn)
+        num_bars = bardist_loss_fn.num_bars
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E

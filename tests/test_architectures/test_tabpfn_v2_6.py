@@ -22,7 +22,7 @@ def _get_model() -> tabpfn_v2_6.TabPFNV2p6:
         num_thinking_rows=2,
     )
     model = tabpfn_v2_6.get_architecture(
-        config, n_out=10, cache_trainset_representation=False
+        config, cache_trainset_representation=False
     )
     model.to(torch.float64)
     return model
