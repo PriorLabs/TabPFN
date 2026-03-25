@@ -141,7 +141,9 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     transform with parameter lambda.
     """
     dtype = x.dtype if np.issubdtype(x.dtype, np.floating) else np.float64
-    x_inv = np.zeros_like(x, dtype=dtype)
+    # Compute in float64 to avoid overflow when the inverse produces values
+    # exceeding a lower-precision dtype's range (e.g., float32).
+    x_inv = np.zeros_like(x, dtype=np.float64)
     pos = x >= 0
 
     # when x >= 0
@@ -149,16 +151,20 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
         x_inv[pos] = np.expm1(x[pos])
     else:  # lmbda != 0
         # more stable version of: (x * lmbda + 1) ** (1 / lmbda) - 1
-        x_inv[pos] = np.expm1(np.log(x[pos] * lmbda + 1) / lmbda)
+        x_inv[pos] = np.expm1(np.log1p(x[pos] * lmbda) / lmbda)
 
     # when x < 0
     if abs(lmbda - 2) > np.spacing(1.0):
         # more stable version of: 1 - (-(2 - lmbda) * x + 1) ** (1 / (2 - lmbda))
-        x_inv[~pos] = -np.expm1(np.log(-(2 - lmbda) * x[~pos] + 1) / (2 - lmbda))
+        x_inv[~pos] = -np.expm1(np.log1p(-(2 - lmbda) * x[~pos]) / (2 - lmbda))
     else:  # lmbda == 2
         x_inv[~pos] = -np.expm1(-x[~pos])
 
-    return x_inv
+    # Clip to representable range before casting to avoid overflow warning
+    if dtype != np.float64:
+        finfo = np.finfo(dtype)
+        np.clip(x_inv, finfo.min, finfo.max, out=x_inv)
+    return x_inv.astype(dtype, copy=False)
 
 
 class SafePowerTransformer(PowerTransformer):
