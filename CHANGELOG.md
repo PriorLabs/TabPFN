@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-
-- Fix float overflow in Yeo-Johnson inverse transform that produced `inf` values and silently degraded regression border resolution. ([#838](https://github.com/PriorLabs/TabPFN/pull/838))
-
 ## [7.0.0] - 2026-03-24
 
 ### Added
