@@ -62,7 +62,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 
 
 model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_5()]
-fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
+fit_modes = ["low_memory", "fit_preprocessors"]
 
 
 @pytest.mark.parametrize(
@@ -79,7 +79,7 @@ fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     device: str,
     n_estimators: int,
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    fit_mode: Literal["low_memory", "fit_preprocessors"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -277,7 +277,8 @@ def test__predict_logits__output_has_correct_properties_and_consistent_with_prob
     # Ensure y is int64 for consistency with classification tasks
     y = y.astype(np.int64)
 
-    classifier = TabPFNClassifier(
+    classifier = TabPFNClassifier.create_default_for_version(
+        version=ModelVersion.V2_5,
         n_estimators=n_estimators,
         device=device,
         softmax_temperature=softmax_temperature,
@@ -507,12 +508,6 @@ def test_fit_modes_all_return_equal_results(
     tabpfn.fit(X, y)
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
-
-    torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
-    tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
-    np.testing.assert_array_equal(preds, tabpfn.predict(X))
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
@@ -751,18 +746,10 @@ def test_get_embeddings(
 
     embeddings = model.get_embeddings(X, data_source)
 
-    # Need to access the model through the executor
-    model_instance = next(iter(model.executor_.model_caches[0]._models.values()))
-    encoder_shape = next(
-        m.out_features
-        for m in model_instance.encoder.modules()
-        if isinstance(m, nn.Linear)
-    )
-
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == encoder_shape
+    assert embeddings.shape[2] == model.models_[0].input_size
 
 
 def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):

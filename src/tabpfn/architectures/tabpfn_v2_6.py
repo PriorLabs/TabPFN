@@ -973,7 +973,7 @@ def _normalize_feature_groups(
         non_constant_mask.sum(-1).unsqueeze(-1),
         min=1,
     ).to(x_RiBF.device)
-    scale = num_features_per_group / number_of_used_features
+    scale = num_features_per_group / number_of_used_features.to(x_RiBF.dtype)
     x_RiBF = x_RiBF * torch.sqrt(scale)
 
     return torch.where(

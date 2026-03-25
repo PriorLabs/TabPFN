@@ -275,9 +275,11 @@ def _try_huggingface_downloads(
         except (GatedRepoError, HfHubHTTPError) as e:
             # Check if this is an authentication/gating error
             if isinstance(e, GatedRepoError) or (
-                isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
+                isinstance(e, HfHubHTTPError)
+                and e.response is not None
+                and e.response.status_code in (401, 403)
             ):
-                raise TabPFNHuggingFaceGatedRepoError(source.repo_id)  # noqa: B904
+                raise TabPFNHuggingFaceGatedRepoError(source.repo_id) from e
             raise e
 
 
@@ -558,7 +560,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -1022,7 +1024,12 @@ def save_tabpfn_model(
         else:
             state_dict = model_state
 
-        checkpoint = {"state_dict": state_dict, "config": asdict(config)}
+        architecture_name = _resolve_architecture_name(config)
+        checkpoint = {
+            "state_dict": state_dict,
+            "config": asdict(config),
+            "architecture_name": architecture_name,
+        }
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)
@@ -1141,3 +1148,15 @@ def load_fitted_tabpfn_model(
         est.to(str(device))
 
         return est
+
+
+def _resolve_architecture_name(config: ArchitectureConfig) -> str:
+    """Resolve the architecture name from the config."""
+    name = getattr(config, "name", None)
+    if name is None:
+        return "base"
+    if "2.6" in name:
+        return "tabpfn_v2_6"
+    if "2.5" in name:
+        return "tabpfn_v2_5"
+    return "base"

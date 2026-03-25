@@ -138,23 +138,37 @@ TEST_CASES = {
     },
     "classifier_tiny_dataset_differentiable_input": _ConsistencyCase(
         data=lambda: _to_tensors(_get_tiny_classification_data()),
-        model=lambda: TabPFNClassifier(**DEFAULT_CONFIG, differentiable_input=True),
+        model=lambda: TabPFNClassifier.create_default_for_version(
+            version=ModelVersion.V2_5, **DEFAULT_CONFIG, differentiable_input=True
+        ),
     ),
     "classifier_iris_dataset": _ConsistencyCase(
         data=_get_iris_multiclass_data,
-        model=lambda: TabPFNClassifier(**DEFAULT_CONFIG),
+        model=lambda: TabPFNClassifier.create_default_for_version(
+            version=ModelVersion.V2_5, **DEFAULT_CONFIG
+        ),
     ),
     "regressor_tiny_dataset_several_devices": _ConsistencyCase(
         data=_get_tiny_regression_data,
-        model=lambda: _add_extra_devices(TabPFNRegressor(**DEFAULT_CONFIG)),
+        model=lambda: _add_extra_devices(
+            TabPFNRegressor.create_default_for_version(
+                version=ModelVersion.V2_5, **DEFAULT_CONFIG
+            )
+        ),
     ),
     "classifier_iris_dataset_several_devices": _ConsistencyCase(
         data=_get_iris_multiclass_data,
-        model=lambda: _add_extra_devices(TabPFNClassifier(**DEFAULT_CONFIG)),
+        model=lambda: _add_extra_devices(
+            TabPFNClassifier.create_default_for_version(
+                version=ModelVersion.V2_5, **DEFAULT_CONFIG
+            )
+        ),
     ),
     "classifier_tiny_dataset_5_estimators": _ConsistencyCase(
         data=_get_tiny_classification_data,
-        model=lambda: TabPFNClassifier(**DEFAULT_CONFIG | {"n_estimators": 5}),
+        model=lambda: TabPFNClassifier.create_default_for_version(
+            version=ModelVersion.V2_5, **DEFAULT_CONFIG | {"n_estimators": 5}
+        ),
     ),
 }
 
