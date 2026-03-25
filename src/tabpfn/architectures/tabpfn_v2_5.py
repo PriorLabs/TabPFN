@@ -866,7 +866,7 @@ def get_architecture(
     return TabPFNV2p5(
         config=config,
         n_out=n_out,
-        task_type="multiclass" if config.max_num_classes > 2 else "regression",
+        task_type="multiclass" if config.max_num_classes >= 2 else "regression",
     )
 
 
