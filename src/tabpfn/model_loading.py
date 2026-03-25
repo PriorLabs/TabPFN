@@ -624,13 +624,15 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                repo_type = "clf" if which == "classifier" else "reg"
-                raise RuntimeError(
-                    f"Failed to download model to {path}!\n\n"
-                    f"For offline usage, please download the model manually from:\n"
-                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
-                    f"Then place it at: {path}",
-                ) from res[0]
+                if _version_has_direct_download_option(model_version):
+                    repo_type = "clf" if which == "classifier" else "reg"
+                    raise RuntimeError(
+                        f"Failed to download model to {path}!\n\n"
+                        f"For offline usage, please download the model manually from:\n"
+                        f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                        f"Then place it at: {path}",
+                    ) from res[0]
+                raise res[0]
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
@@ -777,7 +779,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2.5",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
 ) -> tuple[
     list[Path],
     list[Path],
