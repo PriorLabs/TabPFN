@@ -52,12 +52,12 @@ def get_cached_token() -> str | None:
     """
     env_token = os.environ.get("TABPFN_TOKEN")
     if env_token:
-        return env_token.strip()
+        return env_token.strip() or None
 
     for path in (_TOKEN_FILE, _CLIENT_TOKEN_FILE):
         if path.is_file():
             token = path.read_text().strip()
-            if token:
+            if len(token) > 0:
                 return token
 
     return None
@@ -103,7 +103,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
         logger.warning("Unexpected HTTP %s from token verification endpoint", exc.code)
         return None
     except Exception:  # noqa: BLE001
-        logger.debug("Token verification endpoint unreachable", exc_info=True)
+        logger.error("Token verification endpoint unreachable", exc_info=True)
         return None
 
 
