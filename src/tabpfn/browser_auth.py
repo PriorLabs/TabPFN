@@ -129,7 +129,8 @@ def check_license_accepted(token: str, api_url: str, version: str) -> bool | Non
     None
         Server is unreachable — cannot verify.
     """
-    url = f"{api_url.rstrip('/')}/account/license/?version={urllib.parse.quote(version)}"
+    encoded_version = urllib.parse.quote(version)
+    url = f"{api_url.rstrip('/')}/account/license/?version={encoded_version}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
