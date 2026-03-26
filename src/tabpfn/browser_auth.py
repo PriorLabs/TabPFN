@@ -372,8 +372,7 @@ def ensure_license_accepted() -> Literal[True]:  # noqa: C901
             # license_status is False — license not yet accepted.
             # Fall through to browser login so the GUI can show the acceptance form.
             logger.info(
-                "Token valid but license not accepted;"
-                " opening browser for acceptance.",
+                "Token valid but license not accepted; opening browser for acceptance.",
             )
         elif status is None:
             raise TabPFNLicenseError(

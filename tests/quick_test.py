@@ -3,6 +3,7 @@
 Toy script to check that the TabPFN is working.
 Uses breast cancer (classification) and diabetes (regression) datasets.
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,4 +52,3 @@ if __name__ == "__main__":
             quantiles=[0.1, 0.5, 0.9],
         )
     )
-

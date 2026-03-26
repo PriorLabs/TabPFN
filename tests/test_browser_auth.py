@@ -150,7 +150,11 @@ class TestVerifyToken:
             urllib.request,
             "urlopen",
             side_effect=urllib.error.HTTPError(
-                url="", code=401, msg="", hdrs=None, fp=None  # type: ignore[arg-type]
+                url="",
+                code=401,
+                msg="",
+                hdrs=None,
+                fp=None,  # type: ignore[arg-type]
             ),
         ):
             assert verify_token("bad-tok", "https://api.example.com") is False
@@ -160,7 +164,11 @@ class TestVerifyToken:
             urllib.request,
             "urlopen",
             side_effect=urllib.error.HTTPError(
-                url="", code=403, msg="", hdrs=None, fp=None  # type: ignore[arg-type]
+                url="",
+                code=403,
+                msg="",
+                hdrs=None,
+                fp=None,  # type: ignore[arg-type]
             ),
         ):
             assert verify_token("bad-tok", "https://api.example.com") is False
@@ -178,7 +186,11 @@ class TestVerifyToken:
             urllib.request,
             "urlopen",
             side_effect=urllib.error.HTTPError(
-                url="", code=500, msg="", hdrs=None, fp=None  # type: ignore[arg-type]
+                url="",
+                code=500,
+                msg="",
+                hdrs=None,
+                fp=None,  # type: ignore[arg-type]
             ),
         ):
             assert verify_token("tok", "https://api.example.com") is None
@@ -234,7 +246,8 @@ class TestEnsureLicenseAccepted:
             assert self._import_ensure()() is True
 
     def test_cached_token_server_unreachable(
-        self, monkeypatch: pytest.MonkeyPatch,
+        self,
+        monkeypatch: pytest.MonkeyPatch,
     ):
         """Server unreachable + cached token -> raise."""
         monkeypatch.setenv("TABPFN_TOKEN", "cached-tok")
@@ -244,9 +257,7 @@ class TestEnsureLicenseAccepted:
         ):
             self._import_ensure()()
 
-    def test_invalid_cached_token_triggers_browser(
-        self, tmp_path: Path
-    ):
+    def test_invalid_cached_token_triggers_browser(self, tmp_path: Path):
         """Invalid token should delete cache and attempt browser login."""
         token_file = tmp_path / "cache" / "tabpfn" / "auth_token"
         token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -275,9 +286,7 @@ class TestEnsureLicenseAccepted:
         with pytest.raises(TabPFNLicenseError, match="TABPFN_NO_BROWSER"):
             self._import_ensure()()
 
-    def test_no_browser_false_values_dont_block(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
+    def test_no_browser_false_values_dont_block(self, monkeypatch: pytest.MonkeyPatch):
         """TABPFN_NO_BROWSER=0/false/no should NOT block browser login."""
         for val in ("0", "false", "no", "off"):
             monkeypatch.setenv("TABPFN_NO_BROWSER", val)
@@ -334,12 +343,16 @@ _GUI_URL = "https://ux.priorlabs.ai"
 
 def _make_mock_server():  # noqa: ANN202
     """Create a mock TCP server for tests."""
-    return type("MockServer", (), {
-        "server_address": ("", 12345),
-        "timeout": 0.5,
-        "handle_request": lambda _self: None,
-        "server_close": lambda _self: None,
-    })()
+    return type(
+        "MockServer",
+        (),
+        {
+            "server_address": ("", 12345),
+            "timeout": 0.5,
+            "handle_request": lambda _self: None,
+            "server_close": lambda _self: None,
+        },
+    )()
 
 
 class TestTryBrowserLogin:
@@ -349,7 +362,9 @@ class TestTryBrowserLogin:
         """Token delivered via callback server is returned."""
 
         def fake_create(  # noqa: ANN202
-            _gui_url, auth_event, received_token,
+            _gui_url,
+            auth_event,
+            received_token,
         ):
             received_token[0] = "callback-token"
             auth_event.set()
