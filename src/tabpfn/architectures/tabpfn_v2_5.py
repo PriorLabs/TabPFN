@@ -842,7 +842,6 @@ def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p5Config, dict[str, An
 def get_architecture(
     config: ArchitectureConfig,
     *,
-    n_out: int,
     cache_trainset_representation: bool = False,
 ) -> TabPFNV2p5:
     """Construct TabPFNV2.5 based on the given config.
@@ -854,7 +853,6 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        n_out: The number of output classes that the model should predict.
         cache_trainset_representation: If True, the model should be configured to
             cache the training data during inference to improve speed.
 
@@ -863,11 +861,9 @@ def get_architecture(
     assert isinstance(config, TabPFNV2p5Config)
     if cache_trainset_representation:
         raise NotImplementedError("TabPFNV2.5 does not support kv cache yet.")
-    return TabPFNV2p5(
-        config=config,
-        n_out=n_out,
-        task_type="multiclass" if config.max_num_classes >= 2 else "regression",
-    )
+    task_type = "multiclass" if config.max_num_classes > 0 else "regression"
+    n_out = config.max_num_classes if task_type == "multiclass" else config.num_buckets
+    return TabPFNV2p5(config=config, n_out=n_out, task_type=task_type)
 
 
 def _prepare_targets(

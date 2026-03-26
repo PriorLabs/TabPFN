@@ -1181,7 +1181,6 @@ def _create_dummy_classifier_model_specs(
     )
     model = base.get_architecture(
         config=minimal_config,
-        n_out=max_num_classes,
         cache_trainset_representation=False,
     )
     inference_config = InferenceConfig.get_default(

@@ -70,7 +70,6 @@ class FakeArchitectureModule(ArchitectureModule):
         self,
         config: ArchitectureConfig,
         *,
-        n_out: int,
         cache_trainset_representation: bool,
     ) -> Architecture:
         raise NotImplementedError()
