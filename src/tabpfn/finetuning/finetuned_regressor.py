@@ -21,7 +21,6 @@ from sklearn.utils.validation import check_is_fitted
 from tabpfn import TabPFNRegressor
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
-from tabpfn.model_loading import get_n_out
 
 logger = logging.getLogger(__name__)
 
@@ -442,7 +441,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         logits_QBEL = torch.stack(per_estim_logits, dim=2)
 
         Q, B, E, L = logits_QBEL.shape
-        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], bardist_loss_fn)
+        num_bars = bardist_loss_fn.num_bars
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E

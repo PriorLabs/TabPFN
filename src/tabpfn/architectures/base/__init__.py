@@ -55,7 +55,6 @@ def parse_config(config: dict[str, Any]) -> tuple[ArchitectureConfig, dict[str, 
 def get_architecture(
     config: ArchitectureConfig,
     *,
-    n_out: int,
     cache_trainset_representation: bool,
 ) -> PerFeatureTransformer:
     """Construct the base architecture following the given config.
@@ -67,13 +66,13 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        n_out: The number of output classes that the model should predict.
         cache_trainset_representation: If True, the model should be configured to
             cache the training data during inference to improve speed.
 
     Returns: the constructed architecture
     """
     assert isinstance(config, ModelConfig)
+    n_out = config.max_num_classes or config.num_buckets
     return PerFeatureTransformer(
         config=config,
         # Things that were explicitly passed inside `build_model()`

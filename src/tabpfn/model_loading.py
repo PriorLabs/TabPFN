@@ -30,10 +30,7 @@ from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.bar_distribution import (
-    BarDistribution,
-    FullSupportBarDistribution,
-)
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
@@ -909,7 +906,6 @@ def load_model(
     model_state = {k: v for k, v in full_state.items() if k not in criterion_state_keys}
     model = architecture.get_architecture(
         model_config,
-        n_out=get_n_out(model_config, loss_criterion),
         cache_trainset_representation=cache_trainset_representation,
     )
     model.load_state_dict(model_state)
@@ -948,23 +944,6 @@ def _get_inference_config_from_checkpoint(
         task_type = "multiclass"
 
     return InferenceConfig.get_default(task_type, model_version)
-
-
-def get_n_out(
-    config: ArchitectureConfig,
-    loss: nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-) -> int:
-    """Works out the number of outputs of the model."""
-    if config.max_num_classes == 2:
-        return 1
-    if config.max_num_classes > 2 and isinstance(loss, nn.CrossEntropyLoss):
-        return config.max_num_classes
-    if config.max_num_classes == 0 and isinstance(loss, BarDistribution):
-        return loss.num_bars
-    raise ValueError(
-        "Unknown configuration: "
-        f"max_num_classes={config.max_num_classes} and loss={type(loss)}"
-    )
 
 
 def save_tabpfn_model(
