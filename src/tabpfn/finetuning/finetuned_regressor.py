@@ -19,6 +19,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
@@ -397,7 +398,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     @override
     def _create_estimator(self, config: dict[str, Any]) -> TabPFNRegressor:
         """Create the TabPFNRegressor with the given config."""
-        return TabPFNRegressor(
+        return TabPFNRegressor.create_default_for_version(
+            version=ModelVersion.V2_5,
             **config,
             fit_mode="batched",
             differentiable_input=False,

@@ -753,6 +753,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
+        if self.fit_mode == "fit_with_cache" and (
+            self.model_path == "auto" or "v2.6" in str(self.model_path)
+        ):
+            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
+
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(

@@ -272,9 +272,11 @@ def _try_huggingface_downloads(
         except (GatedRepoError, HfHubHTTPError) as e:
             # Check if this is an authentication/gating error
             if isinstance(e, GatedRepoError) or (
-                isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
+                isinstance(e, HfHubHTTPError)
+                and e.response is not None
+                and e.response.status_code in (401, 403)
             ):
-                raise TabPFNHuggingFaceGatedRepoError(source.repo_id)  # noqa: B904
+                raise TabPFNHuggingFaceGatedRepoError(source.repo_id) from e
             raise e
 
 
@@ -555,7 +557,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -621,13 +623,15 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                repo_type = "clf" if which == "classifier" else "reg"
-                raise RuntimeError(
-                    f"Failed to download model to {path}!\n\n"
-                    f"For offline usage, please download the model manually from:\n"
-                    f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
-                    f"Then place it at: {path}",
-                ) from res[0]
+                if _version_has_direct_download_option(model_version):
+                    repo_type = "clf" if which == "classifier" else "reg"
+                    raise RuntimeError(
+                        f"Failed to download model to {path}!\n\n"
+                        f"For offline usage, please download the model manually from:\n"
+                        f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                        f"Then place it at: {path}",
+                    ) from res[0]
+                raise res[0]
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
@@ -774,7 +778,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2.5",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -999,7 +1003,12 @@ def save_tabpfn_model(
         else:
             state_dict = model_state
 
-        checkpoint = {"state_dict": state_dict, "config": asdict(config)}
+        architecture_name = _resolve_architecture_name(config)
+        checkpoint = {
+            "state_dict": state_dict,
+            "config": asdict(config),
+            "architecture_name": architecture_name,
+        }
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)
@@ -1118,3 +1127,15 @@ def load_fitted_tabpfn_model(
         est.to(str(device))
 
         return est
+
+
+def _resolve_architecture_name(config: ArchitectureConfig) -> str:
+    """Resolve the architecture name from the config."""
+    name = getattr(config, "name", None)
+    if name is None:
+        return "base"
+    if "2.6" in name:
+        return "tabpfn_v2_6"
+    if "2.5" in name:
+        return "tabpfn_v2_5"
+    return "base"

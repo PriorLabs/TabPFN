@@ -37,7 +37,7 @@ devices = get_pytest_devices()
 
 
 model_sources = [ModelSource.get_regressor_v2(), ModelSource.get_regressor_v2_5()]
-fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
+fit_modes = ["low_memory", "fit_preprocessors"]
 
 
 @pytest.fixture(scope="module")
@@ -62,7 +62,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     device: str,
     n_estimators: int,
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    fit_mode: Literal["low_memory", "fit_preprocessors"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -168,7 +168,7 @@ def test__fit_predict__alternative_model_paths__outputs_correct_shape(
 )
 def test__fit_predict__multiple_model_paths__outputs_correct_shape(
     device: str,
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    fit_mode: Literal["low_memory", "fit_preprocessors"],
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
     model = TabPFNRegressor(
@@ -243,11 +243,6 @@ def test_fit_modes_all_return_equal_results(X_y: tuple[np.ndarray, np.ndarray]) 
     tabpfn = TabPFNRegressor(fit_mode="fit_preprocessors", **kwargs)
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
-
-    torch.random.manual_seed(0)
-    tabpfn = TabPFNRegressor(fit_mode="fit_with_cache", **kwargs)
-    tabpfn.fit(X, y)
-    np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor(fit_mode="low_memory", **kwargs)
@@ -440,8 +435,12 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.skip("onnx export is not tested on windows")
     X, y = X_y
     with torch.no_grad():
-        regressor = TabPFNRegressor(
-            n_estimators=1, device="cpu", random_state=43, memory_saving_mode=True
+        regressor = TabPFNRegressor.create_default_for_version(
+            ModelVersion.V2_5,
+            n_estimators=1,
+            device="cpu",
+            random_state=43,
+            memory_saving_mode=True,
         )
         # load the model so we can access it via classifier.models_
         regressor.fit(X, y)
@@ -620,7 +619,13 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     X, y = X_y
 
     # Create a TabPFNRegressor with fixed random state for reproducibility
-    model = TabPFNRegressor(n_estimators=2, random_state=42)
+    model = TabPFNRegressor(
+        n_estimators=1,
+        random_state=42,
+        inference_config={
+            "POLYNOMIAL_FEATURES": "no",
+        },
+    )
     model.fit(X, y)
 
     # Get predictions on original data
@@ -637,7 +642,13 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
     )
 
     # Create and fit a new model with the same random state
-    model_with_constants = TabPFNRegressor(n_estimators=2, random_state=42)
+    model_with_constants = TabPFNRegressor(
+        n_estimators=1,
+        random_state=42,
+        inference_config={
+            "POLYNOMIAL_FEATURES": "no",
+        },
+    )
     model_with_constants.fit(X_with_constants, y)
 
     # Get predictions on data with constant features
