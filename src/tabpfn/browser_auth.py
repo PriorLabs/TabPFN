@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# In-process cache: set to True only after check_license_accepted() returns True.
+# In-process cache: tracks which license versions have been confirmed this session.
 # Short-circuits repeated calls within the same Python process.
-_license_accepted: bool = False
+_accepted_versions: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # Token cache helpers
@@ -348,10 +348,8 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
         If the license cannot be accepted (no browser, server unreachable
         without cached token, etc.).
     """
-    global _license_accepted  # noqa: PLW0603
-
-    # In-process cache: if license was already confirmed this session, skip API call.
-    if _license_accepted:
+    # In-process cache: skip API call if already confirmed this session.
+    if license_version in _accepted_versions:
         return True
 
     gui_url = settings.tabpfn.auth_gui_url
@@ -365,7 +363,7 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
             license_status = check_license_accepted(token, api_url, license_version)
             if license_status is True:
                 save_token(token)
-                _license_accepted = True
+                _accepted_versions.add(license_version)
                 return True
             if license_status is None:
                 raise TabPFNLicenseError(
