@@ -298,16 +298,16 @@ def _batched_scaled_dot_product_attention(
         values = v_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
         enable_gqa = {}
 
-    # Enable backends explicitly to ensure we don't silently fall back to
-    # the math backend, which requires a lot of memory as attention scores
-    # are stored explicitly.
+    # Enable backends explicitly. MATH is included as a last resort since it
+    # stores attention scores explicitly and uses more memory, but we prefer
+    # a slow fallback over a hard crash (e.g. on T4 GPUs on github runners where
+    # flash/efficient attention kernels may not support all configurations).
     backends = [
         SDPBackend.FLASH_ATTENTION,
         SDPBackend.EFFICIENT_ATTENTION,
         SDPBackend.CUDNN_ATTENTION,
+        SDPBackend.MATH,
     ]
-    if not torch.cuda.is_available():
-        backends.append(SDPBackend.MATH)
     num_parallel_calls = q_BHSD.shape[:2].numel()
     CUDA_MAX_GRID = 65536
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
