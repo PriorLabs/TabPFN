@@ -24,7 +24,7 @@ if __name__ == "__main__":
     )
 
     tabpfn = TabPFNClassifier.create_default_for_version(
-        ModelVersion.V2_5, n_estimators=3
+        ModelVersion.V2_6, n_estimators=3
     )
     tabpfn.fit(X_train[:99], y_train[:99])
     print("predicting")  # noqa: T201
@@ -38,7 +38,7 @@ if __name__ == "__main__":
     )
 
     tabpfn = TabPFNRegressor.create_default_for_version(
-        ModelVersion.V2_5, n_estimators=3
+        ModelVersion.V2_6, n_estimators=3
     )
     tabpfn.fit(X_train[:99], y_train[:99])
     print("predicting reg")  # noqa: T201

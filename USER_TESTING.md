@@ -95,5 +95,5 @@ Platform defaults:
 To clear cached model weights and your auth token on macOS (e.g. to test a fresh login flow):
 
 ```bash
-rm -f ~/Library/Caches/tabpfn/tabpfn-v2.5-* && rm ~/.cache/tabpfn/auth_token
+rm -f ~/Library/Caches/tabpfn/tabpfn-v2.* && rm -f ~/.cache/tabpfn/auth_token
 ```

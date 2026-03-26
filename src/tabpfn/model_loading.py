@@ -460,8 +460,8 @@ def _download_model(
 ) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
 
-    # v2.5 requires browser-based license acceptance before download.
-    if version == ModelVersion.V2_5:
+    # Gated models require browser-based license acceptance before download.
+    if version in (ModelVersion.V2_5, ModelVersion.V2_6):
         try:
             from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
@@ -499,8 +499,8 @@ def _download_model(
         logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    # For Version 2.5 we require gating, which we don't have in place for direct
-    # downloads.
+    # For gated versions (v2.5, v2.6) we require license acceptance, which we
+    # don't have in place for direct downloads.
     if _version_has_direct_download_option(version):
         try:
             _try_direct_downloads(to, model_source, model_name)

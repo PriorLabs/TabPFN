@@ -1,4 +1,4 @@
-"""Browser-based license acceptance for TabPFN v2.5.
+"""Browser-based license acceptance for TabPFN.
 
 Opens a browser to the PriorLabs login page so the user can accept the
 license.  The resulting JWT is cached locally for subsequent runs.
@@ -118,7 +118,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
 
 
 def check_license_accepted(token: str, api_url: str) -> bool | None:
-    """Check whether the user has accepted the TabPFN-2.5 license.
+    """Check whether the user has accepted the TabPFN license.
 
     Returns:
     -------
@@ -305,7 +305,7 @@ def try_browser_login(gui_url: str) -> str | None:
 
     # --- print unified instructions ---
     print(  # noqa: T201
-        "\nTabPFN v2.5 requires a one-time license acceptance."
+        "\nTabPFN requires a one-time license acceptance."
         "\nOpening your browser to complete login/registration…\n"
         f"\n  {login_url}\n"
         "\nWaiting for login to complete…\n"
@@ -332,7 +332,7 @@ def try_browser_login(gui_url: str) -> str | None:
 
 
 def ensure_license_accepted() -> Literal[True]:  # noqa: C901
-    """Ensure the user has accepted the TabPFN v2.5 license.
+    """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
     if needed.
@@ -388,7 +388,7 @@ def ensure_license_accepted() -> Literal[True]:  # noqa: C901
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
     if no_browser and no_browser not in ("0", "false", "no", "off"):
         raise TabPFNLicenseError(
-            "TabPFN v2.5 requires license acceptance, but browser login is\n"
+            "TabPFN requires license acceptance, but browser login is\n"
             "disabled (TABPFN_NO_BROWSER is set).\n\n"
             "Set the TABPFN_TOKEN environment variable with a valid token\n"
             "obtained from https://ux.priorlabs.ai"

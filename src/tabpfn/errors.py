@@ -27,12 +27,12 @@ class TabPFNValidationError(ValueError, TabPFNUserError):
 
 
 class TabPFNLicenseError(TabPFNError):
-    """Error raised when the user has not accepted the TabPFN v2.5 license."""
+    """Error raised when the user has not accepted the TabPFN license."""
 
     def __init__(self, message: str | None = None):
         if message is None:
             message = (
-                "TabPFN v2.5 requires license acceptance before downloading.\n\n"
+                "TabPFN requires license acceptance before downloading.\n\n"
                 "To accept the license, run your script in an interactive terminal\n"
                 "so a browser window can open for login, or set the TABPFN_TOKEN\n"
                 "environment variable with a valid token obtained from\n"
