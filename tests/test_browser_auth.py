@@ -10,8 +10,6 @@ from unittest.mock import patch
 import pytest
 
 from tabpfn.browser_auth import (
-    _CLIENT_TOKEN_FILE,
-    _TOKEN_FILE,
     delete_cached_token,
     get_cached_token,
     save_token,
@@ -20,14 +18,13 @@ from tabpfn.browser_auth import (
 )
 from tabpfn.errors import TabPFNLicenseError
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirect all token file paths to tmp_path so tests don't touch $HOME."""
     cache_dir = tmp_path / "cache" / "tabpfn"
     token_file = cache_dir / "auth_token"
@@ -36,6 +33,9 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("tabpfn.browser_auth._CACHE_DIR", cache_dir)
     monkeypatch.setattr("tabpfn.browser_auth._TOKEN_FILE", token_file)
     monkeypatch.setattr("tabpfn.browser_auth._CLIENT_TOKEN_FILE", client_file)
+
+    # Reset in-process cache so tests don't leak state.
+    monkeypatch.setattr("tabpfn.browser_auth._license_accepted", False)
 
     # Clear env vars that could interfere.
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
@@ -126,7 +126,7 @@ class _DummyHTTPResponse:
     def __init__(self, status: int = 200):
         self.status = status
 
-    def read(self):
+    def read(self) -> bytes:
         return b""
 
     def __enter__(self):
@@ -187,7 +187,7 @@ class TestVerifyToken:
         """Verify the endpoint URL is built correctly."""
         called_with: list[str] = []
 
-        def capture_url(req, **_kw):
+        def capture_url(req, **_kw) -> _DummyHTTPResponse:
             called_with.append(req.full_url)
             return _DummyHTTPResponse(200)
 
@@ -199,7 +199,7 @@ class TestVerifyToken:
     def test_url_construction_trailing_slash(self):
         called_with: list[str] = []
 
-        def capture_url(req, **_kw):
+        def capture_url(req, **_kw) -> _DummyHTTPResponse:
             called_with.append(req.full_url)
             return _DummyHTTPResponse(200)
 
@@ -217,28 +217,35 @@ class TestVerifyToken:
 class TestEnsureLicenseAccepted:
     """Test the main entry point with various scenarios."""
 
-    def _import_ensure(self):
-        from tabpfn.browser_auth import ensure_license_accepted
+    def _import_ensure(self):  # noqa: ANN202
+        from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
         return ensure_license_accepted
 
     def test_valid_cached_token(self, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setenv("TABPFN_TOKEN", "valid-tok")
-        with patch(
-            "tabpfn.browser_auth.verify_token", return_value=True
+        with (
+            patch("tabpfn.browser_auth.verify_token", return_value=True),
+            patch(
+                "tabpfn.browser_auth.check_license_accepted",
+                return_value=True,
+            ),
         ):
             assert self._import_ensure()() is True
 
-    def test_cached_token_server_unreachable(self, monkeypatch: pytest.MonkeyPatch):
-        """Server unreachable + cached token -> accept optimistically."""
+    def test_cached_token_server_unreachable(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Server unreachable + cached token -> raise."""
         monkeypatch.setenv("TABPFN_TOKEN", "cached-tok")
-        with patch(
-            "tabpfn.browser_auth.verify_token", return_value=None
+        with (
+            patch("tabpfn.browser_auth.verify_token", return_value=None),
+            pytest.raises(TabPFNLicenseError, match="verify"),
         ):
-            assert self._import_ensure()() is True
+            self._import_ensure()()
 
     def test_invalid_cached_token_triggers_browser(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+        self, tmp_path: Path
     ):
         """Invalid token should delete cache and attempt browser login."""
         token_file = tmp_path / "cache" / "tabpfn" / "auth_token"
@@ -248,11 +255,15 @@ class TestEnsureLicenseAccepted:
         with (
             patch(
                 "tabpfn.browser_auth.verify_token",
-                side_effect=[False, True],  # first call: invalid, second: valid
+                side_effect=[False, True],
             ),
             patch(
                 "tabpfn.browser_auth.try_browser_login",
                 return_value="new-valid-tok",
+            ),
+            patch(
+                "tabpfn.browser_auth.check_license_accepted",
+                return_value=True,
             ),
         ):
             assert self._import_ensure()() is True
@@ -279,6 +290,10 @@ class TestEnsureLicenseAccepted:
                     "tabpfn.browser_auth.verify_token",
                     return_value=True,
                 ),
+                patch(
+                    "tabpfn.browser_auth.check_license_accepted",
+                    return_value=True,
+                ),
             ):
                 assert self._import_ensure()() is True
 
@@ -289,9 +304,9 @@ class TestEnsureLicenseAccepted:
                 "tabpfn.browser_auth.try_browser_login",
                 return_value=None,
             ),
+            pytest.raises(TabPFNLicenseError, match="headless"),
         ):
-            with pytest.raises(TabPFNLicenseError, match="headless"):
-                self._import_ensure()()
+            self._import_ensure()()
 
     def test_browser_token_rejected_raises(self):
         """Token from browser rejected by server -> error."""
@@ -304,9 +319,9 @@ class TestEnsureLicenseAccepted:
                 "tabpfn.browser_auth.verify_token",
                 return_value=False,
             ),
+            pytest.raises(TabPFNLicenseError, match="rejected"),
         ):
-            with pytest.raises(TabPFNLicenseError, match="rejected"):
-                self._import_ensure()()
+            self._import_ensure()()
 
 
 # ---------------------------------------------------------------------------
@@ -317,13 +332,13 @@ class TestEnsureLicenseAccepted:
 _GUI_URL = "https://ux.priorlabs.ai"
 
 
-def _make_mock_server():
+def _make_mock_server():  # noqa: ANN202
     """Create a mock TCP server for tests."""
     return type("MockServer", (), {
         "server_address": ("", 12345),
         "timeout": 0.5,
-        "handle_request": lambda self: None,
-        "server_close": lambda self: None,
+        "handle_request": lambda _self: None,
+        "server_close": lambda _self: None,
     })()
 
 
@@ -333,14 +348,19 @@ class TestTryBrowserLogin:
     def test_browser_callback_delivers_token(self):
         """Token delivered via callback server is returned."""
 
-        def fake_create(gui_url, auth_event, received_token):
+        def fake_create(  # noqa: ANN202
+            _gui_url, auth_event, received_token,
+        ):
             received_token[0] = "callback-token"
             auth_event.set()
             return _make_mock_server(), 12345
 
         with (
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
-            patch("tabpfn.browser_auth._create_callback_server", side_effect=fake_create),
+            patch(
+                "tabpfn.browser_auth._create_callback_server",
+                side_effect=fake_create,
+            ),
             patch("tabpfn.browser_auth.webbrowser.open", return_value=True),
             patch("tabpfn.browser_auth.select.select", return_value=([], [], [])),
         ):
@@ -355,7 +375,10 @@ class TestTryBrowserLogin:
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
             patch("tabpfn.browser_auth._create_callback_server") as mock_create,
             patch("tabpfn.browser_auth.webbrowser.open", return_value=False),
-            patch("tabpfn.browser_auth.select.select", return_value=([mock_stdin], [], [])),
+            patch(
+                "tabpfn.browser_auth.select.select",
+                return_value=([mock_stdin], [], []),
+            ),
         ):
             mock_stdin.isatty.return_value = True
             mock_stdin.readline.return_value = "pasted-token\n"
@@ -377,7 +400,10 @@ class TestTryBrowserLogin:
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
             patch("tabpfn.browser_auth._create_callback_server") as mock_create,
             patch("tabpfn.browser_auth.webbrowser.open", return_value=False),
-            patch("tabpfn.browser_auth.select.select", return_value=([mock_stdin], [], [])),
+            patch(
+                "tabpfn.browser_auth.select.select",
+                return_value=([mock_stdin], [], []),
+            ),
         ):
             mock_stdin.isatty.return_value = True
             mock_stdin.readline.side_effect = ["\n", "second-try\n"]
@@ -407,7 +433,10 @@ class TestTryBrowserLogin:
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
             patch("tabpfn.browser_auth._create_callback_server") as mock_create,
             patch("tabpfn.browser_auth.webbrowser.open", return_value=False),
-            patch("tabpfn.browser_auth.select.select", return_value=([mock_stdin], [], [])),
+            patch(
+                "tabpfn.browser_auth.select.select",
+                return_value=([mock_stdin], [], []),
+            ),
         ):
             mock_stdin.isatty.return_value = True
             mock_stdin.readline.return_value = ""  # EOF
@@ -422,7 +451,10 @@ class TestTryBrowserLogin:
             patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
             patch("tabpfn.browser_auth._create_callback_server") as mock_create,
             patch("tabpfn.browser_auth.webbrowser.open", return_value=True),
-            patch("tabpfn.browser_auth.select.select", return_value=([mock_stdin], [], [])),
+            patch(
+                "tabpfn.browser_auth.select.select",
+                return_value=([mock_stdin], [], []),
+            ),
         ):
             mock_stdin.isatty.return_value = True
             mock_stdin.readline.return_value = ""  # EOF to exit quickly

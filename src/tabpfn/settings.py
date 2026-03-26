@@ -40,7 +40,7 @@ class TabPFNSettings(BaseSettings):
     # Auth URLs (for browser-based license acceptance)
     auth_gui_url: str = Field(
         default="https://ux.priorlabs.ai",
-        description="URL for the PriorLabs login GUI (browser-based license acceptance).",
+        description="PriorLabs login GUI URL.",
     )
     auth_api_url: str = Field(
         default="https://api.priorlabs.ai",

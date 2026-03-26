@@ -47,7 +47,9 @@ _CLIENT_TOKEN_FILE = Path.home() / ".tabpfn" / "token"
 
 
 def get_cached_token() -> str | None:
-    """Return a cached token, checking (in priority order):
+    """Return a cached token.
+
+    Checks (in priority order):
 
     1. ``TABPFN_TOKEN`` environment variable
     2. ``~/.cache/tabpfn/auth_token``
@@ -86,7 +88,7 @@ def delete_cached_token() -> None:
 def verify_token(token: str, api_url: str) -> bool | None:
     """Verify *token* against the PriorLabs API.
 
-    Returns
+    Returns:
     -------
     True
         Token is valid.
@@ -96,7 +98,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
         Server is unreachable — cannot verify.
     """
     url = f"{api_url.rstrip('/')}/protected/"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             return resp.status == 200
@@ -105,7 +107,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
             return False
         logger.warning("Unexpected HTTP %s from token verification endpoint", exc.code)
         return None
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.error("Token verification endpoint unreachable", exc_info=True)
         return None
 
@@ -118,7 +120,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
 def check_license_accepted(token: str, api_url: str) -> bool | None:
     """Check whether the user has accepted the TabPFN-2.5 license.
 
-    Returns
+    Returns:
     -------
     True
         License has been accepted.
@@ -128,7 +130,7 @@ def check_license_accepted(token: str, api_url: str) -> bool | None:
         Server is unreachable — cannot verify.
     """
     url = f"{api_url.rstrip('/')}/tabpfn/license/"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read())
@@ -159,7 +161,7 @@ def _create_callback_server(
     """
 
     class _CallbackHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             query = urllib.parse.parse_qs(parsed.query)
             if "token" in query:
@@ -203,7 +205,8 @@ def _create_callback_server(
                     "<h2>Login successful</h2>"
                     "<p>You can close this tab and return to your terminal.</p>"
                     "</div>"
-                    f'<script>window.location.href="{gui_url}/redirect-success";</script>'
+                    "<script>window.location.href="
+                    f'"{gui_url}/redirect-success";</script>'
                     "</body></html>"
                 )
                 self.wfile.write(html.encode())
@@ -224,7 +227,7 @@ def _create_callback_server(
                 )
                 self.wfile.write(html.encode())
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:
             pass  # silence request logs
 
     httpd = socketserver.TCPServer(("", 0), _CallbackHandler)
@@ -235,12 +238,15 @@ def _create_callback_server(
 def _serve_until_event(
     httpd: socketserver.TCPServer, auth_event: threading.Event
 ) -> None:
-    """Handle HTTP requests until *auth_event* is set.  Meant to run in a daemon thread."""
+    """Handle HTTP requests until *auth_event* is set.
+
+    Meant to run in a daemon thread.
+    """
     httpd.timeout = 0.5
     while not auth_event.is_set():
         try:
             httpd.handle_request()
-        except Exception:
+        except Exception:  # noqa: BLE001
             break
 
 
@@ -298,13 +304,14 @@ def try_browser_login(gui_url: str) -> str | None:
     webbrowser.open(login_url)
 
     # --- print unified instructions ---
-    print(
+    print(  # noqa: T201
         "\nTabPFN v2.5 requires a one-time license acceptance."
         "\nOpening your browser to complete login/registration…\n"
         f"\n  {login_url}\n"
         "\nWaiting for login to complete…\n"
         "\nHaving trouble? You can also authenticate manually:\n"
-        f"  1. Open {gui_url}/account in a browser (log in or register if needed)\n"
+        f"  1. Open {gui_url}/account in a browser"
+        " (log in or register if needed)\n"
         "  2. Copy your Access Token\n"
         "  3. Paste the token below\n"
     )
@@ -324,7 +331,7 @@ def try_browser_login(gui_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted() -> Literal[True]:
+def ensure_license_accepted() -> Literal[True]:  # noqa: C901
     """Ensure the user has accepted the TabPFN v2.5 license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -332,7 +339,7 @@ def ensure_license_accepted() -> Literal[True]:
 
     Returns ``True`` on success.
 
-    Raises
+    Raises:
     ------
     TabPFNLicenseError
         If the license cannot be accepted (no browser, server unreachable
@@ -364,7 +371,10 @@ def ensure_license_accepted() -> Literal[True]:
                 )
             # license_status is False — license not yet accepted.
             # Fall through to browser login so the GUI can show the acceptance form.
-            logger.info("Token valid but license not accepted; opening browser for acceptance.")
+            logger.info(
+                "Token valid but license not accepted;"
+                " opening browser for acceptance.",
+            )
         elif status is None:
             raise TabPFNLicenseError(
                 "Could not reach the license server to verify your token.\n\n"
@@ -407,7 +417,7 @@ def ensure_license_accepted() -> Literal[True]:
 
     license_status = check_license_accepted(token, api_url)
     if license_status is True:
-        print("License accepted — token cached for future sessions.\n")
+        print("License accepted — token cached for future sessions.\n")  # noqa: T201
         _license_accepted = True
         return True
     if license_status is None:
