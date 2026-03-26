@@ -3,7 +3,7 @@
 Opens a browser to the PriorLabs login page so the user can accept the
 license.  The resulting JWT is cached locally for subsequent runs.
 
-Stdlib-only (no dependency on tabpfn-client).
+No dependency on tabpfn-client.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from tabpfn.errors import TabPFNLicenseError
+from tabpfn.settings import settings
 
 if TYPE_CHECKING:
     from typing import Literal
@@ -340,9 +343,6 @@ def ensure_license_accepted() -> Literal[True]:
     # In-process cache: if license was already confirmed this session, skip API call.
     if _license_accepted:
         return True
-
-    from tabpfn.errors import TabPFNLicenseError  # noqa: PLC0415
-    from tabpfn.settings import settings  # noqa: PLC0415
 
     gui_url = settings.tabpfn.auth_gui_url
     api_url = settings.tabpfn.auth_api_url
