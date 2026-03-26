@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.0.1] - 2026-03-26
+
+### Added
+
+- Remove the n_out parameter from get_architecture. ([#839](https://github.com/PriorLabs/TabPFN/pull/839))
+
+### Changed
+
+- Make TabPFN-2.6 the default model ([#840](https://github.com/PriorLabs/TabPFN/pull/840))
+
+
 ## [7.0.0] - 2026-03-24
 
 ### Added
