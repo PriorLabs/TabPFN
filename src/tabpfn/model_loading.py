@@ -461,7 +461,7 @@ def _download_model(
     errors: list[Exception] = []
 
     # v2.5 requires browser-based license acceptance before download.
-    if version != ModelVersion.V2:
+    if version == ModelVersion.V2_5:
         try:
             from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
