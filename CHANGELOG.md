@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Make 2.6 the default model ([#840](https://github.com/PriorLabs/TabPFN/pull/840))
+- Make TabPFN-2.6 the default model ([#840](https://github.com/PriorLabs/TabPFN/pull/840))
 
 
 ## [7.0.0] - 2026-03-24
