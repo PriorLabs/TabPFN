@@ -117,7 +117,7 @@ def verify_token(token: str, api_url: str) -> bool | None:
 # ---------------------------------------------------------------------------
 
 
-def check_license_accepted(token: str, api_url: str) -> bool | None:
+def check_license_accepted(token: str, api_url: str, version: str) -> bool | None:
     """Check whether the user has accepted the TabPFN license.
 
     Returns:
@@ -129,7 +129,7 @@ def check_license_accepted(token: str, api_url: str) -> bool | None:
     None
         Server is unreachable — cannot verify.
     """
-    url = f"{api_url.rstrip('/')}/tabpfn/license/"
+    url = f"{api_url.rstrip('/')}/tabpfn/license/?version={urllib.parse.quote(version)}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})  # noqa: S310
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
@@ -271,7 +271,7 @@ def _poll_for_token(
     return received_token[0]
 
 
-def try_browser_login(gui_url: str) -> str | None:
+def try_browser_login(gui_url: str, license_version: str | None = None) -> str | None:
     """Obtain a token via browser callback and/or manual paste concurrently.
 
     Both the local callback server and the paste prompt run at the same time
@@ -294,6 +294,8 @@ def try_browser_login(gui_url: str) -> str | None:
 
     callback_url = f"http://localhost:{port}"
     login_url = f"{gui_url}/login?callback={callback_url}"
+    if license_version:
+        login_url += f"&license_version={urllib.parse.quote(license_version)}"
 
     server_thread = threading.Thread(
         target=_serve_until_event, args=(httpd, auth_event), daemon=True
@@ -331,7 +333,7 @@ def try_browser_login(gui_url: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted() -> Literal[True]:  # noqa: C901
+def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C901
     """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -359,7 +361,7 @@ def ensure_license_accepted() -> Literal[True]:  # noqa: C901
         status = verify_token(token, api_url)
         if status is True:
             # Token is valid — now check license acceptance.
-            license_status = check_license_accepted(token, api_url)
+            license_status = check_license_accepted(token, api_url, license_version)
             if license_status is True:
                 save_token(token)
                 _license_accepted = True
@@ -394,7 +396,7 @@ def ensure_license_accepted() -> Literal[True]:  # noqa: C901
             "obtained from https://ux.priorlabs.ai"
         )
 
-    token = try_browser_login(gui_url)
+    token = try_browser_login(gui_url, license_version=license_version)
     if token is None:
         raise TabPFNLicenseError(
             "Browser login did not complete successfully.\n\n"
@@ -414,7 +416,7 @@ def ensure_license_accepted() -> Literal[True]:  # noqa: C901
     # Token is valid (status is True or None/unreachable — save it regardless).
     save_token(token)
 
-    license_status = check_license_accepted(token, api_url)
+    license_status = check_license_accepted(token, api_url, license_version)
     if license_status is True:
         print("License accepted — token cached for future sessions.\n")  # noqa: T201
         _license_accepted = True
