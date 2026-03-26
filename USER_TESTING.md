@@ -92,16 +92,8 @@ Platform defaults:
 
 ## 6. Reset login / cached models
 
-To clear cached model weights and your auth token (e.g. to test a fresh login flow):
+To clear cached model weights and your auth token on macOS (e.g. to test a fresh login flow):
 
 ```bash
-# Find your cache directory:
-python -c "from tabpfn.model_loading import get_cache_dir; print(get_cache_dir())"
-
-# Then remove cached models and the auth token from that directory:
-rm <cache_dir>/tabpfn-v2.5-classifier-v2.5_default.ckpt
-rm <cache_dir>/tabpfn-v2.5-regressor-v2.5_default.ckpt
-rm <cache_dir>/auth_token
+rm -f ~/Library/Caches/tabpfn/tabpfn-v2.5-* && rm ~/.cache/tabpfn/auth_token
 ```
-
-Replace `<cache_dir>` with the path printed above (e.g. `~/.cache/tabpfn/` on Linux, `~/Library/Caches/tabpfn/` on macOS).
