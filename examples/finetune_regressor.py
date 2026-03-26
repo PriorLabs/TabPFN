@@ -1,9 +1,15 @@
 """Example of fine-tuning a TabPFN regressor using the FinetunedTabPFNRegressor wrapper.
 
 Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80 GB of VRAM.
+
+Multi-GPU: torchrun --nproc-per-node=N examples/finetune_regressor.py
+Note: Only call fit() once per torchrun session. For multiple finetuning runs, use
+separate torchrun invocations.
 """
 
+import gc
 import logging
+import os
 import warnings
 
 import sklearn.datasets
@@ -54,6 +60,8 @@ RANDOM_STATE = 0
 
 
 def main() -> None:
+    is_main_process = int(os.environ.get("LOCAL_RANK", "0")) == 0
+
     data = sklearn.datasets.fetch_california_housing(as_frame=True)
     X_all = data.data
     y_all = data.target
@@ -62,29 +70,35 @@ def main() -> None:
         X_all, y_all, test_size=0.1, random_state=RANDOM_STATE
     )
 
-    print(
-        f"Loaded {len(X_train):,} samples for training and "
-        f"{len(X_test):,} samples for testing."
-    )
+    if is_main_process:
+        print(
+            f"Loaded {len(X_train):,} samples for training and "
+            f"{len(X_test):,} samples for testing."
+        )
 
-    # 2. Initial model evaluation on test set
-    base_reg = TabPFNRegressor(
-        device=[f"cuda:{i}" for i in range(torch.cuda.device_count())],
-        n_estimators=NUM_ESTIMATORS_FINAL_INFERENCE,
-        ignore_pretraining_limits=True,
-        inference_config={"SUBSAMPLE_SAMPLES": 50_000},
-    )
-    base_reg.fit(X_train, y_train)
+        # 2. Initial model evaluation on test set
+        base_reg = TabPFNRegressor(
+            device=[f"cuda:{i}" for i in range(torch.cuda.device_count())],
+            n_estimators=NUM_ESTIMATORS_FINAL_INFERENCE,
+            ignore_pretraining_limits=True,
+            inference_config={"SUBSAMPLE_SAMPLES": 50_000},
+        )
+        base_reg.fit(X_train, y_train)
 
-    base_pred = base_reg.predict(X_test)
-    mse = mean_squared_error(y_test, base_pred)
-    r2 = r2_score(y_test, base_pred)
+        base_pred = base_reg.predict(X_test)
+        mse = mean_squared_error(y_test, base_pred)
+        r2 = r2_score(y_test, base_pred)
 
-    print(f"📊 Default TabPFN Test MSE: {mse:.4f}")
-    print(f"📊 Default TabPFN Test R²: {r2:.4f}\n")
+        print(f"📊 Default TabPFN Test MSE: {mse:.4f}")
+        print(f"📊 Default TabPFN Test R²: {r2:.4f}\n")
+
+        del base_reg
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # 3. Initialize and run fine-tuning
-    print("--- 2. Initializing and Fitting Model ---\n")
+    if is_main_process:
+        print("--- 2. Initializing and Fitting Model ---\n")
 
     # Instantiate the wrapper with your desired hyperparameters
     finetuned_reg = FinetunedTabPFNRegressor(
@@ -100,17 +114,17 @@ def main() -> None:
 
     # 4. Call .fit() to start the fine-tuning process on the training data
     finetuned_reg.fit(X_train.values, y_train.values)
-    print("\n")
 
     # 5. Evaluate the fine-tuned model
-    print("--- 3. Evaluating Model on Held-out Test Set ---\n")
-    y_pred = finetuned_reg.predict(X_test.values)
+    if is_main_process:
+        print("\n--- 3. Evaluating Model on Held-out Test Set ---\n")
+        y_pred = finetuned_reg.predict(X_test.values)
 
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+        mse = mean_squared_error(y_test, y_pred)
+        r2 = r2_score(y_test, y_pred)
 
-    print(f"📊 Finetuned TabPFN Test MSE: {mse:.4f}")
-    print(f"📊 Finetuned TabPFN Test R²: {r2:.4f}")
+        print(f"📊 Finetuned TabPFN Test MSE: {mse:.4f}")
+        print(f"📊 Finetuned TabPFN Test R²: {r2:.4f}")
 
 
 if __name__ == "__main__":

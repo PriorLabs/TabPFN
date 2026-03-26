@@ -257,7 +257,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         y_query_batch = batch.y_query
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        logits_QBEL = self.finetuned_estimator_.forward(
+        logits_QBEL = self._training_forward(
             X_query_batch,
             return_raw_logits=True,
         )
