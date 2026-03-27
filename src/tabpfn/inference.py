@@ -9,7 +9,7 @@ from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import joblib
@@ -92,7 +92,7 @@ class InferenceEngine(ABC):
         X: np.ndarray,
         *,
         autocast: bool,
-        **model_forward_kwargs: Any,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
 
@@ -102,8 +102,8 @@ class InferenceEngine(ABC):
         Args:
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
-            model_forward_kwargs: Keyword arguments to pass to the model's forward
-                method.
+            differentiable_input: If True, skip non-differentiable operations in the
+                model's forward pass.
         """
         ...
 
@@ -346,9 +346,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         *,
         autocast: bool,
         only_return_standard_out: bool = True,
-        **model_forward_kwargs: Any,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        del model_forward_kwargs
+        del differentiable_input
         devices = self.get_devices()
 
         save_peak_mem = should_save_peak_mem(
@@ -501,7 +501,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         X: list[torch.Tensor],
         *,
         autocast: bool,
-        **model_forward_kwargs: Any,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
@@ -528,7 +528,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
-                    **model_forward_kwargs,
+                    differentiable_input=differentiable_input,
                 )
 
             yield output, self.ensemble_configs[i]
@@ -620,9 +620,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         *,
         autocast: bool,
         only_return_standard_out: bool = True,
-        **model_forward_kwargs: Any,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        del model_forward_kwargs
+        del differentiable_input
         devices = self.get_devices()
 
         if self.force_inference_dtype is not None:
@@ -830,9 +830,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         *,
         autocast: bool,
         only_return_standard_out: bool = True,
-        **model_forward_kwargs: Any,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        del model_forward_kwargs
+        del differentiable_input
         for ensemble_member, model in zip(self.ensemble_members, self.models):
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
