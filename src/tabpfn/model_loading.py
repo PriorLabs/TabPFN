@@ -461,15 +461,15 @@ def _download_model(
     errors: list[Exception] = []
 
     # Gated models require browser-based license acceptance before download.
-    _LICENSE_VERSIONS = {
-        ModelVersion.V2_5: "tabpfn_v2.5_license_v1.1",
-        ModelVersion.V2_6: "tabpfn_v2.6_license_v1.0",
+    _HF_REPOS = {
+        ModelVersion.V2_5: "tabpfn_2_5",
+        ModelVersion.V2_6: "tabpfn_2_6",
     }
-    if version in _LICENSE_VERSIONS:
+    if version in _HF_REPOS:
         try:
             from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
-            ensure_license_accepted(license_version=_LICENSE_VERSIONS[version])
+            ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
         except Exception as e:  # noqa: BLE001
             return [e]
 

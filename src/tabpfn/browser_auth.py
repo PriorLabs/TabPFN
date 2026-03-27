@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# In-process cache: tracks which license versions have been confirmed this session.
+# In-process cache: tracks which HF repos have been confirmed this session.
 # Short-circuits repeated calls within the same Python process.
-_accepted_versions: set[str] = set()
+_accepted_repos: set[str] = set()
 
 # ---------------------------------------------------------------------------
 # Token cache helpers
@@ -109,6 +109,28 @@ def verify_token(token: str, api_url: str) -> bool | None:
         return None
     except Exception:
         logger.error("Token verification endpoint unreachable", exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# HuggingFace model metadata
+# ---------------------------------------------------------------------------
+
+
+def _get_license_name(hf_repo_id: str) -> str | None:
+    """Fetch the license_name from the HuggingFace API for a Prior-Labs repo.
+
+    Returns the license_name string (e.g. ``"tabpfn-2.6-license-v1.0"``)
+    or ``None`` if the request fails.
+    """
+    url = f"https://huggingface.co/api/models/Prior-Labs/{hf_repo_id}"
+    try:
+        req = urllib.request.Request(url)  # noqa: S310
+        with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
+            data = json.loads(resp.read())
+            return data.get("cardData", {}).get("license_name")
+    except Exception:  # noqa: BLE001
+        logger.debug("Could not fetch license_name for %s", hf_repo_id, exc_info=True)
         return None
 
 
@@ -272,7 +294,7 @@ def _poll_for_token(
     return received_token[0]
 
 
-def try_browser_login(gui_url: str, license_version: str | None = None) -> str | None:
+def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None:
     """Obtain a token via browser callback and/or manual paste concurrently.
 
     Both the local callback server and the paste prompt run at the same time
@@ -295,8 +317,8 @@ def try_browser_login(gui_url: str, license_version: str | None = None) -> str |
 
     callback_url = f"http://localhost:{port}"
     login_url = f"{gui_url}/login?callback={callback_url}"
-    if license_version:
-        login_url += f"&license_version={urllib.parse.quote(license_version)}"
+    if hf_repo_id:
+        login_url += f"&hf_repo_id={urllib.parse.quote(hf_repo_id)}"
 
     server_thread = threading.Thread(
         target=_serve_until_event, args=(httpd, auth_event), daemon=True
@@ -334,7 +356,7 @@ def try_browser_login(gui_url: str, license_version: str | None = None) -> str |
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C901
+def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -349,11 +371,14 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
         without cached token, etc.).
     """
     # In-process cache: skip API call if already confirmed this session.
-    if license_version in _accepted_versions:
+    if hf_repo_id in _accepted_repos:
         return True
 
     gui_url = settings.tabpfn.auth_gui_url
     api_url = settings.tabpfn.auth_api_url
+
+    # Resolve the canonical license version string from HF; fall back to repo ID.
+    license_version = _get_license_name(hf_repo_id) or hf_repo_id
 
     token = get_cached_token()
     if token is not None:
@@ -363,7 +388,7 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
             license_status = check_license_accepted(token, api_url, license_version)
             if license_status is True:
                 save_token(token)
-                _accepted_versions.add(license_version)
+                _accepted_repos.add(hf_repo_id)
                 return True
             if license_status is None:
                 raise TabPFNLicenseError(
@@ -395,7 +420,7 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
             "obtained from https://ux.priorlabs.ai"
         )
 
-    token = try_browser_login(gui_url, license_version=license_version)
+    token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
         raise TabPFNLicenseError(
             "Browser login did not complete successfully.\n\n"
@@ -418,7 +443,7 @@ def ensure_license_accepted(license_version: str) -> Literal[True]:  # noqa: C90
     license_status = check_license_accepted(token, api_url, license_version)
     if license_status is True:
         print("License accepted — token cached for future sessions.\n")  # noqa: T201
-        _license_accepted = True
+        _accepted_repos.add(hf_repo_id)
         return True
     if license_status is None:
         raise TabPFNLicenseError(
