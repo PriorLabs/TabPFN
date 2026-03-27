@@ -8,6 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
 from functools import partial
+from inspect import signature
 from pathlib import Path
 from typing import TYPE_CHECKING
 from typing_extensions import override
@@ -36,6 +37,14 @@ if TYPE_CHECKING:
         TabPFNEnsembleMember,
         TabPFNEnsemblePreprocessor,
     )
+
+
+def _model_expectes_task_type_arg(model: Architecture) -> bool:
+    """Check if the model's forward function expects a task_type argument.
+
+    This is a check for backwards compatibility.
+    """
+    return "task_type" in signature(model.forward).parameters
 
 
 class InferenceEngine(ABC):
@@ -92,6 +101,7 @@ class InferenceEngine(ABC):
         X: np.ndarray,
         *,
         autocast: bool,
+        task_type: str,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
 
@@ -101,6 +111,7 @@ class InferenceEngine(ABC):
         Args:
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
+            task_type: The task type, e.g. "multiclass" or "regression".
         """
         ...
 
@@ -342,6 +353,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         X: np.ndarray,
         *,
         autocast: bool,
+        task_type: str,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         devices = self.get_devices()
@@ -380,6 +392,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                task_type=task_type,
             )
             for ensemble_member in ensemble_members_iterator
         )
@@ -388,7 +401,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         for config, output in zip(self.ensemble_preprocessor.configs, outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
-    def _call_model(
+    def _call_model(  # noqa: PLR0913
         self,
         *,
         device: torch.device,
@@ -401,6 +414,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         model_index: int,
         save_peak_mem: bool,
         gpu_preprocessor: TorchPreprocessingPipeline | None,
+        task_type: str,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -424,6 +438,10 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             num_train_rows=X_train.shape[0],
         )
 
+        kwargs = {}
+        if _model_expectes_task_type_arg(model):
+            kwargs["task_type"] = task_type
+
         with get_autocast_context(device, enabled=autocast), torch.inference_mode():
             return model(
                 X_full,
@@ -431,6 +449,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
                 save_peak_memory_factor=save_peak_memory_factor,
+                **kwargs,
             )
 
 
@@ -496,6 +515,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         X: list[torch.Tensor],
         *,
         autocast: bool,
+        task_type: str,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
@@ -508,11 +528,15 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                 train_x_full = train_x_full.type(self.force_inference_dtype)
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
 
+            model = self.models[self.ensemble_configs[i][0]._model_index]
+            kwargs = {}
+            if _model_expectes_task_type_arg(model):
+                kwargs["task_type"] = task_type
             with (
                 get_autocast_context(device, enabled=autocast),
                 torch.inference_mode(self.inference_mode),
             ):
-                output = self.models[self.ensemble_configs[i][0]._model_index](
+                output = model(
                     train_x_full.transpose(0, 1),
                     train_y_batch.transpose(0, 1),
                     only_return_standard_out=True,
@@ -522,6 +546,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
+                    **kwargs,
                 )
 
             yield output, self.ensemble_configs[i]
@@ -612,6 +637,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         X: np.ndarray | torch.Tensor,
         *,
         autocast: bool,
+        task_type: str,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         devices = self.get_devices()
@@ -648,6 +674,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 model_index=ensemble_member.config._model_index,
                 save_peak_mem=save_peak_mem,
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                task_type=task_type,
             )
             for ensemble_member in self.ensemble_members
         )
@@ -656,7 +683,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         for output, ensemble_member in zip(outputs, self.ensemble_members):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
-    def _call_model(
+    def _call_model(  # noqa: PLR0913
         self,
         *,
         device: torch.device,
@@ -669,6 +696,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         model_index: int,
         save_peak_mem: bool,
         gpu_preprocessor: TorchPreprocessingPipeline | None,
+        task_type: str,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Execute a model forward pass on the provided device.
 
@@ -691,6 +719,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             gpu_preprocessor=gpu_preprocessor,
             num_train_rows=X_train.shape[0],
         )
+        kwargs = {}
+        if _model_expectes_task_type_arg(model):
+            kwargs["task_type"] = task_type
 
         with (
             get_autocast_context(device, enabled=autocast),
@@ -702,6 +733,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
                 save_peak_memory_factor=save_peak_memory_factor,
+                **kwargs,
             )
 
     @override
@@ -820,6 +852,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         X: np.ndarray,
         *,
         autocast: bool,
+        task_type: str,
         only_return_standard_out: bool = True,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         for ensemble_member, model in zip(self.ensemble_members, self.models):
@@ -841,6 +874,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                 model.type(self.force_inference_dtype)
                 X_test = X_test.type(self.force_inference_dtype)
 
+            kwargs = {}
+            if _model_expectes_task_type_arg(model):
+                kwargs["task_type"] = task_type
             with (
                 get_autocast_context(self.device, enabled=autocast),
                 torch.inference_mode(),
@@ -854,6 +890,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                     # pressure and enable the saving mode.
                     # TODO: Use the heuristic in this case also.
                     save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
+                    **kwargs,
                 )
 
             model.cpu()
