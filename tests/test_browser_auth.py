@@ -35,7 +35,13 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr("tabpfn.browser_auth._CLIENT_TOKEN_FILE", client_file)
 
     # Reset in-process cache so tests don't leak state.
-    monkeypatch.setattr("tabpfn.browser_auth._license_accepted", False)
+    monkeypatch.setattr("tabpfn.browser_auth._accepted_repos", set())
+
+    # Stub out HF API calls so tests don't make network requests.
+    monkeypatch.setattr(
+        "tabpfn.browser_auth._get_license_name",
+        lambda repo_id: f"{repo_id}-license-v1.0",
+    )
 
     # Clear env vars that could interfere.
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
@@ -243,7 +249,7 @@ class TestEnsureLicenseAccepted:
                 return_value=True,
             ),
         ):
-            assert self._import_ensure()() is True
+            assert self._import_ensure()("tabpfn_2_6") is True
 
     def test_cached_token_server_unreachable(
         self,
@@ -255,7 +261,7 @@ class TestEnsureLicenseAccepted:
             patch("tabpfn.browser_auth.verify_token", return_value=None),
             pytest.raises(TabPFNLicenseError, match="verify"),
         ):
-            self._import_ensure()()
+            self._import_ensure()("tabpfn_2_6")
 
     def test_invalid_cached_token_triggers_browser(self, tmp_path: Path):
         """Invalid token should delete cache and attempt browser login."""
@@ -277,14 +283,14 @@ class TestEnsureLicenseAccepted:
                 return_value=True,
             ),
         ):
-            assert self._import_ensure()() is True
+            assert self._import_ensure()("tabpfn_2_6") is True
             assert not token_file.read_text().startswith("expired")
 
     def test_no_browser_env_raises(self, monkeypatch: pytest.MonkeyPatch):
         """TABPFN_NO_BROWSER=1 without token -> error."""
         monkeypatch.setenv("TABPFN_NO_BROWSER", "1")
         with pytest.raises(TabPFNLicenseError, match="TABPFN_NO_BROWSER"):
-            self._import_ensure()()
+            self._import_ensure()("tabpfn_2_6")
 
     def test_no_browser_false_values_dont_block(self, monkeypatch: pytest.MonkeyPatch):
         """TABPFN_NO_BROWSER=0/false/no should NOT block browser login."""
@@ -304,7 +310,7 @@ class TestEnsureLicenseAccepted:
                     return_value=True,
                 ),
             ):
-                assert self._import_ensure()() is True
+                assert self._import_ensure()("tabpfn_2_6") is True
 
     def test_browser_login_returns_none_raises(self):
         """Browser login failure -> error."""
@@ -315,7 +321,7 @@ class TestEnsureLicenseAccepted:
             ),
             pytest.raises(TabPFNLicenseError, match="headless"),
         ):
-            self._import_ensure()()
+            self._import_ensure()("tabpfn_2_6")
 
     def test_browser_token_rejected_raises(self):
         """Token from browser rejected by server -> error."""
@@ -330,7 +336,7 @@ class TestEnsureLicenseAccepted:
             ),
             pytest.raises(TabPFNLicenseError, match="rejected"),
         ):
-            self._import_ensure()()
+            self._import_ensure()("tabpfn_2_6")
 
 
 # ---------------------------------------------------------------------------
