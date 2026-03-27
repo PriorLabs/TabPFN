@@ -1418,7 +1418,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         outputs = []
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_
+            X,
+            autocast=self.use_autocast_,
+            differentiable_input=self.differentiable_input,
         ):
             original_ndim = output.ndim
 
