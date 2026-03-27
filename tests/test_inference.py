@@ -103,7 +103,6 @@ class _TestModelLegacy(torch.nn.Module):
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
-        task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
         del (
             only_return_standard_out,
@@ -114,7 +113,6 @@ class _TestModelLegacy(torch.nn.Module):
         """Perform a forward pass."""
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
-        self.received_task_type = task_type
         n_train_test, _, _ = x.shape
         n_train, _ = y.shape
         test_rows = n_train_test - n_train
