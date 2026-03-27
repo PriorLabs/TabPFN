@@ -117,7 +117,7 @@ TEST_CASES = {
             ),
         )
         for fit_mode in ["fit_preprocessors", "low_memory"]
-        for version in [ModelVersion.V2_5, ModelVersion.V2_6]
+        for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
         # Save compute by only running all the tests for the latest model.
         if version == ModelVersion.V2_6 or fit_mode == "fit_preprocessors"
     },
@@ -145,7 +145,7 @@ TEST_CASES = {
             ),
         )
         for fit_mode in ["fit_preprocessors", "low_memory"]
-        for version in [ModelVersion.V2_5, ModelVersion.V2_6]
+        for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
         # Save compute by only running all the tests for the latest model.
         if version == ModelVersion.V2_6 or fit_mode == "fit_preprocessors"
     },
