@@ -10,8 +10,12 @@ Removes:
 from pathlib import Path
 from datetime import datetime
 import re
+import os
 
-OUT_DIR = Path("/Users/Scott/Documents/Data Science/ADSWP/TabPFN/BaselineExperiments/outputs")
+# Output directory:
+# - If the OUTPUT_DIR environment variable is set, use that.
+# - Otherwise, default to an "outputs" directory next to this script.
+OUT_DIR = Path(os.environ.get("OUTPUT_DIR", Path(__file__).resolve().parent / "outputs"))
 
 def get_timestamp(filename):
     """Extract timestamp from filename (format: YYYYMMDD_HHMMSS)"""

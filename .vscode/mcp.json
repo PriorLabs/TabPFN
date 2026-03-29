@@ -1,0 +1,7 @@
+{
+  "servers": {
+    "priorlabs": {
+      "url": "https://api.priorlabs.ai/mcp/server"
+    }
+  }
+}
