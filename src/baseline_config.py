@@ -60,11 +60,11 @@ TRAIN_SIZE = 1.0 - TEST_SIZE
 # MODEL PARAMETERS
 # ============================================================================
 
-# TabPFN Configuration
+# TabPFN Configuration (compatible with tabpfn>=7.0.0 / TabPFN model v2.6)
+# n_estimators was called n_ensemble in older versions (<7.x)
 TABPFN_CONFIG = {
-    "n_ensemble": 8,
-    "use_wandb": False,
-    "device": "cpu",
+    "n_estimators": 8,
+    "device": "auto",
 }
 
 # Post-hoc Calibration Methods

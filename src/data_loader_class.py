@@ -10,7 +10,7 @@ from typing import Tuple, Optional, Dict
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-from baseline_config import DATA_PATH, RANDOM_SEED
+from baseline_config import DATA_DIR, RANDOM_SEED
 
 
 class DataLoader:
@@ -49,7 +49,7 @@ class DataLoader:
         pd.DataFrame
             Loaded DataFrame
         """
-        csv_path = DATA_PATH / filename
+        csv_path = DATA_DIR / filename
         if not csv_path.exists():
             raise FileNotFoundError(f"CSV not found: {csv_path}")
         
@@ -160,8 +160,9 @@ class DataLoader:
             if n_samples >= len(self.df):
                 print(f"Sample size ({n_samples}) >= data size ({len(self.df)}), using all data")
                 return self.df
+            original_size = len(self.df)
             self.df = self.df.sample(n=n_samples, random_state=self.random_state).reset_index(drop=True)
-            print(f"Sampled {n_samples} rows (from {len(self.df) + n_samples} total)")
+            print(f"Sampled {n_samples} rows (from {original_size} total)")
         
         elif frac is not None:
             if not (0 < frac <= 1):
