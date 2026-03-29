@@ -335,20 +335,12 @@ def fit_and_eval(
         - 'preds_bin': binary predictions (0/1)
         - 'model_name': name of the model
     """
-    import inspect
-    
-    # Get globals from calling frame if parameters not provided
-    frame = inspect.currentframe().f_back
-    if frame and frame.f_locals:
-        if X_train is None:
-            X_train = frame.f_locals.get('X_train')
-        if X_test is None:
-            X_test = frame.f_locals.get('X_test')
-        if y_train is None:
-            y_train = frame.f_locals.get('y_train')
-        if y_test is None:
-            y_test = frame.f_locals.get('y_test')
-    
+    # Ensure required data is provided explicitly
+    if X_train is None or X_test is None or y_train is None or y_test is None:
+        raise ValueError(
+            "fit_and_eval requires X_train, X_test, y_train, and y_test to be "
+            "provided explicitly. None values are not supported."
+        )
     try:
         # Fit model
         model.fit(X_train, y_train)
