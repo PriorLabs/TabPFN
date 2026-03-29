@@ -1,0 +1,4 @@
+Method,Brier Score,Improvement vs Raw
+Raw TabPFN,0.110776,Baseline
+Platt Scaling,0.110280,0.45%
+Isotonic Regression,0.109813,0.87%

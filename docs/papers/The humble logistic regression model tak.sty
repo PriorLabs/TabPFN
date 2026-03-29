@@ -1,0 +1,77 @@
+The humble logistic regression model takes on the new kid on the block, TabPFN
+A New Model
+As actuaries, it is always an exciting moment when a new modelling technique becomes available. The prospect of extracting new insights from data (and potentially gaining a competitive edge) naturally encourages us to explore ever more complex and sophisticated methodologies. These developments are increasingly enabled by advances in computing power, optimisation algorithms and machine learning research.
+One such recent development is the Tabular Prior-Data Fitted Network (TabPFN). TabPFN promises to perform supervised regression and classification tasks on small to medium-sized tabular datasets with little to no hyperparameter tuning, while achieving performance comparable to state-of-the-art machine learning methods and doing so with relatively fast runtimes. Since its initial introduction in 2023, TabPFN has undergone substantial refinement, with version 2.5 extending its practical applicability to datasets containing up to 50,000 observations and thousands of features.
+These developments naturally raise an important question for actuarial practice: does a modern tabular foundation model such as TabPFN offer a genuine performance advantage over traditional, well-established techniques such as logistic regression? In particular, can it deliver meaningful gains in common actuarial applications such as lapse modelling, where interpretability, stability, and robustness are often as important as raw predictive power?
+How Does TabPFN Work?
+Under the bonnet, TabPFN represents a radical shift in how tabular prediction problems are approached. Rather than being trained on a specific dataset, TabPFN is trained to learn how to solve datasets in general via a process called in-context learning. During its development, TabPFN is exposed to millions of synthetically generated tabular datasets, designed to mimic a wide range of real-world data-generating processes, including non-linear relationships, categorical variables, missing values, noise and class imbalance. From these examples, the model learns a generic prediction strategy that approximates Bayesian inference for tabular data. Once trained, this strategy is encoded into the network’s weights. When presented with a new dataset, TabPFN takes the entire training sample as context and produces predictions for unseen rows in a single forward pass - without the need for hyperparameter tuning or cross-validation.
+Recent advances in TabPFN version 2.5 reflect a combination of deeper transformer architectures, richer synthetic training priors and substantial inference-time optimisations. Together, these changes extend TabPFN’s practical scope to datasets with tens of thousands of rows and mixed feature types, while preserving its speed and strong out-of-the-box performance.
+Actuarial Use Case - Modelling Policy Lapse
+Policy lapse is a problem of enduring importance to insurers. Lapses affect not only premium income and profitability but also impact on the composition of the portfolio and the adequacy of pricing strategies. Customer retention, marketing and customer lifetime value models all depend on a reliable assessment of lapse risk. From a modelling perspective, lapse data present a familiar actuarial challenge: outcomes are binary and imbalanced, explanatory variables are heterogeneous, and behavioural effects often interact with contractual features in subtle ways.
+To explore whether tabPFN can add value in this setting, we analyse the eudirectlapse dataset, which although part of the CASdatasets package in R, has remained relatively unexplored in literature.  The data comprise 23,060 motor insurance policies written through a direct channel, together with a binary indicator of whether the policy lapsed at renewal. A total of 18 explanatory variables are available, covering policyholder characteristics (such as age, gender and job type), policy features (policy duration, number of contracts, payment frequency), vehicle attributes (age, power band, garage type, region), and several premium-related measures. The observed lapse rate in the portfolio is approximately 13%, reflecting a moderately imbalanced but realistic retention problem.
+Variable group
+Example variables
+Description
+Response
+lapse
+Binary indicator of policy lapse at renewal
+Policyholder
+polholder_age, polholder_gender, polholder_job, polholder_BMCevol
+Demographic and bonus–malus characteristics
+Policy
+policy_age, policy_nbcontract, policy_caruse, prem_freqperyear
+Contract duration, usage and payment features
+Premium
+prem_final, prem_last, prem_market, prem_pure
+Observed and benchmark premium measures
+Vehicle
+vehicl_age, vehicl_powerkw, vehicl_garage, vehicl_region
+Vehicle attributes and geographic region
+
+ 
+A brief inspection of the data already reveals strong and intuitive patterns. Figure 1 illustrates two representative relationships. Lapse rates decline steadily with policyholder age, while premium payment frequency exhibits a clear association with retention, with annually paid policies lapsing more frequently than those paid monthly or quarterly. These effects are well known to practitioners and are typical of behavioural and contractual drivers seen in many personal-lines portfolios. Other variables show weaker or more heterogeneous relationships, suggesting a mix of strong additive effects and noisier secondary influences.
+
+Figure 1
+Taken together, these characteristics make eudirectlapse a useful and realistic test case. In our modelling we seek to benchmark a conventional logistic regression model against TabPFN, asking whether a modern foundation model can uncover additional predictive signal beyond what a carefully specified actuarial baseline already captures.
+Model Comparison
+To evaluate the effectiveness of TabPFN, we compared versus a logistic regression GLM with both fit to the same 70:30 train/test split of the dataset.  For the GLM, a modest amount of data preparation was required. Continuous variables with extreme tails or sparse support were capped or grouped into bands to stabilise estimates, while rare categorical levels were combined where appropriate. These steps reflect standard actuarial practice and were guided by exploratory analysis rather than automated optimisation. The resulting model included a mixture of numeric and categorical predictors. TabPFN, by contrast, requires no feature engineering or hyperparameter tuning. The model was applied both to the cleaned dataset and, as a robustness check, to the raw ungrouped data. In both cases, TabPFN was provided with the full training sample as context and produced predicted lapse probabilities for the test set in a single forward pass.
+The Verdict!
+Model performance was evaluated on a held-out test set using a range of commonly used classification metrics. Table 2 summarises the headline results for the baseline GLM and TabPFN, applied both to the cleaned dataset and, as a robustness check, to the raw ungrouped data.
+ 
+Model
+Data
+AUC
+F1 (optimal cutoff)
+Accuracy
+GLM
+Cleaned
+0.63
+0.27
+0.69
+TabPFN
+Cleaned
+0.62
+0.27
+0.71
+GLM
+Raw
+0.63
+0.26
+0.69
+TabPFN
+Raw
+0.63
+0.27
+0.71
+
+Table 2
+Across all models, predictive performance was modest. Using the cleaned dataset, the GLM achieved a test AUC of approximately 0.63, with TabPFN delivering a near-identical result. When applied to the raw dataset (containing many sparse categorical levels and ungrouped variables) both models again produced very similar AUC values, with no material advantage for TabPFN. These results suggest that in this setting, most of the predictive signal is already captured by a relatively simple additive structure.
+One particular point of interest was how each model behaves across different decision thresholds. As lapses are a relatively rare event, the dataset is inherently imbalanced and so accuracy as a metric would be misleading (with high accuracy achievable simply by predicting non-lapse). Instead, metrics such as recall, precision and F1 score provide a more informative view. For both models, optimal F1 scores were achieved at relatively low probability cutoffs (around 0.10 - 0.15), reflecting the need to trade off false positives against missed lapses.
+Interestingly, TabPFN’s ability to operate directly on the raw dataset did not translate into improved predictive power over the GLM. While the model handled sparse categories and mixed feature types without difficulty, its performance closely mirrored that of the GLM once basic actuarial data preparation had been applied. This finding is consistent with the exploratory analysis presented earlier: many of the strongest drivers of lapse in this dataset (such as policyholder age, payment frequency and policy tenure) exhibit smooth, monotonic effects that are well aligned with a logistic regression framework.
+ 
+Conclusion
+Having set out to explore if TabPFN can deliver tangible benefits over a traditional actuarial GLM, we find the answer is not always! Examining a realistic lapse-modelling context using the eudirectlapse dataset, we find little evidence that TabPFN materially outperforms a carefully specified logistic regression model, whether applied to cleaned or raw data. In this case, the GLM appears to capture most of the available predictive signal.
+ 
+Does this mean that TabPFN is limited? Not necessarily so, rather our analysis highlights an important practical insight: when the underlying relationships are largely additive, monotonic and well understood, classical actuarial models remain highly competitive. The value of TabPFN may lie elsewhere, likely in settings with more complex interactions, smaller datasets, or where a quick answer without the need for extensive feature engineering is desirable. From an actuarial perspective, TabPFN’s most compelling contribution may therefore be workflow efficiency rather than outright predictive dominance. The ability to obtain reasonable predictions without extensive preprocessing, hyperparameter tuning or model selection is attractive, particularly in exploratory or time-constrained settings. The transparency, interpretability and regulatory familiarity of GLMs remain powerful advantages, although the integration of TabPFN with Shapley values may well come to challenge this.
+ 
+In summary we have come to realise that the right method for the task is often dataset dependent. Old-fashioned data visualisation and exploration can be a helpful safeguard against the temptation to get carried away with complex methodologies. While using a sledgehammer to crack a nut can be tremendous fun, we should aim for thesimplest solution that fits the problem. Ultimately, our results reinforce a reassuring message for practitioners: while new modelling tools continue to expand our toolkit, there is still plenty of life in the old GLM yet!

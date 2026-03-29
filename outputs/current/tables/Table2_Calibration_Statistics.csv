@@ -1,0 +1,4 @@
+Method,Mean Prob,Std Dev,Min,Max,Range
+Raw TabPFN,0.1068,0.0420,0.0411,0.2354,0.1942
+Platt Scaling,0.1279,0.0475,0.0695,0.3158,0.2463
+Isotonic Regression,0.1279,0.0547,0.0000,0.7088,0.7088
