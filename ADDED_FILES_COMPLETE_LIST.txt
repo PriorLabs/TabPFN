@@ -1,0 +1,321 @@
+ADSWP Project/TabPFN Classifier on eudirectlapse.ipynb
+ADSWP Project/TabPFN_ausprivauto0405.R
+ADSWP Project/TabPFN_freMTPL.R
+ADSWP Project/TabPFN_on_freMTPL.ipynb
+ADSWP Project/baselining/tabpfn-extensions/CONTRIBUTING.md
+ADSWP Project/baselining/tabpfn-extensions/LICENSE
+ADSWP Project/baselining/tabpfn-extensions/README.md
+ADSWP Project/baselining/tabpfn-extensions/examples/README.md
+ADSWP Project/baselining/tabpfn-extensions/examples/embedding/README.md
+ADSWP Project/baselining/tabpfn-extensions/examples/embedding/get_embeddings.py
+ADSWP Project/baselining/tabpfn-extensions/examples/hpo/tuned_tabpfn.py
+ADSWP Project/baselining/tabpfn-extensions/examples/interpretability/feature_selection.py
+ADSWP Project/baselining/tabpfn-extensions/examples/interpretability/shap_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/interpretability/shapiq_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/large_datasets/large_datasets_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/many_class/many_class_classifier_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/phe/phe_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/rf_pfn/rf_pfn_example.py
+ADSWP Project/baselining/tabpfn-extensions/examples/unsupervised/density_estimation_outlier_detection.py
+ADSWP Project/baselining/tabpfn-extensions/examples/unsupervised/generate_data.py
+ADSWP Project/baselining/tabpfn-extensions/examples/unsupervised/imputation.py
+ADSWP Project/baselining/tabpfn-extensions/mypy.ini
+ADSWP Project/baselining/tabpfn-extensions/pyproject.toml
+ADSWP Project/baselining/tabpfn-extensions/scripts/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/scripts/check_backend_compatibility.py
+ADSWP Project/baselining/tabpfn-extensions/scripts/generate_dependencies.py
+ADSWP Project/baselining/tabpfn-extensions/setup.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/benchmarking/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/benchmarking/experiment.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/embedding/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/embedding/tabpfn_embedding.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/hpo/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/hpo/search_space.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/hpo/tuned_tabpfn.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/README.md
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/experiments.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/feature_selection.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/shap.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/interpretability/shapiq.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/many_class/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/many_class/docs/README.md
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/many_class/many_class_classifier.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/misc/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/misc/sklearn_compat.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/post_hoc_ensembles/README.md
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/post_hoc_ensembles/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/post_hoc_ensembles/sklearn_interface.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/post_hoc_ensembles/utils.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/rf_pfn/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/rf_pfn/configs.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/rf_pfn/sklearn_based_decision_tree_tabpfn.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/rf_pfn/sklearn_based_random_forest_tabpfn.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/rf_pfn/utils.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/scoring/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/scoring/scoring_utils.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/sklearn_ensembles/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/sklearn_ensembles/configs.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/sklearn_ensembles/meta_models.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/sklearn_ensembles/weighted_ensemble.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/test_utils.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/unsupervised/__init__.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/unsupervised/experiments.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/unsupervised/unsupervised.py
+ADSWP Project/baselining/tabpfn-extensions/src/tabpfn_extensions/utils.py
+ADSWP Project/baselining/tabpfn-extensions/tabpfn_summary.webp
+ADSWP Project/baselining/tabpfn-extensions/tests/conftest.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_base_tabpfn.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_dt_pfn.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_embedding.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_examples.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_hpo.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_many_class_classifier.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_post_hoc_ensembles.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_rf_pfn.py
+ADSWP Project/baselining/tabpfn-extensions/tests/test_unsupervised.py
+ADSWP Project/baselining/tabpfn-extensions/tests/utils.py
+ADSWP Project/baselining/tabpfn/CHANGELOG.md
+ADSWP Project/baselining/tabpfn/LICENSE
+ADSWP Project/baselining/tabpfn/README.md
+ADSWP Project/baselining/tabpfn/examples/finetune_classifier.py
+ADSWP Project/baselining/tabpfn/examples/finetune_regressor.py
+ADSWP Project/baselining/tabpfn/examples/notebooks/TabPFN_Demo_Local.ipynb
+ADSWP Project/baselining/tabpfn/examples/save_and_load_model.py
+ADSWP Project/baselining/tabpfn/examples/tabpfn_for_binary_classification.py
+ADSWP Project/baselining/tabpfn/examples/tabpfn_for_multiclass_classification.py
+ADSWP Project/baselining/tabpfn/examples/tabpfn_for_regression.py
+ADSWP Project/baselining/tabpfn/pyproject.toml
+ADSWP Project/baselining/tabpfn/scripts/__init__.py
+ADSWP Project/baselining/tabpfn/scripts/download_all_models.py
+ADSWP Project/baselining/tabpfn/scripts/generate_dependencies.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/__init__.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/__init__.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/__init__.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/attention/__init__.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/attention/full_attention.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/bar_distribution.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/config.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/encoders.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/layer.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/memory.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/mlp.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/preprocessing.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/base/transformer.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/architectures/interface.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/base.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/classifier.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/config.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/constants.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/finetune_utils.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/inference.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/misc/_sklearn_compat.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/misc/debug_versions.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/__init__.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/attention.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/bar_distribution.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/config.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/encoders.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/layer.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/loading.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/memory.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/mlp.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/preprocessing.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model/transformer.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/model_loading.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/preprocessing.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/regressor.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/settings.py
+ADSWP Project/baselining/tabpfn/src/tabpfn/utils.py
+ADSWP Project/baselining/tabpfn/tests/README.md
+ADSWP Project/baselining/tabpfn/tests/__init__.py
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/ensemble_classifier_predictions.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/inconsistency_test_predictions.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/iris_multiclass_predictions.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/platform_metadata.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/tiny_classifier_predictions.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/tiny_diff_input_classifier_predictions.json
+ADSWP Project/baselining/tabpfn/tests/reference_predictions/tiny_regressor_predictions.json
+ADSWP Project/baselining/tabpfn/tests/test_classifier_interface.py
+ADSWP Project/baselining/tabpfn/tests/test_config.py
+ADSWP Project/baselining/tabpfn/tests/test_consistency.py
+ADSWP Project/baselining/tabpfn/tests/test_debug_versions.py
+ADSWP Project/baselining/tabpfn/tests/test_finetuning_classifier.py
+ADSWP Project/baselining/tabpfn/tests/test_finetuning_regressor.py
+ADSWP Project/baselining/tabpfn/tests/test_ft_utils.py
+ADSWP Project/baselining/tabpfn/tests/test_model/__init__.py
+ADSWP Project/baselining/tabpfn/tests/test_model/test_attention.py
+ADSWP Project/baselining/tabpfn/tests/test_model/test_bar_distribution.py
+ADSWP Project/baselining/tabpfn/tests/test_model/test_encoders.py
+ADSWP Project/baselining/tabpfn/tests/test_model/test_seperate_train_inference.py
+ADSWP Project/baselining/tabpfn/tests/test_model_loading.py
+ADSWP Project/baselining/tabpfn/tests/test_model_move_backwards_compatibility.py
+ADSWP Project/baselining/tabpfn/tests/test_preprocessing.py
+ADSWP Project/baselining/tabpfn/tests/test_regressor_interface.py
+ADSWP Project/baselining/tabpfn/tests/test_save_load_fitted_model.py
+ADSWP Project/baselining/tabpfn/tests/test_scripts.py
+ADSWP Project/baselining/tabpfn/tests/test_settings.py
+ADSWP Project/baselining/tabpfn/tests/test_utils.py
+ADSWP Project/baselining/tabpfn/tests/utils.py
+ADSWP Project/eudirectlapse.csv
+ADSWP Project/tabpfn_embedding_workflow.ipynb
+ADSWP Project/usautoBI_fit.ipynb
+BaselineExperiments/ARTICLE_REVISED_COMPLETE.md
+BaselineExperiments/BEFORE_AFTER_COMPARISON.md
+BaselineExperiments/FINETUNING_SUMMARY.md
+BaselineExperiments/INDEX_DOCUMENTATION.md
+BaselineExperiments/QUICK_REFERENCE.md
+BaselineExperiments/QUICK_REFERENCE_STREAMLINED.md
+BaselineExperiments/SECURITY_INCIDENT_RESOLVED.md
+BaselineExperiments/STATUS_REPORT_FINAL.md
+BaselineExperiments/STREAMLINING_SUMMARY.md
+BaselineExperiments/TECHNICAL_COMPANION.md
+BaselineExperiments/The humble logistic regression model tak.sty
+BaselineExperiments/There’s Life in the Old GLM Yet!.sty
+BaselineExperiments/UNIFIED_PAPER_FINAL.md
+BaselineExperiments/UNIFIED_PAPER_STRUCTURE.md
+BaselineExperiments/baseline_claim_classification.ipynb
+BaselineExperiments/baselining_notebook.ipynb
+BaselineExperiments/baselining_notebook_summary.md
+BaselineExperiments/baselining_summary_notebook.ipynb
+BaselineExperiments/catboost_info/catboost_training.json
+BaselineExperiments/catboost_info/learn/events.out.tfevents
+BaselineExperiments/catboost_info/learn_error.tsv
+BaselineExperiments/catboost_info/time_left.tsv
+BaselineExperiments/class_imbalance_analysis_summary.md
+BaselineExperiments/cleanup_outputs.py
+BaselineExperiments/data/eudirectlapse.csv
+BaselineExperiments/data/freMTPL2freq.csv
+BaselineExperiments/data_generation_exploration.ipynb
+BaselineExperiments/data_loader.py
+BaselineExperiments/evaluation_metrics.py
+BaselineExperiments/finetuning_notebook.ipynb
+BaselineExperiments/finetuning_regression_notebook.ipynb
+BaselineExperiments/model_output.csv
+BaselineExperiments/model_training.py
+BaselineExperiments/outputs/consensus_importances.csv
+BaselineExperiments/outputs/figures/Figure1_Model_Performance_Comparison.png
+BaselineExperiments/outputs/figures/Figure2_Calibration_Diagnosis.png
+BaselineExperiments/outputs/figures/Figure3_PostHoc_Calibration.png
+BaselineExperiments/outputs/figures/Figure4_Probability_Distribution_by_Class.png
+BaselineExperiments/outputs/figures/Figure5_Imbalance_Hypothesis_Test.png
+BaselineExperiments/outputs/figures/Figure6_MultiMetric_Radar.png
+BaselineExperiments/outputs/finetuning/finetuning_calibrated_results_20251127_234933.csv
+BaselineExperiments/outputs/finetuning/finetuning_calibrated_results_20251128_002217.csv
+BaselineExperiments/outputs/finetuning/finetuning_calibrated_results_20251128_002609.csv
+BaselineExperiments/outputs/finetuning/finetuning_raw_results_20251127_234933.csv
+BaselineExperiments/outputs/finetuning/finetuning_raw_results_20251128_002217.csv
+BaselineExperiments/outputs/finetuning/finetuning_raw_results_20251128_002609.csv
+BaselineExperiments/outputs/finetuning/production_assessment_20251127_234933.csv
+BaselineExperiments/outputs/finetuning/production_assessment_20251128_002217.csv
+BaselineExperiments/outputs/finetuning/production_assessment_20251128_002609.csv
+BaselineExperiments/outputs/model_comparison.csv
+BaselineExperiments/outputs/model_comparison_20251110_020316.csv
+BaselineExperiments/outputs/model_comparison_20251110_020316.pkl
+BaselineExperiments/outputs/model_comparison_20251110_020756.csv
+BaselineExperiments/outputs/model_comparison_20251110_020756.pkl
+BaselineExperiments/outputs/model_comparison_20251110_020831.csv
+BaselineExperiments/outputs/model_comparison_20251110_020831.pkl
+BaselineExperiments/outputs/model_comparison_20251110_203755.csv
+BaselineExperiments/outputs/model_comparison_20251110_203755.pkl
+BaselineExperiments/outputs/model_comparison_20251110_204324.csv
+BaselineExperiments/outputs/model_comparison_20251110_204324.pkl
+BaselineExperiments/outputs/model_comparison_20251110_210402.csv
+BaselineExperiments/outputs/model_comparison_20251110_210402.pkl
+BaselineExperiments/outputs/model_comparison_20251110_213254.csv
+BaselineExperiments/outputs/model_comparison_20251110_213254.pkl
+BaselineExperiments/outputs/model_comparison_20251112_000619.csv
+BaselineExperiments/outputs/model_comparison_20251112_000619.pkl
+BaselineExperiments/outputs/model_comparison_20251126_015846.csv
+BaselineExperiments/outputs/model_comparison_20251126_015846.pkl
+BaselineExperiments/outputs/proba_summary_20251026_004703.csv
+BaselineExperiments/outputs/proba_summary_20251026_195320.csv
+BaselineExperiments/outputs/proba_summary_20251109_152800.csv
+BaselineExperiments/outputs/shap/tabpfn_shap_inputs.parquet
+BaselineExperiments/outputs/shap/tabpfn_shap_values.npy
+BaselineExperiments/outputs/tables/Table1_Model_Performance.csv
+BaselineExperiments/outputs/tables/Table2_Calibration_Statistics.csv
+BaselineExperiments/outputs/tables/Table3_Class_Balance.csv
+BaselineExperiments/outputs/tables/Table4_Brier_Scores.csv
+CHANGELOG.md
+LICENSE
+README.md
+examples/finetune_classifier.py
+examples/finetune_regressor.py
+examples/notebooks/TabPFN_Demo_Local.ipynb
+examples/save_and_load_model.py
+examples/tabpfn_for_binary_classification.py
+examples/tabpfn_for_multiclass_classification.py
+examples/tabpfn_for_regression.py
+pyproject.toml
+scripts/__init__.py
+scripts/download_all_models.py
+scripts/generate_dependencies.py
+src/tabpfn/__init__.py
+src/tabpfn/architectures/__init__.py
+src/tabpfn/architectures/base/__init__.py
+src/tabpfn/architectures/base/attention/__init__.py
+src/tabpfn/architectures/base/attention/full_attention.py
+src/tabpfn/architectures/base/bar_distribution.py
+src/tabpfn/architectures/base/config.py
+src/tabpfn/architectures/base/encoders.py
+src/tabpfn/architectures/base/layer.py
+src/tabpfn/architectures/base/memory.py
+src/tabpfn/architectures/base/mlp.py
+src/tabpfn/architectures/base/preprocessing.py
+src/tabpfn/architectures/base/transformer.py
+src/tabpfn/architectures/interface.py
+src/tabpfn/base.py
+src/tabpfn/classifier.py
+src/tabpfn/config.py
+src/tabpfn/constants.py
+src/tabpfn/finetune_utils.py
+src/tabpfn/inference.py
+src/tabpfn/misc/_sklearn_compat.py
+src/tabpfn/misc/debug_versions.py
+src/tabpfn/model/__init__.py
+src/tabpfn/model/attention.py
+src/tabpfn/model/bar_distribution.py
+src/tabpfn/model/config.py
+src/tabpfn/model/encoders.py
+src/tabpfn/model/layer.py
+src/tabpfn/model/loading.py
+src/tabpfn/model/memory.py
+src/tabpfn/model/mlp.py
+src/tabpfn/model/preprocessing.py
+src/tabpfn/model/transformer.py
+src/tabpfn/model_loading.py
+src/tabpfn/preprocessing.py
+src/tabpfn/regressor.py
+src/tabpfn/settings.py
+src/tabpfn/utils.py
+tests/README.md
+tests/__init__.py
+tests/reference_predictions/ensemble_classifier_predictions.json
+tests/reference_predictions/inconsistency_test_predictions.json
+tests/reference_predictions/iris_multiclass_predictions.json
+tests/reference_predictions/platform_metadata.json
+tests/reference_predictions/tiny_classifier_predictions.json
+tests/reference_predictions/tiny_diff_input_classifier_predictions.json
+tests/reference_predictions/tiny_regressor_predictions.json
+tests/test_classifier_interface.py
+tests/test_config.py
+tests/test_consistency.py
+tests/test_debug_versions.py
+tests/test_finetuning_classifier.py
+tests/test_finetuning_regressor.py
+tests/test_ft_utils.py
+tests/test_model/__init__.py
+tests/test_model/test_attention.py
+tests/test_model/test_bar_distribution.py
+tests/test_model/test_encoders.py
+tests/test_model/test_seperate_train_inference.py
+tests/test_model_loading.py
+tests/test_model_move_backwards_compatibility.py
+tests/test_preprocessing.py
+tests/test_regressor_interface.py
+tests/test_save_load_fitted_model.py
+tests/test_scripts.py
+tests/test_utils.py
+tests/utils.py
