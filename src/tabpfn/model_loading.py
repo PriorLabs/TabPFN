@@ -918,7 +918,8 @@ def load_model(
         model.load_state_dict(full_state)
         model.eval()
         inference_config = InferenceConfig(**(checkpoint["inference_config"]))
-        return model, None, model_config, inference_config
+        empty_criterion = None
+        return model, empty_criterion, model_config, inference_config
 
     criterion_state_keys = [k for k in full_state if "criterion." in k]
     loss_criterion = get_loss_criterion(model_config)
