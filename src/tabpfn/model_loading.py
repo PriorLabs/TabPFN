@@ -551,7 +551,7 @@ def load_model_criterion_config(
 ]: ...
 
 
-def load_model_criterion_config(
+def load_model_criterion_config(  # noqa: PLR0912
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
@@ -637,6 +637,16 @@ def load_model_criterion_config(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
         )
+        if criterion is None:
+            if not hasattr(loaded_model, "regression_borders"):
+                # TODO(Phil): Add a a proper Regression API that removes the reliance
+                # on the external criterion and lets the model compute predictions.
+                # Then remove this hack.
+                raise ValueError(
+                    "If no criterion is saved, the model must have "
+                    "a regression_borders attribute."
+                )
+            criterion = FullSupportBarDistribution(loaded_model.regression_borders)
         if check_bar_distribution_criterion and not isinstance(
             criterion,
             FullSupportBarDistribution,
@@ -868,7 +878,7 @@ def load_model(
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
     ArchitectureConfig,
     InferenceConfig,
 ]:
@@ -896,6 +906,20 @@ def load_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
+    model = architecture.get_architecture(
+        model_config,
+        cache_trainset_representation=cache_trainset_representation,
+    )
+
+    if "test_targets_MB" in inspect.signature(model.forward).parameters:
+        # The model computes the loss internally. Support for this was only added after
+        # v2.5, so we can safely assume that the inference config is stored in the
+        # checkpoint.
+        model.load_state_dict(full_state)
+        model.eval()
+        inference_config = InferenceConfig(**(checkpoint["inference_config"]))
+        empty_criterion = None
+        return model, empty_criterion, model_config, inference_config
 
     criterion_state_keys = [k for k in full_state if "criterion." in k]
     loss_criterion = get_loss_criterion(model_config)
@@ -908,15 +932,9 @@ def load_model(
         assert len(criterion_state_keys) == 0, criterion_state_keys
 
     model_state = {k: v for k, v in full_state.items() if k not in criterion_state_keys}
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
     model.load_state_dict(model_state)
     model.eval()
-
     inference_config = _get_inference_config_from_checkpoint(checkpoint, loss_criterion)
-
     return model, loss_criterion, model_config, inference_config
 
 
