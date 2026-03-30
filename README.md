@@ -32,7 +32,7 @@ OR installation from source
 ```bash
 pip install "tabpfn @ git+https://github.com/PriorLabs/TabPFN.git"
 ```
-OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation) (version 0.10.0 or higher), which we use for development, then run
+OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation) (version 0.10.0 or higher recommended), which we use for development, then run
 ```bash
 git clone https://github.com/PriorLabs/TabPFN.git --depth 1
 cd TabPFN
