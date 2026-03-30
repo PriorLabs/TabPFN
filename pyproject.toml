@@ -107,6 +107,9 @@ ci = [
   "pytest>=8.4.2",
 ]
 
+[tool.uv]
+exclude-newer = "7 days"
+
 [tool.setuptools.package-data]
 "tabpfn.architectures.shared" = ["tabpfn_col_embedding.pt"]
 
