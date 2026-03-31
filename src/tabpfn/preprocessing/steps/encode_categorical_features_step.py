@@ -258,6 +258,12 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         return transformed, None, None  # type: ignore
 
     # TODO: add num_added_features for one-hot-encodings.
+    @override
+    def num_added_features(
+        self, X_train: np.ndarray, feature_schema: FeatureSchema
+    ) -> int:
+        """Return the number of added features."""
+        raise NotImplementedError()
 
 
 __all__ = [

@@ -41,7 +41,9 @@ class AddSVDFeaturesStep(PreprocessingStep):
         self.is_no_op: bool = False
 
     @override
-    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+    def num_added_features(
+        self, X_train: np.ndarray, feature_schema: FeatureSchema
+    ) -> int:
         """Return the number of added features."""
         n_features = feature_schema.num_columns
         if n_features < 2:
@@ -49,8 +51,8 @@ class AddSVDFeaturesStep(PreprocessingStep):
 
         transformer = get_svd_features_transformer(
             self.global_transformer_name,
-            n_samples,
-            n_features,
+            n_samples=X_train.shape[0],
+            n_features=n_features,
         )
         svd_transformer = transformer.steps[1][1]
         assert isinstance(svd_transformer, TruncatedSVD)

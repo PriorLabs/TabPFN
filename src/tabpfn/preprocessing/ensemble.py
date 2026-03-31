@@ -78,7 +78,7 @@ class TabPFNEnsemblePreprocessor:
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
-        n_samples: int,
+        X_train: np.ndarray,
         feature_schema: FeatureSchema,
         random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
@@ -88,7 +88,8 @@ class TabPFNEnsemblePreprocessor:
 
         Args:
             configs: List of ensemble configurations.
-            n_samples: Number of samples in the dataset.
+            X_train: training dataset of shape [N, F], where
+                N is the number of datapoints and F is the number of features.
             feature_schema: Feature schema of the dataset.
             random_state: Random state object for preprocessing. If int, the
                 preprocessing will use the same random seed across calls to fit().
@@ -99,7 +100,6 @@ class TabPFNEnsemblePreprocessor:
         """
         super().__init__()
         self.configs = configs
-        self.n_samples = n_samples
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
@@ -116,7 +116,7 @@ class TabPFNEnsemblePreprocessor:
         max_features = self.configs[0].preprocess_config.max_features_per_estimator
         self.subsample_feature_indices = _get_subsample_feature_indices(
             pipelines=self.pipelines,
-            n_samples=self.n_samples,
+            X_train=X_train,
             feature_schema=self.feature_schema,
             max_features_per_estimator=max_features,
             rng=self.rng,
@@ -353,7 +353,7 @@ def _generate_class_permutations(
 
 def _get_subsample_feature_indices(
     pipelines: Sequence[PreprocessingPipeline],
-    n_samples: int,
+    X_train: np.ndarray,
     feature_schema: FeatureSchema,
     max_features_per_estimator: int,
     rng: np.random.Generator,
@@ -362,11 +362,10 @@ def _get_subsample_feature_indices(
 
     def get_total_features(
         pipeline: PreprocessingPipeline,
-        n_samples: int,
         feature_schema: FeatureSchema,
     ) -> int:
         n_features = feature_schema.num_columns
-        return n_features + pipeline.num_added_features(n_samples, feature_schema)
+        return n_features + pipeline.num_added_features(X_train, feature_schema)
 
     # The feature subsampling will be done aware of the settings used in the
     # preprocessing pipelines because some steps add features
@@ -377,7 +376,6 @@ def _get_subsample_feature_indices(
         while (
             get_total_features(
                 pipeline=pipeline,
-                n_samples=n_samples,
                 feature_schema=feature_schema_pipeline,
             )
             > max_features_per_estimator

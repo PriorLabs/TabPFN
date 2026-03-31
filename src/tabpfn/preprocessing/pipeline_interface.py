@@ -177,12 +177,14 @@ class PreprocessingStep:
             modality_added=modality_added,
         )
 
-    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+    def num_added_features(
+        self, X_train: np.ndarray, feature_schema: FeatureSchema
+    ) -> int:
         """Return the number of added features.
 
         This needs to be overridden by subclasses that add features.
         """
-        del n_samples, feature_schema
+        del X_train, feature_schema
         return 0
 
     def _validate_added_data(
@@ -286,10 +288,12 @@ class PreprocessingPipeline:
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
 
-    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+    def num_added_features(
+        self, X_train: np.ndarray, feature_schema: FeatureSchema
+    ) -> int:
         """Return the number of added features."""
         return sum(
-            step.num_added_features(n_samples, feature_schema) for step, _ in self.steps
+            step.num_added_features(X_train, feature_schema) for step, _ in self.steps
         )
 
     def _process_steps(

@@ -296,9 +296,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         )
 
     @override
-    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+    def num_added_features(
+        self,
+        X_train: np.ndarray,
+        feature_schema: FeatureSchema,
+    ) -> int:
         """Return the number of added features."""
-        del n_samples
+        del X_train
         n_features = feature_schema.num_columns
         append = self._get_append_to_original_decision(
             n_features=n_features,

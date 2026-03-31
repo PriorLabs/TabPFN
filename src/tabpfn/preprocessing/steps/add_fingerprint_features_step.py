@@ -143,9 +143,11 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         return X, added_fingerprint, FeatureModality.NUMERICAL
 
     @override
-    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+    def num_added_features(
+        self, X_train: np.ndarray, feature_schema: FeatureSchema
+    ) -> int:
         """Return the number of added features."""
-        del n_samples, feature_schema
+        del X_train, feature_schema
         return 1
 
 
