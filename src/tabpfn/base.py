@@ -466,6 +466,9 @@ def get_embeddings(
         ClassifierEnsembleConfig,
         RegressorEnsembleConfig,
     )
+    from tabpfn.regressor import TabPFNRegressor  # noqa: PLC0415
+
+    task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
@@ -473,10 +476,10 @@ def get_embeddings(
 
     embeddings: list[np.ndarray] = []
 
-    # Cast executor to Any to bypass the iter_outputs signature check
     for output, config in model.executor_.iter_outputs(
         X,
         autocast=model.use_autocast_,
+        task_type=task_type,
         only_return_standard_out=False,
     ):
         # Cast output to Any to allow dict-like access

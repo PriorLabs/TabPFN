@@ -618,6 +618,7 @@ class TabPFNV2p5(Architecture):
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
         differentiable_input: bool = False,
+        task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 

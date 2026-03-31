@@ -289,6 +289,7 @@ class PerFeatureTransformer(Architecture):
         data_dags: list[nx.DiGraph] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
+        task_type: str | None = None,
     ) -> torch.Tensor: ...
 
     @overload
@@ -303,6 +304,7 @@ class PerFeatureTransformer(Architecture):
         data_dags: list[nx.DiGraph] | None = None,
         save_peak_memory_factor: int | None = None,
         force_recompute_layer: bool = False,
+        task_type: str | None = None,
     ) -> dict[str, torch.Tensor]: ...
 
     @override
@@ -318,6 +320,7 @@ class PerFeatureTransformer(Architecture):
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
         differentiable_input: bool = False,
+        task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 

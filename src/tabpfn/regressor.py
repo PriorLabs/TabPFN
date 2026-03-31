@@ -1085,7 +1085,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Iterate over estimators
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_
+            X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
