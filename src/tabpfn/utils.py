@@ -369,6 +369,9 @@ def remove_non_differentiable_preprocessing_from_models(
         models: The models to update.
     """
     for model in models:
+        if not hasattr(model, "y_encoder"):
+            continue
+
         diffable_steps = []  # only differentiable encoder steps.
         for module in model.y_encoder:
             if isinstance(module, MulticlassClassificationTargetEncoderStep):

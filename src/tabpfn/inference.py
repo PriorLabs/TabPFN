@@ -101,6 +101,7 @@ class InferenceEngine(ABC):
         X: np.ndarray,
         *,
         autocast: bool,
+        differentiable_input: bool = False,
         task_type: str,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
         """Iterate over the outputs of the model for each ensemble configuration.
@@ -111,6 +112,8 @@ class InferenceEngine(ABC):
         Args:
             X: The input data to make predictions on.
             autocast: Whether to use torch.autocast during inference.
+            differentiable_input: If True, skip non-differentiable operations in the
+                model's forward pass.
             task_type: The task type, e.g. "multiclass" or "regression".
         """
         ...
@@ -355,7 +358,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        del differentiable_input
         devices = self.get_devices()
 
         save_peak_mem = should_save_peak_mem(
@@ -515,6 +520,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         X: list[torch.Tensor],
         *,
         autocast: bool,
+        differentiable_input: bool = False,
         task_type: str,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
@@ -546,6 +552,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
+                    differentiable_input=differentiable_input,
                     **kwargs,
                 )
 
@@ -639,7 +646,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        del differentiable_input
         devices = self.get_devices()
 
         if self.force_inference_dtype is not None:
@@ -854,7 +863,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
+        differentiable_input: bool = False,
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+        del differentiable_input
         for ensemble_member, model in zip(self.ensemble_members, self.models):
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
