@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -141,7 +141,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -192,7 +192,7 @@ jobs:
           - tabpfn-time-series
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - name: Checkout TabPFN at current ref
@@ -269,7 +269,7 @@ jobs:
     runs-on: ubuntu-22.04-4core-gpu
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ vars.TABPFN_2_5_AND_2_6_HF_TOKEN }}
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
