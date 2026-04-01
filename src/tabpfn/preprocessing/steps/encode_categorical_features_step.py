@@ -258,9 +258,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         return transformed, None, None  # type: ignore
 
     @override
-    def num_added_features(
-        self, X_train: np.ndarray, feature_schema: FeatureSchema
-    ) -> int:
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
         """Return the number of added features.
 
         For ordinal, numeric, and none encodings this is always 0 (same column count).
@@ -268,7 +266,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         determined before fitting, so we still return 0.
         A warning is emitted upstream when one-hot is combined with feature subsampling.
         """
-        del X_train, feature_schema
+        del n_samples, feature_schema
         return 0
 
 

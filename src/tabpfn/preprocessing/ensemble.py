@@ -81,7 +81,7 @@ class TabPFNEnsemblePreprocessor:
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
-        X_train: np.ndarray,
+        n_samples: int,
         feature_schema: FeatureSchema,
         random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
@@ -91,8 +91,7 @@ class TabPFNEnsemblePreprocessor:
 
         Args:
             configs: List of ensemble configurations.
-            X_train: training dataset of shape [N, F], where
-                N is the number of datapoints and F is the number of features.
+            n_samples: Number of training samples.
             feature_schema: Feature schema of the dataset.
             random_state: Random state object for preprocessing. If int, the
                 preprocessing will use the same random seed across calls to fit().
@@ -120,7 +119,7 @@ class TabPFNEnsemblePreprocessor:
         max_features = self.configs[0].preprocess_config.max_features_per_estimator
         self.subsample_feature_indices = _get_subsample_feature_indices(
             pipelines=self.pipelines,
-            X_train=X_train,
+            n_samples=n_samples,
             feature_schema=self.feature_schema,
             max_features_per_estimator=max_features,
             rng=self.rng,
@@ -359,7 +358,7 @@ def _pipeline_uses_onehot(pipeline: PreprocessingPipeline) -> bool:
 
 def _get_subsample_feature_indices(
     pipelines: Sequence[PreprocessingPipeline],
-    X_train: np.ndarray,
+    n_samples: int,
     feature_schema: FeatureSchema,
     max_features_per_estimator: int,
     rng: np.random.Generator,
@@ -373,9 +372,7 @@ def _get_subsample_feature_indices(
         n_features = feature_schema.num_columns
         # For one-hot encoding, num_added_features returns 0 as an approximation
         # because the true count depends on data cardinality (see warning below).
-        return n_features + pipeline.num_added_features(
-            X_train[:, :n_features], feature_schema
-        )
+        return n_features + pipeline.num_added_features(n_samples, feature_schema)
 
     # The feature subsampling will be done aware of the settings used in the
     # preprocessing pipelines because some steps add additional features

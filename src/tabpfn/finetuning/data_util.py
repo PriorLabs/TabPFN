@@ -436,7 +436,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         )
         ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=conf,
-            X_train=x_train_raw,
+            n_samples=x_train_raw.shape[0],
             feature_schema=feature_schema,
             random_state=self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,

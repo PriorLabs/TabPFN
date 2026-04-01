@@ -756,7 +756,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
-            X_train=X,
+            n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
             # Note: we use the static_seed so we're independent of the random generation
             # inside the initialize function above
