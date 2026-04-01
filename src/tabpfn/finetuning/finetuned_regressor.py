@@ -19,9 +19,9 @@ from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
-from tabpfn.model_loading import get_n_out
 
 logger = logging.getLogger(__name__)
 
@@ -398,7 +398,8 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     @override
     def _create_estimator(self, config: dict[str, Any]) -> TabPFNRegressor:
         """Create the TabPFNRegressor with the given config."""
-        return TabPFNRegressor(
+        return TabPFNRegressor.create_default_for_version(
+            version=ModelVersion.V2_5,
             **config,
             fit_mode="batched",
             differentiable_input=False,
@@ -435,14 +436,14 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         y_query_batch = batch.y_query
         bardist_loss_fn = self._bardist_loss
 
-        _, per_estim_logits, _ = self.finetuned_estimator_.forward(X_query_batch)
+        _, per_estim_logits, _ = self._training_forward(X_query_batch)
         # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
 
         # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
         logits_QBEL = torch.stack(per_estim_logits, dim=2)
 
         Q, B, E, L = logits_QBEL.shape
-        num_bars = get_n_out(self.finetuned_estimator_.configs_[0], bardist_loss_fn)
+        num_bars = bardist_loss_fn.num_bars
         assert y_query_batch.shape[1] == Q
         assert B == 1
         assert self.n_estimators_finetune == E

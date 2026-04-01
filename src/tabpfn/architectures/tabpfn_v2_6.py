@@ -294,16 +294,16 @@ def _batched_scaled_dot_product_attention(
         values = v_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
         enable_gqa = {}
 
-    # Enable backends explicitly to ensure we don't silently fall back to
-    # the math backend, which requires a lot of memory as attention scores
-    # are stored explicitly.
+    # Enable backends explicitly. MATH is included as a last resort since it
+    # stores attention scores explicitly and uses more memory, but we prefer
+    # a slow fallback over a hard crash (e.g. on T4 GPUs on github runners where
+    # flash/efficient attention kernels may not support all configurations).
     backends = [
         SDPBackend.FLASH_ATTENTION,
         SDPBackend.EFFICIENT_ATTENTION,
         SDPBackend.CUDNN_ATTENTION,
+        SDPBackend.MATH,
     ]
-    if not torch.cuda.is_available():
-        backends.append(SDPBackend.MATH)
     num_parallel_calls = q_BHSD.shape[:2].numel()
     CUDA_MAX_GRID = 65536
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
@@ -613,6 +613,8 @@ class TabPFNV2p6(Architecture):
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
+        differentiable_input: bool = False,
+        task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 
@@ -655,6 +657,7 @@ class TabPFNV2p6(Architecture):
             num_train_rows=num_train_rows,
             num_train_labels=num_train_labels,
             batch_size=batch_size,
+            differentiable_input=differentiable_input,
         )
 
         # Add the targets as an additional column.
@@ -764,6 +767,8 @@ class TabPFNV2p6(Architecture):
         num_train_rows: int,
         num_train_labels: int,
         batch_size: int,
+        *,
+        differentiable_input: bool = False,
     ) -> torch.Tensor:
         """Preprocess and embed the target values.
 
@@ -774,6 +779,7 @@ class TabPFNV2p6(Architecture):
             num_train_rows: Total number of rows in x
             num_train_labels: Number of training labels for imputation
             batch_size: Batch size for reshaping
+            differentiable_input: If True, skip non-differentiable operations.
 
         Returns:
             Embedded targets of shape (B, Ri, X) where:
@@ -790,6 +796,7 @@ class TabPFNV2p6(Architecture):
             y_RiB1=y_RiB1,
             task_type=self.task_type,
             num_train_rows=num_train_labels,
+            differentiable_input=differentiable_input,
         )
 
         y_RiB1_concat = torch.cat([y_RiB1, y_nan_and_inf_indicator_RiB1], dim=-1)
@@ -818,7 +825,6 @@ def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2p6Config, dict[str, An
 def get_architecture(
     config: ArchitectureConfig,
     *,
-    n_out: int,
     cache_trainset_representation: bool = False,
 ) -> TabPFNV2p6:
     """Construct TabPFNV2.6 based on the given config.
@@ -830,7 +836,6 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        n_out: The number of output classes that the model should predict.
         cache_trainset_representation: If True, the model should be configured to
             cache the training data during inference to improve speed.
 
@@ -839,11 +844,9 @@ def get_architecture(
     assert isinstance(config, TabPFNV2p6Config)
     if cache_trainset_representation:
         raise NotImplementedError("TabPFNV2.6 does not support kv cache yet.")
-    return TabPFNV2p6(
-        config=config,
-        n_out=n_out,
-        task_type="multiclass" if config.max_num_classes > 2 else "regression",
-    )
+    task_type = "multiclass" if config.max_num_classes > 0 else "regression"
+    n_out = config.max_num_classes if task_type == "multiclass" else config.num_buckets
+    return TabPFNV2p6(config=config, n_out=n_out, task_type=task_type)
 
 
 def _prepare_targets(
@@ -941,6 +944,8 @@ def _impute_target_nan_and_inf(
     y_RiB1: torch.Tensor,
     task_type: TaskType,
     num_train_rows: int,
+    *,
+    differentiable_input: bool = False,
 ) -> torch.Tensor:
     """Impute NaN/Inf values in the target tensor.
 
@@ -948,10 +953,14 @@ def _impute_target_nan_and_inf(
         y_RiB1: Tensor of shape [Ri, B, 1], where Ri is the number of train+test rows.
         task_type: The task type ("regression" or "multiclass").
         num_train_rows: Number of training rows.
+        differentiable_input: If True, skip non-differentiable operations (ceil).
 
     """
     if task_type == "regression":
         return _impute_nan_and_inf_with_mean(x=y_RiB1, num_train_rows=num_train_rows)
+
+    if differentiable_input:
+        return y_RiB1
 
     # The following class imputation is performed for backwards compatibility.
     # We impute the mean and then do a ceil() operation.
@@ -973,7 +982,7 @@ def _normalize_feature_groups(
         non_constant_mask.sum(-1).unsqueeze(-1),
         min=1,
     ).to(x_RiBF.device)
-    scale = num_features_per_group / number_of_used_features
+    scale = num_features_per_group / number_of_used_features.to(x_RiBF.dtype)
     x_RiBF = x_RiBF * torch.sqrt(scale)
 
     return torch.where(

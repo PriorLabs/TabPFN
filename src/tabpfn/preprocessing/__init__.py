@@ -13,10 +13,10 @@ from .ensemble import (
 )
 from .pipeline_interface import PreprocessingPipeline
 from .presets import (
-    default_classifier_preprocessor_configs,
-    default_regressor_preprocessor_configs,
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
+    v2_6_classifier_preprocessor_configs,
+    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -29,13 +29,13 @@ __all__ = [
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
     "clean_data",
-    "default_classifier_preprocessor_configs",
-    "default_regressor_preprocessor_configs",
     "fit_preprocessing",
     "generate_classification_ensemble_configs",
     "generate_regression_ensemble_configs",
     "v2_5_classifier_preprocessor_configs",
     "v2_5_regressor_preprocessor_configs",
+    "v2_6_classifier_preprocessor_configs",
+    "v2_6_regressor_preprocessor_configs",
     "v2_classifier_preprocessor_configs",
     "v2_regressor_preprocessor_configs",
 ]

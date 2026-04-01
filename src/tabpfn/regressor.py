@@ -496,6 +496,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
+        elif version == ModelVersion.V2_6:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v2_6().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 
@@ -760,6 +768,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "prediction. The model will be re-initialized."
             )
             self.fit_mode = "fit_preprocessors"
+
+        if self.fit_mode == "fit_with_cache" and (
+            self.model_path == "auto" or "v2.6" in str(self.model_path)
+        ):
+            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
@@ -1074,7 +1087,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # Iterate over estimators
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_
+            X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:

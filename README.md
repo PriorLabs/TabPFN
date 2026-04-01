@@ -32,7 +32,7 @@ OR installation from source
 ```bash
 pip install "tabpfn @ git+https://github.com/PriorLabs/TabPFN.git"
 ```
-OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation), which we use for development, then run
+OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation) (version 0.10.0 or higher recommended), which we use for development, then run
 ```bash
 git clone https://github.com/PriorLabs/TabPFN.git --depth 1
 cd TabPFN
@@ -41,68 +41,39 @@ uv sync
 
 ### Basic Usage
 
-#### Classification
+To use our default TabPFN-2.6 model, trained purely on synthetic data:
+
 ```python
-from sklearn.datasets import load_breast_cancer
-from sklearn.metrics import accuracy_score, roc_auc_score
-from sklearn.model_selection import train_test_split
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 
-from tabpfn import TabPFNClassifier
-from tabpfn.constants import ModelVersion
-
-# Load data
-X, y = load_breast_cancer(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
-
-# Initialize a classifier
-clf = TabPFNClassifier()  # Uses TabPFN 2.5 weights, finetuned on real data.
-# To use TabPFN v2:
-# clf = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
-clf.fit(X_train, y_train)
-
-
-# Predict probabilities
-prediction_probabilities = clf.predict_proba(X_test)
-print("ROC AUC:", roc_auc_score(y_test, prediction_probabilities[:, 1]))
-
-# Predict labels
+clf = TabPFNClassifier()
+clf.fit(X_train, y_train)  # downloads checkpoint on first use
 predictions = clf.predict(X_test)
-print("Accuracy", accuracy_score(y_test, predictions))
+
+reg = TabPFNRegressor()
+reg.fit(X_train, y_train)  # downloads checkpoint on first use
+predictions = reg.predict(X_test)
 ```
 
-#### Regression
-```python
-from sklearn.datasets import fetch_openml
-from sklearn.metrics import mean_squared_error, r2_score
-from sklearn.model_selection import train_test_split
+To use other model versions (e.g. TabPFN-2.5):
 
-from tabpfn import TabPFNRegressor
+```python
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
-# Load Boston Housing data
-df = fetch_openml(data_id=531, as_frame=True)  # Boston Housing dataset
-X = df.data
-y = df.target.astype(float)  # Ensure target is float for regression
-
-# Train-test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.5, random_state=42)
-
-# Initialize the regressor
-regressor = TabPFNRegressor()  # Uses TabPFN-2.5 weights, trained on synthetic data only.
-# To use TabPFN v2:
-# regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
-regressor.fit(X_train, y_train)
-
-# Predict on the test set
-predictions = regressor.predict(X_test)
-
-# Evaluate the model
-mse = mean_squared_error(y_test, predictions)
-r2 = r2_score(y_test, predictions)
-
-print("Mean Squared Error (MSE):", mse)
-print("R² Score:", r2)
+classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
+regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
 ```
+
+For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
+
+
+### Usage Tips
+
+- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
+- **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
+- **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
+- **Mind the dataset size**: TabPFN works best on datasets with fewer than 100,000 samples and 2000 features. For larger datasets, we recommend looking at the [Large datasets guide](https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py).
 
 ## TabPFN Ecosystem
 
@@ -280,20 +251,21 @@ graph LR
 
 ## License
 
-The TabPFN-2.5 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/LICENSE). These are used by default.
+The TabPFN-2.5 and TabPFN-2.6 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_2_6/blob/main/LICENSE). These are used by default.
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
 ```
 from tabpfn.constants import ModelVersion
+
 tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 ```
 
 ## Enterprise & Production
 
 For high-throughput or massive-scale production environments, we offer an **Enterprise Edition** with the following capabilities:
--   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN-2.5 into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
--   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**—a 1,000x increase over the original TabPFNv2.
+-   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN-2.6 into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
+-   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**—a 1,000x increase over the default TabPFN-2.5 and TabPFN-2.6 models.
 -   **Commercial Support**: Includes a Commercial Enterprise License for production use-cases, dedicated integration support, and access to private high-speed inference engines.
 
 **To learn more or request a commercial license, please contact us at [sales@priorlabs.ai](mailto:sales@priorlabs.ai).**
