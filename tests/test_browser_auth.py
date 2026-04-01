@@ -46,6 +46,7 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     # Clear env vars that could interfere.
     monkeypatch.delenv("TABPFN_TOKEN", raising=False)
     monkeypatch.delenv("TABPFN_NO_BROWSER", raising=False)
+    monkeypatch.delenv("CI", raising=False)
 
 
 # ---------------------------------------------------------------------------
