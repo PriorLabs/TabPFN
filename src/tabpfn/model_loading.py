@@ -358,7 +358,6 @@ def download_all_models(to: Path) -> None:
                 version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
-                skip_license_check=True,
             )
 
 
@@ -478,12 +477,15 @@ def _download_model(
         ModelVersion.V2_6: "tabpfn_2_6",
     }
     if not skip_license_check and version in _HF_REPOS:
-        try:
-            from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
+        import os  # noqa: PLC0415
 
-            ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
-        except Exception as e:  # noqa: BLE001
-            return [e]
+        if not os.environ.get("HF_TOKEN"):
+            try:
+                from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
+
+                ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
+            except Exception as e:  # noqa: BLE001
+                return [e]
 
     try:
         model_source = _get_model_source(version, ModelType(which))
