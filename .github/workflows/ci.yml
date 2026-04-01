@@ -111,11 +111,11 @@ jobs:
 
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
-        run: uv run --no-sync pytest tests/
+        run: uv run --no-sync pytest -s tests/
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
-        run: uv run --no-sync pytest -m "not slow" tests/
+        run: uv run --no-sync pytest -s -m "not slow" tests/
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
@@ -130,7 +130,7 @@ jobs:
         if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
-        run: uv run --no-sync pytest -m "not slow" tests/
+        run: uv run --no-sync pytest -s -m "not slow" tests/
 
   # -------------------------------------------------------------------
   # Ubuntu-latest + highest dependencies (used as gate for GPU)
@@ -174,7 +174,7 @@ jobs:
       - *save-model-cache
 
       - name: Run Tests
-        run: uv run --no-sync pytest tests/
+        run: uv run --no-sync pytest -s tests/
 
   # -------------------------------------------------------------------
   # First Party Packages
@@ -237,7 +237,7 @@ jobs:
           FAST_TEST_MODE: 1 # Configures -extensions to run a smaller set of tests.
         run: |
           cd ${{ matrix.repo-name }}
-          uv run --with ../TabPFN --all-extras pytest -m "not uses_tabpfn_client"
+          uv run --with ../TabPFN --all-extras pytest -s -m "not uses_tabpfn_client"
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -304,4 +304,4 @@ jobs:
           CUDA_VISIBLE_DEVICES: "0"
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
-        run: uv run --no-sync pytest tests/
+        run: uv run --no-sync pytest -s tests/
