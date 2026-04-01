@@ -4,8 +4,11 @@ from unittest.mock import MagicMock
 
 import numpy as np
 
+from tabpfn.preprocessing import generate_classification_ensemble_configs
+from tabpfn.preprocessing.configs import PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
+    TabPFNEnsemblePreprocessor,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
 )
@@ -115,3 +118,66 @@ def test__get_subsample_feature_indices__subsampling_needed():
 
     # Assert that each feature is present in at least one of the two estimators.
     assert set(result[0]) | set(result[1]) == set(range(100))
+
+
+def test__transform_X_test__applies_feature_subsampling() -> None:
+    """Regression test: transform_X_test must apply the same feature subsampling
+    that was used during fit, otherwise the fitted pipeline's boolean masks will
+    have the wrong size for the full-feature test set.
+    """
+    rng = np.random.default_rng(42)
+    n_train = 50
+    n_test = 10
+    n_features = 20
+    max_features = 8  # Force subsampling: 8 < 20
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 3, n_train)
+    X_test = rng.standard_normal((n_test, n_features))
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=3,
+        subsample_samples=None,
+        max_index=2,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=3,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=feature_schema,
+        random_state=0,
+        n_preprocessing_jobs=1,
+    )
+
+    members = ensemble_preprocessor.fit_transform_ensemble_members(
+        X_train=X_train,
+        y_train=y_train,
+        feature_schema=feature_schema,
+    )
+
+    # All members should have feature_indices set since n_features > max_features.
+    for member in members:
+        assert member.feature_indices is not None
+        assert len(member.feature_indices) == max_features
+
+    # transform_X_test must not raise and must return the correct shape.
+    for member in members:
+        X_test_transformed = member.transform_X_test(X_test)
+        assert X_test_transformed.shape[0] == n_test

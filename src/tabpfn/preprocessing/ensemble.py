@@ -58,11 +58,14 @@ class TabPFNEnsembleMember:
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
+    feature_indices: np.ndarray | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
         """Transform the test data."""
+        if self.feature_indices is not None:
+            X = X[..., self.feature_indices]
         return self.cpu_preprocessor.transform(X).X
 
 
@@ -167,6 +170,7 @@ class TabPFNEnsemblePreprocessor:
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
+                feature_indices=self.subsample_feature_indices[i],
             )
 
     def fit_transform_ensemble_members(
