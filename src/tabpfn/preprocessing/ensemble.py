@@ -365,11 +365,16 @@ def _get_subsample_feature_indices(
         feature_schema: FeatureSchema,
     ) -> int:
         n_features = feature_schema.num_columns
-        return n_features + pipeline.num_added_features(X_train, feature_schema)
+        # TODO: Need to think about how to deal with this for one-hot
+        # encoding, which depends on the input data rather than only the
+        # input shape.
+        return n_features + pipeline.num_added_features(
+            X_train[:, :n_features], feature_schema
+        )
 
     # The feature subsampling will be done aware of the settings used in the
-    # preprocessing pipelines because some steps add features
-    # (SVD, append_original, fingerprint).
+    # preprocessing pipelines because some steps add additional features
+    # (SVD, append_original, fingerprint, one-hot).
     subsample_sizes = []
     for pipeline in pipelines:
         feature_schema_pipeline = copy.deepcopy(feature_schema)
