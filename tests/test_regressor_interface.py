@@ -231,10 +231,13 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
 ) -> None:
+    if any(d.type == "mps" for d in infer_devices(devices="auto")):
+        pytest.skip("MPS does not support float64.")
+
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
-        "inference_precision": torch.float32,
+        "inference_precision": torch.float64,
         "random_state": 0,
     }
     X, y = X_y
@@ -261,10 +264,13 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
 ) -> None:
+    if any(d.type == "mps" for d in infer_devices(devices="auto")):
+        pytest.skip("MPS does not support float64.")
+
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
-        "inference_precision": torch.float32,
+        "inference_precision": torch.float64,
         "random_state": 0,
     }
     X, y = X_y
