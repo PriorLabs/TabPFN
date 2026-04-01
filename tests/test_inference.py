@@ -322,6 +322,8 @@ def test__iter_outputs__task_type_forwarded(
             n_configs=2, n_classes=n_classes, num_models=1
         ),
         random_state=rng,
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
         n_preprocessing_jobs=1,
     )
     engine = InferenceEngineOnDemand(
