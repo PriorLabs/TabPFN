@@ -337,8 +337,10 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
         "\nHaving trouble? You can also authenticate manually:\n"
         f"  1. Open {gui_url}/account in a browser"
         " (log in or register if needed)\n"
-        "  2. Copy your Access Token\n"
-        "  3. Paste the token below\n"
+        "  2. Accept the license at"
+        f" {gui_url}/account/licenses\n"
+        "  3. Copy your Access Token\n"
+        "  4. Paste the token below\n"
     )
 
     # --- main thread: poll stdin while waiting for callback ---
