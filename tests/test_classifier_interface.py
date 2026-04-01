@@ -494,23 +494,57 @@ def test_balance_probabilities_alters_proba_output() -> None:
     )
 
 
-@pytest.mark.skip(
-    reason="The result is actually different depending on the fitting mode."
-)
-def test_fit_modes_all_return_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray],
+# Only v2 and 2.5 support the KV cache at the moment.
+@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+def test__fit_preprocessors_and_with_cache_produce_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
 ) -> None:
-    kwargs = {"n_estimators": 2, "device": "auto", "random_state": 0}
+    kwargs = {
+        "version": model_version,
+        "n_estimators": 2,
+        "random_state": 0,
+    }
     X, y = X_y
 
     torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="fit_preprocessors", **kwargs)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
     tabpfn.fit(X, y)
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
 
     torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_with_cache", **kwargs
+    )
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
+    np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+
+@pytest.mark.skip(
+    "fit_mode='low_memory' produces different results to 'fit_preprocessors'"
+)
+@pytest.mark.parametrize("model_version", list(ModelVersion))
+def test__fit_preprocessors_and_low_memory_produce_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
+) -> None:
+    kwargs = {"model_version": model_version, "n_estimators": 2, "random_state": 0}
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
+    tabpfn.fit(X, y)
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_with_cache", **kwargs
+    )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
