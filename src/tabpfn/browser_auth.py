@@ -451,7 +451,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "Please check your internet connection and try again."
         )
     # license_status is False
+    encoded = urllib.parse.quote(hf_repo_id)
     raise TabPFNLicenseError(
         "License not yet accepted. Please complete the acceptance form at\n"
-        f"{gui_url}/accept-license and try again."
+        f"{gui_url}/accept-license?hf_repo_id={encoded} and try again."
     )
