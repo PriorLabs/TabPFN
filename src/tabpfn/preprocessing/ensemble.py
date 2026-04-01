@@ -21,6 +21,9 @@ from tabpfn.preprocessing.configs import (
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
+from tabpfn.preprocessing.steps.encode_categorical_features_step import (
+    EncodeCategoricalFeaturesStep,
+)
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -108,9 +111,10 @@ class TabPFNEnsemblePreprocessor:
         self.random_state = random_state
         self.static_seed, self.rng = infer_random_state(random_state)
 
+        pipeline_seeds = self.rng.integers(0, np.iinfo(np.int32).max, len(self.configs))
         self.pipelines = [
-            create_preprocessing_pipeline(config, random_state=self.static_seed)
-            for config in self.configs
+            create_preprocessing_pipeline(config, random_state=int(seed))
+            for config, seed in zip(self.configs, pipeline_seeds)
         ]
 
         max_features = self.configs[0].preprocess_config.max_features_per_estimator
@@ -139,15 +143,8 @@ class TabPFNEnsemblePreprocessor:
             random_state=override_random_state or self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
-            # TODO:
-            # When adding this, this test is failing:
-            # tests/test_finetuning_classifier.py::
-            # test_finetuning_consistency_preprocessing_classifier
-            # Likely because of random seed for data shuffling.
-            # TODO: Fix this by using TabPFNEnsemblePreprocessor
-            # also in finetuning pipeline or by improving random seed handling.
-            # pipelines=self.pipelines,
-            # subsample_feature_indices=self.subsample_feature_indices,
+            subsample_feature_indices=self.subsample_feature_indices,
+            pipelines=self.pipelines,
         )
 
         gpu_preprocessors = []
@@ -351,6 +348,15 @@ def _generate_class_permutations(
     raise ValueError(f"Unknown {class_shift_method=}")
 
 
+def _pipeline_uses_onehot(pipeline: PreprocessingPipeline) -> bool:
+    """Return True if the pipeline contains a one-hot encoding step."""
+    return any(
+        isinstance(step, EncodeCategoricalFeaturesStep)
+        and step.categorical_transform_name == "onehot"
+        for step, _ in pipeline.steps
+    )
+
+
 def _get_subsample_feature_indices(
     pipelines: Sequence[PreprocessingPipeline],
     X_train: np.ndarray,
@@ -365,9 +371,8 @@ def _get_subsample_feature_indices(
         feature_schema: FeatureSchema,
     ) -> int:
         n_features = feature_schema.num_columns
-        # TODO: Need to think about how to deal with this for one-hot
-        # encoding, which depends on the input data rather than only the
-        # input shape.
+        # For one-hot encoding, num_added_features returns 0 as an approximation
+        # because the true count depends on data cardinality (see warning below).
         return n_features + pipeline.num_added_features(
             X_train[:, :n_features], feature_schema
         )
@@ -389,6 +394,23 @@ def _get_subsample_feature_indices(
                 list(range(feature_schema_pipeline.num_columns - 1))
             )
         subsample_sizes.append(feature_schema_pipeline.num_columns)
+
+    # Warn when one-hot encoding and feature subsampling are both active.
+    # The subsampling budget is computed assuming one-hot adds 0 extra columns,
+    # so the actual post-expansion feature count may exceed max_features_per_estimator.
+    if any(s < feature_schema.num_columns for s in subsample_sizes) and any(
+        _pipeline_uses_onehot(p) for p in pipelines
+    ):
+        warnings.warn(
+            "Balanced feature subsampling is active, but at least one preprocessing "
+            "pipeline uses one-hot encoding. The subsampling budget is computed "
+            "without accounting for the additional columns created by one-hot "
+            "expansion (which depends on training data cardinality). The actual "
+            "number of features per estimator may exceed `max_features_per_estimator` "
+            "for those pipelines.",
+            UserWarning,
+            stacklevel=2,
+        )
 
     # Generate balanced feature indices using round-robin sampling from a shuffled pool.
     # This ensures each feature appears approximately the same number of times across

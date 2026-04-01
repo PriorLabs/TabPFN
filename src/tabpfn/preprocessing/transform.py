@@ -160,11 +160,14 @@ def fit_preprocessing(
         pipelines = [None] * len(configs)
     assert len(pipelines) == len(configs)
 
-    X_train_list, y_train_list = _get_subsampled_data_per_estimator(
-        configs=configs,
-        X_train=X_train,
-        y_train=y_train,
-        subsample_feature_indices=subsample_feature_indices,
+    X_train_list, y_train_list, feature_schema_list = (
+        _get_subsampled_data_per_estimator(
+            configs=configs,
+            X_train=X_train,
+            y_train=y_train,
+            feature_schema=feature_schema,
+            subsample_feature_indices=subsample_feature_indices,
+        )
     )
     assert len(X_train_list) == len(y_train_list) == len(configs)
 
@@ -185,11 +188,11 @@ def fit_preprocessing(
             X_train,
             y_train,
             seed,
-            feature_schema=feature_schema,
+            feature_schema=fs,
             pipeline=pipeline,
         )
-        for config, X_train, y_train, seed, pipeline in zip(
-            configs, X_train_list, y_train_list, seeds, pipelines
+        for config, X_train, y_train, seed, fs, pipeline in zip(
+            configs, X_train_list, y_train_list, seeds, feature_schema_list, pipelines
         )
     )
 
@@ -198,11 +201,18 @@ def _get_subsampled_data_per_estimator(
     configs: Sequence[EnsembleConfig],
     X_train: np.ndarray | torch.Tensor,
     y_train: np.ndarray | torch.Tensor,
+    feature_schema: FeatureSchema,
     subsample_feature_indices: Sequence[np.ndarray | None] | None = None,
-) -> tuple[list[np.ndarray | torch.Tensor], list[np.ndarray | torch.Tensor]]:
+) -> tuple[
+    list[np.ndarray | torch.Tensor],
+    list[np.ndarray | torch.Tensor],
+    list[FeatureSchema],
+]:
     """Get the data per estimator that is potentially subsampled.
 
     For datasets that are too large we need to subsample the rows and/or features.
+    When feature subsampling is active, the returned feature schema is sliced to
+    match the selected columns so downstream pipeline steps receive a consistent view.
     """
     if subsample_feature_indices is None:
         subsample_feature_indices = [None] * len(configs)
@@ -210,6 +220,7 @@ def _get_subsampled_data_per_estimator(
 
     X_train_list = []
     y_train_list = []
+    feature_schema_list = []
     for config, feature_indices in zip(configs, subsample_feature_indices):
         X_train_estimator = X_train
         y_train_estimator = y_train
@@ -218,10 +229,14 @@ def _get_subsampled_data_per_estimator(
             y_train_estimator = y_train_estimator[config.subsample_ix]
         if feature_indices is not None:
             X_train_estimator = X_train_estimator[..., feature_indices]
+            fs = feature_schema.slice_for_indices(feature_indices.tolist())
+        else:
+            fs = feature_schema
         if not isinstance(X_train, torch.Tensor):
             X_train_estimator = X_train_estimator.copy()
             y_train_estimator = y_train_estimator.copy()
         X_train_list.append(X_train_estimator)
         y_train_list.append(y_train_estimator)
+        feature_schema_list.append(fs)
 
-    return X_train_list, y_train_list
+    return X_train_list, y_train_list, feature_schema_list

@@ -257,13 +257,19 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 ].astype(transformed[:, col].dtype)
         return transformed, None, None  # type: ignore
 
-    # TODO: add num_added_features for one-hot-encodings.
     @override
     def num_added_features(
         self, X_train: np.ndarray, feature_schema: FeatureSchema
     ) -> int:
-        """Return the number of added features."""
-        raise NotImplementedError()
+        """Return the number of added features.
+
+        For ordinal, numeric, and none encodings this is always 0 (same column count).
+        For one-hot encoding the true value depends on data cardinality and cannot be
+        determined before fitting, so we still return 0.
+        A warning is emitted upstream when one-hot is combined with feature subsampling.
+        """
+        del X_train, feature_schema
+        return 0
 
 
 __all__ = [
