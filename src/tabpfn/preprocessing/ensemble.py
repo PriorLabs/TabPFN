@@ -105,8 +105,7 @@ class TabPFNEnsemblePreprocessor:
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
-        # TODO: think about how to handle random state here
-        # Also next_static_seed() method may not be needed anymore.
+
         self.random_state = random_state
         self.static_seed, self.rng = infer_random_state(random_state)
 
