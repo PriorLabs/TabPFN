@@ -530,7 +530,7 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
 ) -> None:
-    kwargs = {"model_version": model_version, "n_estimators": 2, "random_state": 0}
+    kwargs = {"version": model_version, "n_estimators": 2, "random_state": 0}
     X, y = X_y
 
     torch.random.manual_seed(0)
@@ -543,7 +543,7 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier.create_default_for_version(
-        fit_mode="fit_with_cache", **kwargs
+        fit_mode="low_memory", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
