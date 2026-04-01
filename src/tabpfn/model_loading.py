@@ -358,6 +358,7 @@ def download_all_models(to: Path) -> None:
                 version=model_version,
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
+                skip_license_check=True,
             )
 
 
@@ -426,6 +427,7 @@ def download_model(
     version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
+    skip_license_check: bool = False,
 ) -> Literal["ok"] | list[Exception]:
     """Download a TabPFN model, trying all available sources.
 
@@ -434,6 +436,9 @@ def download_model(
         version: The version of the model to download.
         which: The type of model to download.
         model_name: Optional specific model name to download.
+        skip_license_check: If True, skip the Prior Labs license acceptance
+            check. Intended for CI/scripted environments that manage
+            authentication separately via HF_TOKEN.
 
     Returns:
         "ok" if the model was downloaded successfully, otherwise a list of
@@ -448,7 +453,13 @@ def download_model(
         if to.exists():
             logger.debug(f"Model already downloaded by another thread: {to}")
             return "ok"
-        return _download_model(to, version=version, which=which, model_name=model_name)
+        return _download_model(
+            to,
+            version=version,
+            which=which,
+            model_name=model_name,
+            skip_license_check=skip_license_check,
+        )
 
 
 def _download_model(
@@ -457,6 +468,7 @@ def _download_model(
     version: ModelVersion,
     which: Literal["classifier", "regressor"],
     model_name: str | None = None,
+    skip_license_check: bool = False,
 ) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
 
@@ -465,7 +477,7 @@ def _download_model(
         ModelVersion.V2_5: "tabpfn_2_5",
         ModelVersion.V2_6: "tabpfn_2_6",
     }
-    if version in _HF_REPOS:
+    if not skip_license_check and version in _HF_REPOS:
         try:
             from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
