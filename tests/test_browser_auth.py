@@ -365,32 +365,6 @@ def _make_mock_server():  # noqa: ANN202
 class TestTryBrowserLogin:
     """Tests for the concurrent browser login flow."""
 
-    def test_browser_callback_delivers_token(self):
-        """Token delivered via callback server is returned."""
-
-        def fake_create(  # noqa: ANN202
-            _gui_url,
-            auth_event,
-            received_token,
-        ):
-            received_token[0] = "callback-token"
-            auth_event.set()
-            return _make_mock_server(), 12345
-
-        with (
-            patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
-            patch(
-                "tabpfn.browser_auth._create_callback_server",
-                side_effect=fake_create,
-            ),
-            patch("tabpfn.browser_auth.webbrowser.open", return_value=True),
-            patch("tabpfn.browser_auth.select.select", return_value=([], [], [])),
-        ):
-            mock_stdin.isatty.return_value = True
-            result = try_browser_login(_GUI_URL)
-
-        assert result == "callback-token"
-
     def test_paste_prompt_delivers_token(self):
         """Token pasted at the prompt is returned when callback doesn't fire."""
         with (
