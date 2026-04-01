@@ -942,14 +942,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X, ord_encoder=getattr(self, "ordinal_encoder_", None)
         )
 
-        # Runs over iteration engine
         n_estimators = 0
-        averaged_logits: torch.Tensor | None = None
+        accumulated_logits: torch.Tensor | None = None
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
             for borders_t, output in self._iter_forward_executor(
                 X, use_inference_mode=True
             ):
-                # Transform probabilities across borders
                 transformed = translate_probs_across_borders(
                     output,
                     frm=torch.as_tensor(borders_t, device=output.device),
@@ -959,17 +957,23 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 if self.average_before_softmax:
                     transformed = transformed.log()
 
-                if averaged_logits is None:
-                    averaged_logits = transformed
+                if accumulated_logits is None:
+                    accumulated_logits = transformed
                 else:
-                    averaged_logits = averaged_logits + transformed
+                    accumulated_logits = accumulated_logits + transformed
                 n_estimators += 1
 
-        # Finalize averaging
+        assert n_estimators > 0, "n_estimators must be greater than 0"
+
+        if accumulated_logits is None:
+            raise ValueError(
+                "Cannot make predictions, possibly due to `n_estimators=0`."
+            )
+
         if self.average_before_softmax:
-            logits = (averaged_logits / n_estimators).softmax(dim=-1)  # type: ignore
+            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
         else:
-            logits = averaged_logits / n_estimators  # type: ignore
+            logits = accumulated_logits / n_estimators
 
         # Post-process the logits
         logits = logits.log()
