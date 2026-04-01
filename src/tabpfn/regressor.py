@@ -963,7 +963,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     accumulated_logits = accumulated_logits + transformed
                 n_estimators += 1
 
-        assert n_estimators > 0, "n_estimators must be greater than 0"
+        assert n_estimators > 0
 
         if accumulated_logits is None:
             raise ValueError(
