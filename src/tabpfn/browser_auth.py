@@ -302,7 +302,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 
     Returns the JWT on success, or ``None`` on failure / non-TTY environments.
     """
-    if not sys.stdin.isatty() or os.environ.get("CI"):
+    if not sys.stdin.isatty():
         return None
 
     auth_event = threading.Event()
