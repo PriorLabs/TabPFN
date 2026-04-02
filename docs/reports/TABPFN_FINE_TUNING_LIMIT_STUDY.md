@@ -1,5 +1,7 @@
 # TabPFN Fine-Tuning Limits on Apple Silicon: An Empirical Study
 
+Scope note: all experiments in this report use `TabPFNClassifier` for binary classification; `TabPFNRegressor` is out of scope for this study.
+
 ## Abstract
 
 This report documents an empirical evaluation of local TabPFN classifier fine-tuning on an Apple Silicon (`macOS`, M1-class) machine. We designed and executed staged stress tests to determine practical operating limits, compare `cpu` and `mps` performance, and validate model persistence through save/reload workflows. Across 300 to 3000 row trials, we observed a device crossover: `cpu` was faster in smaller runs, while `mps` became faster and materially more memory-efficient at larger workloads (3000 rows). We also validated persistent model artifact generation and reload checks, while identifying an important caveat that reload-evaluation metrics typically align with pre-fine-tune clone-evaluation behavior rather than always reproducing post-step in-memory evaluation values.

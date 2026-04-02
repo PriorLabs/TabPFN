@@ -1,5 +1,7 @@
 # Small TabPFN Classifier Fine-Tuning Methodology
 
+Scope note: this methodology is classifier-only and uses `TabPFNClassifier` for all fine-tuning and evaluation steps described here.
+
 ## Objective
 
 Run a small, low-risk fine-tuning exercise on a classifier to answer three questions:

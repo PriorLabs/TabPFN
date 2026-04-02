@@ -1,5 +1,7 @@
 # TabPFN Post-Hoc Optimization: Executive Summary
 
+Scope note: this summary covers a classification use case (insurance lapse prediction) and references classifier workflows, not `TabPFNRegressor`.
+
 ## Overview
 
 This document summarizes the results of post-hoc optimization experiments performed on the TabPFN model for insurance lapse prediction, WITHOUT true fine-tuning (which requires GPU infrastructure unavailable in this environment).

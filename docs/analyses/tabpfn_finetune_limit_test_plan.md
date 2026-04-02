@@ -1,5 +1,7 @@
 # TabPFN Fine-Tuning Limit Test Plan
 
+Scope note: this limit plan covers binary classification fine-tuning with `TabPFNClassifier` only.
+
 ## Goal
 
 Measure the largest TabPFN fine-tuning workload that remains reasonable on this Apple Silicon machine.

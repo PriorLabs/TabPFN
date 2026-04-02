@@ -2,6 +2,8 @@
 
 Date: 2026-04-02
 
+Scope note: this protocol is for insurance classification tasks and uses `TabPFNClassifier` for raw and domain-finetuned TabPFN arms.
+
 ## 1. Research Question
 
 Does domain-specific fine-tuning of TabPFN improve insurance prediction performance versus:
