@@ -496,17 +496,17 @@ def test_balance_probabilities_alters_proba_output() -> None:
 
 # Only v2 and 2.5 support the KV cache at the moment.
 @pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+# Disable MPS as it doesn't support float64.
+@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if any(d.type == "mps" for d in infer_devices(devices="auto")):
-        pytest.skip("MPS does not support float64.")
-
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
         "inference_precision": torch.float64,
         "random_state": 0,
+        "device": device,
     }
     X, y = X_y
 
@@ -531,17 +531,17 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     "fit_mode='low_memory' produces different results to 'fit_preprocessors'"
 )
 @pytest.mark.parametrize("model_version", list(ModelVersion))
+# Disable MPS as it doesn't support float64.
+@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if any(d.type == "mps" for d in infer_devices(devices="auto")):
-        pytest.skip("MPS does not support float64.")
-
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
         "inference_precision": torch.float64,
         "random_state": 0,
+        "device": device,
     }
     X, y = X_y
 
