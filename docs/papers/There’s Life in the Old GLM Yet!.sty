@@ -2,6 +2,10 @@ There's Life in the Old GLM Yet!
 When a modern foundation model meets decades of actuarial tradition
 Cillian Williamson, Scott Hawes, Jin Cui, Karol Gawłowski
 
+Plain summary (non-technical)
+
+We compared TabPFN (a pretrained model that works with raw spreadsheet‑style data) to the traditional logistic regression model (GLM) on a UK motor lapse dataset (23,060 policies). Short takeaways: GLM slightly outperformed TabPFN for ranking customers by risk (AUC ≈ 0.599 vs 0.593), but after a simple calibration step TabPFN produced marginally more accurate probabilities (Brier ≈ 0.1080 vs 0.1098). If you need clear, explainable scores use GLM; if you value faster turnarounds and calibrated probabilities, include TabPFN in the toolkit.
+
 The Surprising Question
 When TabPFN emerged as a breakthrough in tabular machine learning, the hype was justified - zero hyperparameter tuning, minimal feature engineering and state of the art performance straight out of the box (Hollmann et al., 2023; Leite et al., 2024). The question seemed obvious: why would any actuary still use logistic regression?
 
