@@ -827,6 +827,11 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
             )
 
+            if force_inference_dtype is not None:
+                ens_model.type(force_inference_dtype)
+                X = X.type(force_inference_dtype)
+                y = y.type(force_inference_dtype)
+
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
             # at once to generate the KV cache
