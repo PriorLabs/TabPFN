@@ -1,4 +1,4 @@
-# TabPFN Post-Hoc Optimization: Executive Summary
+# TabPFN Post-Hoc Optimisation: Executive Summary
 
 Scope note: this summary covers a classification use case (insurance lapse prediction) and references classifier workflows, not `TabPFNRegressor`.
 
