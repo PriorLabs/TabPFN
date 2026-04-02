@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.0] - 2026-04-02
+
+### Added
+
+- More informative Out-Of-Memory error message. ([#805](https://github.com/PriorLabs/TabPFN/pull/805))
+- Add multi-GPU DDP support for finetuning via torchrun (auto-detected, no code changes needed) ([#812](https://github.com/PriorLabs/TabPFN/pull/812))
+- Add task_type to forward. ([#844](https://github.com/PriorLabs/TabPFN/pull/844))
+- Exclude very recent package release in environment ([#847](https://github.com/PriorLabs/TabPFN/pull/847))
+
+### Changed
+
+- Switch from Hugging Face to Prior Labs website for model license acceptance ([#798](https://github.com/PriorLabs/TabPFN/pull/798))
+- "auto" device selection now uses all available CUDA GPUs instead of only the first one ([#808](https://github.com/PriorLabs/TabPFN/pull/808))
+- Optimize fingerprint hashing in preprocessing: round feature matrix once instead of per-row, avoid redundant SHA-256 calls. Speeds up fit by up to 2x for large datasets. ([#818](https://github.com/PriorLabs/TabPFN/pull/818))
+
+### Fixed
+
+- Fix the pdf() in FullSupportBarDistribution to actually compute the probability density. ([#799](https://github.com/PriorLabs/TabPFN/pull/799))
+- Fix float overflow in Yeo-Johnson inverse transform that produced `inf` values and silently degraded regression border resolution. ([#838](https://github.com/PriorLabs/TabPFN/pull/838))
+- Fix differentiable input for v2.6 ([#843](https://github.com/PriorLabs/TabPFN/pull/843))
+
+
 ## [7.0.1] - 2026-03-26
 
 ### Added
