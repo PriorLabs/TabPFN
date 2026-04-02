@@ -81,3 +81,22 @@ Interpretation:
 ## Bottom Line
 
 Stage A and Stage B are complete, the experimentation framework is reliable, and current evidence does not yet support replacing raw TabPFN with domain-finetuned TabPFN as a universal default. The recommended next step is Stage C with multi-seed uncertainty estimates, followed by targeted Stage D ablations.
+
+## Reproducibility Note (How This Was Executed)
+
+- Workspace: TabPFN-work-scott, with local upstream TabPFN source available at TabPFN-upstream.
+- Key execution environment detail: use local upstream import path when running fine-tuning utilities.
+   - `PYTHONPATH=/Users/Scott/Documents/Data Science/ADSWP/TabPFN-upstream/src`
+- Core runner used for Stage A and Stage B style comparisons:
+   - `python scripts/run_domain_finetune_stage_a.py --target-dataset <dataset> --target-rows 2500 --pool-rows-per-dataset 1000 --tabpfn-device cpu --tabpfn-context-samples <64|128> --tabpfn-max-finetune-steps <1|3|5> --seed 42 --observations "..." --comments "..."`
+- Datasets used:
+   - `eudirectlapse`, `coil2000`, `ausprivauto0405`, `freMTPL2freq_binary`
+- Fixed controls in reported runs:
+   - seed `42`
+   - same split discipline across model arms
+   - same target/pool row budgets per run
+- Canonical output artifacts:
+   - run table: `outputs/current/tables/domain_finetune_study_runs.csv`
+   - narrative logbook: `outputs/current/logs/domain_finetune_logbook.md`
+
+For strict reproduction of the latest comparison snapshot referenced in this report, run all four datasets with `tabpfn_context_samples=128` and `tabpfn_max_finetune_steps=5` using the command shape above, then read the two artifact files listed.
