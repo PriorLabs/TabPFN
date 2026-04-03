@@ -14,7 +14,6 @@ import torch
 from sklearn.base import (
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 # --- TabPFN imports ---
 from tabpfn.constants import (
@@ -416,16 +415,6 @@ def estimator_to_device(
         )
 
     return byte_size
-
-
-def initialize_telemetry() -> None:
-    """Initialize telemetry and acknowledge anonymous session.
-
-    If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
-    no action is taken.
-    """
-    ping()
-    capture_session()
 
 
 def get_embeddings(
