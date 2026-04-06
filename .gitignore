@@ -166,3 +166,4 @@ cython_debug/
 CLAUDE.md
 .claude
 uv.lock
+.claude/settings.local.json
