@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import io
 import urllib.error
 import urllib.request
@@ -403,80 +404,148 @@ class TestHasDisplay:
 # ---------------------------------------------------------------------------
 
 
+class TestHeadlessCbreakLoop:
+    """Tests for _headless_cbreak_loop (cbreak-mode input)."""
+
+    def _import_cbreak_loop(self):  # noqa: ANN202
+        from tabpfn.browser_auth import _headless_cbreak_loop  # noqa: PLC0415
+
+        return _headless_cbreak_loop
+
+    def _fake_stdin(self, chars: str) -> io.StringIO:
+        """Create a fake stdin backed by a StringIO with a no-op fileno."""
+        fake = io.StringIO(chars)
+        fake.fileno = lambda: 0  # type: ignore[assignment]
+        return fake
+
+    @contextlib.contextmanager
+    def _patch_termios(self):
+        """Patch termios/tty so cbreak mode doesn't touch the real terminal."""
+        import termios as _termios  # noqa: PLC0415
+        import tty as _tty  # noqa: PLC0415
+
+        with (
+            patch.object(_termios, "tcgetattr", return_value=[]),
+            patch.object(_termios, "tcsetattr"),
+            patch.object(_tty, "setcbreak"),
+        ):
+            yield
+
+    def test_returns_pasted_token(self, monkeypatch: pytest.MonkeyPatch):
+        """Simulates pasting a full token followed by Enter."""
+        cbreak_loop = self._import_cbreak_loop()
+        fake = self._fake_stdin("eyJhbGciOiJIUzI1NiJ9\r")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with self._patch_termios():
+            token = cbreak_loop("https://ux.priorlabs.ai/login?hf_repo_id=tabpfn_2_6")
+
+        assert token == "eyJhbGciOiJIUzI1NiJ9"
+
+    def test_copy_then_paste(self, monkeypatch: pytest.MonkeyPatch):
+        """Press c to copy, then paste a token."""
+        cbreak_loop = self._import_cbreak_loop()
+        # 'c' for copy, then token chars, then Enter
+        fake = self._fake_stdin("cmytok\r")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with (
+            self._patch_termios(),
+            patch("tabpfn.browser_auth._copy_osc52") as mock_osc52,
+        ):
+            token = cbreak_loop("https://ux.priorlabs.ai/login")
+
+        assert token == "mytok"
+        mock_osc52.assert_called_once_with("https://ux.priorlabs.ai/login")
+
+    def test_eof_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        """EOF on first read returns None."""
+        cbreak_loop = self._import_cbreak_loop()
+        fake = self._fake_stdin("")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with self._patch_termios():
+            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+
+    def test_ctrl_c_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        """Ctrl+C character returns None."""
+        cbreak_loop = self._import_cbreak_loop()
+        fake = self._fake_stdin("\x03")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with self._patch_termios():
+            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+
+    def test_keyboard_interrupt_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        """KeyboardInterrupt during read returns None."""
+        cbreak_loop = self._import_cbreak_loop()
+        fake = self._fake_stdin("")
+        fake.read = lambda n: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[assignment,method-assign]
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with self._patch_termios():
+            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+
+    def test_backspace_erases_char(self, monkeypatch: pytest.MonkeyPatch):
+        """Backspace removes the previous character."""
+        cbreak_loop = self._import_cbreak_loop()
+        # Type 'ab', backspace, 'c', Enter → token is 'ac'
+        fake = self._fake_stdin("ab\x7fc\r")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+
+        with self._patch_termios():
+            assert cbreak_loop("https://ux.priorlabs.ai/login") == "ac"
+
+
+class TestHeadlessReadlineLoop:
+    """Tests for _headless_readline_loop (fallback when termios unavailable)."""
+
+    def _import_readline_loop(self):  # noqa: ANN202
+        from tabpfn.browser_auth import _headless_readline_loop  # noqa: PLC0415
+
+        return _headless_readline_loop
+
+    def test_returns_token(self, monkeypatch: pytest.MonkeyPatch):
+        readline_loop = self._import_readline_loop()
+        fake = io.StringIO("my-token\n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+        assert readline_loop("https://ux.priorlabs.ai/login") == "my-token"
+
+    def test_copy_then_token(self, monkeypatch: pytest.MonkeyPatch):
+        readline_loop = self._import_readline_loop()
+        fake = io.StringIO("c\nmy-token\n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+        with patch("tabpfn.browser_auth._copy_osc52") as mock_osc52:
+            token = readline_loop("https://ux.priorlabs.ai/login")
+        assert token == "my-token"
+        mock_osc52.assert_called_once()
+
+    def test_eof_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        readline_loop = self._import_readline_loop()
+        fake = io.StringIO("")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
+        assert readline_loop("https://ux.priorlabs.ai/login") is None
+
+
 class TestHeadlessInteractiveLogin:
+    """Integration tests for _headless_interactive_login routing."""
+
     def _import_headless(self):  # noqa: ANN202
         from tabpfn.browser_auth import _headless_interactive_login  # noqa: PLC0415
 
         return _headless_interactive_login
 
-    def test_returns_token_from_stdin(self, monkeypatch: pytest.MonkeyPatch):
-        """User pastes a token directly."""
+    def test_routes_to_cbreak_when_termios_available(self):
         headless_login = self._import_headless()
-
-        # Simulate: _read_char_cbreak returns 'e' (first char of JWT),
-        # then sys.stdin.readline returns the rest.
-        fake_stdin = io.StringIO("yJhbGciOiJIUzI1NiJ9\n")
-        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
-
-        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="e"):
-            token = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
-
-        assert token == "eyJhbGciOiJIUzI1NiJ9"
-
-    def test_copy_url_then_paste_token(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-    ):
-        """User presses c to copy, then pastes a token."""
-        headless_login = self._import_headless()
-
-        call_count = 0
-
-        def fake_cbreak():
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return "c"  # first call: copy
-            return "t"  # second call: start of token
-
-        fake_stdin = io.StringIO("ok-from-paste\n")
-        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
-
-        with (
-            patch("tabpfn.browser_auth._read_char_cbreak", side_effect=fake_cbreak),
-            patch("tabpfn.browser_auth._copy_osc52") as mock_osc52,
-        ):
-            token = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
-
-        assert token == "tok-from-paste"
-        mock_osc52.assert_called_once()
-        assert "tabpfn_2_6" in mock_osc52.call_args[0][0]
-
-    def test_eof_returns_none(self):
-        """EOF from cbreak read returns None."""
-        headless_login = self._import_headless()
-
-        with patch("tabpfn.browser_auth._read_char_cbreak", return_value=None):
-            assert headless_login("https://ux.priorlabs.ai") is None
-
-    def test_ctrl_c_returns_none(self):
-        """Ctrl+C from cbreak read returns None."""
-        headless_login = self._import_headless()
-
-        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="\x03"):
-            assert headless_login("https://ux.priorlabs.ai") is None
-
-    def test_keyboard_interrupt_returns_none(self):
-        """KeyboardInterrupt during flow returns None."""
-        headless_login = self._import_headless()
-
         with patch(
-            "tabpfn.browser_auth._read_char_cbreak",
-            side_effect=KeyboardInterrupt,
-        ):
-            assert headless_login("https://ux.priorlabs.ai") is None
+            "tabpfn.browser_auth._headless_cbreak_loop",
+            return_value="tok",
+        ) as mock_cbreak:
+            token = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+        assert token == "tok"
+        assert "tabpfn_2_6" in mock_cbreak.call_args[0][0]
 
-    def test_fallback_without_termios(self, monkeypatch: pytest.MonkeyPatch):
-        """When termios is unavailable, falls back to readline-based input."""
+    def test_routes_to_readline_without_termios(self):
         headless_login = self._import_headless()
 
         import builtins  # noqa: PLC0415
@@ -488,23 +557,26 @@ class TestHeadlessInteractiveLogin:
                 raise ImportError("no termios")
             return _real_import(name, *args, **kwargs)
 
-        fake_stdin = io.StringIO("my-token-here\n")
-        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
-
-        with patch("builtins.__import__", side_effect=block_termios):
+        with (
+            patch("builtins.__import__", side_effect=block_termios),
+            patch(
+                "tabpfn.browser_auth._headless_readline_loop",
+                return_value="tok",
+            ) as mock_readline,
+        ):
             token = headless_login("https://ux.priorlabs.ai")
-
-        assert token == "my-token-here"
+        assert token == "tok"
+        mock_readline.assert_called_once()
 
     def test_login_url_includes_hf_repo_id(
         self, capsys: pytest.CaptureFixture[str]
     ):
-        """The printed URL should include the hf_repo_id parameter."""
         headless_login = self._import_headless()
-
-        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="\x03"):
+        with patch(
+            "tabpfn.browser_auth._headless_cbreak_loop",
+            return_value=None,
+        ):
             headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
-
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
 

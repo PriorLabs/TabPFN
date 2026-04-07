@@ -376,56 +376,97 @@ def _headless_interactive_login(
     )
 
     try:
-        use_cbreak = True
-        try:
-            import termios as _termios  # noqa: PLC0415, F401
-        except ImportError:
-            use_cbreak = False
+        import termios  # noqa: PLC0415
+        import tty  # noqa: PLC0415
+    except ImportError:
+        termios = None  # type: ignore[assignment]
 
+    if termios is not None:
+        return _headless_cbreak_loop(login_url)
+
+    # Fallback when termios is unavailable (shouldn't happen on Unix,
+    # but be safe).
+    return _headless_readline_loop(login_url)
+
+
+def _headless_cbreak_loop(login_url: str) -> str | None:
+    """Headless input loop using cbreak mode (single-keypress, no Enter)."""
+    import termios  # noqa: PLC0415
+    import tty  # noqa: PLC0415
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
         while True:
-            if use_cbreak:
-                sys.stdout.write(
-                    "  [c] Copy URL to clipboard"
-                    "    Paste your token to continue\n\n> "
-                )
-                sys.stdout.flush()
+            sys.stdout.write(
+                "  [c] Copy URL to clipboard"
+                "    Paste your token to continue\n\n> "
+            )
+            sys.stdout.flush()
 
-                first_char = _read_char_cbreak()
-                if first_char is None or first_char == "\x03":  # EOF / Ctrl+C
+            ch = sys.stdin.read(1)
+            if not ch or ch == "\x03":  # EOF / Ctrl+C
+                sys.stdout.write("\n")
+                return None
+            if ch in ("c", "C"):
+                _copy_osc52(login_url)
+                sys.stdout.write("\r> \u2713 Copied to clipboard\n\n")
+                sys.stdout.flush()
+                continue
+
+            # Start of a token — stay in cbreak and read until Enter.
+            chars = [ch]
+            sys.stdout.write(ch)
+            sys.stdout.flush()
+            while True:
+                ch = sys.stdin.read(1)
+                if not ch or ch == "\x03":
                     sys.stdout.write("\n")
                     return None
-                if first_char in ("c", "C"):
-                    _copy_osc52(login_url)
-                    sys.stdout.write("\r> \u2713 Copied to clipboard\n\n")
+                if ch in ("\r", "\n"):
+                    sys.stdout.write("\n")
                     sys.stdout.flush()
+                    break
+                if ch in ("\x7f", "\x08"):  # Backspace / Delete
+                    if chars:
+                        chars.pop()
+                        sys.stdout.write("\b \b")
+                        sys.stdout.flush()
                     continue
-
-                # First char is start of a token — echo it and read the rest
-                # in normal (cooked) mode so the user gets line editing.
-                sys.stdout.write(first_char)
+                chars.append(ch)
+                sys.stdout.write(ch)
                 sys.stdout.flush()
-                rest = sys.stdin.readline()
-                token = (first_char + rest).strip()
-            else:
-                # Fallback when termios is unavailable (shouldn't happen on
-                # Unix, but be safe).
-                sys.stdout.write(
-                    "  Type [c]+Enter to copy URL, or paste your token:\n\n> "
-                )
-                sys.stdout.flush()
-                line = sys.stdin.readline()
-                if not line:
-                    return None
-                text = line.strip()
-                if text.lower() == "c":
-                    _copy_osc52(login_url)
-                    sys.stdout.write("\u2713 Copied to clipboard\n\n")
-                    sys.stdout.flush()
-                    continue
-                token = text
 
+            token = "".join(chars).strip()
             if token:
                 return token
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _headless_readline_loop(login_url: str) -> str | None:
+    """Headless input loop using readline (Enter required, termios unavailable)."""
+    try:
+        while True:
+            sys.stdout.write(
+                "  Type [c]+Enter to copy URL, or paste your token:\n\n> "
+            )
+            sys.stdout.flush()
+            line = sys.stdin.readline()
+            if not line:
+                return None
+            text = line.strip()
+            if text.lower() == "c":
+                _copy_osc52(login_url)
+                sys.stdout.write("\u2713 Copied to clipboard\n\n")
+                sys.stdout.flush()
+                continue
+            if text:
+                return text
     except KeyboardInterrupt:
         sys.stdout.write("\n")
         return None
