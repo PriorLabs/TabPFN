@@ -48,22 +48,32 @@ class WandbLogger:
         self,
         project: str | None = None,
         run_name: str | None = None,
+        entity: str | None = None,
         **wandb_kwargs: Any,
     ):
         self.project = project
         self.run_name = run_name
+        self.entity = entity
         self.wandb_kwargs = wandb_kwargs
         self._run = None
 
     def setup(self, config: dict[str, Any]) -> None:
         """Initialize a new WandB run with the given config."""
-        import wandb  # noqa: PLC0415
+        try:
+            import wandb  # noqa: PLC0415
+        except ModuleNotFoundError:
+            raise ModuleNotFoundError(
+                "WandbLogger requires the 'wandb' package. "
+                "Install it with: uv sync --extra wandb"
+            ) from None
 
         init_kwargs = dict(self.wandb_kwargs)
         if self.project:
             init_kwargs.setdefault("project", self.project)
         if self.run_name:
             init_kwargs.setdefault("name", self.run_name)
+        if self.entity:
+            init_kwargs.setdefault("entity", self.entity)
         init_kwargs.setdefault("config", config)
         self._run = wandb.init(**init_kwargs)
         wandb.define_metric("val/*", step_metric="train/epoch")

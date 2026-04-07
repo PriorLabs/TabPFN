@@ -558,6 +558,19 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         _logger = self.experiment_logger or NullLogger()
         global_step = 0
 
+        if is_main_process:
+            config = {
+                k: v for k, v in self.get_params().items() if k != "experiment_logger"
+            }
+            try:
+                _logger.setup(config)
+            except (OSError, ModuleNotFoundError):
+                logger.warning(
+                    "Experiment logger setup failed, falling back to NullLogger.",
+                    exc_info=True,
+                )
+                _logger = NullLogger()
+
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
         start_time = time.monotonic()
@@ -709,12 +722,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             best_metric = self._get_initial_best_metric()
 
         best_metric = _ddp_broadcast_primary_metric(best_metric)
-
-        if is_main_process:
-            config = {
-                k: v for k, v in self.get_params().items() if k != "experiment_logger"
-            }
-            _logger.setup(config)
 
         static_seed, rng = infer_random_state(self.random_state)
         preprocessing_random_state = (

@@ -200,6 +200,8 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
     @override
     def _metric_name(self) -> str:
         """Return the name of the primary metric."""
+        if self.eval_metric == "log_loss":
+            return "log_loss"
         return "ROC AUC"
 
     @override
