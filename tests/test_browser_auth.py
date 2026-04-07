@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -404,6 +405,9 @@ class TestHasDisplay:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="termios/cbreak not available on Windows"
+)
 class TestHeadlessCbreakLoop:
     """Tests for _headless_cbreak_loop (cbreak-mode input)."""
 
@@ -535,6 +539,9 @@ class TestHeadlessInteractiveLogin:
 
         return _headless_interactive_login
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="termios not available on Windows"
+    )
     def test_routes_to_cbreak_when_termios_available(self):
         headless_login = self._import_headless()
         with patch(
@@ -570,9 +577,9 @@ class TestHeadlessInteractiveLogin:
 
     def test_login_url_includes_hf_repo_id(self, capsys: pytest.CaptureFixture[str]):
         headless_login = self._import_headless()
-        with patch(
-            "tabpfn.browser_auth._headless_cbreak_loop",
-            return_value=None,
+        with (
+            patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
+            patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
         ):
             headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
         captured = capsys.readouterr()
