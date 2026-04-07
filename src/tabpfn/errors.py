@@ -46,7 +46,7 @@ class TabPFNLicenseError(TabPFNError):
                 f" {gui_url}/account\n"
                 "  4. Set the environment variable:"
                 ' export TABPFN_TOKEN="<your-token>"\n'
-                "     or in Python (before initializing TabPFN):"
+                "     or in Python (before calling .fit()):"
                 ' import os; os.environ["TABPFN_TOKEN"] = "<your-token>"'
             )
         super().__init__(message)

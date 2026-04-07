@@ -601,7 +601,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             f"  2. Accept the license on the Licenses tab\n"
             f"  3. Copy your Access Token from {gui_url}/account\n"
             '  4. Set the environment variable: export TABPFN_TOKEN="<your-token>"\n'
-            "     or in Python (before initializing TabPFN):"
+            "     or in Python (before calling .fit()):"
             ' import os; os.environ["TABPFN_TOKEN"] = "<your-token>"'
         )
 
