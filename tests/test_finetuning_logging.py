@@ -46,7 +46,8 @@ class TestWandbLogger:
         logger = WandbLogger(project="test-proj", run_name="run-1", entity="team")
         assert logger.project == "test-proj"
         assert logger.run_name == "run-1"
-        assert logger.wandb_kwargs == {"entity": "team"}
+        assert logger.entity == "team"
+        assert logger.wandb_kwargs == {}
         assert logger._run is None
 
     def test_setup_calls_wandb_init(self, mock_wandb):
@@ -63,6 +64,13 @@ class TestWandbLogger:
             "val/*", step_metric="train/epoch"
         )
         assert logger._run is mock_run
+
+    def test_setup_passes_entity(self, mock_wandb):
+        logger = WandbLogger(project="p", entity="team")
+        logger.setup({})
+
+        call_kwargs = mock_wandb.init.call_args[1]
+        assert call_kwargs["entity"] == "team"
 
     def test_setup_does_not_override_explicit_kwargs(self, mock_wandb):
         logger = WandbLogger(
