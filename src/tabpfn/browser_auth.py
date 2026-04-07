@@ -281,10 +281,10 @@ def _create_callback_server(
                     f"{page_style}</head><body><div class='card'>"
                     "<div class='logo'>Prior Labs</div>"
                     "<div class='warn'>&#9888;</div>"
-                    "<h2>No token received</h2>"
-                    "<p>Please paste your token in the terminal, or visit "
+                    "<h2>No API key received</h2>"
+                    "<p>Please paste your API key in the terminal, or visit "
                     f'<a href="{gui_url}/account">{gui_url}/account</a> '
-                    "to copy your Access Token.</p>"
+                    "to copy your API Key.</p>"
                     "</div></body></html>"
                 )
                 self.wfile.write(html.encode())
@@ -316,7 +316,7 @@ def _poll_for_token(
     auth_event: threading.Event, received_token: list[str | None]
 ) -> str | None:
     """Read token from stdin or wait for browser callback, whichever comes first."""
-    sys.stdout.write("Token (or press Enter to keep waiting): ")
+    sys.stdout.write("API key (or press Enter to keep waiting): ")
     sys.stdout.flush()
     while not auth_event.is_set():
         ready, _, _ = select.select([sys.stdin], [], [], 0.5)
@@ -328,7 +328,7 @@ def _poll_for_token(
         token = line.strip()
         if token:
             return token
-        sys.stdout.write("Token (or press Enter to keep waiting): ")
+        sys.stdout.write("API key (or press Enter to keep waiting): ")
         sys.stdout.flush()
     return received_token[0]
 
@@ -353,7 +353,7 @@ def _headless_interactive_login(
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, accept the license on the Licenses tab,\n"
-        f"then copy your Access Token from\n"
+        f"then copy your API Key from\n"
         f"  {gui_url}/account\n"
     )
 
@@ -410,7 +410,7 @@ def _headless_cbreak_loop(login_url: str) -> str | None:
         tty.setcbreak(fd)
         while True:
             sys.stdout.write(
-                "  [c] Copy URL to clipboard    Paste your token to continue\n\n> "
+                "  [c] Copy URL to clipboard    Paste your API key to continue\n\n> "
             )
             sys.stdout.flush()
 
@@ -438,7 +438,9 @@ def _headless_readline_loop(login_url: str) -> str | None:
     """Headless input loop using readline (Enter required, termios unavailable)."""
     try:
         while True:
-            sys.stdout.write("  Type [c]+Enter to copy URL, or paste your token:\n\n> ")
+            sys.stdout.write(
+                "  Type [c]+Enter to copy URL, or paste your API key:\n\n> "
+            )
             sys.stdout.flush()
             line = sys.stdin.readline()
             if not line:
@@ -510,8 +512,8 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
         " (log in or register if needed)\n"
         "  2. Accept the license at"
         f" {gui_url}/account/licenses\n"
-        "  3. Copy your Access Token\n"
-        "  4. Paste the token below\n"
+        "  3. Copy your API Key\n"
+        "  4. Paste the API key below\n"
     )
 
     # --- main thread: poll stdin while waiting for callback ---
@@ -590,7 +592,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "TabPFN requires a one-time license acceptance to download\n"
             "model weights for local inference, but browser login is\n"
             "disabled (TABPFN_NO_BROWSER is set).\n\n"
-            "Set the TABPFN_TOKEN environment variable with a valid token\n"
+            "Set the TABPFN_TOKEN environment variable with a valid API key\n"
             "obtained from https://ux.priorlabs.ai"
         )
 
@@ -603,17 +605,17 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "To authenticate in a non-interactive environment:\n"
             f"  1. Open {gui_url} in a browser and log in (or register)\n"
             f"  2. Accept the license on the Licenses tab\n"
-            f"  3. Copy your Access Token from {gui_url}/account\n"
-            '  4. Set the environment variable: export TABPFN_TOKEN="<your-token>"\n'
+            f"  3. Copy your API Key from {gui_url}/account\n"
+            '  4. Set the environment variable: export TABPFN_TOKEN="<your-api-key>"\n'
             "     or in Python (before calling .fit()):"
-            ' import os; os.environ["TABPFN_TOKEN"] = "<your-token>"'
+            ' import os; os.environ["TABPFN_TOKEN"] = "<your-api-key>"'
         )
 
     # Verify the token we just received from the browser.
     status = verify_token(token, api_url)
     if status is False:
         raise TabPFNLicenseError(
-            "The token received from the browser login was rejected by the\n"
+            "The API key received from the browser login was rejected by the\n"
             "server.  Please try again or contact support@priorlabs.ai"
         )
 
@@ -622,7 +624,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
 
     license_status = check_license_accepted(token, api_url, license_version)
     if license_status is True:
-        print("License accepted — token cached for future sessions.\n")  # noqa: T201
+        print("License accepted — API key cached for future sessions.\n")  # noqa: T201
         _accepted_repos.add(hf_repo_id)
         return True
     if license_status is None:

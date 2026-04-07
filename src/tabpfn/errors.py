@@ -43,12 +43,12 @@ class TabPFNLicenseError(TabPFNError):
                 f"  1. Open {gui_url} in a browser"
                 " and log in (or register)\n"
                 "  2. Accept the license on the Licenses tab\n"
-                "  3. Copy your Access Token from"
+                "  3. Copy your API Key from"
                 f" {gui_url}/account\n"
                 "  4. Set the environment variable:"
-                ' export TABPFN_TOKEN="<your-token>"\n'
+                ' export TABPFN_TOKEN="<your-api-key>"\n'
                 "     or in Python (before calling .fit()):"
-                ' import os; os.environ["TABPFN_TOKEN"] = "<your-token>"'
+                ' import os; os.environ["TABPFN_TOKEN"] = "<your-api-key>"'
             )
         super().__init__(message)
 
