@@ -536,6 +536,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
+    cache_model_to_memory: bool,
     version: Literal["v2", "v2.5", "v2.6"],
     which: Literal["classifier"],
     download_if_not_exists: bool,
@@ -553,6 +554,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
+    cache_model_to_memory: bool,
     version: Literal["v2", "v2.5", "v2.6"],
     which: Literal["regressor"],
     download_if_not_exists: bool,
@@ -569,6 +571,7 @@ def load_model_criterion_config(  # noqa: PLR0912
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
+    cache_model_to_memory: bool = False,
     which: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
     download_if_not_exists: bool,
@@ -592,6 +595,8 @@ def load_model_criterion_config(  # noqa: PLR0912
             for models trained for regression.
         cache_trainset_representation:
             Whether the model should know to cache the trainset representation.
+        cache_model_to_memory:
+            Whether to cache the model in memory.
         which: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
@@ -649,6 +654,7 @@ def load_model_criterion_config(  # noqa: PLR0912
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
+            cache_model_to_memory=cache_model_to_memory,
         )
         if criterion is None:
             if not hasattr(loaded_model, "regression_borders"):
@@ -869,12 +875,17 @@ def get_loss_criterion(
 
 
 @functools.cache
-def _load_checkpoint(path: str) -> dict:
+def _load_checkpoint_cached(path: str) -> dict:
     """Load and cache a checkpoint from disk.
 
     Cached so that repeated ``load_model`` calls with the same path skip disk
-    I/O.  Use ``_load_checkpoint.cache_clear()`` to free memory.
+    I/O.  Use ``_load_checkpoint_cached.cache_clear()`` to free memory.
     """
+    return _load_checkpoint(path)
+
+
+def _load_checkpoint(path: str) -> dict:
+    """Load a checkpoint from disk."""
     # Catch the `FutureWarning` that torch raises. This should be dealt with!
     # The warning is raised due to `torch.load`, which advises against ckpt
     # files that contain non-tensor data.
@@ -889,6 +900,7 @@ def load_model(
     *,
     path: Path,
     cache_trainset_representation: bool = True,
+    cache_model_to_memory: bool = False,
 ) -> tuple[
     Architecture,
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
@@ -897,16 +909,21 @@ def load_model(
 ]:
     """Loads a model from a given path. Only for inference.
 
-    The raw checkpoint is cached so that repeated calls with the same path
-    skip disk I/O.  Each call returns a fresh model instance so callers can
-    mutate it freely (finetuning, differentiable input, KV caching, etc.).
+    If ``cache_model_to_memory`` is True, the raw checkpoint is cached so that
+    repeated calls with the same path skip disk I/O.
 
     Args:
         path: Path to the checkpoint
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
+        cache_model_to_memory: If True, the raw checkpoint dict is cached
+            in memory so repeated loads of the same path skip disk I/O.
     """
-    checkpoint = _load_checkpoint(str(path.resolve()))
+    resolved = str(path.resolve())
+    if cache_model_to_memory:
+        checkpoint = _load_checkpoint_cached(resolved)
+    else:
+        checkpoint = _load_checkpoint(resolved)
 
     try:
         architecture_name = checkpoint["architecture_name"]

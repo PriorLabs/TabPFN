@@ -97,6 +97,8 @@ def initialize_tabpfn_model(
     | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    *,
+    cache_model_to_memory: bool = False,
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
@@ -113,6 +115,7 @@ def initialize_tabpfn_model(
 
         which: Which TabPFN model to load.
         fit_mode: Determines caching behavior.
+        cache_model_to_memory: If True, cache loaded checkpoints in memory.
 
     Returns:
         a list of models,
@@ -187,6 +190,7 @@ def initialize_tabpfn_model(
                     # The classifier's bar distribution is not used
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
+                    cache_model_to_memory=cache_model_to_memory,
                     which="classifier",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
@@ -200,6 +204,7 @@ def initialize_tabpfn_model(
                     # The regressor's bar distribution is required
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
+                    cache_model_to_memory=cache_model_to_memory,
                     which="regressor",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
@@ -380,6 +385,7 @@ def initialize_model_variables_helper(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
             fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+            cache_model_to_memory=calling_instance.cache_model_to_memory,
         )
     )
     calling_instance.models_ = models

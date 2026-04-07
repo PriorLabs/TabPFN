@@ -234,6 +234,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
+        cache_model_to_memory: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -434,6 +435,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 If true, preprocessing attempts to be end-to-end differentiable.
                 Less relevant for standard regression fine-tuning compared to
                 prompt-tuning.
+
+            cache_model_to_memory:
+                If True, the raw model checkpoint is cached in memory so that
+                repeated `fit()` calls skip disk I/O. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -456,6 +461,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
+        self.cache_model_to_memory = cache_model_to_memory
 
         if n_jobs is not None:
             warnings.warn(
