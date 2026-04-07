@@ -348,7 +348,8 @@ def _headless_interactive_login(
         login_url += f"?hf_repo_id={urllib.parse.quote(hf_repo_id)}"
 
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance.\n"
+        "\nTabPFN requires a one-time license acceptance to download"
+        " model weights for local inference.\n"
         "\nNo display detected. Open this URL in a browser on another device:\n"
         f"\n  {login_url}\n"
         f"\nAfter logging in, accept the license on the Licenses tab,\n"
@@ -499,7 +500,8 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 
     # --- print unified instructions ---
     print(  # noqa: T201
-        "\nTabPFN requires a one-time license acceptance."
+        "\nTabPFN requires a one-time license acceptance to download"
+        " model weights for local inference."
         "\nOpening your browser to complete login/registration…\n"
         f"\n  {login_url}\n"
         "\nWaiting for login to complete…\n"
@@ -585,7 +587,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
     if no_browser and no_browser not in ("0", "false", "no", "off"):
         raise TabPFNLicenseError(
-            "TabPFN requires license acceptance, but browser login is\n"
+            "TabPFN requires a one-time license acceptance to download\n"
+            "model weights for local inference, but browser login is\n"
             "disabled (TABPFN_NO_BROWSER is set).\n\n"
             "Set the TABPFN_TOKEN environment variable with a valid token\n"
             "obtained from https://ux.priorlabs.ai"
@@ -594,7 +597,8 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
         raise TabPFNLicenseError(
-            "TabPFN requires license acceptance, but no interactive terminal\n"
+            "TabPFN requires a one-time license acceptance to download\n"
+            "model weights for local inference, but no interactive terminal\n"
             "is available.\n\n"
             "To authenticate in a non-interactive environment:\n"
             f"  1. Open {gui_url} in a browser and log in (or register)\n"

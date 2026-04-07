@@ -35,8 +35,9 @@ class TabPFNLicenseError(TabPFNError):
         if message is None:
             gui_url = settings.tabpfn.auth_gui_url
             message = (
-                "TabPFN requires license acceptance before"
-                " downloading.\n\n"
+                "TabPFN requires a one-time license acceptance"
+                " to download model weights for local"
+                " inference.\n\n"
                 "To authenticate in a non-interactive"
                 " environment:\n"
                 f"  1. Open {gui_url} in a browser"
