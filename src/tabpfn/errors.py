@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from tabpfn.settings import settings
+
 if TYPE_CHECKING:
     from tabpfn.constants import XType
 
@@ -31,8 +33,6 @@ class TabPFNLicenseError(TabPFNError):
 
     def __init__(self, message: str | None = None):
         if message is None:
-            from tabpfn.settings import settings  # noqa: PLC0415
-
             gui_url = settings.tabpfn.auth_gui_url
             message = (
                 "TabPFN requires license acceptance before"

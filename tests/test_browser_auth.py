@@ -568,9 +568,7 @@ class TestHeadlessInteractiveLogin:
         assert result == "jwt-val"
         mock_readline.assert_called_once()
 
-    def test_login_url_includes_hf_repo_id(
-        self, capsys: pytest.CaptureFixture[str]
-    ):
+    def test_login_url_includes_hf_repo_id(self, capsys: pytest.CaptureFixture[str]):
         headless_login = self._import_headless()
         with patch(
             "tabpfn.browser_auth._headless_cbreak_loop",

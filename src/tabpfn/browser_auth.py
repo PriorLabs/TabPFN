@@ -51,11 +51,10 @@ def _has_display() -> bool:
     if sys.platform == "darwin":
         # macOS has a display unless we are in a pure SSH session
         # without X forwarding.
-        return not (
-            os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY")
-        )
+        return not (os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY"))
     # Linux / other Unix: require X11 or Wayland.
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
 
 # ---------------------------------------------------------------------------
 # Token cache helpers
@@ -410,8 +409,7 @@ def _headless_cbreak_loop(login_url: str) -> str | None:
         tty.setcbreak(fd)
         while True:
             sys.stdout.write(
-                "  [c] Copy URL to clipboard"
-                "    Paste your token to continue\n\n> "
+                "  [c] Copy URL to clipboard    Paste your token to continue\n\n> "
             )
             sys.stdout.flush()
 
@@ -439,9 +437,7 @@ def _headless_readline_loop(login_url: str) -> str | None:
     """Headless input loop using readline (Enter required, termios unavailable)."""
     try:
         while True:
-            sys.stdout.write(
-                "  Type [c]+Enter to copy URL, or paste your token:\n\n> "
-            )
+            sys.stdout.write("  Type [c]+Enter to copy URL, or paste your token:\n\n> ")
             sys.stdout.flush()
             line = sys.stdin.readline()
             if not line:
