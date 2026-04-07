@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import typing
 import warnings
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
@@ -496,6 +496,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
+        elif version == ModelVersion.V2_6:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v2_6().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 
@@ -761,6 +769,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
+        if self.fit_mode == "fit_with_cache" and (
+            self.model_path == "auto" or "v2.6" in str(self.model_path)
+        ):
+            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
+
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y, znorm_space_bardist = (
@@ -865,7 +878,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="predict", param_names=["X"])
-    def predict(
+    def predict(  # noqa: C901, PLR0912
         self,
         X: XType,
         *,
@@ -929,36 +942,38 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X, ord_encoder=getattr(self, "ordinal_encoder_", None)
         )
 
-        # Runs over iteration engine
-        with handle_oom_errors(
-            self.devices_,
-            X,
-            model_type="regressor",
-            n_train_samples=getattr(self, "n_train_samples_", None),
-            n_features=getattr(self, "n_features_in_", None),
-        ):
-            (
-                _,
-                # list of tensors [N_est, N_samples, N_borders] (after forward)
-                outputs,
-                # list of numpy arrays containing borders for each estimator
-                borders,
-            ) = self.forward(X, use_inference_mode=True)
+        n_estimators = 0
+        accumulated_logits: torch.Tensor | None = None
+        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+            for borders_t, output in self._iter_forward_executor(
+                X, use_inference_mode=True
+            ):
+                transformed = translate_probs_across_borders(
+                    output,
+                    frm=torch.as_tensor(borders_t, device=output.device),
+                    to=self.znorm_space_bardist_.borders.to(output.device),
+                )
 
-        # --- Translate probs, average, get final logits ---
-        transformed_logits = [
-            translate_probs_across_borders(
-                logits,
-                frm=torch.as_tensor(borders_t, device=logits.device),
-                to=self.znorm_space_bardist_.borders.to(logits.device),
+                if self.average_before_softmax:
+                    transformed = transformed.log()
+
+                if accumulated_logits is None:
+                    accumulated_logits = transformed
+                else:
+                    accumulated_logits = accumulated_logits + transformed
+                n_estimators += 1
+
+        assert n_estimators > 0
+
+        if accumulated_logits is None:
+            raise ValueError(
+                "Cannot make predictions, possibly due to `n_estimators=0`."
             )
-            for logits, borders_t in zip(outputs, borders)
-        ]
-        stacked_logits = torch.stack(transformed_logits, dim=0)
+
         if self.average_before_softmax:
-            logits = stacked_logits.log().mean(dim=0).softmax(dim=-1)
+            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
         else:
-            logits = stacked_logits.mean(dim=0)
+            logits = accumulated_logits / n_estimators
 
         # Post-process the logits
         logits = logits.log()
@@ -1005,31 +1020,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
-    def forward(
+    def _iter_forward_executor(
         self,
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
-    ) -> tuple[torch.Tensor | None, list[torch.Tensor], list[np.ndarray]]:
-        """Forward pass for TabPFNRegressor Inference Engine.
-        Used in fine-tuning and prediction. Called directly
-        in FineTuning training loop or by predict() function
-        with the use_inference_mode flag explicitly set to True.
-
-        Iterates over outputs of InferenceEngine.
-
-        Args:
-            X: list[torch.Tensor] in fine-tuning, XType in normal predictions.
-            use_inference_mode: Flag for inference mode., default at False since
-            it is called within predict. During FineTuning forward() is called
-            directly by user, so default should be False here.
-
-        Returns:
-            A tuple containing:
-                - Averaged logits over the ensemble (for fine-tuning).
-                - Raw outputs from each estimator in the ensemble.
-                - Borders used for each estimator.
-        """
+    ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
             self.executor_, InferenceEngineBatchedNoPreprocessing
@@ -1059,20 +1055,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fine-tuning workflow (requires float32 for backpropagation)."
         )
 
+        check_is_fitted(self)
         # Ensure torch.inference_mode is OFF to allow gradients
         if self.fit_mode in ["fit_preprocessors", "batched"]:
             # only these two modes support this option
             self.executor_.use_torch_inference_mode(use_inference=use_inference_mode)
-
-        check_is_fitted(self)
-
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
-        outputs: list[torch.Tensor] = []
-        borders: list[np.ndarray] = []
-
-        # Iterate over estimators
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_
+            X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
@@ -1114,19 +1104,49 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     if descending_borders:
                         borders_t = borders_t.flip(-1)  # type: ignore
 
-                borders.append(borders_t)
-
                 if logit_cancel_mask is not None:
                     output = output.clone()  # noqa: PLW2901
                     output[..., logit_cancel_mask] = float("-inf")
-
+                yield borders_t, output
             else:
                 raise ValueError(
                     "Unexpected config format "
                     "and Batch prediction is not supported yet!"
                 )
 
-            outputs.append(output)  # type: ignore
+    def forward(
+        self,
+        X: list[torch.Tensor] | XType,
+        *,
+        use_inference_mode: bool = False,
+    ) -> tuple[torch.Tensor | None, list[torch.Tensor], list[np.ndarray]]:
+        """Forward pass for TabPFNRegressor Inference Engine.
+        Used in fine-tuning and prediction. Called directly
+        in FineTuning training loop or by predict() function
+        with the use_inference_mode flag explicitly set to True.
+
+        Iterates over outputs of InferenceEngine.
+
+        Args:
+            X: list[torch.Tensor] in fine-tuning, XType in normal predictions.
+            use_inference_mode: Flag for inference mode., default at False since
+            it is called within predict. During FineTuning forward() is called
+            directly by user, so default should be False here.
+
+        Returns:
+            A tuple containing:
+                - Averaged logits over the ensemble (for fine-tuning).
+                - Raw outputs from each estimator in the ensemble.
+                - Borders used for each estimator.
+        """
+        outputs: list[torch.Tensor] = []
+        borders: list[np.ndarray] = []
+
+        for border, output in self._iter_forward_executor(
+            X, use_inference_mode=use_inference_mode
+        ):
+            borders.append(border)
+            outputs.append(output)
 
         averaged_logits = None
         all_logits = None

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import inspect
 import json
 import logging
@@ -29,10 +30,7 @@ from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.bar_distribution import (
-    BarDistribution,
-    FullSupportBarDistribution,
-)
+from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
@@ -53,8 +51,9 @@ logger = logging.getLogger(__name__)
 # Public fallback base URL for model downloads
 FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/05152025"
 
-# Special string used to identify v2.5 models in model paths.
+# Special string used to identify model paths.
 V_2_5_IDENTIFIER = "v2.5"
+V_2_6_IDENTIFIER = "v2.6"
 
 
 class ModelType(str, Enum):  # noqa: D101
@@ -143,6 +142,28 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
+    @classmethod
+    def get_classifier_v2_6(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v2.6-classifier-v2.6_default.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_2_6",
+            default_filename="tabpfn-v2.6-classifier-v2.6_default.ckpt",
+            filenames=filenames,
+        )
+
+    @classmethod
+    def get_regressor_v2_6(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v2.6-regressor-v2.6_default.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/tabpfn_2_6",
+            default_filename="tabpfn-v2.6-regressor-v2.6_default.ckpt",
+            filenames=filenames,
+        )
+
 
 def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
     if version == ModelVersion.V2:
@@ -155,6 +176,11 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
             return ModelSource.get_classifier_v2_5()
         if model_type == ModelType.REGRESSOR:
             return ModelSource.get_regressor_v2_5()
+    elif version == ModelVersion.V2_6:
+        if model_type == ModelType.CLASSIFIER:
+            return ModelSource.get_classifier_v2_6()
+        if model_type == ModelType.REGRESSOR:
+            return ModelSource.get_regressor_v2_6()
 
     raise ValueError(
         f"Unsupported version/model combination: {version.value}/{model_type.value}",
@@ -246,9 +272,11 @@ def _try_huggingface_downloads(
         except (GatedRepoError, HfHubHTTPError) as e:
             # Check if this is an authentication/gating error
             if isinstance(e, GatedRepoError) or (
-                isinstance(e, HfHubHTTPError) and e.response.status_code in (401, 403)
+                isinstance(e, HfHubHTTPError)
+                and e.response is not None
+                and e.response.status_code in (401, 403)
             ):
-                raise TabPFNHuggingFaceGatedRepoError(source.repo_id)  # noqa: B904
+                raise TabPFNHuggingFaceGatedRepoError(source.repo_id) from e
             raise e
 
 
@@ -315,6 +343,8 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V2, ModelSource.get_regressor_v2(), "regressor"),
         (ModelVersion.V2_5, ModelSource.get_classifier_v2_5(), "classifier"),
         (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
+        (ModelVersion.V2_6, ModelSource.get_classifier_v2_6(), "classifier"),
+        (ModelVersion.V2_6, ModelSource.get_regressor_v2_6(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
             path = to / ckpt_name
@@ -333,7 +363,7 @@ def download_all_models(to: Path) -> None:
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
     """Determine if a version has a direct download option."""
-    return version == ModelVersion.V2
+    return version in (ModelVersion.V2, ModelVersion.V2_5)
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
@@ -430,6 +460,19 @@ def _download_model(
 ) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
 
+    # Gated models require browser-based license acceptance before download.
+    _HF_REPOS = {
+        ModelVersion.V2_5: "tabpfn_2_5",
+        ModelVersion.V2_6: "tabpfn_2_6",
+    }
+    if version in _HF_REPOS:
+        try:
+            from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
+
+            ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
+        except Exception as e:  # noqa: BLE001
+            return [e]
+
     try:
         model_source = _get_model_source(version, ModelType(which))
     except ValueError as e:
@@ -460,8 +503,8 @@ def _download_model(
         logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    # For Version 2.5 we require gating, which we don't have in place for direct
-    # downloads.
+    # For gated versions (v2.5, v2.6) we require license acceptance, which we
+    # don't have in place for direct downloads.
     if _version_has_direct_download_option(version):
         try:
             _try_direct_downloads(to, model_source, model_name)
@@ -493,7 +536,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5"],
+    version: Literal["v2", "v2.5", "v2.6"],
     which: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -510,7 +553,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5"],
+    version: Literal["v2", "v2.5", "v2.6"],
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -521,13 +564,13 @@ def load_model_criterion_config(
 ]: ...
 
 
-def load_model_criterion_config(
+def load_model_criterion_config(  # noqa: PLR0912
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5"] = "v2",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -593,14 +636,30 @@ def load_model_criterion_config(
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
-                # Later: Add improved error handling here, reenabling
-                #  the old offline download (only raise when Gating)
+                if _version_has_direct_download_option(model_version):
+                    repo_type = "clf" if which == "classifier" else "reg"
+                    raise RuntimeError(
+                        f"Failed to download model to {path}!\n\n"
+                        f"For offline usage, please download the model manually from:\n"
+                        f"https://huggingface.co/Prior-Labs/TabPFN-v2-{repo_type}/resolve/main/{resolved_model_names[i]}\n\n"
+                        f"Then place it at: {path}",
+                    ) from res[0]
                 raise res[0]
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
             cache_trainset_representation=cache_trainset_representation,
         )
+        if criterion is None:
+            if not hasattr(loaded_model, "regression_borders"):
+                # TODO(Phil): Add a a proper Regression API that removes the reliance
+                # on the external criterion and lets the model compute predictions.
+                # Then remove this hack.
+                raise ValueError(
+                    "If no criterion is saved, the model must have "
+                    "a regression_borders attribute."
+                )
+            criterion = FullSupportBarDistribution(loaded_model.regression_borders)
         if check_bar_distribution_criterion and not isinstance(
             criterion,
             FullSupportBarDistribution,
@@ -635,14 +694,6 @@ def load_model_criterion_config(
             )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config
-
-
-def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
-    if model_path is None:
-        return settings.tabpfn.model_version
-    if V_2_5_IDENTIFIER in Path(model_path).name:
-        return ModelVersion.V2_5
-    return ModelVersion.V2
 
 
 def _log_model_config(
@@ -723,6 +774,16 @@ def log_model_init_params(
             pass
 
 
+def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
+    if model_path is None:
+        return settings.tabpfn.model_version
+    if V_2_6_IDENTIFIER in Path(model_path).name:
+        return ModelVersion.V2_6
+    if V_2_5_IDENTIFIER in Path(model_path).name:
+        return ModelVersion.V2_5
+    return ModelVersion.V2
+
+
 def resolve_model_version(
     model_path: ModelPath | list[ModelPath] | None,
 ) -> ModelVersion:
@@ -740,7 +801,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5"] = "v2.5",
+    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -807,65 +868,86 @@ def get_loss_criterion(
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
 
 
+@functools.cache
+def _load_checkpoint(path: str) -> dict:
+    """Load and cache a checkpoint from disk.
+
+    Cached so that repeated ``load_model`` calls with the same path skip disk
+    I/O.  Use ``_load_checkpoint.cache_clear()`` to free memory.
+    """
+    # Catch the `FutureWarning` that torch raises. This should be dealt with!
+    # The warning is raised due to `torch.load`, which advises against ckpt
+    # files that contain non-tensor data.
+    # This `weights_only=None` is the default value. In the future this will
+    # default to `True`, disallowing loading of arbitrary objects.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=FutureWarning)
+        return torch.load(path, map_location="cpu", weights_only=None)
+
+
 def load_model(
     *,
     path: Path,
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
     ArchitectureConfig,
     InferenceConfig,
 ]:
     """Loads a model from a given path. Only for inference.
+
+    The raw checkpoint is cached so that repeated calls with the same path
+    skip disk I/O.  Each call returns a fresh model instance so callers can
+    mutate it freely (finetuning, differentiable input, KV caching, etc.).
 
     Args:
         path: Path to the checkpoint
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
     """
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weightes_only=None` is the default value. In the future this will default to
-    # `True`, dissallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        checkpoint: dict = torch.load(path, map_location="cpu", weights_only=None)
+    checkpoint = _load_checkpoint(str(path.resolve()))
 
     try:
         architecture_name = checkpoint["architecture_name"]
     except KeyError:
         architecture_name = "base"
     architecture = ARCHITECTURES[architecture_name]
-    state_dict = checkpoint["state_dict"]
+    full_state = checkpoint["state_dict"]
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
     logger.debug(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
+    model = architecture.get_architecture(
+        model_config,
+        cache_trainset_representation=cache_trainset_representation,
+    )
 
-    criterion_state_keys = [k for k in state_dict if "criterion." in k]
+    if "test_targets_MB" in inspect.signature(model.forward).parameters:
+        # The model computes the loss internally. Support for this was only added after
+        # v2.5, so we can safely assume that the inference config is stored in the
+        # checkpoint.
+        model.load_state_dict(full_state)
+        model.eval()
+        inference_config = InferenceConfig(**(checkpoint["inference_config"]))
+        empty_criterion = None
+        return model, empty_criterion, model_config, inference_config
+
+    criterion_state_keys = [k for k in full_state if "criterion." in k]
     loss_criterion = get_loss_criterion(model_config)
     if isinstance(loss_criterion, FullSupportBarDistribution):
-        # Remove from state dict
         criterion_state = {
-            k.replace("criterion.", ""): state_dict.pop(k) for k in criterion_state_keys
+            k.replace("criterion.", ""): full_state[k] for k in criterion_state_keys
         }
         loss_criterion.load_state_dict(criterion_state)
     else:
         assert len(criterion_state_keys) == 0, criterion_state_keys
 
-    model = architecture.get_architecture(
-        model_config,
-        n_out=get_n_out(model_config, loss_criterion),
-        cache_trainset_representation=cache_trainset_representation,
-    )
-    model.load_state_dict(state_dict)
+    model_state = {k: v for k, v in full_state.items() if k not in criterion_state_keys}
+    model.load_state_dict(model_state)
     model.eval()
-
     inference_config = _get_inference_config_from_checkpoint(checkpoint, loss_criterion)
-
     return model, loss_criterion, model_config, inference_config
 
 
@@ -885,6 +967,7 @@ def _get_inference_config_from_checkpoint(
     #  >v2.5: "inference_config" present, so don't need to guess a default config
     if inference_config := checkpoint.get("inference_config"):
         return InferenceConfig(**inference_config)
+
     if "architecture_name" not in checkpoint:
         model_version = ModelVersion.V2
     else:
@@ -896,23 +979,6 @@ def _get_inference_config_from_checkpoint(
         task_type = "multiclass"
 
     return InferenceConfig.get_default(task_type, model_version)
-
-
-def get_n_out(
-    config: ArchitectureConfig,
-    loss: nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
-) -> int:
-    """Works out the number of outputs of the model."""
-    if config.max_num_classes == 2:
-        return 1
-    if config.max_num_classes > 2 and isinstance(loss, nn.CrossEntropyLoss):
-        return config.max_num_classes
-    if config.max_num_classes == 0 and isinstance(loss, BarDistribution):
-        return loss.num_bars
-    raise ValueError(
-        "Unknown configuration: "
-        f"max_num_classes={config.max_num_classes} and loss={type(loss)}"
-    )
 
 
 def save_tabpfn_model(
@@ -968,7 +1034,12 @@ def save_tabpfn_model(
         else:
             state_dict = model_state
 
-        checkpoint = {"state_dict": state_dict, "config": asdict(config)}
+        architecture_name = _resolve_architecture_name(config)
+        checkpoint = {
+            "state_dict": state_dict,
+            "config": asdict(config),
+            "architecture_name": architecture_name,
+        }
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)
@@ -1087,3 +1158,15 @@ def load_fitted_tabpfn_model(
         est.to(str(device))
 
         return est
+
+
+def _resolve_architecture_name(config: ArchitectureConfig) -> str:
+    """Resolve the architecture name from the config."""
+    name = getattr(config, "name", None)
+    if name is None:
+        return "base"
+    if "2.6" in name:
+        return "tabpfn_v2_6"
+    if "2.5" in name:
+        return "tabpfn_v2_5"
+    return "base"

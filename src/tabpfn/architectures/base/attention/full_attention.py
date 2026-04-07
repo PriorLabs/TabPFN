@@ -13,41 +13,15 @@ from torch.utils.checkpoint import checkpoint
 
 from tabpfn.architectures.base.attention import Attention
 from tabpfn.architectures.base.memory import support_save_peak_mem_factor
+from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 
 if TYPE_CHECKING:
     from tabpfn.architectures.base.config import ModelConfig
 
+
 TORCH_VERSION = torch.__version__.split(".")
 
 TORCH_2_ATTENTION_POSSIBLE = int(TORCH_VERSION[0]) >= 2
-
-
-def _gqa_is_supported() -> bool:
-    """Check if PyTorch's scaled_dot_product_attention supports enable_gqa parameter.
-
-    This checks whether torch.nn.functional.scaled_dot_product_attention has a
-    kwarg enable_gqa and if we have sufficient NVIDIA compute capability.
-    PyTorch 2.5+ includes enable_gqa support.
-    """
-    if not TORCH_2_ATTENTION_POSSIBLE or not torch.cuda.is_available():
-        return False
-
-    # Check if PyTorch version is 2.5 or higher for enable_gqa support
-    torch_major, torch_minor = int(TORCH_VERSION[0]), int(TORCH_VERSION[1])
-    has_enable_gqa = torch_major > 2 or (torch_major == 2 and torch_minor >= 5)
-
-    if not has_enable_gqa:
-        return False
-
-    # Check compute capability only if CUDA is available
-    # We need compute capability >= 8.0 for efficient GQA
-    device = torch.cuda.current_device()
-    nvidia_compute_capability = torch.cuda.get_device_capability(device)
-    return nvidia_compute_capability[0] >= 8
-
-
-# Cache the GQA support check at module level
-USE_TORCH_2_GQA = _gqa_is_supported()
 
 
 class MultiHeadAttention(Attention):
@@ -631,7 +605,7 @@ class MultiHeadAttention(Attention):
                 )
 
             # Check if we should use PyTorch 2.0's GQA support
-            if USE_TORCH_2_GQA:
+            if gqa_is_supported():
                 extra_inputs["enable_gqa"] = True
             else:
                 k = MultiHeadAttention.broadcast_kv_across_heads(

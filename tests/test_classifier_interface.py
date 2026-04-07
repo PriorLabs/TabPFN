@@ -62,7 +62,7 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 
 
 model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_5()]
-fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
+fit_modes = ["low_memory", "fit_preprocessors"]
 
 
 @pytest.mark.parametrize(
@@ -79,7 +79,7 @@ fit_modes = ["low_memory", "fit_preprocessors", "fit_with_cache"]
 def test__fit_predict__passes_sklearn_check_and_outputs_correct_shape(
     device: str,
     n_estimators: int,
-    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    fit_mode: Literal["low_memory", "fit_preprocessors"],
     inference_precision: torch.types._dtype | Literal["autocast", "auto"],
     X_y: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -277,7 +277,8 @@ def test__predict_logits__output_has_correct_properties_and_consistent_with_prob
     # Ensure y is int64 for consistency with classification tasks
     y = y.astype(np.int64)
 
-    classifier = TabPFNClassifier(
+    classifier = TabPFNClassifier.create_default_for_version(
+        version=ModelVersion.V2_5,
         n_estimators=n_estimators,
         device=device,
         softmax_temperature=softmax_temperature,
@@ -493,29 +494,69 @@ def test_balance_probabilities_alters_proba_output() -> None:
     )
 
 
-@pytest.mark.skip(
-    reason="The result is actually different depending on the fitting mode."
-)
-def test_fit_modes_all_return_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray],
+# Only v2 and 2.5 support the KV cache at the moment.
+@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+# Disable MPS as it doesn't support float64.
+@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
+def test__fit_preprocessors_and_with_cache_produce_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    kwargs = {"n_estimators": 2, "device": "auto", "random_state": 0}
+    kwargs = {
+        "version": model_version,
+        "n_estimators": 2,
+        "inference_precision": torch.float64,
+        "random_state": 0,
+        "device": device,
+    }
     X, y = X_y
 
     torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="fit_preprocessors", **kwargs)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
     tabpfn.fit(X, y)
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
 
     torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="fit_with_cache", **kwargs)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_with_cache", **kwargs
+    )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
 
+
+@pytest.mark.skip(
+    "fit_mode='low_memory' produces different results to 'fit_preprocessors'"
+)
+@pytest.mark.parametrize("model_version", list(ModelVersion))
+# Disable MPS as it doesn't support float64.
+@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
+def test__fit_preprocessors_and_low_memory_produce_equal_results(
+    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
+) -> None:
+    kwargs = {
+        "version": model_version,
+        "n_estimators": 2,
+        "inference_precision": torch.float64,
+        "random_state": 0,
+        "device": device,
+    }
+    X, y = X_y
+
     torch.random.manual_seed(0)
-    tabpfn = TabPFNClassifier(fit_mode="low_memory", **kwargs)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
+    tabpfn.fit(X, y)
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="low_memory", **kwargs
+    )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
@@ -696,7 +737,12 @@ def test_onnx_exportable_cpu(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         pytest.skip("onnx export is not tested on windows")
     X, y = X_y
     with torch.no_grad():
-        classifier = TabPFNClassifier(n_estimators=1, device="cpu", random_state=42)
+        classifier = TabPFNClassifier.create_default_for_version(
+            ModelVersion.V2_5,
+            n_estimators=1,
+            device="cpu",
+            random_state=42,
+        )
         # load the model so we can access it via classifier.models_
         classifier.fit(X, y)
         # this is necessary if cuda is available
@@ -751,18 +797,10 @@ def test_get_embeddings(
 
     embeddings = model.get_embeddings(X, data_source)
 
-    # Need to access the model through the executor
-    model_instance = next(iter(model.executor_.model_caches[0]._models.values()))
-    encoder_shape = next(
-        m.out_features
-        for m in model_instance.encoder.modules()
-        if isinstance(m, nn.Linear)
-    )
-
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == encoder_shape
+    assert embeddings.shape[2] == model.models_[0].input_size
 
 
 def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):
@@ -1189,7 +1227,6 @@ def _create_dummy_classifier_model_specs(
     )
     model = base.get_architecture(
         config=minimal_config,
-        n_out=max_num_classes,
         cache_trainset_representation=False,
     )
     inference_config = InferenceConfig.get_default(
@@ -1223,6 +1260,17 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2.5-" in estimator.model_path
+
+
+def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "classifier" in estimator.model_path
+    assert "-v2.6-" in estimator.model_path
 
 
 def test__create_default_for_version__passes_through_overrides() -> None:

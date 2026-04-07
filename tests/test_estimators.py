@@ -24,9 +24,7 @@ device_combinations = [
 
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-@pytest.mark.parametrize(
-    "fit_mode", ["fit_preprocessors", "fit_with_cache", "low_memory"]
-)
+@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
 def test__to__before_fit__does_not_crash(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
@@ -97,15 +95,12 @@ def test__to__fit_with_cache_and_after_first_fit__raises_error(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
 ) -> None:
     estimator = estimator_class(fit_mode="fit_with_cache", n_estimators=2)
-    X_train, X_test, y_train = _get_tiny_dataset(estimator)
+    X_train, _, y_train = _get_tiny_dataset(estimator)
 
-    estimator.fit(X_train, y_train)
-    with pytest.raises(NotImplementedError):
-        estimator.to("cpu")
-
-    estimator.predict(X_test)
-    with pytest.raises(NotImplementedError):
-        estimator.to("cpu")
+    with pytest.raises(
+        ValueError, match="fit_with_cache is not supported for TabPFN v2"
+    ):
+        estimator.fit(X_train, y_train)
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
@@ -129,7 +124,9 @@ def test__to__after_fit__no_tensors_left_on_old_device(
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
-@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
+)
 def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,

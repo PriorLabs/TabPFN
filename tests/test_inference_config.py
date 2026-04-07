@@ -13,7 +13,9 @@ from tabpfn.preprocessing import PreprocessorConfig
 
 
 def test__save_and_load__loaded_value_equal_to_saved() -> None:
-    config = InferenceConfig.get_default(task_type="multiclass", model_version="latest")
+    config = InferenceConfig.get_default(
+        task_type="multiclass", model_version=ModelVersion.V2_5
+    )
 
     with io.BytesIO() as buffer:
         torch.save(asdict(config), buffer)
@@ -61,7 +63,9 @@ def test__override_with_user_input__config_override__replaces_entire_config() ->
 
 
 def test__override_with_user_input__override_is_None__returns_copy_of_config() -> None:
-    config = InferenceConfig.get_default(task_type="regression", model_version="latest")
+    config = InferenceConfig.get_default(
+        task_type="regression", model_version=ModelVersion.V2_5
+    )
     new_config = config.override_with_user_input_and_resolve_auto(user_config=None)
     assert new_config is not config
     assert new_config == config

@@ -18,11 +18,14 @@ class ArchitectureConfig:
     Contains config keys common to all the architectures.
     """
 
-    max_num_classes: int
-    num_buckets: int
+    max_num_classes: int = -1
+    """Maximum number of classes the model should support.
+
+    Must be set to a value greater than 0 to support classification."""
+    num_buckets: int = -1
     """In regression models: the number of buckets in the output bar distribution.
 
-    In classification models, does nothing.
+    Must be set to a value greater than 0 to support regression.
     """
 
     def get_unused_config(self, unparsed_config: dict[str, Any]) -> dict[str, Any]:
@@ -78,7 +81,6 @@ class ArchitectureModule(Protocol):
         self,
         config: ArchitectureConfig,
         *,
-        n_out: int,
         cache_trainset_representation: bool,
     ) -> Architecture:
         """Construct a new instance of the model based on the given config.
@@ -87,7 +89,6 @@ class ArchitectureModule(Protocol):
             config: The config returned by parse_config(). This method should use a
                 runtime isinstance() check to downcast the config to this architecture's
                 specific config class.
-            n_out: The number of output classes that the model should predict.
             cache_trainset_representation: If True, the model should be configured to
                 cache the training data during inference to improve speed.
 
@@ -113,7 +114,8 @@ class Architecture(nn.Module, ABC):
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
-        save_peak_mem_factor: int | None = None,
+        save_peak_memory_factor: int | None = None,
+        task_type: str | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -126,7 +128,8 @@ class Architecture(nn.Module, ABC):
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
-        save_peak_mem_factor: int | None = None,
+        save_peak_memory_factor: int | None = None,
+        task_type: str | None = None,
     ) -> dict[str, Tensor]: ...
 
     @abstractmethod
@@ -140,6 +143,7 @@ class Architecture(nn.Module, ABC):
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
+        task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass.
 
@@ -183,6 +187,7 @@ class Architecture(nn.Module, ABC):
                 support it and will ignore this option.
 
                 If None, this feature is disabled.
+            task_type: The type of task, typically "classification" or "regression".
 
         Returns:
             If `only_return_standard_out`, then a Tensor of shape

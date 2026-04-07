@@ -77,6 +77,32 @@ def test__safe_power_transformer__power_transformer_fails__no_error():
     )
 
 
+def test__safe_power_transformer__inverse_transform_float32__no_overflow_warning():
+    """Test that inverse_transform on float32 data does not emit overflow warnings."""
+    # Use a small lambda to amplify the inverse, pushing float64 intermediates
+    # beyond float32 range — the exact scenario that previously produced
+    # "RuntimeWarning: overflow encountered in cast".
+    lmbda = 0.01
+    transformer = SafePowerTransformer(method="yeo-johnson", standardize=False)
+    transformer.lambdas_ = np.array([lmbda])
+    transformer._scaler = None
+
+    # Forward-transform a large value so the inverse must reconstruct it
+    x_large = np.array([[1e30]], dtype=np.float32)
+    x_transformed = transformer.transform(x_large)
+
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        x_inv = transformer.inverse_transform(x_transformed)
+
+    overflow_warnings = [x for x in w if "overflow" in str(x.message).lower()]
+    assert len(overflow_warnings) == 0, (
+        f"Unexpected overflow warning(s): {[str(x.message) for x in overflow_warnings]}"
+    )
+    assert x_inv.dtype == np.float32
+    assert np.all(np.isfinite(x_inv))
+
+
 def test__safe_power_transformer__transform_then_inverse_transform__returns_original():
     """Test that SafePowerTransformer inverse_transform returns data to original scale."""  # noqa: E501
     rng = np.random.default_rng(42)

@@ -31,7 +31,7 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_base_architectur
     tmp_path: Path,
 ) -> None:
     config = _get_minimal_base_architecture_config()
-    model = base.get_architecture(config, n_out=10, cache_trainset_representation=True)
+    model = base.get_architecture(config, cache_trainset_representation=True)
     checkpoint = {"state_dict": model.state_dict(), "config": asdict(config)}
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
@@ -65,7 +65,6 @@ class FakeArchitectureModule(ArchitectureModule):
         self,
         config: ArchitectureConfig,
         *,
-        n_out: int,
         cache_trainset_representation: bool,
     ) -> Architecture:
         return DummyArchitecture()
@@ -141,7 +140,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
 ) -> None:
     architecture_config = _get_minimal_base_architecture_config()
     model = base.get_architecture(
-        architecture_config, n_out=10, cache_trainset_representation=True
+        architecture_config, cache_trainset_representation=True
     )
     # v2 checkpoints have no "architecture_name" key
     checkpoint = {

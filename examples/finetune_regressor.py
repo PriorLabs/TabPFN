@@ -3,6 +3,8 @@
 Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80 GB of VRAM.
 
 Multi-GPU: torchrun --nproc-per-node=N examples/finetune_regressor.py
+Note: Only call fit() once per torchrun session. For multiple finetuning runs, use
+separate torchrun invocations.
 """
 
 import gc

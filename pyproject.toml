@@ -4,15 +4,15 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "6.4.1"
+version = "7.1.0"
 dependencies = [
-  "torch>=2.1",
+  "torch>=2.5",
   "numpy>=1.21.6",
   "scikit-learn>=1.2.0",
   "typing_extensions>=4.12.0",
   "scipy>=1.11.1",
   "pandas>=1.4.0",
-  "einops>=0.2.0",
+  "einops>=0.4.0",
   "huggingface-hub>=0.19.0",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.10.1",
@@ -107,8 +107,12 @@ ci = [
   "pytest>=8.4.2",
 ]
 
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = {torch = false} 
+
 [tool.setuptools.package-data]
-"tabpfn.architectures.base" = ["tabpfn_col_embedding.pt"]
+"tabpfn.architectures.shared" = ["tabpfn_col_embedding.pt"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]  # Where the tests are located
@@ -422,6 +426,7 @@ ignore_packages = [
     "tabpfn*",
     # LICENSEREF-NVIDIA-SOFTWARE-LICENSE, introduced by torch>=2.10
     "cuda-bindings",
+    "cuda-toolkit",
 ]
 
 [tool.changelog-bot.towncrier_changelog]

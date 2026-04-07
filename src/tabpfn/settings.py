@@ -33,8 +33,18 @@ class TabPFNSettings(BaseSettings):
         "If not set, uses platform-specific user cache directory.",
     )
     model_version: ModelVersion = Field(
-        default=ModelVersion.V2_5,
+        default=ModelVersion.V2_6,
         description="The version of the TabPFN model to use by default.",
+    )
+
+    # Auth URLs (for browser-based license acceptance)
+    auth_gui_url: str = Field(
+        default="https://ux.priorlabs.ai",
+        description="PriorLabs login GUI URL.",
+    )
+    auth_api_url: str = Field(
+        default="https://api.priorlabs.ai",
+        description="URL for the PriorLabs API (token verification).",
     )
 
     # Performance/Memory Settings

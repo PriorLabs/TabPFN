@@ -11,12 +11,16 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import base
+from . import base, tabpfn_v2_5, tabpfn_v2_6
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import ArchitectureModule
 
-ARCHITECTURES: dict[str, ArchitectureModule] = {"base": base}
+ARCHITECTURES: dict[str, ArchitectureModule] = {
+    "base": base,
+    "tabpfn_v2_5": tabpfn_v2_5,
+    "tabpfn_v2_6": tabpfn_v2_6,
+}
 """Map from architecture names to the corresponding module."""
 
 

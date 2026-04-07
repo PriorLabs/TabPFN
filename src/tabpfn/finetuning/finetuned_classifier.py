@@ -19,6 +19,7 @@ from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNClassifier
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
@@ -204,7 +205,8 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
     @override
     def _create_estimator(self, config: dict[str, Any]) -> TabPFNClassifier:
         """Create the TabPFNClassifier with the given config."""
-        return TabPFNClassifier(
+        return TabPFNClassifier.create_default_for_version(
+            version=ModelVersion.V2_5,
             **config,
             fit_mode="batched",
             differentiable_input=False,
