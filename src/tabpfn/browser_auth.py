@@ -51,9 +51,9 @@ def _has_display() -> bool:
     if sys.platform == "darwin":
         # macOS has a display unless we are in a pure SSH session
         # without X forwarding.
-        if os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY"):
-            return False
-        return True
+        return not (
+            os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY")
+        )
     # Linux / other Unix: require X11 or Wayland.
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
@@ -208,24 +208,6 @@ def _copy_osc52(text: str) -> None:
     sys.stdout.flush()
 
 
-def _read_char_cbreak() -> str | None:
-    """Read a single character from stdin in cbreak mode (no Enter required).
-
-    Returns the character, or ``None`` on EOF.
-    """
-    import termios  # noqa: PLC0415
-    import tty  # noqa: PLC0415
-
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setcbreak(fd)
-        ch = sys.stdin.read(1)
-        return ch or None
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
 # ---------------------------------------------------------------------------
 # Browser login flow
 # ---------------------------------------------------------------------------
@@ -377,7 +359,6 @@ def _headless_interactive_login(
 
     try:
         import termios  # noqa: PLC0415
-        import tty  # noqa: PLC0415
     except ImportError:
         termios = None  # type: ignore[assignment]
 
@@ -387,6 +368,35 @@ def _headless_interactive_login(
     # Fallback when termios is unavailable (shouldn't happen on Unix,
     # but be safe).
     return _headless_readline_loop(login_url)
+
+
+def _read_token_cbreak(first_char: str) -> str | None:
+    """Read token characters in cbreak mode, echoing manually.
+
+    *first_char* is the character that was already read (and not ``c``).
+    Returns the completed token string, or ``None`` on EOF / Ctrl+C.
+    """
+    chars = [first_char]
+    sys.stdout.write(first_char)
+    sys.stdout.flush()
+    while True:
+        ch = sys.stdin.read(1)
+        if not ch or ch == "\x03":
+            sys.stdout.write("\n")
+            return None
+        if ch in ("\r", "\n"):
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+            return "".join(chars).strip() or None
+        if ch in ("\x7f", "\x08"):  # Backspace / Delete
+            if chars:
+                chars.pop()
+                sys.stdout.write("\b \b")
+                sys.stdout.flush()
+            continue
+        chars.append(ch)
+        sys.stdout.write(ch)
+        sys.stdout.flush()
 
 
 def _headless_cbreak_loop(login_url: str) -> str | None:
@@ -415,30 +425,7 @@ def _headless_cbreak_loop(login_url: str) -> str | None:
                 sys.stdout.flush()
                 continue
 
-            # Start of a token — stay in cbreak and read until Enter.
-            chars = [ch]
-            sys.stdout.write(ch)
-            sys.stdout.flush()
-            while True:
-                ch = sys.stdin.read(1)
-                if not ch or ch == "\x03":
-                    sys.stdout.write("\n")
-                    return None
-                if ch in ("\r", "\n"):
-                    sys.stdout.write("\n")
-                    sys.stdout.flush()
-                    break
-                if ch in ("\x7f", "\x08"):  # Backspace / Delete
-                    if chars:
-                        chars.pop()
-                        sys.stdout.write("\b \b")
-                        sys.stdout.flush()
-                    continue
-                chars.append(ch)
-                sys.stdout.write(ch)
-                sys.stdout.flush()
-
-            token = "".join(chars).strip()
+            token = _read_token_cbreak(ch)
             if token:
                 return token
     except KeyboardInterrupt:

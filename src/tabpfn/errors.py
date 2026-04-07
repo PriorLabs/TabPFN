@@ -31,13 +31,21 @@ class TabPFNLicenseError(TabPFNError):
 
     def __init__(self, message: str | None = None):
         if message is None:
+            from tabpfn.settings import settings  # noqa: PLC0415
+
+            gui_url = settings.tabpfn.auth_gui_url
             message = (
-                "TabPFN requires license acceptance before downloading.\n\n"
-                "To authenticate in a non-interactive environment:\n"
-                "  1. Open https://ux.priorlabs.ai in a browser and log in (or register)\n"
+                "TabPFN requires license acceptance before"
+                " downloading.\n\n"
+                "To authenticate in a non-interactive"
+                " environment:\n"
+                f"  1. Open {gui_url} in a browser"
+                " and log in (or register)\n"
                 "  2. Accept the license on the Licenses tab\n"
-                "  3. Copy your Access Token from https://ux.priorlabs.ai/account\n"
-                '  4. Set the environment variable: export TABPFN_TOKEN="<your-token>"'
+                "  3. Copy your Access Token from"
+                f" {gui_url}/account\n"
+                "  4. Set the environment variable:"
+                ' export TABPFN_TOKEN="<your-token>"'
             )
         super().__init__(message)
 
