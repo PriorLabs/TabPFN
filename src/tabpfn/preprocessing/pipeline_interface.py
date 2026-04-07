@@ -287,10 +287,21 @@ class PreprocessingPipeline:
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
 
     def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
-        """Return the number of added features."""
-        return sum(
-            step.num_added_features(n_samples, feature_schema) for step, _ in self.steps
-        )
+        """Return the number of added features.
+
+        Threads an evolving feature schema through the steps so that each step
+        sees the feature count that includes columns added by prior steps.
+        """
+        total_added = 0
+        current_schema = feature_schema
+        for step, _ in self.steps:
+            added = step.num_added_features(n_samples, current_schema)
+            total_added += added
+            if added > 0:
+                current_schema = current_schema.append_columns(
+                    FeatureModality.NUMERICAL, added
+                )
+        return total_added
 
     def _process_steps(
         self,

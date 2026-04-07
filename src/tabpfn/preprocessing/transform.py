@@ -185,13 +185,13 @@ def fit_preprocessing(
     yield from executor(  # type: ignore[misc]
         joblib.delayed(_fit_preprocessing_one)(
             config,
-            X_train,
-            y_train,
+            X_train_est,
+            y_train_est,
             seed,
             feature_schema=fs,
             pipeline=pipeline,
         )
-        for config, X_train, y_train, seed, fs, pipeline in zip(
+        for config, X_train_est, y_train_est, seed, fs, pipeline in zip(
             configs, X_train_list, y_train_list, seeds, feature_schema_list, pipelines
         )
     )

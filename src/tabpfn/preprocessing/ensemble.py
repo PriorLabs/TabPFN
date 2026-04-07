@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import dataclasses
 import warnings
 from collections.abc import Iterable, Iterator, Sequence
@@ -359,6 +358,36 @@ def _pipeline_uses_onehot(pipeline: PreprocessingPipeline) -> bool:
     )
 
 
+def _find_max_input_features(
+    pipeline: PreprocessingPipeline,
+    n_samples: int,
+    feature_schema: FeatureSchema,
+    max_features_per_estimator: int,
+) -> int:
+    """Find the largest number of input features that fits within the budget.
+
+    Uses binary search over the number of kept features k, checking whether
+    k + pipeline.num_added_features(n_samples, schema_sliced_to_k) <= max.
+    """
+    n_total = feature_schema.num_columns
+
+    # Check if all features already fit.
+    total = n_total + pipeline.num_added_features(n_samples, feature_schema)
+    if total <= max_features_per_estimator:
+        return n_total
+
+    lo, hi = 0, n_total
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        sliced_schema = feature_schema.slice_for_indices(list(range(mid)))
+        total = mid + pipeline.num_added_features(n_samples, sliced_schema)
+        if total <= max_features_per_estimator:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
 def _get_subsample_feature_indices(
     pipelines: Sequence[PreprocessingPipeline],
     n_samples: int,
@@ -367,33 +396,23 @@ def _get_subsample_feature_indices(
     rng: np.random.Generator,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator."""
-
-    def get_total_features(
-        pipeline: PreprocessingPipeline,
-        feature_schema: FeatureSchema,
-    ) -> int:
-        n_features = feature_schema.num_columns
-        # For one-hot encoding, num_added_features returns 0 as an approximation
-        # because the true count depends on data cardinality (see warning below).
-        return n_features + pipeline.num_added_features(n_samples, feature_schema)
+    n_total_features = feature_schema.num_columns
 
     # The feature subsampling will be done aware of the settings used in the
     # preprocessing pipelines because some steps add additional features
     # (SVD, append_original, fingerprint, one-hot).
+    # For one-hot encoding, num_added_features returns 0 as an approximation
+    # because the true count depends on data cardinality (see warning below).
     subsample_sizes = []
     for pipeline in pipelines:
-        feature_schema_pipeline = copy.deepcopy(feature_schema)
-        while (
-            get_total_features(
+        subsample_sizes.append(
+            _find_max_input_features(
                 pipeline=pipeline,
-                feature_schema=feature_schema_pipeline,
+                n_samples=n_samples,
+                feature_schema=feature_schema,
+                max_features_per_estimator=max_features_per_estimator,
             )
-            > max_features_per_estimator
-        ):
-            feature_schema_pipeline = feature_schema_pipeline.slice_for_indices(
-                list(range(feature_schema_pipeline.num_columns - 1))
-            )
-        subsample_sizes.append(feature_schema_pipeline.num_columns)
+        )
 
     # Warn when one-hot encoding and feature subsampling are both active.
     # The subsampling budget is computed assuming one-hot adds 0 extra columns,
@@ -419,7 +438,7 @@ def _get_subsample_feature_indices(
     pool: list[int] = []
 
     for size in subsample_sizes:
-        if size >= feature_schema.num_columns:
+        if size >= n_total_features:
             # No subsampling needed, use all features
             subsample_feature_indices.append(None)
             continue
@@ -429,8 +448,14 @@ def _get_subsample_feature_indices(
 
         while remaining > 0:
             if len(pool) == 0:
-                # Reshuffle and create a new pool of all feature indices
-                pool = rng.permutation(feature_schema.num_columns).tolist()
+                # Reshuffle and create a new pool of all feature indices,
+                # excluding any already selected for this member to avoid
+                # duplicates.
+                already_selected = set(indices)
+                available = [
+                    i for i in range(n_total_features) if i not in already_selected
+                ]
+                pool = rng.permutation(available).tolist()
 
             # Take as many as we need (or as many as available) from the pool
             take = min(remaining, len(pool))
@@ -438,7 +463,8 @@ def _get_subsample_feature_indices(
             pool = pool[take:]
             remaining -= take
 
-        subsample_feature_indices.append(np.array(indices))
+        # Sort so downstream steps see features in their original order.
+        subsample_feature_indices.append(np.sort(np.array(indices)))
 
     return subsample_feature_indices
 

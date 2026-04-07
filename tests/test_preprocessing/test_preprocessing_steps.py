@@ -318,7 +318,9 @@ def test__pipeline__num_added_features():
             AddSVDFeaturesStep(global_transformer_name="svd", random_state=42),
         ]
     )
-    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 10 + 10 // 2
+    # Reshape adds 10 (append_to_original), then SVD sees 20 features and adds
+    # min(100//10+1, 20//2) = min(11, 10) = 10. Total added = 20.
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 10 + 10
 
     pipeline = PreprocessingPipeline(
         steps=[
