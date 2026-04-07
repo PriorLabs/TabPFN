@@ -116,7 +116,7 @@ def main() -> None:
 
     # Instantiate the wrapper with your desired hyperparameters
     # To enable WandB logging, pass an experiment_logger:
-    #.  from tabpfn.finetuning.logging import WandbLogger
+    # .  from tabpfn.finetuning.logging import WandbLogger
     #   experiment_logger=WandbLogger(project="my-project", run_name="my-run", entity="my-entity")
     finetuned_clf = FinetunedTabPFNClassifier(
         device="cuda",
