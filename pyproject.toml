@@ -70,6 +70,9 @@ classifiers = [
 ]
 license = { file = "LICENSE" }
 
+[project.optional-dependencies]
+wandb = ["wandb>=0.25.1"]
+
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
 source = "https://github.com/priorlabs/tabpfn"

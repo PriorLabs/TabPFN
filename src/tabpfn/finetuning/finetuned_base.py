@@ -38,6 +38,7 @@ from tabpfn.finetuning.data_util import (
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
+from tabpfn.finetuning.logging import FinetuningLogger, NullLogger
 from tabpfn.finetuning.train_util import (
     get_and_init_optimizer,
     get_checkpoint_path_and_epoch_from_output_dir,
@@ -238,6 +239,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             data batches. This is helpful in most cases because, e.g., the column order
             will stay the same across batches.
             If False, the preprocessing will use a different random seed for each batch.
+        experiment_logger: An optional logger implementing the ``FinetuningLogger``
+            protocol (e.g., ``WandbLogger``) for experiment tracking. If None,
+            a no-op ``NullLogger`` is used. Defaults to None.
     """
 
     def __init__(  # noqa: PLR0913
@@ -265,8 +269,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         use_activation_checkpointing: bool = True,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
+        experiment_logger: FinetuningLogger | None = None,
     ):
         super().__init__()
+        self.experiment_logger = experiment_logger
         self.device = device
         self.epochs = epochs
         self.time_limit = time_limit
@@ -548,6 +554,22 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         if using_ddp:
             self.device = device_str
+
+        _logger = self.experiment_logger or NullLogger()
+        global_step = 0
+
+        if is_main_process:
+            config = {
+                k: v for k, v in self.get_params().items() if k != "experiment_logger"
+            }
+            try:
+                _logger.setup(config)
+            except (OSError, ModuleNotFoundError):
+                logger.warning(
+                    "Experiment logger setup failed, falling back to NullLogger.",
+                    exc_info=True,
+                )
+                _logger = NullLogger()
 
         # Store the original training size for checkpoint naming
         train_size = X.shape[0]
@@ -870,6 +892,23 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                 epoch_loss_sum += loss_scalar
                 epoch_batches += 1
+                global_step += 1
+
+                if is_main_process:
+                    current_lr = (
+                        scheduler.get_last_lr()[0]
+                        if scheduler is not None
+                        else self.learning_rate
+                    )
+                    _logger.log_step(
+                        {
+                            "train/loss": loss_scalar,
+                            "train/lr": current_lr,
+                            "train/epoch": epoch,
+                            "train/global_step": global_step,
+                        },
+                        step=global_step,
+                    )
 
                 progress_bar.set_postfix(
                     loss=f"{loss_scalar:.4f}",
@@ -900,6 +939,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     y_val,  # pyright: ignore[reportArgumentType]
                 )
                 self._log_epoch_evaluation(epoch, eval_result, mean_train_loss)
+
+                epoch_log_metrics: dict[str, float] = {
+                    "train/epoch": epoch,
+                    f"val/{self._metric_name}": eval_result.primary,
+                }
+                if mean_train_loss is not None:
+                    epoch_log_metrics["train/mean_loss"] = mean_train_loss
+                for k, v in eval_result.secondary.items():
+                    epoch_log_metrics[f"val/{k}"] = v
+                _logger.log_epoch(epoch_log_metrics, step=global_step)
+
                 primary_metric = eval_result.primary
             else:
                 primary_metric = self._get_initial_best_metric()
@@ -992,6 +1042,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 dist.destroy_process_group()
 
         if is_main_process:
+            _logger.finish()
             logger.info("--- ✅ Fine-tuning Finished ---")
 
         if is_main_process:
