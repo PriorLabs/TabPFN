@@ -35,6 +35,28 @@ logger = logging.getLogger(__name__)
 # Short-circuits repeated calls within the same Python process.
 _accepted_repos: set[str] = set()
 
+
+# ---------------------------------------------------------------------------
+# Environment detection
+# ---------------------------------------------------------------------------
+
+
+def _has_display() -> bool:
+    """Heuristic: is a graphical display likely available for opening a browser?
+
+    Returns ``True`` when it is reasonable to call :func:`webbrowser.open`.
+    """
+    if sys.platform == "win32":
+        return True
+    if sys.platform == "darwin":
+        # macOS has a display unless we are in a pure SSH session
+        # without X forwarding.
+        if os.environ.get("SSH_CONNECTION") and not os.environ.get("DISPLAY"):
+            return False
+        return True
+    # Linux / other Unix: require X11 or Wayland.
+    return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+
 # ---------------------------------------------------------------------------
 # Token cache helpers
 # ---------------------------------------------------------------------------
@@ -169,6 +191,42 @@ def check_license_accepted(token: str, api_url: str, version: str) -> bool | Non
 
 
 # ---------------------------------------------------------------------------
+# Terminal helpers (headless-interactive flow)
+# ---------------------------------------------------------------------------
+
+
+def _copy_osc52(text: str) -> None:
+    """Copy *text* to the system clipboard via the OSC 52 terminal escape.
+
+    Works over SSH when the terminal emulator supports it (iTerm2, kitty,
+    Windows Terminal, most modern terminals).
+    """
+    import base64  # noqa: PLC0415
+
+    encoded = base64.b64encode(text.encode()).decode()
+    sys.stdout.write(f"\033]52;c;{encoded}\a")
+    sys.stdout.flush()
+
+
+def _read_char_cbreak() -> str | None:
+    """Read a single character from stdin in cbreak mode (no Enter required).
+
+    Returns the character, or ``None`` on EOF.
+    """
+    import termios  # noqa: PLC0415
+    import tty  # noqa: PLC0415
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+        return ch or None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+# ---------------------------------------------------------------------------
 # Browser login flow
 # ---------------------------------------------------------------------------
 
@@ -294,16 +352,103 @@ def _poll_for_token(
     return received_token[0]
 
 
+def _headless_interactive_login(
+    gui_url: str, hf_repo_id: str | None = None
+) -> str | None:
+    """Token acquisition for headless but interactive environments (e.g. SSH).
+
+    Shows the login URL, offers single-keypress clipboard copy via OSC 52,
+    and waits for the user to paste a token.
+
+    Returns the JWT on success, or ``None`` on abort / EOF.
+    """
+    login_url = f"{gui_url}/login"
+    if hf_repo_id:
+        login_url += f"?hf_repo_id={urllib.parse.quote(hf_repo_id)}"
+
+    print(  # noqa: T201
+        "\nTabPFN requires a one-time license acceptance.\n"
+        "\nNo display detected. Open this URL in a browser on another device:\n"
+        f"\n  {login_url}\n"
+        f"\nAfter logging in, accept the license on the Licenses tab,\n"
+        f"then copy your Access Token from\n"
+        f"  {gui_url}/account\n"
+    )
+
+    try:
+        use_cbreak = True
+        try:
+            import termios as _termios  # noqa: PLC0415, F401
+        except ImportError:
+            use_cbreak = False
+
+        while True:
+            if use_cbreak:
+                sys.stdout.write(
+                    "  [c] Copy URL to clipboard"
+                    "    Paste your token to continue\n\n> "
+                )
+                sys.stdout.flush()
+
+                first_char = _read_char_cbreak()
+                if first_char is None or first_char == "\x03":  # EOF / Ctrl+C
+                    sys.stdout.write("\n")
+                    return None
+                if first_char in ("c", "C"):
+                    _copy_osc52(login_url)
+                    sys.stdout.write("\r> \u2713 Copied to clipboard\n\n")
+                    sys.stdout.flush()
+                    continue
+
+                # First char is start of a token — echo it and read the rest
+                # in normal (cooked) mode so the user gets line editing.
+                sys.stdout.write(first_char)
+                sys.stdout.flush()
+                rest = sys.stdin.readline()
+                token = (first_char + rest).strip()
+            else:
+                # Fallback when termios is unavailable (shouldn't happen on
+                # Unix, but be safe).
+                sys.stdout.write(
+                    "  Type [c]+Enter to copy URL, or paste your token:\n\n> "
+                )
+                sys.stdout.flush()
+                line = sys.stdin.readline()
+                if not line:
+                    return None
+                text = line.strip()
+                if text.lower() == "c":
+                    _copy_osc52(login_url)
+                    sys.stdout.write("\u2713 Copied to clipboard\n\n")
+                    sys.stdout.flush()
+                    continue
+                token = text
+
+            if token:
+                return token
+    except KeyboardInterrupt:
+        sys.stdout.write("\n")
+        return None
+
+
 def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None:
     """Obtain a token via browser callback and/or manual paste concurrently.
 
-    Both the local callback server and the paste prompt run at the same time
-    so that neither blocks the other.
+    Chooses the right strategy based on the environment:
+
+    * **Non-interactive** (no TTY): returns ``None`` immediately.
+    * **Headless interactive** (TTY but no display): shows the URL and waits
+      for the user to paste a token.
+    * **Graphical** (TTY + display): opens the browser and runs a local
+      callback server alongside a paste prompt.
 
     Returns the JWT on success, or ``None`` on failure / non-TTY environments.
     """
     if not sys.stdin.isatty():
         return None
+
+    if not _has_display():
+        return _headless_interactive_login(gui_url, hf_repo_id=hf_repo_id)
 
     auth_event = threading.Event()
     received_token: list[str | None] = [None]
@@ -425,10 +570,13 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
         raise TabPFNLicenseError(
-            "Browser login did not complete successfully.\n\n"
-            "If you are in a headless environment, set the TABPFN_TOKEN\n"
-            "environment variable with a valid token obtained from\n"
-            "https://ux.priorlabs.ai"
+            "TabPFN requires license acceptance, but no interactive terminal\n"
+            "is available.\n\n"
+            "To authenticate in a non-interactive environment:\n"
+            f"  1. Open {gui_url} in a browser and log in (or register)\n"
+            f"  2. Accept the license on the Licenses tab\n"
+            f"  3. Copy your Access Token from {gui_url}/account\n"
+            '  4. Set the environment variable: export TABPFN_TOKEN="<your-token>"'
         )
 
     # Verify the token we just received from the browser.

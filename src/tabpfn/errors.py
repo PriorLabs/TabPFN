@@ -33,10 +33,11 @@ class TabPFNLicenseError(TabPFNError):
         if message is None:
             message = (
                 "TabPFN requires license acceptance before downloading.\n\n"
-                "To accept the license, run your script in an interactive terminal\n"
-                "so a browser window can open for login, or set the TABPFN_TOKEN\n"
-                "environment variable with a valid token obtained from\n"
-                "https://ux.priorlabs.ai"
+                "To authenticate in a non-interactive environment:\n"
+                "  1. Open https://ux.priorlabs.ai in a browser and log in (or register)\n"
+                "  2. Accept the license on the Licenses tab\n"
+                "  3. Copy your Access Token from https://ux.priorlabs.ai/account\n"
+                '  4. Set the environment variable: export TABPFN_TOKEN="<your-token>"'
             )
         super().__init__(message)
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from tabpfn.browser_auth import (
+    _has_display,
     delete_cached_token,
     get_cached_token,
     save_token,
@@ -318,7 +320,18 @@ class TestEnsureLicenseAccepted:
                 "tabpfn.browser_auth.try_browser_login",
                 return_value=None,
             ),
-            pytest.raises(TabPFNLicenseError, match="headless"),
+            pytest.raises(TabPFNLicenseError, match="no interactive terminal"),
+        ):
+            self._import_ensure()("tabpfn_2_6")
+
+    def test_browser_login_returns_none_error_includes_steps(self):
+        """Non-interactive error should include step-by-step instructions."""
+        with (
+            patch(
+                "tabpfn.browser_auth.try_browser_login",
+                return_value=None,
+            ),
+            pytest.raises(TabPFNLicenseError, match="TABPFN_TOKEN"),
         ):
             self._import_ensure()("tabpfn_2_6")
 
@@ -336,3 +349,214 @@ class TestEnsureLicenseAccepted:
             pytest.raises(TabPFNLicenseError, match="rejected"),
         ):
             self._import_ensure()("tabpfn_2_6")
+
+
+# ---------------------------------------------------------------------------
+# _has_display
+# ---------------------------------------------------------------------------
+
+
+class TestHasDisplay:
+    def test_windows_always_true(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "win32")
+        assert _has_display() is True
+
+    def test_macos_local_session(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "darwin")
+        monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        monkeypatch.delenv("DISPLAY", raising=False)
+        assert _has_display() is True
+
+    def test_macos_ssh_without_x_forwarding(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "darwin")
+        monkeypatch.setenv("SSH_CONNECTION", "1.2.3.4 5678 5.6.7.8 22")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        assert _has_display() is False
+
+    def test_macos_ssh_with_x_forwarding(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "darwin")
+        monkeypatch.setenv("SSH_CONNECTION", "1.2.3.4 5678 5.6.7.8 22")
+        monkeypatch.setenv("DISPLAY", "localhost:10.0")
+        assert _has_display() is True
+
+    def test_linux_with_x11(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "linux")
+        monkeypatch.setenv("DISPLAY", ":0")
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        assert _has_display() is True
+
+    def test_linux_with_wayland(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "linux")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+        assert _has_display() is True
+
+    def test_linux_headless(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("tabpfn.browser_auth.sys.platform", "linux")
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        assert _has_display() is False
+
+
+# ---------------------------------------------------------------------------
+# _headless_interactive_login
+# ---------------------------------------------------------------------------
+
+
+class TestHeadlessInteractiveLogin:
+    def _import_headless(self):  # noqa: ANN202
+        from tabpfn.browser_auth import _headless_interactive_login  # noqa: PLC0415
+
+        return _headless_interactive_login
+
+    def test_returns_token_from_stdin(self, monkeypatch: pytest.MonkeyPatch):
+        """User pastes a token directly."""
+        headless_login = self._import_headless()
+
+        # Simulate: _read_char_cbreak returns 'e' (first char of JWT),
+        # then sys.stdin.readline returns the rest.
+        fake_stdin = io.StringIO("yJhbGciOiJIUzI1NiJ9\n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
+
+        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="e"):
+            token = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+
+        assert token == "eyJhbGciOiJIUzI1NiJ9"
+
+    def test_copy_url_then_paste_token(
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ):
+        """User presses c to copy, then pastes a token."""
+        headless_login = self._import_headless()
+
+        call_count = 0
+
+        def fake_cbreak():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return "c"  # first call: copy
+            return "t"  # second call: start of token
+
+        fake_stdin = io.StringIO("ok-from-paste\n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
+
+        with (
+            patch("tabpfn.browser_auth._read_char_cbreak", side_effect=fake_cbreak),
+            patch("tabpfn.browser_auth._copy_osc52") as mock_osc52,
+        ):
+            token = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+
+        assert token == "tok-from-paste"
+        mock_osc52.assert_called_once()
+        assert "tabpfn_2_6" in mock_osc52.call_args[0][0]
+
+    def test_eof_returns_none(self):
+        """EOF from cbreak read returns None."""
+        headless_login = self._import_headless()
+
+        with patch("tabpfn.browser_auth._read_char_cbreak", return_value=None):
+            assert headless_login("https://ux.priorlabs.ai") is None
+
+    def test_ctrl_c_returns_none(self):
+        """Ctrl+C from cbreak read returns None."""
+        headless_login = self._import_headless()
+
+        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="\x03"):
+            assert headless_login("https://ux.priorlabs.ai") is None
+
+    def test_keyboard_interrupt_returns_none(self):
+        """KeyboardInterrupt during flow returns None."""
+        headless_login = self._import_headless()
+
+        with patch(
+            "tabpfn.browser_auth._read_char_cbreak",
+            side_effect=KeyboardInterrupt,
+        ):
+            assert headless_login("https://ux.priorlabs.ai") is None
+
+    def test_fallback_without_termios(self, monkeypatch: pytest.MonkeyPatch):
+        """When termios is unavailable, falls back to readline-based input."""
+        headless_login = self._import_headless()
+
+        import builtins  # noqa: PLC0415
+
+        _real_import = builtins.__import__
+
+        def block_termios(name, *args, **kwargs):
+            if name == "termios":
+                raise ImportError("no termios")
+            return _real_import(name, *args, **kwargs)
+
+        fake_stdin = io.StringIO("my-token-here\n")
+        monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake_stdin)
+
+        with patch("builtins.__import__", side_effect=block_termios):
+            token = headless_login("https://ux.priorlabs.ai")
+
+        assert token == "my-token-here"
+
+    def test_login_url_includes_hf_repo_id(
+        self, capsys: pytest.CaptureFixture[str]
+    ):
+        """The printed URL should include the hf_repo_id parameter."""
+        headless_login = self._import_headless()
+
+        with patch("tabpfn.browser_auth._read_char_cbreak", return_value="\x03"):
+            headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+
+        captured = capsys.readouterr()
+        assert "hf_repo_id=tabpfn_2_6" in captured.out
+
+
+# ---------------------------------------------------------------------------
+# try_browser_login routing
+# ---------------------------------------------------------------------------
+
+
+class TestTryBrowserLoginRouting:
+    def _import_try_login(self):  # noqa: ANN202
+        from tabpfn.browser_auth import try_browser_login  # noqa: PLC0415
+
+        return try_browser_login
+
+    def test_non_interactive_returns_none(self, monkeypatch: pytest.MonkeyPatch):
+        """Non-TTY stdin → returns None without attempting any login."""
+        try_login = self._import_try_login()
+        with patch("tabpfn.browser_auth.sys.stdin") as mock_stdin:
+            mock_stdin.isatty.return_value = False
+            assert try_login("https://ux.priorlabs.ai") is None
+
+    def test_headless_routes_to_headless_login(self, monkeypatch: pytest.MonkeyPatch):
+        """TTY + no display → delegates to _headless_interactive_login."""
+        try_login = self._import_try_login()
+        with (
+            patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
+            patch("tabpfn.browser_auth._has_display", return_value=False),
+            patch(
+                "tabpfn.browser_auth._headless_interactive_login",
+                return_value="headless-tok",
+            ) as mock_headless,
+        ):
+            mock_stdin.isatty.return_value = True
+            result = try_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+
+        assert result == "headless-tok"
+        mock_headless.assert_called_once_with(
+            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+        )
+
+    def test_graphical_opens_browser(self, monkeypatch: pytest.MonkeyPatch):
+        """TTY + display → opens browser (existing flow)."""
+        try_login = self._import_try_login()
+        with (
+            patch("tabpfn.browser_auth.sys.stdin") as mock_stdin,
+            patch("tabpfn.browser_auth._has_display", return_value=True),
+            patch("tabpfn.browser_auth.webbrowser.open") as mock_browser,
+            patch("tabpfn.browser_auth._poll_for_token", return_value="browser-tok"),
+        ):
+            mock_stdin.isatty.return_value = True
+            result = try_login("https://ux.priorlabs.ai")
+
+        assert result == "browser-tok"
+        mock_browser.assert_called_once()
