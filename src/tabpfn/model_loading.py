@@ -363,7 +363,7 @@ def download_all_models(to: Path) -> None:
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
     """Determine if a version has a direct download option."""
-    return version == ModelVersion.V2
+    return version in (ModelVersion.V2, ModelVersion.V2_5)
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
@@ -460,6 +460,19 @@ def _download_model(
 ) -> Literal["ok"] | list[Exception]:
     errors: list[Exception] = []
 
+    # Gated models require browser-based license acceptance before download.
+    _HF_REPOS = {
+        ModelVersion.V2_5: "tabpfn_2_5",
+        ModelVersion.V2_6: "tabpfn_2_6",
+    }
+    if version in _HF_REPOS:
+        try:
+            from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
+
+            ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
+        except Exception as e:  # noqa: BLE001
+            return [e]
+
     try:
         model_source = _get_model_source(version, ModelType(which))
     except ValueError as e:
@@ -490,8 +503,8 @@ def _download_model(
         logger.warning("HuggingFace download failed.")
         errors.append(e)
 
-    # For Version 2.5 we require gating, which we don't have in place for direct
-    # downloads.
+    # For gated versions (v2.5, v2.6) we require license acceptance, which we
+    # don't have in place for direct downloads.
     if _version_has_direct_download_option(version):
         try:
             _try_direct_downloads(to, model_source, model_name)
