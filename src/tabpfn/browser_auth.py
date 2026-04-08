@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tabpfn.errors import TabPFNLicenseError
+from tabpfn.license_telemetry import track_license_event
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -532,7 +533,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
+def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PLR0912
     """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -565,8 +566,10 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             if license_status is True:
                 save_token(token)
                 _accepted_repos.add(hf_repo_id)
+                track_license_event("cached_token_valid")
                 return True
             if license_status is None:
+                track_license_event("error", reason="server_unreachable")
                 raise TabPFNLicenseError(
                     "Could not reach the license server to verify acceptance.\n\n"
                     "Please check your internet connection and try again."
@@ -577,6 +580,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
                 "Token valid but license not accepted; opening browser for acceptance.",
             )
         elif status is None:
+            track_license_event("error", reason="server_unreachable")
             raise TabPFNLicenseError(
                 "Could not reach the license server to verify your token.\n\n"
                 "Please check your internet connection and try again."
@@ -587,8 +591,17 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             delete_cached_token()
 
     # No valid cached token — need browser login.
+    # Determine environment for telemetry.
+    if not sys.stdin.isatty():
+        env = "non_interactive"
+    elif not _has_display():
+        env = "headless_interactive"
+    else:
+        env = "graphical"
+
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
     if no_browser and no_browser not in ("0", "false", "no", "off"):
+        track_license_event("error", environment=env, reason="no_browser_env")
         raise TabPFNLicenseError(
             "TabPFN requires a one-time license acceptance to download\n"
             "model weights for local inference, but browser login is\n"
@@ -597,8 +610,11 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "obtained from https://ux.priorlabs.ai"
         )
 
+    track_license_event("started", environment=env)
+
     token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
     if token is None:
+        track_license_event("error", environment=env, reason="aborted")
         raise TabPFNLicenseError(
             "TabPFN requires a one-time license acceptance to download\n"
             "model weights for local inference, but no interactive terminal\n"
@@ -615,6 +631,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     # Verify the token we just received from the browser.
     status = verify_token(token, api_url)
     if status is False:
+        track_license_event("error", environment=env, reason="token_rejected")
         raise TabPFNLicenseError(
             "The API key received from the browser login was rejected by the\n"
             "server.  Please try again or contact support@priorlabs.ai"
@@ -627,13 +644,16 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     if license_status is True:
         print("License accepted — API key cached for future sessions.\n")  # noqa: T201
         _accepted_repos.add(hf_repo_id)
+        track_license_event("success", environment=env)
         return True
     if license_status is None:
+        track_license_event("error", environment=env, reason="server_unreachable")
         raise TabPFNLicenseError(
             "Could not reach the license server to verify acceptance.\n\n"
             "Please check your internet connection and try again."
         )
     # license_status is False
+    track_license_event("error", environment=env, reason="license_not_accepted")
     encoded = urllib.parse.quote(hf_repo_id)
     raise TabPFNLicenseError(
         "License not yet accepted. Please complete the acceptance form at\n"
