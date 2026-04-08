@@ -95,7 +95,7 @@ class InferenceEngine(ABC):
         self.save_peak_mem = save_peak_mem
         self.dtype_byte_size = dtype_byte_size
         self.force_inference_dtype = force_inference_dtype
-        self.speed_metrics: dict[str, float] = {}
+        self._speed_metrics: dict[str, float] = {}
 
     @abstractmethod
     def iter_outputs(
@@ -390,7 +390,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         preprocessed = [
             (em, em.transform_X_test(X)) for em in ensemble_members_iterator
         ]
-        self.speed_metrics["predict_preprocessing_seconds"] = (
+        self._speed_metrics["predict_preprocessing_seconds"] = (
             time.perf_counter() - preprocess_start
         )
 
@@ -422,7 +422,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             forward_time += time.perf_counter() - forward_start
             yield _move_and_squeeze_output(output, devices[0]), config
 
-        self.speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     def _call_model(  # noqa: PLR0913
         self,
@@ -579,7 +579,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
 
             yield output, self.ensemble_configs[i]
 
-        self.speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     @override
     def use_torch_inference_mode(self, *, use_inference: bool) -> None:
@@ -659,7 +659,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 feature_schema=feature_schema,
             )
         )
-        self.speed_metrics["fit_preprocessing_seconds"] = (
+        self._speed_metrics["fit_preprocessing_seconds"] = (
             time.perf_counter() - fit_preprocess_start
         )
 
@@ -700,7 +700,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         preprocess_start = time.perf_counter()
         preprocessed_test_data = [_transform_X_test(em) for em in self.ensemble_members]
-        self.speed_metrics["predict_preprocessing_seconds"] = (
+        self._speed_metrics["predict_preprocessing_seconds"] = (
             time.perf_counter() - preprocess_start
         )
 
@@ -734,7 +734,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             forward_time += time.perf_counter() - forward_start
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
-        self.speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     def _call_model(  # noqa: PLR0913
         self,
@@ -906,8 +906,8 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
         )
-        self.speed_metrics["fit_preprocessing_seconds"] = fit_preprocess_time
-        self.speed_metrics["fit_model_forward_seconds"] = fit_forward_time
+        self._speed_metrics["fit_preprocessing_seconds"] = fit_preprocess_time
+        self._speed_metrics["fit_model_forward_seconds"] = fit_forward_time
 
         self.device = device
         self.ensemble_members = ensemble_members
@@ -973,8 +973,8 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
             yield output, ensemble_member.config
 
-        self.speed_metrics["predict_preprocessing_seconds"] = preprocess_time
-        self.speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_preprocessing_seconds"] = preprocess_time
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
