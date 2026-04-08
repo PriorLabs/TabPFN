@@ -411,14 +411,18 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             for em, x_test in preprocessed
         )
 
-        forward_start = time.perf_counter()
-        outputs = list(parallel_execute(devices, model_forward_functions))
-        self.speed_metrics["predict_model_forward_seconds"] = (
-            time.perf_counter() - forward_start
-        )
+        # Use explicit next() instead of zip so we can time each model forward
+        # without forcing eager evaluation of the parallel_execute generator.
+        outputs = parallel_execute(devices, model_forward_functions)
 
-        for config, output in zip(self.ensemble_preprocessor.configs, outputs):
+        forward_time = 0.0
+        for config in self.ensemble_preprocessor.configs:
+            forward_start = time.perf_counter()
+            output = next(outputs)
+            forward_time += time.perf_counter() - forward_start
             yield _move_and_squeeze_output(output, devices[0]), config
+
+        self.speed_metrics["predict_model_forward_seconds"] = forward_time
 
     def _call_model(  # noqa: PLR0913
         self,
@@ -719,14 +723,18 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             )
         )
 
-        forward_start = time.perf_counter()
-        outputs = list(parallel_execute(devices, model_forward_functions))
-        self.speed_metrics["predict_model_forward_seconds"] = (
-            time.perf_counter() - forward_start
-        )
+        # Use explicit next() instead of zip so we can time each model forward
+        # without forcing eager evaluation of the parallel_execute generator.
+        outputs = parallel_execute(devices, model_forward_functions)
 
-        for output, ensemble_member in zip(outputs, self.ensemble_members):
+        forward_time = 0.0
+        for ensemble_member in self.ensemble_members:
+            forward_start = time.perf_counter()
+            output = next(outputs)
+            forward_time += time.perf_counter() - forward_start
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
+
+        self.speed_metrics["predict_model_forward_seconds"] = forward_time
 
     def _call_model(  # noqa: PLR0913
         self,
