@@ -44,9 +44,11 @@ TabPFN operates in two modes with different privacy properties:
 
 **Without an account (anonymous).** Telemetry is tied only to a random `install_id` generated locally on first use. This ID is not linked to any personal information and cannot be traced back to you.
 
-**With an account (pseudonymous).** If you create a TabPFN account, your `user_id` is included in telemetry events. This means usage data is linked to your account and constitutes processing of personal data under GDPR. Prior Labs GmbH acts as the data controller. Our legal basis is legitimate interests (Article 6(1)(f) GDPR) - understanding how our model is used in order to improve it. We do not use this data for advertising or share it with third parties.
+**With an account (pseudonymous).** If you create a TabPFN account, your `user_id` is included in telemetry events. This means usage data is linked to your account and constitutes processing of personal data under GDPR. Our legal basis is legitimate interests (Article 6(1)(f) GDPR) - understanding how our model is used in order to improve it. We do not use this data for advertising or share it with third parties.
 
 Your data subject rights apply in full: you may request access, correction, deletion, or export of your telemetry data at any time by contacting hello@priorlabs.ai.
+
+For further details we suggest you check out our [privacy policy](https://priorlabs.ai/privacy-policy).
 
 ## Opting out
 
