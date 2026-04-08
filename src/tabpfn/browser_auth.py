@@ -20,9 +20,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
-from pathlib import Path
 from typing import TYPE_CHECKING
 
+from tabpfn.auth_token import delete_cached_token, get_cached_token, save_token
 from tabpfn.errors import TabPFNLicenseError
 from tabpfn.settings import settings
 from tabpfn.telemetry import track_license_event
@@ -62,51 +62,6 @@ def _get_env_type() -> str:
     if not sys.stdin.isatty():
         return "non_interactive"
     return "headless_interactive" if not _has_display() else "graphical"
-
-
-# ---------------------------------------------------------------------------
-# Token cache helpers
-# ---------------------------------------------------------------------------
-
-_CACHE_DIR = Path.home() / ".cache" / "tabpfn"
-_TOKEN_FILE = _CACHE_DIR / "auth_token"
-
-# tabpfn-client stores its token here — we read it as a fallback.
-_CLIENT_TOKEN_FILE = Path.home() / ".tabpfn" / "token"
-
-
-def get_cached_token() -> str | None:
-    """Return a cached token.
-
-    Checks (in priority order):
-
-    1. ``TABPFN_TOKEN`` environment variable
-    2. ``~/.cache/tabpfn/auth_token``
-    3. ``~/.tabpfn/token`` (tabpfn-client's cache)
-    """
-    env_token = os.environ.get("TABPFN_TOKEN")
-    if env_token:
-        return env_token.strip() or None
-
-    for path in (_TOKEN_FILE, _CLIENT_TOKEN_FILE):
-        if path.is_file():
-            token = path.read_text().strip()
-            if len(token) > 0:
-                return token
-
-    return None
-
-
-def save_token(token: str) -> None:
-    """Persist *token* to ``~/.cache/tabpfn/auth_token``."""
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _TOKEN_FILE.write_text(token)
-    logger.debug("Token saved to %s", _TOKEN_FILE)
-
-
-def delete_cached_token() -> None:
-    """Remove the cached token file (if it exists)."""
-    _TOKEN_FILE.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

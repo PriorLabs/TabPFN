@@ -12,11 +12,9 @@ from unittest.mock import patch
 
 import pytest
 
+from tabpfn.auth_token import delete_cached_token, get_cached_token, save_token
 from tabpfn.browser_auth import (
     _has_display,
-    delete_cached_token,
-    get_cached_token,
-    save_token,
     verify_token,
 )
 from tabpfn.errors import TabPFNLicenseError
@@ -33,9 +31,9 @@ def _isolate_token_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Non
     token_file = cache_dir / "auth_token"
     client_file = tmp_path / ".tabpfn" / "token"
 
-    monkeypatch.setattr("tabpfn.browser_auth._CACHE_DIR", cache_dir)
-    monkeypatch.setattr("tabpfn.browser_auth._TOKEN_FILE", token_file)
-    monkeypatch.setattr("tabpfn.browser_auth._CLIENT_TOKEN_FILE", client_file)
+    monkeypatch.setattr("tabpfn.auth_token._CACHE_DIR", cache_dir)
+    monkeypatch.setattr("tabpfn.auth_token._TOKEN_FILE", token_file)
+    monkeypatch.setattr("tabpfn.auth_token._CLIENT_TOKEN_FILE", client_file)
 
     # Reset in-process cache so tests don't leak state.
     monkeypatch.setattr("tabpfn.browser_auth._accepted_repos", set())
