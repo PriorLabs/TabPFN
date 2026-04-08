@@ -418,6 +418,7 @@ def _headless_cbreak_loop(login_url: str) -> str | None:
             if not ch or ch == "\x03":  # EOF / Ctrl+C
                 sys.stdout.write("\n")
                 return None
+            # Safe to intercept 'c': JWTs always start with 'ey' (base64 of '{')
             if ch in ("c", "C"):
                 _copy_osc52(login_url)
                 sys.stdout.write("\r> \u2713 Copied to clipboard\n\n")
