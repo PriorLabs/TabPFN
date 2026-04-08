@@ -617,7 +617,6 @@ class TabPFNV2p5(Architecture):
         categorical_inds: list[list[int]] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
-        differentiable_input: bool = False,
         task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
@@ -661,7 +660,6 @@ class TabPFNV2p5(Architecture):
             num_train_rows=num_train_rows,
             num_train_labels=num_train_labels,
             batch_size=batch_size,
-            differentiable_input=differentiable_input,
         )
 
         # Add the targets as an additional column.
@@ -771,8 +769,6 @@ class TabPFNV2p5(Architecture):
         num_train_rows: int,
         num_train_labels: int,
         batch_size: int,
-        *,
-        differentiable_input: bool = False,
     ) -> torch.Tensor:
         """Preprocess and embed the target values.
 
@@ -783,7 +779,6 @@ class TabPFNV2p5(Architecture):
             num_train_rows: Total number of rows in x
             num_train_labels: Number of training labels for imputation
             batch_size: Batch size for reshaping
-            differentiable_input: If True, skip non-differentiable operations.
 
         Returns:
             Embedded targets of shape (B, Ri, X) where:
@@ -800,7 +795,6 @@ class TabPFNV2p5(Architecture):
             y_RiB1=y_RiB1,
             task_type=self.task_type,
             num_train_rows=num_train_labels,
-            differentiable_input=differentiable_input,
         )
 
         y_RiB1_concat = torch.cat([y_RiB1, y_nan_and_inf_indicator_RiB1], dim=-1)
@@ -1067,8 +1061,6 @@ def _impute_target_nan_and_inf(
     y_RiB1: torch.Tensor,
     task_type: TaskType,
     num_train_rows: int,
-    *,
-    differentiable_input: bool = False,
 ) -> torch.Tensor:
     """Impute NaN/Inf values in the target tensor.
 
@@ -1076,22 +1068,18 @@ def _impute_target_nan_and_inf(
         y_RiB1: Tensor of shape [Ri, B, 1], where Ri is the number of train+test rows.
         task_type: The task type ("regression" or "multiclass").
         num_train_rows: Number of training rows.
-        differentiable_input: If True, skip non-differentiable operations (ceil).
 
     """
-    if differentiable_input:
-        return y_RiB1
-
     if task_type == "regression":
         return _impute_nan_and_inf_with_mean(x=y_RiB1, num_train_rows=num_train_rows)
 
     # The following class imputation is performed for backwards compatibility.
     # We impute the mean and then do a ceil() operation.
-    # This is what happened in the previously used "encoder pipeline"
-    # that ran a pipeline of NanHandlingEncoderStep and
-    # MulticlassClassificationTargetEncoderStep.
+    # Only apply ceil() to imputed positions to preserve differentiability for
+    # original values (e.g. during prompt tuning).
+    nan_inf_mask = torch.isnan(y_RiB1) | torch.isinf(y_RiB1)
     y_RiB1 = _impute_nan_and_inf_with_mean(x=y_RiB1, num_train_rows=num_train_rows)
-    return y_RiB1.ceil()
+    return torch.where(nan_inf_mask, y_RiB1.ceil(), y_RiB1)
 
 
 def _normalize_feature_groups(
