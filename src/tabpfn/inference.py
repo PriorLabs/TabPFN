@@ -11,7 +11,7 @@ from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -38,6 +38,29 @@ if TYPE_CHECKING:
         TabPFNEnsembleMember,
         TabPFNEnsemblePreprocessor,
     )
+
+
+_T = TypeVar("_T")
+
+
+class _TimedIterator(Iterator[_T]):
+    """Wraps an iterator, accumulating wall-clock time spent in ``__next__``."""
+
+    def __init__(self, inner: Iterator[_T]) -> None:
+        super().__init__()
+        self._inner = inner
+        self.elapsed_seconds: float = 0.0
+
+    @override
+    def __next__(self) -> _T:
+        start = time.perf_counter()
+        value = next(self._inner)
+        self.elapsed_seconds += time.perf_counter() - start
+        return value
+
+    @override
+    def __iter__(self) -> _TimedIterator[_T]:
+        return self
 
 
 def _model_expectes_task_type_arg(model: Architecture) -> bool:
@@ -377,7 +400,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             for model_cache in self.model_caches:
                 model_cache.set_dtype(self.force_inference_dtype)
 
-        preprocess_start = time.perf_counter()
         ensemble_members_iterator = (
             self.ensemble_preprocessor.fit_transform_ensemble_members_iterator(
                 X_train=self.X_train,
@@ -387,18 +409,12 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 override_random_state=np.random.default_rng(self.static_seed),
             )
         )
-        preprocessed = [
-            (em, em.transform_X_test(X)) for em in ensemble_members_iterator
-        ]
-        self._speed_metrics["predict_preprocessing_seconds"] = (
-            time.perf_counter() - preprocess_start
-        )
 
         model_forward_functions = (
             partial(
                 self._call_model,
                 X_train=em.X_train,
-                X_test=x_test,
+                X_test=em.transform_X_test(X),
                 y_train=em.y_train,
                 feature_schema=em.feature_schema,
                 only_return_standard_out=only_return_standard_out,
@@ -408,21 +424,19 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 gpu_preprocessor=em.gpu_preprocessor,
                 task_type=task_type,
             )
-            for em, x_test in preprocessed
+            for em in ensemble_members_iterator
         )
 
-        # Use explicit next() instead of zip so we can time each model forward
-        # without forcing eager evaluation of the parallel_execute generator.
-        outputs = parallel_execute(devices, model_forward_functions)
+        timed_outputs = _TimedIterator(
+            parallel_execute(devices, model_forward_functions)
+        )
 
-        forward_time = 0.0
-        for config in self.ensemble_preprocessor.configs:
-            forward_start = time.perf_counter()
-            output = next(outputs)
-            forward_time += time.perf_counter() - forward_start
+        for config, output in zip(self.ensemble_preprocessor.configs, timed_outputs):
             yield _move_and_squeeze_output(output, devices[0]), config
 
-        self._speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_model_forward_seconds"] = (
+            timed_outputs.elapsed_seconds
+        )
 
     def _call_model(  # noqa: PLR0913
         self,
@@ -698,17 +712,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         ) -> np.ndarray | torch.Tensor:
             return X if self.no_preprocessing else ensemble_member.transform_X_test(X)
 
-        preprocess_start = time.perf_counter()
-        preprocessed_test_data = [_transform_X_test(em) for em in self.ensemble_members]
-        self._speed_metrics["predict_preprocessing_seconds"] = (
-            time.perf_counter() - preprocess_start
-        )
-
         model_forward_functions = (
             partial(
                 self._call_model,
                 X_train=ensemble_member.X_train,
-                X_test=x_test,
+                X_test=_transform_X_test(ensemble_member),
                 y_train=ensemble_member.y_train,
                 feature_schema=ensemble_member.feature_schema,
                 autocast=autocast,
@@ -718,23 +726,19 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
                 task_type=task_type,
             )
-            for ensemble_member, x_test in zip(
-                self.ensemble_members, preprocessed_test_data
-            )
+            for ensemble_member in self.ensemble_members
         )
 
-        # Use explicit next() instead of zip so we can time each model forward
-        # without forcing eager evaluation of the parallel_execute generator.
-        outputs = parallel_execute(devices, model_forward_functions)
+        timed_outputs = _TimedIterator(
+            parallel_execute(devices, model_forward_functions)
+        )
 
-        forward_time = 0.0
-        for ensemble_member in self.ensemble_members:
-            forward_start = time.perf_counter()
-            output = next(outputs)
-            forward_time += time.perf_counter() - forward_start
+        for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
-        self._speed_metrics["predict_model_forward_seconds"] = forward_time
+        self._speed_metrics["predict_model_forward_seconds"] = (
+            timed_outputs.elapsed_seconds
+        )
 
     def _call_model(  # noqa: PLR0913
         self,
