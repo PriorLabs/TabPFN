@@ -319,7 +319,6 @@ class PerFeatureTransformer(Architecture):
         data_dags: list[nx.DiGraph] | None = None,
         force_recompute_layer: bool = False,
         save_peak_memory_factor: int | None = None,
-        differentiable_input: bool = False,
         task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
@@ -330,7 +329,6 @@ class PerFeatureTransformer(Architecture):
             force_recompute_layer: If True, enable activation checkpointing for each
                 Transformer block. Otherwise, checkpoint as set in the config.
         """
-        del differentiable_input
         assert style is None
 
         if isinstance(x, dict):
