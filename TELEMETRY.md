@@ -10,6 +10,7 @@ We gather high-level usage signals - enough to guide development, never enough t
 
 - `session` - sent when a TabPFN estimator is initialized
 - `ping` - liveness check on model initialization
+- `model_load` - sent when a model is loaded from disk or cache
 - `fit_called` / `predict_called` - sent when you call `fit` or `predict`
 
 **Metadata (all events)**
