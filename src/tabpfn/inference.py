@@ -842,15 +842,19 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
         ens_models: list[Architecture] = []
         ensemble_members: list[TabPFNEnsembleMember] = []
-        fit_preprocess_time = 0.0
+        # Wrap the iterator to capture CPU preprocessing time (which runs
+        # inside __next__ of the ensemble_members_iterator).
+        timed_cpu_preprocess = _TimedIterator(ensemble_members_iterator)
+        fit_gpu_preprocess_time = 0.0
         fit_forward_time = 0.0
 
-        for ensemble_member in ensemble_members_iterator:
+        for ensemble_member in timed_cpu_preprocess:
             ensemble_members.append(ensemble_member)
 
-            preprocess_start = time.perf_counter()
             ens_model = deepcopy(models[ensemble_member.config._model_index])
             ens_model = ens_model.to(device)
+
+            gpu_preprocess_start = time.perf_counter()
             X = ensemble_member.X_train
             y = ensemble_member.y_train
 
@@ -873,7 +877,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                 ens_model.type(force_inference_dtype)
                 X = X.type(force_inference_dtype)
                 y = y.type(force_inference_dtype)
-            fit_preprocess_time += time.perf_counter() - preprocess_start
+            fit_gpu_preprocess_time += time.perf_counter() - gpu_preprocess_start
 
             # We do not reset the peak memory for cache_kv mode
             # because the entire data has to be passed through the model
@@ -901,7 +905,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             dtype_byte_size=dtype_byte_size,
             force_inference_dtype=force_inference_dtype,
         )
-        self._speed_metrics["fit_preprocessing_seconds"] = fit_preprocess_time
+        self._speed_metrics["fit_preprocessing_seconds"] = (
+            timed_cpu_preprocess.elapsed_seconds + fit_gpu_preprocess_time
+        )
         self._speed_metrics["fit_model_forward_seconds"] = fit_forward_time
 
         self.device = device
