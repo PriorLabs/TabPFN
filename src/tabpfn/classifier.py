@@ -229,7 +229,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         differentiable_input: bool = False,
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
-        cache_model_to_memory: bool = False,
     ) -> None:
         """Construct a TabPFN classifier.
 
@@ -453,10 +452,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 `eval_metric`. See
                 [tabpfn.inference_tuning.ClassifierTuningConfig][] for details
                 and options.
-
-            cache_model_to_memory:
-                If True, the raw model checkpoint is cached in memory so that
-                repeated `fit()` calls skip disk I/O. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -487,7 +482,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
-        self.cache_model_to_memory = cache_model_to_memory
         initialize_telemetry()
 
         # Only anonymously record `fit_mode` usage
