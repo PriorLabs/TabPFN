@@ -740,7 +740,7 @@ class TabPFNV2p6(Architecture):
         nan_and_inf_indicator_RiBgF = _generate_nan_and_inf_indicator(x=x_RiBgF)
         # For consistency with old base implementation, the imputation is done
         # before the standard scaling
-        x_RiBgF = _impute_nan_and_inf_with_mean(
+        x_RiBgF, _ = _impute_nan_and_inf_with_mean(
             x=x_RiBgF, num_train_rows=num_train_labels
         )
         x_RiBgF = self.standard_scaler(x=x_RiBgF, num_train_rows=num_train_labels)
@@ -921,17 +921,22 @@ def _pad_and_reshape_feature_groups(
     return x_RiBgF, num_feature_groups
 
 
-def _impute_nan_and_inf_with_mean(x: torch.Tensor, num_train_rows: int) -> torch.Tensor:
+def _impute_nan_and_inf_with_mean(
+    x: torch.Tensor, num_train_rows: int
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Impute the nan and inf with the mean of the feature.
 
     Args:
         x: Tensor of shape [R, ...], where
             R = number of rows
         num_train_rows: The position to use for single evaluation.
+
+    Returns:
+        A tuple of (imputed tensor, nan/inf mask).
     """
     feature_means = torch_nanmean(x=x[:num_train_rows], axis=0, include_inf=True)
     nan_mask = torch.logical_or(torch.isnan(x), torch.isinf(x))
-    return torch.where(nan_mask, feature_means.unsqueeze(0).expand_as(x), x)
+    return torch.where(nan_mask, feature_means.unsqueeze(0).expand_as(x), x), nan_mask
 
 
 def _impute_target_nan_and_inf(
@@ -948,14 +953,18 @@ def _impute_target_nan_and_inf(
 
     """
     if task_type == "regression":
-        return _impute_nan_and_inf_with_mean(x=y_RiB1, num_train_rows=num_train_rows)
+        y_RiB1, _ = _impute_nan_and_inf_with_mean(
+            x=y_RiB1, num_train_rows=num_train_rows
+        )
+        return y_RiB1
 
     # The following class imputation is performed for backwards compatibility.
     # We impute the mean and then do a ceil() operation.
     # Only apply ceil() to imputed positions to preserve differentiability for
     # original values (e.g. during prompt tuning).
-    nan_inf_mask = torch.isnan(y_RiB1) | torch.isinf(y_RiB1)
-    y_RiB1 = _impute_nan_and_inf_with_mean(x=y_RiB1, num_train_rows=num_train_rows)
+    y_RiB1, nan_inf_mask = _impute_nan_and_inf_with_mean(
+        x=y_RiB1, num_train_rows=num_train_rows
+    )
     return torch.where(nan_inf_mask, y_RiB1.ceil(), y_RiB1)
 
 
