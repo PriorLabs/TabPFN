@@ -57,6 +57,13 @@ def _has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
+def _get_env_type() -> str:
+    """Classify the current environment for telemetry and flow selection."""
+    if not sys.stdin.isatty():
+        return "non_interactive"
+    return "headless_interactive" if not _has_display() else "graphical"
+
+
 # ---------------------------------------------------------------------------
 # Token cache helpers
 # ---------------------------------------------------------------------------
@@ -533,7 +540,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
 # ---------------------------------------------------------------------------
 
 
-def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PLR0912
+def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     """Ensure the user has accepted the TabPFN license.
 
     Checks for a cached token, verifies it, and falls back to browser login
@@ -556,6 +563,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
 
     # Resolve the canonical license version string from HF; fall back to repo ID.
     license_version = _get_license_name(hf_repo_id) or hf_repo_id
+    env = _get_env_type()
 
     token = get_cached_token()
     if token is not None:
@@ -566,10 +574,12 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
             if license_status is True:
                 save_token(token)
                 _accepted_repos.add(hf_repo_id)
-                track_license_event("cached_token_valid")
+                track_license_event("cached_token_valid", environment=env)
                 return True
             if license_status is None:
-                track_license_event("error", reason="server_unreachable")
+                track_license_event(
+                    "error", environment=env, reason="server_unreachable"
+                )
                 raise TabPFNLicenseError(
                     "Could not reach the license server to verify acceptance.\n\n"
                     "Please check your internet connection and try again."
@@ -580,7 +590,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
                 "Token valid but license not accepted; opening browser for acceptance.",
             )
         elif status is None:
-            track_license_event("error", reason="server_unreachable")
+            track_license_event("error", environment=env, reason="server_unreachable")
             raise TabPFNLicenseError(
                 "Could not reach the license server to verify your token.\n\n"
                 "Please check your internet connection and try again."
@@ -591,13 +601,6 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901, PL
             delete_cached_token()
 
     # No valid cached token — need browser login.
-    # Determine environment for telemetry.
-    if not sys.stdin.isatty():
-        env = "non_interactive"
-    elif not _has_display():
-        env = "headless_interactive"
-    else:
-        env = "graphical"
 
     no_browser = os.environ.get("TABPFN_NO_BROWSER", "").strip()
     if no_browser and no_browser not in ("0", "false", "no", "off"):
