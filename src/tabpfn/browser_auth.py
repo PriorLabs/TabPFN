@@ -24,8 +24,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from tabpfn.errors import TabPFNLicenseError
-from tabpfn.license_telemetry import track_license_event
 from tabpfn.settings import settings
+from tabpfn.telemetry import track_license_event
 
 if TYPE_CHECKING:
     from typing import Literal

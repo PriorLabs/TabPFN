@@ -61,15 +61,13 @@ class TestGetTelemetryConfig:
 
 class TestGetUserId:
     def test_returns_none_when_no_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(telemetry_module, "get_cached_auth_token", lambda: None)
+        monkeypatch.setattr("tabpfn.browser_auth.get_cached_token", lambda: None)
         assert telemetry_module._get_user_id() is None
 
     def test_returns_none_when_token_invalid(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(
-            telemetry_module, "get_cached_auth_token", lambda: "not-a-jwt"
-        )
+        monkeypatch.setattr("tabpfn.browser_auth.get_cached_token", lambda: "not-a-jwt")
         assert telemetry_module._get_user_id() is None
 
     def test_returns_user_claim_when_token_valid(
@@ -81,7 +79,7 @@ class TestGetUserId:
             "x" * 32,
             algorithm="HS256",
         )
-        monkeypatch.setattr(telemetry_module, "get_cached_auth_token", lambda: token)
+        monkeypatch.setattr("tabpfn.browser_auth.get_cached_token", lambda: token)
         assert telemetry_module._get_user_id() == "user-123"
 
 

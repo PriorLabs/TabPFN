@@ -10,7 +10,8 @@ To disable, set the environment variable::
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from typing import Any, cast
 
 import jwt
@@ -30,6 +31,7 @@ from tabpfn_common_utils.telemetry.core.events import (
     ModelLoadEvent,
     PingEvent,
     SessionEvent,
+    _get_install_id,
 )
 from tabpfn_common_utils.telemetry.core.service import ProductTelemetry
 from tabpfn_common_utils.telemetry.interactive import (
@@ -38,9 +40,58 @@ from tabpfn_common_utils.telemetry.interactive import (
     ping,
 )
 
-from tabpfn.browser_auth import get_cached_token as get_cached_auth_token
+from tabpfn.auth_token import get_cached_token as get_cached_auth_token
 
-__all__ = ["init", "set_init_params", "set_model_config", "track_model_call"]
+logger = logging.getLogger(__name__)
+
+__all__ = [
+    "init",
+    "set_init_params",
+    "set_model_config",
+    "track_license_event",
+    "track_model_call",
+]
+
+
+@dataclass
+class LicenseFlowEvent(BaseTelemetryEvent):
+    """Event emitted at key points of the license acceptance flow.
+
+    Used to build a funnel: started -> success vs error, broken down by
+    environment and failure reason.
+    """
+
+    outcome: str = ""
+    environment: str | None = None
+    method: str | None = None
+    reason: str | None = None
+    install_id: str = field(default_factory=_get_install_id, init=False)
+
+    @property
+    def name(self) -> str:
+        return "license_flow"
+
+
+def track_license_event(
+    outcome: str,
+    *,
+    environment: str | None = None,
+    method: str | None = None,
+    reason: str | None = None,
+) -> None:
+    """Fire a license flow telemetry event, silently ignoring errors."""
+    try:
+        _capture_event_with_user_id(
+            LicenseFlowEvent(
+                outcome=outcome,
+                environment=environment,
+                method=method,
+                reason=reason,
+            )
+        )
+    except Exception:  # noqa: BLE001
+        logger.debug("Failed to capture license flow event", exc_info=True)
+
 
 _cached_user_id: str | None = None
 
@@ -146,10 +197,13 @@ def _capture_event_with_user_id(
 
     # We passthrough the session and ping events anonymously.
     # These events still contain anonymous and valuable runtime metadata.
+    # LicenseFlowEvent must also pass through because it fires before/during
+    # authentication, when no user ID is available yet.
     passthrough_events = (
         SessionEvent,
         PingEvent,
         ModelLoadEvent,
+        LicenseFlowEvent,
     )
     if user_id is None and not isinstance(event, passthrough_events):
         return
