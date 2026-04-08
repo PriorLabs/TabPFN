@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING
 
 import torch
 
+from tabpfn.settings import settings
+
 if TYPE_CHECKING:
     from tabpfn.constants import XType
 
@@ -31,12 +33,22 @@ class TabPFNLicenseError(TabPFNError):
 
     def __init__(self, message: str | None = None):
         if message is None:
+            gui_url = settings.tabpfn.auth_gui_url
             message = (
-                "TabPFN requires license acceptance before downloading.\n\n"
-                "To accept the license, run your script in an interactive terminal\n"
-                "so a browser window can open for login, or set the TABPFN_TOKEN\n"
-                "environment variable with a valid token obtained from\n"
-                "https://ux.priorlabs.ai"
+                "TabPFN requires a one-time license acceptance"
+                " to download model weights for local"
+                " inference.\n\n"
+                "To authenticate in a non-interactive"
+                " environment:\n"
+                f"  1. Open {gui_url} in a browser"
+                " and log in (or register)\n"
+                "  2. Accept the license on the Licenses tab\n"
+                "  3. Copy your API Key from"
+                f" {gui_url}/account\n"
+                "  4. Set the environment variable:"
+                ' export TABPFN_TOKEN="<your-api-key>"\n'
+                "     or in Python (before calling .fit()):"
+                ' import os; os.environ["TABPFN_TOKEN"] = "<your-api-key>"'
             )
         super().__init__(message)
 
