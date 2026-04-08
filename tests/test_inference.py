@@ -83,16 +83,13 @@ class _TestModel(Architecture):
         pass
 
 
-class _TestModelLegacy(torch.nn.Module):
+class _TestModelLegacy(Architecture):
     """A test model whose forward pass doesn't have task_type argument."""
 
     def __init__(self) -> None:
         """Create a new instance."""
         super().__init__()
         self.parameter = torch.nn.Parameter(torch.tensor(1.0))
-
-    def get_default_performance_options(self) -> PerformanceOptions:
-        return PerformanceOptions()
 
     def forward(
         self,
