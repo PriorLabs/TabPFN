@@ -10,7 +10,7 @@ import torch
 from numpy.random import default_rng
 from torch import Tensor
 
-from tabpfn.architectures.interface import Architecture
+from tabpfn.architectures.interface import Architecture, PerformanceOptions
 from tabpfn.inference import InferenceEngineCachePreprocessing, InferenceEngineOnDemand
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
@@ -37,8 +37,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -49,8 +48,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
     ) -> dict[str, Tensor]: ...
 
     @override
@@ -61,8 +59,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass, see doc string of `Architecture`."""
@@ -94,6 +91,9 @@ class _TestModelLegacy(torch.nn.Module):
         super().__init__()
         self.parameter = torch.nn.Parameter(torch.tensor(1.0))
 
+    def get_default_performance_options(self) -> PerformanceOptions:
+        return PerformanceOptions()
+
     def forward(
         self,
         x: Tensor | dict[str, Tensor],
@@ -101,14 +101,12 @@ class _TestModelLegacy(torch.nn.Module):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
     ) -> Tensor | dict[str, Tensor]:
         del (
             only_return_standard_out,
             categorical_inds,
-            force_recompute_layer,
-            save_peak_memory_factor,
+            performance_options,
         )
         """Perform a forward pass."""
         assert isinstance(x, Tensor)
