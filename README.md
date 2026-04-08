@@ -496,15 +496,14 @@ pre-commit run --all-files
 pytest tests/
 ```
 
-## Anonymized Telemetry
+## Telemetry
 
-This project collects fully anonymous usage telemetry with an option to opt-out of any telemetry or opt-in to extended telemetry.
+This project collects usage telemetry with an option to opt-out.
 
 The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
-- **No personal data is collected**
+- **Personal data is collected only if user provided consent and accepted the terms of service**
 - **No code, model inputs, or outputs are ever sent**
-- **Data is strictly anonymous and cannot be linked to individuals**
 
 For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 

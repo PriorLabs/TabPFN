@@ -42,6 +42,8 @@ from tabpfn.browser_auth import get_cached_token as get_cached_auth_token
 
 __all__ = ["init", "set_init_params", "set_model_config", "track_model_call"]
 
+_cached_user_id: str | None = None
+
 
 @dataclass
 class _TelemetryConfig:
@@ -72,7 +74,7 @@ def _patch_client() -> None:
     # Patch the telemetry client with the custom configuration
     instance._posthog_client = Posthog(
         project_api_key=config.project_token,
-        host=instance.HOST,
+        host=config.api_host,
         disable_geoip=True,
         enable_exception_autocapture=False,
         max_queue_size=10,
@@ -107,18 +109,10 @@ def _get_telemetry_config() -> _TelemetryConfig | None:
 
 
 def _get_user_id() -> str | None:
-    """Get the user ID from the authentication token.
+    global _cached_user_id  # noqa: PLW0603
+    if _cached_user_id is not None:
+        return _cached_user_id
 
-    The authentication token is cached in the browser_auth module. A token
-    is acquired while accepting the license.
-
-    We do not cache the user ID in memory because it may be set during the
-    execution of the code, while decoding the JWT token takes up to 3ms
-    so it does not slow down the execution of the code.
-
-    Returns:
-        The user ID from the authentication token.
-    """
     token = get_cached_auth_token()
     if token is None:
         return None
@@ -126,11 +120,13 @@ def _get_user_id() -> str | None:
     try:
         payload = jwt.decode(token, options={"verify_signature": False})
     except Exception:  # noqa: BLE001
-        # Silently ignore all raised exceptions because we don't want
-        # to block the execution of the code if the token is invalid
         return None
 
-    return payload.get("user")
+    user = payload.get("user")
+    if user is not None:
+        _cached_user_id = user
+
+    return user
 
 
 def _capture_event_with_user_id(

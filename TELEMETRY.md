@@ -1,71 +1,97 @@
 # 📊 Telemetry
 
-This project includes lightweight, anonymous telemetry to help us improve TabPFN.  
+This project includes lightweight telemetry to help us improve TabPFN.  
 We've designed this with two goals in mind:
 
-1. ✅ Be **fully GDPR-compliant** (no personal data, no sensitive data, no surprises)  
-2. ✅ Be **OSS-friendly and transparent** about what we track and why  
-
-If you'd rather not send telemetry, you can always opt out (see **Opting out**).
+1. ✅ Be **fully GDPR-compliant** (transparent, opt-out at any time, no surprises)
+2. ✅ Be **OSS-friendly** about what we track and why
 
 ---
 
 ## 🔍 What we collect
 
-We only gather **very high-level usage signals** — enough to guide development, never enough to identify you or your data.  
-
-Here's the full list:
+We gather **high-level usage signals** - enough to guide development, never enough to expose your data or code.
 
 ### Events
-- `ping` – sent when models initialize, used to check liveness  
-- `fit_called` – sent when you call `fit`  
+- `ping` – sent when models initialize, used to check liveness
+- `fit_called` – sent when you call `fit`
 - `predict_called` – sent when you call `predict`
-- `session` - sent whenever a user initializes a TabPFN estimator.
+- `session` – sent whenever a TabPFN estimator is initialized
 
 ### Metadata (all events)
 - `python_version` – version of Python you're running
 - `tabpfn_version` – TabPFN package version
 - `timestamp` – time of the event
-- `numpy_vesion` - local Numpy version
-- `pandas_version` - local Pandas version
-- `gpu_type` - type of GPU TabPFN is running on.
-- `install_date` - `year-month-day` when TabPFN was used for the first time
-- `install_id` - unique, random and anonymous installation ID.
+- `numpy_version` – local NumPy version
+- `pandas_version` – local Pandas version
+- `gpu_type` – type of GPU TabPFN is running on
+- `install_date` – `year-month-day` when TabPFN was used for the first time
+- `install_id` – unique, random installation identifier (see below)
 
 ### Extra metadata (`fit` / `predict` only)
-- `task` – whether the call was for **classification** or **regression**  
-- `num_rows` – *rounded* number of rows in your dataset  
-- `num_columns` – *rounded* number of columns in your dataset  
-- `duration_ms` – time it took to complete the call  
+- `task` – classification or regression
+- `num_rows` – *rounded* number of rows in your dataset
+- `num_columns` – *rounded* number of columns in your dataset
+- `duration_ms` – time it took to complete the call
 
 ---
 
-## 🛡️ How we protect your privacy
+## 👤 Anonymous vs. account-linked telemetry
 
-- **No inputs, no outputs, no code** ever leave your machine.  
-- **No personal data** is collected.  
-- Dataset shapes are **rounded into ranges** (e.g. `(953, 17)` → `(1000, 20)`) so exact dimensionalities can't be linked back to you.  
-- The data is strictly anonymous — it cannot be tied to individuals, projects, or datasets.  
+TabPFN operates in two modes with **different privacy properties**:
 
-This approach lets us understand dataset *patterns* (e.g. "most users run with ~1k features") while ensuring no one's data is exposed.  
+### Without an account (anonymous)
+
+If you use TabPFN without logging in, telemetry is tied only to a random 
+`install_id` generated locally on first use. This ID is **not linked to any 
+personal information** and cannot be traced back to you.
+
+### With an account (pseudonymous)
+
+If you accept the TabPFN license and create an account, your `user_id` is 
+included in telemetry events. This means:
+
+- Usage data (events and metadata listed above) **is linked to your account**
+- This constitutes **processing of personal data** under GDPR
+- Prior Labs GmbH acts as the **data controller** for this data
+- Our legal basis is **legitimate interests** (Article 6(1)(f) GDPR): understanding how our model is used in order to improve it. We do not use this data for advertising or share it with third parties.
+
+Your **data subject rights** apply in full: you may request access, correction, 
+deletion, or export of your telemetry data at any time by contacting hello@priorlabs.ai.
+
+Even with an account, **no inputs, outputs, model weights, or code ever leave 
+your machine.** Dataset shapes are rounded into ranges so exact dimensionalities 
+are not recorded.
 
 ---
 
-## 🤔 Why collect telemetry?
+## 🛡️ What we never collect
 
-Open-source projects don't get much feedback unless people file issues. Telemetry helps us:  
-- See which parts of TabPFN are most used (fit vs predict, classification vs regression)  
-- Detect performance bottlenecks and stability issues  
-- Prioritize improvements that benefit the most users  
+Regardless of account status:
 
-This information goes directly into **making TabPFN better** for the community.  
+- No training data, features, labels, or model outputs
+- No file paths, environment variables, or hostnames
+- No exact dataset shapes (only rounded ranges)
+- No code
 
 ---
 
 ## 🚫 Opting out
 
-Don't want to send telemetry? No problem — just set the environment variable:
-
+Set the environment variable to disable all telemetry entirely:
 ```bash
 export TABPFN_DISABLE_TELEMETRY=1
 ```
+
+---
+
+## 🤔 Why collect telemetry?
+
+Open-source projects don't get much feedback unless people file issues. 
+Telemetry helps us:
+
+- See which parts of TabPFN are most used
+- Detect performance bottlenecks
+- Prioritize improvements that benefit the most users
+
+This goes directly into **making TabPFN better** for the community.
