@@ -158,7 +158,7 @@ def _capture_event_with_user_id(
         "properties": properties,
     }
 
-    # Events may still be anonymous, and we wanna keep them that way
+    # Unless the user is authenticated, we capture the event anonymously
     if user_id is not None:
         kwargs["distinct_id"] = user_id
 
