@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from abc import ABC, abstractmethod
 from dataclasses import asdict
 from typing import Any, Literal, Protocol, overload
@@ -49,6 +50,47 @@ def _get_unused_items(
             if len(subconfig_unused) > 0:
                 unused[k] = subconfig_unused
     return unused
+
+
+@dataclasses.dataclass(frozen=True)
+class PerformanceOptions:
+    """Options controlling performance/memory trade-offs in the forward pass.
+
+    Pass an instance of this class as the `performance_options` argument to
+    `Architecture.forward` to tune memory usage and compute behaviour for a
+    single call without changing model weights or configuration.
+
+    These are purely optional performance tweaks.  Each architecture may
+    choose to support, partially support, or silently ignore any individual
+    option — they will never raise an error if an unsupported option is passed.
+    """
+
+    save_peak_memory_factor: int | None = None
+    """Chunk factor for within-layer memory saving (attention, MLP, layer norm).
+
+    When set, the attention computation, MLP, and layer-norm steps are split into
+    `save_peak_memory_factor` chunks and executed sequentially, avoiding the need
+    to materialise the full intermediate tensors.  `None` disables chunking
+    (default).  Higher values reduce peak GPU memory, and can also increase
+    throughput by reducing memory pressure and the number of CPU<->GPU
+    synchronisation points required for memory allocations."""
+
+    force_recompute_layer: bool = False
+    """Enable activation checkpointing (gradient recomputation) for all layers.
+
+    When ``True``, intermediate activations are not stored during the forward pass;
+    instead they are recomputed from scratch during the backward pass.  This trades
+    compute for memory and is useful when training with very large context sizes.
+    Has no effect during inference (``torch.no_grad`` / ``torch.inference_mode``).
+    """
+
+    use_chunkwise_inference: bool = False
+    """Use the chunked inference path that avoids materialising `(B, Ri, C, E)`.
+
+    When `True`, the decoder iterates over test rows and feature groups in small
+    chunks so that the full `(batch, rows, cols, embed)` tensor is never fully
+    resident in memory at once.
+    """
 
 
 class ArchitectureModule(Protocol):
@@ -113,8 +155,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor: ...
 
@@ -127,8 +168,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> dict[str, Tensor]: ...
 
@@ -141,8 +181,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
         """Perform a forward pass.
@@ -169,24 +208,8 @@ class Architecture(nn.Module, ABC):
 
             categorical_inds: The indices of categorical features.
 
-            force_recompute_layer: If True, enable activation checkpointing for this
-                forward pass. If False, the model may use activation checkpointing as
-                determined by its config. This is useful, during training, to only
-                enable checkpointing for particularly large datasets, while usually
-                keeping it disabled.
-
-            save_peak_memory_factor:
-                If not None, enable batching internally in the model. This reduces the
-                peak memory usage by chunking the inputs to various layers (e.g.
-                attention, MLP, and layer norm) along the batch dimension, and
-                processing each chunk sequentially rather than as one larger tensor. The
-                value of this option determines how many chunks the input is divided
-                into; a higher value results in lower peak memory consumption.
-
-                This can only be used during inference. Some architectures do not
-                support it and will ignore this option.
-
-                If None, this feature is disabled.
+            performance_options: Performance and memory options for this forward pass.
+                If None, uses defaults (no memory saving, no recomputation).
             task_type: The type of task, typically "classification" or "regression".
 
         Returns:
@@ -199,3 +222,15 @@ class Architecture(nn.Module, ABC):
             Particular models may also return additional information.
         """
         ...
+
+    def get_default_performance_options(self) -> PerformanceOptions:
+        """Return the default :class:`PerformanceOptions` for this architecture.
+
+        Subclasses may override this to change the defaults, e.g. to enable
+        memory-efficient inference by default for large models.
+        """
+        return PerformanceOptions(
+            save_peak_memory_factor=None,
+            force_recompute_layer=False,
+            use_chunkwise_inference=False,
+        )

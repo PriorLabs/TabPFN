@@ -24,7 +24,11 @@ from tabpfn.architectures.encoders.steps._ops import (
     select_features,
     torch_nanmean,
 )
-from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+from tabpfn.architectures.interface import (
+    Architecture,
+    ArchitectureConfig,
+    PerformanceOptions,
+)
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
@@ -608,21 +612,24 @@ class TabPFNV2p5(Architecture):
         return x_BRGX
 
     @override
-    def forward(
+    def forward(  # noqa: C901
         self,
         x: torch.Tensor | dict[str, torch.Tensor],
         y: torch.Tensor | dict[str, torch.Tensor] | None,
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 
         See ModelInterface.forward() for the full docstring.
         """
+        if performance_options is None:
+            performance_options = self.get_default_performance_options()
+        force_recompute_layer = performance_options.force_recompute_layer
+        save_peak_memory_factor = performance_options.save_peak_memory_factor
         del categorical_inds
         if isinstance(x, dict):
             x = x["main"]

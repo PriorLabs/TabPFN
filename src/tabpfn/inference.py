@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
@@ -23,6 +24,7 @@ from tabpfn.architectures.base.memory import (
     MemorySavingMode,
     should_save_peak_mem,
 )
+from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.torch import (
@@ -460,8 +462,12 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         )
         batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
-        save_peak_memory_factor = (
-            DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
+        performance_options = model.get_default_performance_options()
+        performance_options = dataclasses.replace(
+            performance_options,
+            save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+            if save_peak_mem
+            else None,
         )
 
         X_full = _maybe_run_gpu_preprocessing(
@@ -480,7 +486,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
-                save_peak_memory_factor=save_peak_memory_factor,
+                performance_options=performance_options,
                 **kwargs,
             )
 
@@ -758,8 +764,12 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         )
         batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
-        save_peak_memory_factor = (
-            DEFAULT_SAVE_PEAK_MEMORY_FACTOR if save_peak_mem else None
+        performance_options = model.get_default_performance_options()
+        performance_options = dataclasses.replace(
+            performance_options,
+            save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+            if save_peak_mem
+            else None,
         )
 
         X_full = _maybe_run_gpu_preprocessing(
@@ -780,7 +790,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
-                save_peak_memory_factor=save_peak_memory_factor,
+                performance_options=performance_options,
                 **kwargs,
             )
 
@@ -961,7 +971,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                     # When the KV cache is enabled, we assume we are under memory
                     # pressure and enable the saving mode.
                     # TODO: Use the heuristic in this case also.
-                    save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
+                    performance_options=PerformanceOptions(
+                        save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+                    ),
                     **kwargs,
                 )
             forward_time += time.perf_counter() - forward_start
