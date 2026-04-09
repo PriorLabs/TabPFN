@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [7.1.1] - 2026-04-09
+
+### Added
+
+- Add modular experiment logging for finetuning with `experiment_logger` parameter, including `WandbLogger` for W&B tracking and a `FinetuningLogger` protocol for custom integrations. ([#815](https://github.com/PriorLabs/TabPFN/pull/815))
+- Add three-tier authentication flow: browser-based login for graphical environments, headless interactive login with clipboard copy for SSH/cluster sessions, and clear step-by-step instructions for fully non-interactive environments. ([#862](https://github.com/PriorLabs/TabPFN/pull/862))
+
+### Changed
+
+- - Optimize regressor predict method for memory efficiency
+    - Average ensemble outputs on-the-fly instead of accumulating all outputs
+    - Reduces memory usage by avoiding storage of all intermediate outputs, especially beneficial for large `n_estimators` ([#745](https://github.com/PriorLabs/TabPFN/pull/745))
+
+### Fixed
+
+- Fix bugs where fit_mode="fit_with_cache" produced slightly incorrect predictions in v2.5 (but not v2): thinking tokens were added twice, `inference_precision` flag was not applied correctly. ([#852](https://github.com/PriorLabs/TabPFN/pull/852))
+
+
 ## [7.1.0] - 2026-04-02
 
 ### Added
