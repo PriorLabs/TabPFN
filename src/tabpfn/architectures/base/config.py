@@ -69,7 +69,8 @@ class ModelConfig(ArchitectureConfig):
     """If True, enables activation checkpointing for each PerFeatureEncoderLayer in the
     encoder. This saves memory. recompute_attn is a related flag which checkpoints the
     attention and mlp layers individually. Note that the forward pass takes an argument
-    `force_recompute_layer` which can be used to force recomputation of the layer."""
+    `PerformanceOptions.force_recompute_layer` which can be used to force recomputation
+    of the layer."""
     remove_empty_features: Literal[True] = True
     remove_outliers: Literal[False] = False
     use_separate_decoder: Literal[False] = False

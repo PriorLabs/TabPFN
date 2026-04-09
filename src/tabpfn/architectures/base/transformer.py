@@ -23,7 +23,7 @@ from tabpfn.architectures.encoders import (
     NanHandlingEncoderStep,
     TorchPreprocessingPipeline,
 )
-from tabpfn.architectures.interface import Architecture
+from tabpfn.architectures.interface import Architecture, PerformanceOptions
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.errors import TabPFNValidationError
 
@@ -287,8 +287,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> torch.Tensor: ...
 
@@ -302,8 +301,7 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
-        save_peak_memory_factor: int | None = None,
-        force_recompute_layer: bool = False,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> dict[str, torch.Tensor]: ...
 
@@ -317,20 +315,18 @@ class PerFeatureTransformer(Architecture):
         categorical_inds: list[list[int]] | None = None,
         style: torch.Tensor | None = None,
         data_dags: list[nx.DiGraph] | None = None,
-        force_recompute_layer: bool = False,
-        save_peak_memory_factor: int | None = None,
-        differentiable_input: bool = False,
+        performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Perform a forward pass.
 
         See ModelInterface.forward() for the full docstring.
 
-        Args:
-            force_recompute_layer: If True, enable activation checkpointing for each
-                Transformer block. Otherwise, checkpoint as set in the config.
         """
-        del differentiable_input
+        if performance_options is None:
+            performance_options = self.get_default_performance_options()
+        force_recompute_layer = performance_options.force_recompute_layer
+        save_peak_memory_factor = performance_options.save_peak_memory_factor
         assert style is None
 
         if isinstance(x, dict):
@@ -524,7 +520,13 @@ class PerFeatureTransformer(Architecture):
             )
         del embedded_y, embedded_x
 
-        if self.add_thinking_tokens is not None:
+        is_kv_cache_prediction = (
+            self.cache_trainset_representation and single_eval_pos == 0
+        )
+
+        # The thinking tokens are added when the cache is populated, so we don't add
+        # them again when using the cache.
+        if self.add_thinking_tokens is not None and not is_kv_cache_prediction:
             embedded_input, single_eval_pos = self.add_thinking_tokens(
                 embedded_input,
                 single_eval_pos,
