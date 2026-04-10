@@ -8,6 +8,7 @@ import pytest
 import torch
 
 from tabpfn.architectures import tabpfn_v2_6
+from tabpfn.architectures.interface import PerformanceOptions
 
 
 def _get_model() -> tabpfn_v2_6.TabPFNV2p6:
@@ -34,11 +35,12 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> Non
     x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
     y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
 
-    output_without_memory_saving = arch(
-        x, y, only_return_standard_out=False, save_peak_memory_factor=None
-    )
+    output_without_memory_saving = arch(x, y, only_return_standard_out=False)
     output_with_memory_saving = arch(
-        x, y, only_return_standard_out=False, save_peak_memory_factor=4
+        x,
+        y,
+        only_return_standard_out=False,
+        performance_options=PerformanceOptions(save_peak_memory_factor=4),
     )
 
     msg = "Output keys do not match between implementations"
@@ -57,11 +59,12 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
     x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
     y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
 
-    output_without_recomputation = arch(
-        x, y, only_return_standard_out=False, force_recompute_layer=False
-    )
+    output_without_recomputation = arch(x, y, only_return_standard_out=False)
     output_with_recomputation = arch(
-        x, y, only_return_standard_out=False, force_recompute_layer=True
+        x,
+        y,
+        only_return_standard_out=False,
+        performance_options=PerformanceOptions(force_recompute_layer=True),
     )
 
     msg = "Output keys do not match between implementations"
@@ -92,5 +95,5 @@ def test__forward__no_test_set_works_batch_size_one() -> None:
     x = torch.randn(1, 1, 20, dtype=torch.float64) * 0.1
     y = torch.randint(0, 10, [1, 1], dtype=torch.float64)
 
-    out = arch(x, y, only_return_standard_out=False, force_recompute_layer=False)
+    out = arch(x, y, only_return_standard_out=False)
     assert out["standard"].shape == (0, 1, 10)
