@@ -475,9 +475,14 @@ def _subsample_features_balanced(
 ) -> list[np.ndarray | None]:
     """Balanced round-robin sampling from a shared shuffled pool.
 
-    Ensures each feature appears approximately the same number of times across
-    all estimators. When the pool is exhausted, it is reshuffled and refilled.
+    Features are globally shuffled once so that consecutive pool positions
+    correspond to unrelated original features. This prevents the round-robin
+    from systematically grouping neighboring columns (which may be correlated)
+    into the same estimator. Each feature appears approximately the same number
+    of times across all estimators.
     """
+    # Global shuffle: slot i -> original feature index shuffled_order[i].
+    shuffled_order = rng.permutation(n_total_features)
     subsample_feature_indices: list[np.ndarray | None] = []
     pool: list[int] = []
 
@@ -486,26 +491,28 @@ def _subsample_features_balanced(
             subsample_feature_indices.append(None)
             continue
 
-        indices: list[int] = []
+        slots: list[int] = []
         remaining = size
 
         while remaining > 0:
             if len(pool) == 0:
-                # Reshuffle and create a new pool of all feature indices,
-                # excluding any already selected for this member to avoid
-                # duplicates.
-                already_selected = set(indices)
+                # Refill pool with slot indices, excluding any already selected
+                # for this member to avoid duplicates.
+                already_selected = set(slots)
                 available = [
                     i for i in range(n_total_features) if i not in already_selected
                 ]
-                pool = rng.permutation(available).tolist()
+                rng.shuffle(available)
+                pool = available
 
             take = min(remaining, len(pool))
-            indices.extend(pool[:take])
+            slots.extend(pool[:take])
             pool = pool[take:]
             remaining -= take
 
-        subsample_feature_indices.append(np.sort(np.array(indices)))
+        # Map slots back to original feature indices and sort.
+        original_indices = shuffled_order[np.array(slots)]
+        subsample_feature_indices.append(np.sort(original_indices))
 
     return subsample_feature_indices
 
@@ -538,10 +545,16 @@ def _subsample_features_constant_and_balanced(
 
     The constant features (indices 0..n_constant-1) are always included. The
     remaining budget is filled using balanced round-robin sampling from the
-    non-constant features (indices n_constant..n_total-1), so each non-constant
-    feature appears approximately equally across estimators.
+    non-constant features (indices n_constant..n_total-1). Non-constant features
+    are globally shuffled once so that consecutive pool positions correspond to
+    unrelated original features, preventing correlated neighboring columns from
+    clustering in the same estimator.
     """
     n_constant = min(constant_feature_count, n_total_features)
+    n_non_constant = n_total_features - n_constant
+
+    # Global shuffle of non-constant features: slot i -> original feature index.
+    non_constant_shuffled = rng.permutation(np.arange(n_constant, n_total_features))
     subsample_feature_indices: list[np.ndarray | None] = []
     pool: list[int] = []
 
@@ -557,25 +570,27 @@ def _subsample_features_constant_and_balanced(
 
         # Always include the first n_constant features, fill rest via balanced pool.
         remaining_budget = size - n_constant
-        indices: list[int] = []
+        slots: list[int] = []
         remaining = remaining_budget
 
         while remaining > 0:
             if len(pool) == 0:
-                already_selected = set(indices)
+                # Refill pool with slot indices into non_constant_shuffled.
+                already_selected = set(slots)
                 available = [
-                    i
-                    for i in range(n_constant, n_total_features)
-                    if i not in already_selected
+                    i for i in range(n_non_constant) if i not in already_selected
                 ]
-                pool = rng.permutation(available).tolist()
+                rng.shuffle(available)
+                pool = available
 
             take = min(remaining, len(pool))
-            indices.extend(pool[:take])
+            slots.extend(pool[:take])
             pool = pool[take:]
             remaining -= take
 
-        all_indices = np.concatenate([np.arange(n_constant), np.array(indices)])
+        # Map slots back to original feature indices.
+        non_constant_indices = non_constant_shuffled[np.array(slots)]
+        all_indices = np.concatenate([np.arange(n_constant), non_constant_indices])
         subsample_feature_indices.append(np.sort(all_indices))
 
     return subsample_feature_indices

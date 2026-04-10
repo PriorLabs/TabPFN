@@ -85,6 +85,7 @@ def test__get_subsample_feature_indices__no_subsampling_needed():
         feature_schema=_get_schema(n_features=10),
         max_features_per_estimator=15,
         rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.RANDOM,
     )
 
     assert len(result) == 2
