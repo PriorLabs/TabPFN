@@ -72,6 +72,7 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     PreprocessorConfig,
     clean_data,
     generate_classification_ensemble_configs,
@@ -776,6 +777,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
         )
 
         self.executor_ = create_inference_engine(
@@ -898,6 +903,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # inside the initialize function above
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(

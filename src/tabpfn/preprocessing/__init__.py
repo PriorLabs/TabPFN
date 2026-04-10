@@ -4,6 +4,7 @@ from .clean import clean_data
 from .configs import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     PreprocessorConfig,
     RegressorEnsembleConfig,
 )
@@ -25,6 +26,7 @@ from .transform import fit_preprocessing
 __all__ = [
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
+    "FeatureSubsamplingMethod",
     "PreprocessingPipeline",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",

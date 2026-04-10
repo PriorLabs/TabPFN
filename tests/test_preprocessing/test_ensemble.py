@@ -3,9 +3,10 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 from tabpfn.preprocessing import generate_classification_ensemble_configs
-from tabpfn.preprocessing.configs import PreprocessorConfig
+from tabpfn.preprocessing.configs import FeatureSubsamplingMethod, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -106,6 +107,7 @@ def test__get_subsample_feature_indices__subsampling_needed():
         feature_schema=_get_schema(n_features=100),
         max_features_per_estimator=80,  # With 2 added features, need to subsample to 6
         rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.BALANCED,
     )
 
     assert result[0] is not None
@@ -181,3 +183,125 @@ def test__transform_X_test__applies_feature_subsampling() -> None:
     for member in members:
         X_test_transformed = member.transform_X_test(X_test)
         assert X_test_transformed.shape[0] == n_test
+
+
+def test__get_subsample_feature_indices__random_method():
+    """Test that RANDOM method independently subsamples for each estimator."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 20
+
+    pipeline2 = MagicMock()
+    pipeline2.num_added_features.return_value = 40
+
+    rng = np.random.default_rng(42)
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline2],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=100),
+        max_features_per_estimator=80,
+        rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.RANDOM,
+    )
+
+    assert result[0] is not None
+    assert len(result[0]) == 60
+    assert all(0 <= idx < 100 for idx in result[0])
+    # Indices should be sorted
+    assert list(result[0]) == sorted(result[0])
+
+    assert result[1] is not None
+    assert len(result[1]) == 40
+    assert all(0 <= idx < 100 for idx in result[1])
+    assert list(result[1]) == sorted(result[1])
+
+
+def test__get_subsample_feature_indices__constant_and_balanced_method():
+    """Test that CONSTANT_AND_BALANCED always includes the first N features."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 20
+
+    rng = np.random.default_rng(42)
+    constant_count = 30
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=100),
+        max_features_per_estimator=80,
+        rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.CONSTANT_AND_BALANCED,
+        constant_feature_count=constant_count,
+    )
+
+    for indices in result:
+        assert indices is not None
+        assert len(indices) == 60
+        # The first constant_count features must always be included
+        assert set(range(constant_count)).issubset(set(indices))
+        # Remaining features come from [constant_count, 100)
+        non_constant = set(indices) - set(range(constant_count))
+        assert all(constant_count <= idx < 100 for idx in non_constant)
+        # Indices should be sorted
+        assert list(indices) == sorted(indices)
+
+    # Non-constant features should be balanced: no overlap between the two estimators
+    # since 30 + 30 = 60 < 70 non-constant features, the pool suffices without reuse.
+    non_constant_0 = set(result[0]) - set(range(constant_count))
+    non_constant_1 = set(result[1]) - set(range(constant_count))
+    assert len(non_constant_0 & non_constant_1) == 0
+
+
+def test__get_subsample_feature_indices__constant_and_balanced_budget_less_than_constant():  # noqa: E501
+    """Test edge case where budget is less than constant_feature_count."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+
+    rng = np.random.default_rng(42)
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=100),
+        max_features_per_estimator=30,
+        rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.CONSTANT_AND_BALANCED,
+        constant_feature_count=50,
+    )
+
+    assert result[0] is not None
+    assert len(result[0]) == 30
+    # Should be the first 30 features
+    np.testing.assert_array_equal(result[0], np.arange(30))
+
+
+def test__get_subsample_feature_indices__no_subsampling_all_methods():
+    """Test that all methods return None when no subsampling is needed."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+
+    for method in FeatureSubsamplingMethod:
+        rng = np.random.default_rng(42)
+        result = _get_subsample_feature_indices(
+            pipelines=[pipeline],
+            n_samples=100,
+            feature_schema=_get_schema(n_features=10),
+            max_features_per_estimator=15,
+            rng=rng,
+            feature_subsampling_method=method,
+        )
+        assert result[0] is None, f"Expected None for method={method}"
+
+
+def test__get_subsample_feature_indices__invalid_method():
+    """Test that an invalid method raises ValueError."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+
+    rng = np.random.default_rng(42)
+    with pytest.raises(ValueError, match="Unknown feature subsampling method"):
+        _get_subsample_feature_indices(
+            pipelines=[pipeline],
+            n_samples=100,
+            feature_schema=_get_schema(n_features=100),
+            max_features_per_estimator=80,
+            rng=rng,
+            feature_subsampling_method="nonexistent",  # type: ignore
+        )

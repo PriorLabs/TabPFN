@@ -17,6 +17,7 @@ from tabpfn.constants import (
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
@@ -88,6 +89,8 @@ class TabPFNEnsemblePreprocessor:
         random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
+        feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
+        constant_feature_count: int = 50,
     ) -> None:
         """Init.
 
@@ -101,6 +104,10 @@ class TabPFNEnsemblePreprocessor:
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
                 preprocessor objects.
+            feature_subsampling_method: Method for subsampling features. One of
+                "balanced", "random", or "constant_and_balanced".
+            constant_feature_count: Number of leading features to always include
+                when using the "constant_and_balanced" method.
         """
         super().__init__()
         self.configs = configs
@@ -124,6 +131,8 @@ class TabPFNEnsemblePreprocessor:
             feature_schema=self.feature_schema,
             max_features_per_estimator=max_features,
             rng=self.rng,
+            feature_subsampling_method=feature_subsampling_method,
+            constant_feature_count=constant_feature_count,
         )
 
     def fit_transform_ensemble_members_iterator(
@@ -394,8 +403,22 @@ def _get_subsample_feature_indices(
     feature_schema: FeatureSchema,
     max_features_per_estimator: int,
     rng: np.random.Generator,
+    feature_subsampling_method: FeatureSubsamplingMethod,
+    constant_feature_count: int = 50,
 ) -> list[np.ndarray | None]:
-    """Get the indices of the features to subsample for each estimator."""
+    """Get the indices of the features to subsample for each estimator.
+
+    Args:
+        pipelines: Preprocessing pipelines for each estimator.
+        n_samples: Number of training samples.
+        feature_schema: Feature schema of the dataset.
+        max_features_per_estimator: Maximum number of features per estimator.
+        rng: Random number generator.
+        feature_subsampling_method: Method for subsampling features. One of
+            "balanced", "random", or "constant_and_balanced".
+        constant_feature_count: Number of leading features to always include
+            when using the "constant_and_balanced" method.
+    """
     n_total_features = feature_schema.num_columns
 
     # The feature subsampling will be done aware of the settings used in the
@@ -421,7 +444,7 @@ def _get_subsample_feature_indices(
         _pipeline_uses_onehot(p) for p in pipelines
     ):
         warnings.warn(
-            "Balanced feature subsampling is active, but at least one preprocessing "
+            "Feature subsampling is active, but at least one preprocessing "
             "pipeline uses one-hot encoding. The subsampling budget is computed "
             "without accounting for the additional columns created by one-hot "
             "expansion (which depends on training data cardinality). The actual "
@@ -431,15 +454,35 @@ def _get_subsample_feature_indices(
             stacklevel=2,
         )
 
-    # Generate balanced feature indices using round-robin sampling from a shuffled pool.
-    # This ensures each feature appears approximately the same number of times across
-    # all estimators. When the pool is exhausted, it is reshuffled and refilled.
+    if feature_subsampling_method is FeatureSubsamplingMethod.BALANCED:
+        return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
+    if feature_subsampling_method is FeatureSubsamplingMethod.RANDOM:
+        return _subsample_features_random(subsample_sizes, n_total_features, rng)
+    if feature_subsampling_method is FeatureSubsamplingMethod.CONSTANT_AND_BALANCED:
+        return _subsample_features_constant_and_balanced(
+            subsample_sizes, n_total_features, rng, constant_feature_count
+        )
+
+    raise ValueError(
+        f"Unknown feature subsampling method: {feature_subsampling_method}"
+    )
+
+
+def _subsample_features_balanced(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Balanced round-robin sampling from a shared shuffled pool.
+
+    Ensures each feature appears approximately the same number of times across
+    all estimators. When the pool is exhausted, it is reshuffled and refilled.
+    """
     subsample_feature_indices: list[np.ndarray | None] = []
     pool: list[int] = []
 
     for size in subsample_sizes:
         if size >= n_total_features:
-            # No subsampling needed, use all features
             subsample_feature_indices.append(None)
             continue
 
@@ -457,14 +500,83 @@ def _get_subsample_feature_indices(
                 ]
                 pool = rng.permutation(available).tolist()
 
-            # Take as many as we need (or as many as available) from the pool
             take = min(remaining, len(pool))
             indices.extend(pool[:take])
             pool = pool[take:]
             remaining -= take
 
-        # Sort so downstream steps see features in their original order.
         subsample_feature_indices.append(np.sort(np.array(indices)))
+
+    return subsample_feature_indices
+
+
+def _subsample_features_random(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Each estimator independently draws a random subset of features."""
+    subsample_feature_indices: list[np.ndarray | None] = []
+
+    for size in subsample_sizes:
+        if size >= n_total_features:
+            subsample_feature_indices.append(None)
+        else:
+            indices = rng.permutation(n_total_features)[:size]
+            subsample_feature_indices.append(np.sort(indices))
+
+    return subsample_feature_indices
+
+
+def _subsample_features_constant_and_balanced(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+    constant_feature_count: int,
+) -> list[np.ndarray | None]:
+    """Always include the first N features, balanced round-robin for the rest.
+
+    The constant features (indices 0..n_constant-1) are always included. The
+    remaining budget is filled using balanced round-robin sampling from the
+    non-constant features (indices n_constant..n_total-1), so each non-constant
+    feature appears approximately equally across estimators.
+    """
+    n_constant = min(constant_feature_count, n_total_features)
+    subsample_feature_indices: list[np.ndarray | None] = []
+    pool: list[int] = []
+
+    for size in subsample_sizes:
+        if size >= n_total_features:
+            subsample_feature_indices.append(None)
+            continue
+
+        if size <= n_constant:
+            # Budget is less than constant count; just take the first `size` features.
+            subsample_feature_indices.append(np.arange(size))
+            continue
+
+        # Always include the first n_constant features, fill rest via balanced pool.
+        remaining_budget = size - n_constant
+        indices: list[int] = []
+        remaining = remaining_budget
+
+        while remaining > 0:
+            if len(pool) == 0:
+                already_selected = set(indices)
+                available = [
+                    i
+                    for i in range(n_constant, n_total_features)
+                    if i not in already_selected
+                ]
+                pool = rng.permutation(available).tolist()
+
+            take = min(remaining, len(pool))
+            indices.extend(pool[:take])
+            pool = pool[take:]
+            remaining -= take
+
+        all_indices = np.concatenate([np.arange(n_constant), np.array(indices)])
+        subsample_feature_indices.append(np.sort(all_indices))
 
     return subsample_feature_indices
 
