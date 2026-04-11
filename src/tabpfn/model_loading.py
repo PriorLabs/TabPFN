@@ -363,7 +363,7 @@ def download_all_models(to: Path) -> None:
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
     """Determine if a version has a direct download option."""
-    return version in (ModelVersion.V2, ModelVersion.V2_5)
+    return version in (ModelVersion.V2,)
 
 
 def get_cache_dir() -> Path:  # noqa: PLR0911
