@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, TypeVar
 from typing_extensions import override
 
 import joblib
-import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import (
@@ -34,6 +33,8 @@ from tabpfn.preprocessing.torch import (
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
@@ -403,7 +404,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 y_train=self.y_train,
                 feature_schema=self.feature_schema,
                 parallel_mode="in-order",
-                override_random_state=np.random.default_rng(self.static_seed),
+                override_random_state=self.static_seed,
             )
         )
 
@@ -863,16 +864,22 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
             ens_model = deepcopy(models[ensemble_member.config._model_index])
             ens_model = ens_model.to(device)
+            if force_inference_dtype is not None:
+                ens_model = ens_model.type(force_inference_dtype)
 
             gpu_preprocess_start = time.perf_counter()
             X = ensemble_member.X_train
             y = ensemble_member.y_train
 
-            if not isinstance(X, torch.Tensor):
-                X = torch.as_tensor(X, dtype=torch.float32, device=device)
+            inference_dtype = (
+                force_inference_dtype
+                if force_inference_dtype is not None
+                else torch.float32
+            )
+
+            X = torch.as_tensor(X, dtype=inference_dtype, device=device)
             X = X.unsqueeze(1)
-            if not isinstance(y, torch.Tensor):
-                y = torch.as_tensor(y, dtype=torch.float32, device=device)
+            y = torch.as_tensor(y, dtype=inference_dtype, device=device)
 
             batched_preprocessor_cat_ix = [
                 ensemble_member.feature_schema.indices_for(FeatureModality.CATEGORICAL)
@@ -938,7 +945,16 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             preprocess_start = time.perf_counter()
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
-            X_test = torch.as_tensor(X_test, dtype=torch.float32, device=self.device)
+            inference_dtype = (
+                self.force_inference_dtype
+                if self.force_inference_dtype is not None
+                else torch.float32
+            )
+            X_test = torch.as_tensor(
+                X_test,
+                dtype=inference_dtype,
+                device=self.device,
+            )
             X_test = X_test.unsqueeze(1)
             batched_cat_ix = [
                 ensemble_member.feature_schema.indices_for(FeatureModality.CATEGORICAL)
