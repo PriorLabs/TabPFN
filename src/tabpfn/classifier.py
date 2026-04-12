@@ -30,7 +30,6 @@ import numpy as np
 import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
-from tabpfn_common_utils.telemetry import track_model_call
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -39,7 +38,6 @@ from tabpfn.base import (
     estimator_to_device,
     get_embeddings,
     initialize_model_variables_helper,
-    initialize_telemetry,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -81,6 +79,10 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.telemetry import (
+    init as init_telemetry,
+    track_model_call,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -482,7 +484,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
-        initialize_telemetry()
+        init_telemetry()
 
         # Only anonymously record `fit_mode` usage
         log_model_init_params(self, {"fit_mode": self.fit_mode})

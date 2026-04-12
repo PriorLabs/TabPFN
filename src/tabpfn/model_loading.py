@@ -26,7 +26,6 @@ from urllib.error import URLError
 import joblib
 import torch
 from filelock import FileLock
-from tabpfn_common_utils.telemetry import set_model_config
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
@@ -36,6 +35,7 @@ from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.settings import settings
+from tabpfn.telemetry import set_model_config
 
 if TYPE_CHECKING:
     from sklearn.base import BaseEstimator
@@ -767,7 +767,7 @@ def log_model_init_params(
             # We conditionally import here to avoid introducing breaking changes as
             # this interface was introduced in tabpfn_common_utils 0.2.13 and not all
             # users have upgraded to this version yet.
-            from tabpfn_common_utils.telemetry import set_init_params  # noqa: PLC0415
+            from tabpfn.telemetry import set_init_params  # noqa: PLC0415
 
             set_init_params(logged_params)
         except ImportError:

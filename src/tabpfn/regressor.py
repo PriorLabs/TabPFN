@@ -35,7 +35,6 @@ from sklearn.base import (
     TransformerMixin,
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry import track_model_call
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -45,7 +44,6 @@ from tabpfn.base import (
     estimator_to_device,
     get_embeddings,
     initialize_model_variables_helper,
-    initialize_telemetry,
 )
 from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
@@ -69,6 +67,10 @@ from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
+)
+from tabpfn.telemetry import (
+    init as init_telemetry,
+    track_model_call,
 )
 from tabpfn.utils import (
     DevicesSpecification,
@@ -466,7 +468,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
-        initialize_telemetry()
+        init_telemetry()
 
         # Only anonymously record `fit_mode` usage
         log_model_init_params(self, {"fit_mode": self.fit_mode})
