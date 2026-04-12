@@ -133,9 +133,9 @@ class InferenceConfig:
     ] = "random"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
+        - "random": Each estimator independently draws a random subset of features.
         - "balanced": Round-robin sampling from a shared shuffled pool so each feature
           appears approximately equally across estimators.
-        - "random": Each estimator independently draws a random subset of features.
         - "constant_and_balanced": Always include the first N features (see
           CONSTANT_FEATURE_COUNT), then use balanced subsampling for the rest.
     """

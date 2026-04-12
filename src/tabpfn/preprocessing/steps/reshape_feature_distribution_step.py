@@ -65,12 +65,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     """Reshape feature distributions using various transformations.
 
     This step should receive ALL columns (not modality-sliced) because it:
-    1. Handles feature subsampling when too many features exist
-    2. Applies different logic based on `apply_to_categorical` flag
-    3. Can append transformed features to originals (`append_to_original`)
-
-    # TODO(ben): Add separate PreprocessingStep's for all of the above
-    # so that we can register this with modalities
+    1. Applies different logic based on `apply_to_categorical` flag
+    2. Can append transformed features to originals (`append_to_original`)
 
     When using with PreprocessingPipeline, register as a bare step (no modalities):
         pipeline = PreprocessingPipeline(steps=[ReshapeFeatureDistributionsStep()])
@@ -140,6 +136,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.transform_name = transform_name
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
+        self._init_append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
         self.transformer_: Pipeline | ColumnTransformer | None = None
@@ -153,6 +150,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
+        # Reset append_to_original so re-fitting re-derives the "auto" decision.
+        self.append_to_original = self._init_append_to_original
+
         static_seed, rng = infer_random_state(self.random_state)
         categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
@@ -160,24 +160,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_samples,
             random_state=static_seed,
         )
-        if n_features > self.max_features_per_estimator:
-            subsample_features = self.max_features_per_estimator
-            self.subsampled_features_ = rng.choice(
-                list(range(n_features)),
-                subsample_features,
-                replace=False,
-            )
-            # Update modalities to reflect subsampled features
-            # Create a new schema with only the kept indices
-            kept_indices = list(self.subsampled_features_)
-            feature_schema = feature_schema.slice_for_indices(kept_indices)
-            categorical_features = feature_schema.indices_for(
-                FeatureModality.CATEGORICAL
-            )
-            n_features = subsample_features
-        else:
-            self.subsampled_features_ = np.arange(n_features)
-
         all_feats_ix = list(range(n_features))
         transformers = []
 
@@ -269,7 +251,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features,
             feature_schema,
         )
-        transformer.fit(X[:, self.subsampled_features_])
+        transformer.fit(X)
         self.transformer_ = transformer
         return output_schema
 
@@ -278,7 +260,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X[:, self.subsampled_features_]), None, None  # type: ignore
+        return self.transformer_.transform(X), None, None  # type: ignore
 
     def _get_append_to_original_decision(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from functools import partial
 from typing_extensions import override
@@ -59,7 +60,7 @@ def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
         partial(
             ReshapeFeatureDistributionsStep,
             transform_name="none",
-            append_to_original=True,
+            append_to_original="auto",
             apply_to_categorical=False,
         )
     ]
@@ -140,6 +141,66 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         assert result_full.feature_schema.indices_for(
             FeatureModality.CATEGORICAL
         ) == result_subset.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+
+
+def _make_step(cls: Callable[..., PreprocessingStep]) -> PreprocessingStep:
+    """Create a step, pinning random_state=0 when the constructor accepts it."""
+    sig = inspect.signature(cls)
+    if "random_state" in sig.parameters:
+        return cls(random_state=0)
+    return cls()
+
+
+def test__preprocessing_steps__refit_safety():
+    """Fitting a step on dataset A then re-fitting on dataset B must produce
+    the same result as a fresh step fit only on dataset B.
+
+    This guards against internal state (e.g. cached flags, overwritten init
+    params) leaking across fits.
+    """
+    rng = np.random.default_rng(42)
+    cat_inds = [1, 3]
+
+    # Dataset A: small, few features.
+    n_a, f_a = 30, 4
+    schema_a = _make_metadata(f_a, cat_inds)
+    x_a = _get_random_data(rng, n_a, f_a, cat_inds)
+
+    # Dataset B: larger, more features (triggers different code-paths in
+    # steps that branch on feature count, e.g. SVD, append_to_original).
+    n_b, f_b = 50, 8
+    cat_inds_b = [1, 3]
+    schema_b = _make_metadata(f_b, cat_inds_b)
+    x_b = _get_random_data(rng, n_b, f_b, cat_inds_b)
+
+    for cls in _get_preprocessing_steps():
+        # Fit on A, then re-fit on B with the same instance.
+        step_reused = _make_step(cls)
+        step_reused.fit_transform(x_a, schema_a)
+        reused_result = step_reused.fit_transform(x_b, schema_b)
+
+        # Fresh instance fit only on B.
+        step_fresh = _make_step(cls)
+        fresh_result = step_fresh.fit_transform(x_b, schema_b)
+
+        assert reused_result.X.shape == fresh_result.X.shape, (
+            f"Refit shape mismatch for {cls}: "
+            f"{reused_result.X.shape} vs {fresh_result.X.shape}"
+        )
+        assert np.allclose(reused_result.X, fresh_result.X, equal_nan=True), (
+            f"Refit output mismatch for {cls}"
+        )
+        if reused_result.X_added is not None or fresh_result.X_added is not None:
+            assert reused_result.X_added is not None, (
+                f"Refit X_added presence mismatch for {cls}: reused_result.X_added is None"  # noqa: E501
+            )
+            assert fresh_result.X_added is not None, (
+                f"Refit X_added presence mismatch for {cls}: fresh_result.X_added is None"  # noqa: E501
+            )
+
+            assert np.allclose(
+                reused_result.X_added, fresh_result.X_added, equal_nan=True
+            ), f"Refit X_added mismatch for {cls}"
 
 
 def test__pipeline__handles_added_columns_from_fingerprint_step():

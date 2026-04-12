@@ -148,6 +148,11 @@ class PreprocessingStep:
         Returns:
             PreprocessingStepResult with transformed data and updated feature schema.
         """
+        # Reset cached validation state so re-fitting is safe.
+        if hasattr(self, "n_added_columns_"):
+            del self.n_added_columns_
+        if hasattr(self, "modality_added_"):
+            del self.modality_added_
         self.feature_schema_updated_ = self._fit(X, feature_schema)
         return self.transform(X, is_test=False)
 

@@ -62,6 +62,7 @@ class AddSVDFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
+        self.is_no_op = False
         n_samples, n_features = X.shape
         if n_features < 2:
             self.is_no_op = True

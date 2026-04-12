@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, TypeVar
 from typing_extensions import override
 
 import joblib
-import numpy as np
 import torch
 
 from tabpfn.architectures.base.memory import (
@@ -34,6 +33,8 @@ from tabpfn.preprocessing.torch import (
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from tabpfn.architectures.interface import Architecture
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
@@ -399,11 +400,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 y_train=self.y_train,
                 feature_schema=self.feature_schema,
                 parallel_mode="in-order",
-                # reproducible across predicts.
-                # TODO: this should be the case for all inference engines.
-                override_random_state=np.random.default_rng(
-                    self.ensemble_preprocessor.static_seed
-                ),
             )
         )
 

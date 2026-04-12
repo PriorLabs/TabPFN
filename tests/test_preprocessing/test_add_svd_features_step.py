@@ -209,6 +209,28 @@ def test__random_state__produces_reproducible_results() -> None:
     np.testing.assert_array_almost_equal(result1.X_added, result2.X_added)
 
 
+def test__refit__after_no_op_produces_svd_features() -> None:
+    data_1feat = _get_test_data(n_samples=50, n_features=1)
+    data_6feat = _get_test_data(n_samples=50, n_features=6)
+    schema_1 = _get_schema(num_columns=1)
+    schema_6 = _get_schema(num_columns=6)
+
+    # Fit on 1 feature (is_no_op=True), then re-fit on 6 features.
+    step = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
+    result_noop = step.fit_transform(data_1feat, schema_1)
+    assert result_noop.X_added is None  # no-op: no SVD features
+
+    result_refit = step.fit_transform(data_6feat, schema_6)
+
+    # Fresh step fit only on 6 features.
+    step_fresh = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
+    result_fresh = step_fresh.fit_transform(data_6feat, schema_6)
+
+    assert result_refit.X_added is not None, "is_no_op was not reset on re-fit"
+    assert result_fresh.X_added is not None
+    np.testing.assert_array_almost_equal(result_refit.X_added, result_fresh.X_added)
+
+
 def test__get_svd_features_transformer__invalid_name_raises() -> None:
     """Test that invalid transformer name raises ValueError."""
     with pytest.raises(ValueError, match="Invalid global transformer name"):

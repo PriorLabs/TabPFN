@@ -116,7 +116,7 @@ class TabPFNEnsemblePreprocessor:
         self.keep_fitted_cache = keep_fitted_cache
 
         self.random_state = random_state
-        self.static_seed, self.rng = infer_random_state(random_state)
+        _, self.rng = infer_random_state(random_state)
 
         pipeline_seeds = self.rng.integers(0, np.iinfo(np.int32).max, len(self.configs))
         self.pipelines = [
@@ -124,12 +124,14 @@ class TabPFNEnsemblePreprocessor:
             for config, seed in zip(self.configs, pipeline_seeds)
         ]
 
-        max_features = self.configs[0].preprocess_config.max_features_per_estimator
+        max_features_per_estimator = [
+            c.preprocess_config.max_features_per_estimator for c in self.configs
+        ]
         self.subsample_feature_indices = _get_subsample_feature_indices(
             pipelines=self.pipelines,
             n_samples=n_samples,
             feature_schema=self.feature_schema,
-            max_features_per_estimator=max_features,
+            max_features_per_estimator=max_features_per_estimator,
             rng=self.rng,
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
@@ -141,7 +143,6 @@ class TabPFNEnsemblePreprocessor:
         y_train: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
-        override_random_state: int | np.random.Generator | None = None,
     ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
@@ -149,7 +150,6 @@ class TabPFNEnsemblePreprocessor:
             X_train=X_train,
             y_train=y_train,
             feature_schema=feature_schema,
-            random_state=override_random_state or self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
             subsample_feature_indices=self.subsample_feature_indices,
@@ -164,21 +164,22 @@ class TabPFNEnsemblePreprocessor:
             )
             gpu_preprocessors.append(gpu_preprocessor)
 
-        for i, (
+        for (
+            config_index,
             config,
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
             feature_schema_preprocessed,
-        ) in enumerate(preprocessed_data_iterator):
+        ) in preprocessed_data_iterator:
             yield TabPFNEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
-                gpu_preprocessor=gpu_preprocessors[i],
+                gpu_preprocessor=gpu_preprocessors[config_index],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
-                feature_indices=self.subsample_feature_indices[i],
+                feature_indices=self.subsample_feature_indices[config_index],
             )
 
     def fit_transform_ensemble_members(
@@ -375,33 +376,32 @@ def _find_max_input_features(
 ) -> int:
     """Find the largest number of input features that fits within the budget.
 
-    Uses binary search over the number of kept features k, checking whether
-    k + pipeline.num_added_features(n_samples, schema_sliced_to_k) <= max.
+    Decrements from n_total until k + pipeline.num_added_features(...) <= max.
+
+    TODO: The search always slices the *first* k features, so the budget
+    estimate can be biased when transforms add features depending on feature
+    type (e.g. one-hot for categoricals). Shuffling the schema indices before
+    slicing would give a more representative estimate.
     """
     n_total = feature_schema.num_columns
 
-    # Check if all features already fit.
-    total = n_total + pipeline.num_added_features(n_samples, feature_schema)
-    if total <= max_features_per_estimator:
-        return n_total
-
-    lo, hi = 0, n_total
-    while lo < hi:
-        mid = (lo + hi + 1) // 2
-        sliced_schema = feature_schema.slice_for_indices(list(range(mid)))
-        total = mid + pipeline.num_added_features(n_samples, sliced_schema)
-        if total <= max_features_per_estimator:
-            lo = mid
+    for k in range(n_total, -1, -1):
+        if k == n_total:
+            sliced_schema = feature_schema
         else:
-            hi = mid - 1
-    return lo
+            sliced_schema = feature_schema.slice_for_indices(list(range(k)))
+        total = k + pipeline.num_added_features(n_samples, sliced_schema)
+        if total <= max_features_per_estimator:
+            return k
+
+    return 0
 
 
 def _get_subsample_feature_indices(
     pipelines: Sequence[PreprocessingPipeline],
     n_samples: int,
     feature_schema: FeatureSchema,
-    max_features_per_estimator: int,
+    max_features_per_estimator: Sequence[int],
     rng: np.random.Generator,
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
@@ -412,13 +412,15 @@ def _get_subsample_feature_indices(
         pipelines: Preprocessing pipelines for each estimator.
         n_samples: Number of training samples.
         feature_schema: Feature schema of the dataset.
-        max_features_per_estimator: Maximum number of features per estimator.
+        max_features_per_estimator: Maximum number of features per estimator,
+            one value per pipeline.
         rng: Random number generator.
         feature_subsampling_method: Method for subsampling features. One of
             "balanced", "random", or "constant_and_balanced".
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
     """
+    assert len(max_features_per_estimator) == len(pipelines)
     n_total_features = feature_schema.num_columns
 
     # The feature subsampling will be done aware of the settings used in the
@@ -427,13 +429,13 @@ def _get_subsample_feature_indices(
     # For one-hot encoding, num_added_features returns 0 as an approximation
     # because the true count depends on data cardinality (see warning below).
     subsample_sizes = []
-    for pipeline in pipelines:
+    for pipeline, max_feats in zip(pipelines, max_features_per_estimator):
         subsample_sizes.append(
             _find_max_input_features(
                 pipeline=pipeline,
                 n_samples=n_samples,
                 feature_schema=feature_schema,
-                max_features_per_estimator=max_features_per_estimator,
+                max_features_per_estimator=max_feats,
             )
         )
 
