@@ -912,7 +912,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
             y_train=y,
-            feature_schema=self.inferred_feature_schema_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices=self.devices_,
