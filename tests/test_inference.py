@@ -151,7 +151,6 @@ def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
     engine = InferenceEngineCachePreprocessing(
         X_train,
         y_train,
-        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
         ensemble_preprocessor=ensemble_preprocessor,
         models=[_TestModel()],
         devices=[torch.device("cpu")],
@@ -209,7 +208,6 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
         engine = InferenceEngineOnDemand(
             X_train,
             y_train,
-            feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
             ensemble_preprocessor=ensemble_preprocessor,
             models=models,
             devices=[torch.device("cpu")],
@@ -262,7 +260,6 @@ def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
     engine = InferenceEngineOnDemand(
         X_train,
         y_train,
-        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
         ensemble_preprocessor=ensemble_preprocessor,
         models=models,
         devices=[torch.device("cpu")],
@@ -324,7 +321,6 @@ def test__iter_outputs__task_type_forwarded(
     engine = InferenceEngineOnDemand(
         X_train,
         y_train,
-        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
         ensemble_preprocessor=ensemble_preprocessor,
         models=[model],
         devices=[torch.device("cpu")],

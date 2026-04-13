@@ -306,6 +306,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         del n_samples, feature_schema
         return 0
 
+    @override
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """One-hot encoding creates columns depending on data cardinality."""
+        return self.categorical_transform_name == "onehot"
+
 
 __all__ = [
     "EncodeCategoricalFeaturesStep",

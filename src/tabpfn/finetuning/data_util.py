@@ -444,7 +444,6 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         ensemble_members = ensemble_preprocessor.fit_transform_ensemble_members(
             X_train=x_train_raw,
             y_train=y_train,
-            feature_schema=feature_schema,
         )
         X_trains_preprocessed = [m.X_train for m in ensemble_members]
         y_trains_preprocessed = [m.y_train for m in ensemble_members]

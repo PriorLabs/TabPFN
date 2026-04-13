@@ -77,6 +77,7 @@ def test__get_subsample_feature_indices__no_subsampling_needed():
     """Test that None is returned when features fit within the limit."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     result = _get_subsample_feature_indices(
@@ -97,9 +98,11 @@ def test__get_subsample_feature_indices__subsampling_needed():
     """Test that feature indices are generated when subsampling is required."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 20  # Adds 2 features
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     pipeline2 = MagicMock()
     pipeline2.num_added_features.return_value = 40  # Adds 2 features
+    pipeline2.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     result = _get_subsample_feature_indices(
@@ -172,7 +175,6 @@ def test__transform_X_test__applies_feature_subsampling() -> None:
     members = ensemble_preprocessor.fit_transform_ensemble_members(
         X_train=X_train,
         y_train=y_train,
-        feature_schema=feature_schema,
     )
 
     # All members should have feature_indices set since n_features > max_features.
@@ -190,9 +192,11 @@ def test__get_subsample_feature_indices__random_method():
     """Test that RANDOM method independently subsamples for each estimator."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 20
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     pipeline2 = MagicMock()
     pipeline2.num_added_features.return_value = 40
+    pipeline2.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     result = _get_subsample_feature_indices(
@@ -220,6 +224,7 @@ def test__get_subsample_feature_indices__constant_and_balanced_method():
     """Test that CONSTANT_AND_BALANCED always includes the first N features."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 20
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     constant_count = 30
@@ -255,6 +260,7 @@ def test__get_subsample_feature_indices__constant_and_balanced_budget_less_than_
     """Test edge case where budget is less than constant_feature_count."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     result = _get_subsample_feature_indices(
@@ -277,6 +283,7 @@ def test__get_subsample_feature_indices__no_subsampling_all_methods():
     """Test that all methods return None when no subsampling is needed."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     for method in FeatureSubsamplingMethod:
         rng = np.random.default_rng(42)
@@ -295,6 +302,7 @@ def test__get_subsample_feature_indices__invalid_method():
     """Test that an invalid method raises ValueError."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     rng = np.random.default_rng(42)
     with pytest.raises(ValueError, match="Unknown feature subsampling method"):
@@ -312,6 +320,7 @@ def test__get_subsample_feature_indices__balanced_uniformity():
     """8 estimators x 60 features over 100 -> each feature appears 4 or 5 times."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     n_estimators = 8
     n_features = 100
@@ -350,6 +359,7 @@ def test__get_subsample_feature_indices__balanced_reproducibility():
     """Same /different seed produces identical / different results."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
 
     kwargs = {
         "pipelines": [pipeline, pipeline],
@@ -421,7 +431,6 @@ def test__end_to_end__balanced_feature_subsampling():
     members = ensemble_preprocessor.fit_transform_ensemble_members(
         X_train=X_train,
         y_train=y_train,
-        feature_schema=feature_schema,
     )
 
     assert len(members) == n_estimators

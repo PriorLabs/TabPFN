@@ -190,6 +190,15 @@ class PreprocessingStep:
         del n_samples, feature_schema
         return 0
 
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """Return True if this step's feature expansion depends on data values.
+
+        Override to return True for steps where ``num_added_features()`` is an
+        approximation because the true count depends on fitting data (e.g.
+        one-hot encoding cardinality).
+        """
+        return False
+
     def _validate_added_data(
         self,
         X_added: np.ndarray | None,
@@ -307,6 +316,12 @@ class PreprocessingPipeline:
                     FeatureModality.NUMERICAL, added
                 )
         return total_added
+
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """Return True if any step has data-dependent feature expansion."""
+        return any(
+            step.has_data_dependent_feature_expansion() for step, _ in self.steps
+        )
 
     def _process_steps(
         self,

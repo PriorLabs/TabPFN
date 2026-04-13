@@ -21,9 +21,6 @@ from tabpfn.preprocessing.configs import (
     RegressorEnsembleConfig,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-from tabpfn.preprocessing.steps.encode_categorical_features_step import (
-    EncodeCategoricalFeaturesStep,
-)
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -141,7 +138,6 @@ class TabPFNEnsemblePreprocessor:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
     ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
@@ -149,7 +145,7 @@ class TabPFNEnsemblePreprocessor:
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            feature_schema=feature_schema,
+            feature_schema=self.feature_schema,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
             subsample_feature_indices=self.subsample_feature_indices,
@@ -186,14 +182,12 @@ class TabPFNEnsemblePreprocessor:
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_schema: FeatureSchema,
     ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
                 parallel_mode="block",
             )
         )
@@ -283,9 +277,8 @@ def _get_subsample_indices_for_estimators(
             )
             subsample_samples = subsample_samples[:num_estimators]
         for subsample in subsample_samples:
-            assert len(subsample) > 0, (
-                "Length of subsampled indices must be larger than 0"
-            )
+            if len(subsample) == 0:
+                raise ValueError("Length of subsampled indices must be larger than 0")
         balance_count = num_estimators // len(subsample_samples)
         subsample_indices = _balance(subsample_samples, balance_count)
         leftover = num_estimators % len(subsample_samples)
@@ -359,15 +352,6 @@ def _generate_class_permutations(
     raise ValueError(f"Unknown {class_shift_method=}")
 
 
-def _pipeline_uses_onehot(pipeline: PreprocessingPipeline) -> bool:
-    """Return True if the pipeline contains a one-hot encoding step."""
-    return any(
-        isinstance(step, EncodeCategoricalFeaturesStep)
-        and step.categorical_transform_name == "onehot"
-        for step, _ in pipeline.steps
-    )
-
-
 def _find_max_input_features(
     pipeline: PreprocessingPipeline,
     n_samples: int,
@@ -420,7 +404,11 @@ def _get_subsample_feature_indices(
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
     """
-    assert len(max_features_per_estimator) == len(pipelines)
+    if len(max_features_per_estimator) != len(pipelines):
+        raise ValueError(
+            f"max_features_per_estimator has {len(max_features_per_estimator)} "
+            f"elements, but there are {len(pipelines)} pipelines"
+        )
     n_total_features = feature_schema.num_columns
 
     # The feature subsampling will be done aware of the settings used in the
@@ -443,12 +431,13 @@ def _get_subsample_feature_indices(
     # The subsampling budget is computed assuming one-hot adds 0 extra columns,
     # so the actual post-expansion feature count may exceed max_features_per_estimator.
     if any(s < feature_schema.num_columns for s in subsample_sizes) and any(
-        _pipeline_uses_onehot(p) for p in pipelines
+        p.has_data_dependent_feature_expansion() for p in pipelines
     ):
         warnings.warn(
             "Feature subsampling is active, but at least one preprocessing "
-            "pipeline uses one-hot encoding. The subsampling budget is computed "
-            "without accounting for the additional columns created by one-hot "
+            "pipeline uses data dependent feature exampnsion (for example "
+            "one-hot encoding). The subsampling budget is computed "
+            "without accounting for the additional columns created by this "
             "expansion (which depends on training data cardinality). The actual "
             "number of features per estimator may exceed `max_features_per_estimator` "
             "for those pipelines.",
@@ -468,6 +457,39 @@ def _get_subsample_feature_indices(
     raise ValueError(
         f"Unknown feature subsampling method: {feature_subsampling_method}"
     )
+
+
+def _draw_balanced_from_pool(
+    pool: list[int],
+    size: int,
+    pool_size: int,
+    rng: np.random.Generator,
+) -> tuple[list[int], list[int]]:
+    """Draw ``size`` slot indices via round-robin from a refillable pool.
+
+    When the pool is exhausted it is refilled with ``range(pool_size)`` minus
+    any slots already drawn for the current estimator (to avoid duplicates).
+
+    Returns:
+        (drawn_slots, remaining_pool) so the caller can carry the pool across
+        estimators for balanced coverage.
+    """
+    slots: list[int] = []
+    remaining = size
+
+    while remaining > 0:
+        if len(pool) == 0:
+            already_selected = set(slots)
+            available = [i for i in range(pool_size) if i not in already_selected]
+            rng.shuffle(available)
+            pool = available
+
+        take = min(remaining, len(pool))
+        slots.extend(pool[:take])
+        pool = pool[take:]
+        remaining -= take
+
+    return slots, pool
 
 
 def _subsample_features_balanced(
@@ -493,26 +515,7 @@ def _subsample_features_balanced(
             subsample_feature_indices.append(None)
             continue
 
-        slots: list[int] = []
-        remaining = size
-
-        while remaining > 0:
-            if len(pool) == 0:
-                # Refill pool with slot indices, excluding any already selected
-                # for this member to avoid duplicates.
-                already_selected = set(slots)
-                available = [
-                    i for i in range(n_total_features) if i not in already_selected
-                ]
-                rng.shuffle(available)
-                pool = available
-
-            take = min(remaining, len(pool))
-            slots.extend(pool[:take])
-            pool = pool[take:]
-            remaining -= take
-
-        # Map slots back to original feature indices and sort.
+        slots, pool = _draw_balanced_from_pool(pool, size, n_total_features, rng)
         original_indices = shuffled_order[np.array(slots)]
         subsample_feature_indices.append(np.sort(original_indices))
 
@@ -572,25 +575,10 @@ def _subsample_features_constant_and_balanced(
 
         # Always include the first n_constant features, fill rest via balanced pool.
         remaining_budget = size - n_constant
-        slots: list[int] = []
-        remaining = remaining_budget
+        slots, pool = _draw_balanced_from_pool(
+            pool, remaining_budget, n_non_constant, rng
+        )
 
-        while remaining > 0:
-            if len(pool) == 0:
-                # Refill pool with slot indices into non_constant_shuffled.
-                already_selected = set(slots)
-                available = [
-                    i for i in range(n_non_constant) if i not in already_selected
-                ]
-                rng.shuffle(available)
-                pool = available
-
-            take = min(remaining, len(pool))
-            slots.extend(pool[:take])
-            pool = pool[take:]
-            remaining -= take
-
-        # Map slots back to original feature indices.
         non_constant_indices = non_constant_shuffled[np.array(slots)]
         all_indices = np.concatenate([np.arange(n_constant), non_constant_indices])
         subsample_feature_indices.append(np.sort(all_indices))

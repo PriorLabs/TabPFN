@@ -161,11 +161,19 @@ def fit_preprocessing(
         fitted preprocessing pipeline, the transformed training data, the transformed
         target, and the feature schema.
     """
-    assert len(pipelines) == len(configs)
+    if len(pipelines) != len(configs):
+        raise ValueError(
+            f"pipelines has {len(pipelines)} elements, "
+            f"but configs has {len(configs)} elements"
+        )
 
     if subsample_feature_indices is None:
         subsample_feature_indices = [None] * len(configs)
-    assert len(subsample_feature_indices) == len(configs)
+    if len(subsample_feature_indices) != len(configs):
+        raise ValueError(
+            f"subsample_feature_indices has {len(subsample_feature_indices)} "
+            f"elements, but configs has {len(configs)} elements"
+        )
 
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]

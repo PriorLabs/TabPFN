@@ -136,7 +136,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.transform_name = transform_name
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
-        self._init_append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
         self.transformer_: Pipeline | ColumnTransformer | None = None
@@ -150,9 +149,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
-        # Reset append_to_original so re-fitting re-derives the "auto" decision.
-        self.append_to_original = self._init_append_to_original
-
         static_seed, rng = infer_random_state(self.random_state)
         categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
@@ -165,7 +161,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
 
         numerical_ix = [i for i in range(n_features) if i not in categorical_features]
 
-        self.append_to_original = self._get_append_to_original_decision(
+        self.append_to_original_decision_ = self._get_append_to_original_decision(
             n_features=n_features,
             max_features_per_estimator=self.max_features_per_estimator,
         )
@@ -173,12 +169,12 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # -------- Append to original ------
         # If we append to original, all the categorical indices are kept in place
         # as the first transform is a passthrough on the whole X as it is above
-        if self.append_to_original and self.apply_to_categorical:
+        if self.append_to_original_decision_ and self.apply_to_categorical:
             trans_ixs = categorical_features + numerical_ix
             transformers.append(("original", "passthrough", all_feats_ix))
             cat_ix = categorical_features  # Exist as they are in original
 
-        elif self.append_to_original and not self.apply_to_categorical:
+        elif self.append_to_original_decision_ and not self.apply_to_categorical:
             trans_ixs = numerical_ix
             # Includes the categoricals passed through
             transformers.append(("original", "passthrough", all_feats_ix))
@@ -188,11 +184,11 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # We only have categorical indices if we don't transform them
         # The first transformer will be a passthrough on the categorical indices
         # Making them the first
-        elif not self.append_to_original and self.apply_to_categorical:
+        elif not self.append_to_original_decision_ and self.apply_to_categorical:
             trans_ixs = categorical_features + numerical_ix
             cat_ix = []  # We have none left, they've been transformed
 
-        elif not self.append_to_original and not self.apply_to_categorical:
+        elif not self.append_to_original_decision_ and not self.apply_to_categorical:
             trans_ixs = numerical_ix
             transformers.append(("cats", "passthrough", categorical_features))
             cat_ix = list(range(len(categorical_features)))  # They are at start
@@ -200,7 +196,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         else:
             raise ValueError(
                 f"Unrecognized combination of {self.apply_to_categorical=}"
-                f" and {self.append_to_original=}",
+                f" and {self.append_to_original_decision_=}",
             )
 
         # NOTE: No need to keep track of categoricals here, already done above
@@ -227,7 +223,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # Compute output feature count for modality update
         # Include: base features + appended transformed (if append_to_original)
         n_output_features = (
-            n_features + len(trans_ixs) if self.append_to_original else n_features
+            n_features + len(trans_ixs)
+            if self.append_to_original_decision_
+            else n_features
         )
 
         # Build the new metadata with updated categorical indices

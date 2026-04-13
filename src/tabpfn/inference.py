@@ -334,7 +334,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
-        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -347,7 +346,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble preprocessor to use.
             models: The models to use.
             devices: A list of the devices to use for inference. If multiple devices are
@@ -366,7 +364,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
 
         self.X_train = X_train
         self.y_train = y_train
-        self.feature_schema = feature_schema
         self.ensemble_preprocessor = ensemble_preprocessor
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
@@ -398,7 +395,6 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             self.ensemble_preprocessor.fit_transform_ensemble_members_iterator(
                 X_train=self.X_train,
                 y_train=self.y_train,
-                feature_schema=self.feature_schema,
                 parallel_mode="in-order",
             )
         )
@@ -614,12 +610,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     forward pass through the model which is currently done sequentially.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
         *,
-        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -634,7 +629,6 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble preprocessor to use.
             models: The models to use.
             devices: A list of the devices to use for inference. If multiple devices are
@@ -658,14 +652,12 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = inference_mode
         self.no_preprocessing = no_preprocessing
         self.X_train_shape_before_preprocessing = X_train.shape
-        self.feature_schema = feature_schema
 
         fit_preprocess_start = time.perf_counter()
         self.ensemble_members: list[TabPFNEnsembleMember] = (
             ensemble_preprocessor.fit_transform_ensemble_members(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
             )
         )
         self._speed_metrics["fit_preprocessing_seconds"] = (
@@ -803,12 +795,11 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     member we store the full KV cache of that model. For now this is held in CPU RAM.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
-        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -823,7 +814,6 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble configurations to use.
             models: The models to use.
             devices: A list of devices, the first of which will be used to run the
@@ -841,7 +831,6 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             ensemble_preprocessor.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
                 parallel_mode="as-ready",
             )
         )
