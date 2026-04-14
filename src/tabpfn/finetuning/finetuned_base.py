@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import inspect
 import logging
 import os
 import time
@@ -45,6 +46,7 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
+from tabpfn.telemetry import suppress_telemetry
 from tabpfn.utils import infer_devices, infer_random_state
 from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
@@ -145,6 +147,33 @@ def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:
         executor.y_trains = [
             t.to(target) if t.device != target else t for t in y_trains
         ]
+
+
+def _fit_finetuned_estimator_from_preprocessed(
+    estimator: Any,
+    batch: ClassifierBatch | RegressorBatch,
+) -> None:
+    """Run the internal per-batch fit without emitting public fit telemetry."""
+    bound_fit_from_preprocessed = estimator.fit_from_preprocessed
+    fit_from_preprocessed = inspect.unwrap(bound_fit_from_preprocessed)
+
+    with suppress_telemetry():
+        if inspect.ismethod(fit_from_preprocessed):
+            fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+            )
+            return
+
+        fit_from_preprocessed(
+            bound_fit_from_preprocessed.__self__,  # type: ignore[attr-defined]
+            batch.X_context,
+            batch.y_context,
+            batch.cat_indices,
+            batch.configs,
+        )
 
 
 class _TabPFNDDPWrapper(torch.nn.Module):
@@ -843,11 +872,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                 self._setup_batch(batch)
 
-                self.finetuned_estimator_.fit_from_preprocessed(
-                    batch.X_context,
-                    batch.y_context,
-                    batch.cat_indices,
-                    batch.configs,
+                _fit_finetuned_estimator_from_preprocessed(
+                    self.finetuned_estimator_,
+                    batch,
                 )
 
                 if using_ddp:

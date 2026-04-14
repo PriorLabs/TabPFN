@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -10,6 +11,7 @@ import tabpfn_common_utils.telemetry.core.decorators as telemetry_decorators
 import torch
 
 import tabpfn.classifier as classifier_module
+import tabpfn.finetuning.finetuned_base as finetuned_base_module
 from tabpfn import TabPFNClassifier, telemetry
 
 
@@ -166,3 +168,64 @@ def test__classifier_tuning__does_not_emit_internal_telemetry(
     assert event_counts["session"] == 1
     assert event_counts["fit_called"] == 1
     assert event_counts["predict_called"] == 0
+
+
+def test__finetuning_training_loop_fit__does_not_emit_per_batch_fit_telemetry(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+    calls: list[str] = []
+    monkeypatch.setattr(
+        telemetry_decorators,
+        "capture_event",
+        lambda event: events.append(event.name),
+    )
+
+    def fake_fit_from_preprocessed(
+        self: object,
+        X_preprocessed: list[torch.Tensor],
+        y_preprocessed: list[torch.Tensor],
+        cat_ix: list[list[list[int]]],
+        configs: list[Any],
+    ) -> object:
+        del X_preprocessed, y_preprocessed, cat_ix, configs
+        calls.append("fit")
+        return self
+
+    fake_fit_from_preprocessed.__module__ = "tabpfn.classifier"
+
+    class FakeEstimator:
+        fit_from_preprocessed: Any
+
+    FakeEstimator.fit_from_preprocessed = telemetry_decorators.track_model_call(
+        "fit",
+        param_names=["X_preprocessed", "y_preprocessed"],
+    )(fake_fit_from_preprocessed)
+
+    estimator = FakeEstimator()
+    batch = SimpleNamespace(
+        X_context=[torch.zeros((4, 3))],
+        y_context=[torch.zeros(4)],
+        cat_indices=[[]],
+        configs=[[]],
+    )
+
+    estimator.fit_from_preprocessed(
+        batch.X_context,
+        batch.y_context,
+        batch.cat_indices,
+        batch.configs,
+    )
+    assert calls == ["fit"]
+    assert events == ["fit_called"]
+
+    calls.clear()
+    events.clear()
+
+    finetuned_base_module._fit_finetuned_estimator_from_preprocessed(
+        estimator,
+        batch,
+    )
+
+    assert calls == ["fit"]
+    assert events == []
