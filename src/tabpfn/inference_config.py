@@ -141,7 +141,7 @@ class InferenceConfig:
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
         "balanced", "random", "constant_and_balanced"
-    ] = "random"
+    ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
         - "random": Each estimator independently draws a random subset of features.
