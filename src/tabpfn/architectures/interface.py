@@ -92,6 +92,14 @@ class PerformanceOptions:
     resident in memory at once.
     """
 
+    enable_torch_compile: bool = False
+    """If set to True, the model may decide to compile all or selected parts.
+
+    Setting this to `True` can enable speedups for repeated inference but may
+    result in longer inference time for the first forward pass, during which
+    compile and autotune will be run. Tuning results are cached, so should
+    persist across runs."""
+
 
 class ArchitectureModule(Protocol):
     """Interface that modules containing model architectures should implement."""
