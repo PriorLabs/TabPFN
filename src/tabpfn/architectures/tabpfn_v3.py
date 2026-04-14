@@ -6,6 +6,7 @@ from __future__ import annotations
 import dataclasses
 import logging as _logging
 import math
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
@@ -1688,6 +1689,14 @@ class TabPFNV3(Architecture):
         This function always assumes the full dataset to be passed, even
         in the case of a KV cache.
         """
+        # Suppress RMSNorm dtype mismatch warning when running in mixed
+        # precision (fp16 input, fp32 weights). Harmless until we move
+        # norms to the same dtype as the input.
+        warnings.filterwarnings(
+            "ignore",
+            message="Mismatch dtype between input and weight.*Cannot dispatch to fused implementation",  # noqa: E501
+            category=UserWarning,
+        )
         del task_type
         del test_targets_MB
         if isinstance(x, dict):
