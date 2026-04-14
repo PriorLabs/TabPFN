@@ -874,7 +874,7 @@ def _file_identity(path: str) -> tuple[int, int]:
     return (st.st_mtime_ns, st.st_size)
 
 
-@functools.cache
+@functools.lru_cache(maxsize=1)
 def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     """Load and cache a checkpoint from disk.
 
