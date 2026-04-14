@@ -59,6 +59,7 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing import (
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
     clean_data,
     generate_regression_ensemble_configs,
@@ -816,11 +817,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
             # Note: we use the static_seed so we're independent of the random generation
             # inside the initialize function above
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
         )
 
         self.executor_ = create_inference_engine(

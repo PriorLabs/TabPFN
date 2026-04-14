@@ -17,8 +17,10 @@ from tabpfn.constants import (
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -53,11 +55,14 @@ class TabPFNEnsembleMember:
     X_train: np.ndarray | torch.Tensor
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
+    feature_indices: np.ndarray | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
         """Transform the test data."""
+        if self.feature_indices is not None:
+            X = X[..., self.feature_indices]
         return self.cpu_preprocessor.transform(X).X
 
 
@@ -76,59 +81,75 @@ class TabPFNEnsemblePreprocessor:
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
+        n_samples: int,
+        feature_schema: FeatureSchema,
         random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
+        feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
+        constant_feature_count: int = 50,
     ) -> None:
         """Init.
 
         Args:
             configs: List of ensemble configurations.
+            n_samples: Number of training samples.
+            feature_schema: Feature schema of the dataset.
             random_state: Random state object for preprocessing. If int, the
                 preprocessing will use the same random seed across calls to fit().
             n_preprocessing_jobs: Number of preprocessing jobs to use.
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
                 preprocessor objects.
+            feature_subsampling_method: Method for subsampling features. One of
+                "balanced", "random", or "constant_and_balanced".
+            constant_feature_count: Number of leading features to always include
+                when using the "constant_and_balanced" method.
         """
         super().__init__()
         self.configs = configs
+        self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
+
         self.random_state = random_state
+        _, self.rng = infer_random_state(random_state)
 
-        # TODO:
-        # 1. Create pipeline in init for balanced feature subsampling
-        # 2. Run pipeline.num_added_features() for each ensemble member
-        # 3. Create feature slices
+        pipeline_seeds = self.rng.integers(0, np.iinfo(np.int32).max, len(self.configs))
+        self.pipelines = [
+            create_preprocessing_pipeline(config, random_state=int(seed))
+            for config, seed in zip(self.configs, pipeline_seeds)
+        ]
 
-    def next_static_seed(self) -> int:
-        """Get a static seed for the ensemble data processor.
-
-        This can be used to redo the preprocessing with the same random state
-        during the fit_transform*() methods. Currently it is only used
-        in the InferenceEngineOnDemand class.
-        """
-        static_seed, _ = infer_random_state(self.random_state)
-        return static_seed
+        max_features_per_estimator = [
+            c.preprocess_config.max_features_per_estimator for c in self.configs
+        ]
+        self.subsample_feature_indices = _get_subsample_feature_indices(
+            pipelines=self.pipelines,
+            n_samples=n_samples,
+            feature_schema=self.feature_schema,
+            max_features_per_estimator=max_features_per_estimator,
+            rng=self.rng,
+            feature_subsampling_method=feature_subsampling_method,
+            constant_feature_count=constant_feature_count,
+        )
 
     def fit_transform_ensemble_members_iterator(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_schema: FeatureSchema,
         parallel_mode: Literal["block", "as-ready", "in-order"],
-        override_random_state: int | np.random.Generator | None = None,
     ) -> Iterator[TabPFNEnsembleMember]:
         """Get an iterator over the fit and transform data."""
         preprocessed_data_iterator = fit_preprocessing(
             configs=self.configs,
             X_train=X_train,
             y_train=y_train,
-            feature_schema=feature_schema,
-            random_state=override_random_state or self.random_state,
+            feature_schema=self.feature_schema,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
+            subsample_feature_indices=self.subsample_feature_indices,
+            pipelines=self.pipelines,
         )
 
         gpu_preprocessors = []
@@ -139,34 +160,34 @@ class TabPFNEnsemblePreprocessor:
             )
             gpu_preprocessors.append(gpu_preprocessor)
 
-        for i, (
+        for (
+            config_index,
             config,
             cpu_preprocessor,
             X_train_preprocessed,
             y_train_preprocessed,
             feature_schema_preprocessed,
-        ) in enumerate(preprocessed_data_iterator):
+        ) in preprocessed_data_iterator:
             yield TabPFNEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
-                gpu_preprocessor=gpu_preprocessors[i],
+                gpu_preprocessor=gpu_preprocessors[config_index],
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
+                feature_indices=self.subsample_feature_indices[config_index],
             )
 
     def fit_transform_ensemble_members(
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
-        feature_schema: FeatureSchema,
     ) -> list[TabPFNEnsembleMember]:
         """Fit and transform the ensemble members."""
         return list(
             self.fit_transform_ensemble_members_iterator(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
                 parallel_mode="block",
             )
         )
@@ -256,9 +277,8 @@ def _get_subsample_indices_for_estimators(
             )
             subsample_samples = subsample_samples[:num_estimators]
         for subsample in subsample_samples:
-            assert len(subsample) > 0, (
-                "Length of subsampled indices must be larger than 0"
-            )
+            if len(subsample) == 0:
+                raise ValueError("Length of subsampled indices must be larger than 0")
         balance_count = num_estimators // len(subsample_samples)
         subsample_indices = _balance(subsample_samples, balance_count)
         leftover = num_estimators % len(subsample_samples)
@@ -330,6 +350,240 @@ def _generate_class_permutations(
         return [None] * num_estimators  # type: ignore[return-value]
 
     raise ValueError(f"Unknown {class_shift_method=}")
+
+
+def _find_max_input_features(
+    pipeline: PreprocessingPipeline,
+    n_samples: int,
+    feature_schema: FeatureSchema,
+    max_features_per_estimator: int,
+) -> int:
+    """Find the largest number of input features that fits within the budget.
+
+    Decrements from n_total until k + pipeline.num_added_features(...) <= max.
+
+    TODO: The search always slices the *first* k features, so the budget
+    estimate can be biased when transforms add features depending on feature
+    type (e.g. one-hot for categoricals). Shuffling the schema indices before
+    slicing would give a more representative estimate.
+    """
+    n_total = feature_schema.num_columns
+
+    for k in range(n_total, -1, -1):
+        if k == n_total:
+            sliced_schema = feature_schema
+        else:
+            sliced_schema = feature_schema.slice_for_indices(list(range(k)))
+        total = k + pipeline.num_added_features(n_samples, sliced_schema)
+        if total <= max_features_per_estimator:
+            return k
+
+    return 0
+
+
+def _get_subsample_feature_indices(
+    pipelines: Sequence[PreprocessingPipeline],
+    n_samples: int,
+    feature_schema: FeatureSchema,
+    max_features_per_estimator: Sequence[int],
+    rng: np.random.Generator,
+    feature_subsampling_method: FeatureSubsamplingMethod,
+    constant_feature_count: int = 50,
+) -> list[np.ndarray | None]:
+    """Get the indices of the features to subsample for each estimator.
+
+    Args:
+        pipelines: Preprocessing pipelines for each estimator.
+        n_samples: Number of training samples.
+        feature_schema: Feature schema of the dataset.
+        max_features_per_estimator: Maximum number of features per estimator,
+            one value per pipeline.
+        rng: Random number generator.
+        feature_subsampling_method: Method for subsampling features. One of
+            "balanced", "random", or "constant_and_balanced".
+        constant_feature_count: Number of leading features to always include
+            when using the "constant_and_balanced" method.
+    """
+    if len(max_features_per_estimator) != len(pipelines):
+        raise ValueError(
+            f"max_features_per_estimator has {len(max_features_per_estimator)} "
+            f"elements, but there are {len(pipelines)} pipelines"
+        )
+    n_total_features = feature_schema.num_columns
+
+    # The feature subsampling will be done aware of the settings used in the
+    # preprocessing pipelines because some steps add additional features
+    # (SVD, append_original, fingerprint, one-hot).
+    # For one-hot encoding, num_added_features returns 0 as an approximation
+    # because the true count depends on data cardinality (see warning below).
+    subsample_sizes = []
+    for pipeline, max_feats in zip(pipelines, max_features_per_estimator):
+        subsample_sizes.append(
+            _find_max_input_features(
+                pipeline=pipeline,
+                n_samples=n_samples,
+                feature_schema=feature_schema,
+                max_features_per_estimator=max_feats,
+            )
+        )
+
+    # Warn when one-hot encoding and feature subsampling are both active.
+    # The subsampling budget is computed assuming one-hot adds 0 extra columns,
+    # so the actual post-expansion feature count may exceed max_features_per_estimator.
+    if any(s < feature_schema.num_columns for s in subsample_sizes) and any(
+        p.has_data_dependent_feature_expansion() for p in pipelines
+    ):
+        warnings.warn(
+            "Feature subsampling is active, but at least one preprocessing "
+            "pipeline uses data dependent feature exampnsion (for example "
+            "one-hot encoding). The subsampling budget is computed "
+            "without accounting for the additional columns created by this "
+            "expansion (which depends on training data cardinality). The actual "
+            "number of features per estimator may exceed `max_features_per_estimator` "
+            "for those pipelines.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    if feature_subsampling_method is FeatureSubsamplingMethod.BALANCED:
+        return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
+    if feature_subsampling_method is FeatureSubsamplingMethod.RANDOM:
+        return _subsample_features_random(subsample_sizes, n_total_features, rng)
+    if feature_subsampling_method is FeatureSubsamplingMethod.CONSTANT_AND_BALANCED:
+        return _subsample_features_constant_and_balanced(
+            subsample_sizes, n_total_features, rng, constant_feature_count
+        )
+
+    raise ValueError(
+        f"Unknown feature subsampling method: {feature_subsampling_method}"
+    )
+
+
+def _draw_balanced_from_pool(
+    pool: list[int],
+    size: int,
+    pool_size: int,
+    rng: np.random.Generator,
+) -> tuple[list[int], list[int]]:
+    """Draw ``size`` slot indices via round-robin from a refillable pool.
+
+    When the pool is exhausted it is refilled with ``range(pool_size)`` minus
+    any slots already drawn for the current estimator (to avoid duplicates).
+
+    Returns:
+        (drawn_slots, remaining_pool) so the caller can carry the pool across
+        estimators for balanced coverage.
+    """
+    slots: list[int] = []
+    remaining = size
+
+    while remaining > 0:
+        if len(pool) == 0:
+            already_selected = set(slots)
+            available = [i for i in range(pool_size) if i not in already_selected]
+            rng.shuffle(available)
+            pool = available
+
+        take = min(remaining, len(pool))
+        slots.extend(pool[:take])
+        pool = pool[take:]
+        remaining -= take
+
+    return slots, pool
+
+
+def _subsample_features_balanced(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Balanced round-robin sampling from a shared shuffled pool.
+
+    Features are globally shuffled once so that consecutive pool positions
+    correspond to unrelated original features. This prevents the round-robin
+    from systematically grouping neighboring columns (which may be correlated)
+    into the same estimator. Each feature appears approximately the same number
+    of times across all estimators.
+    """
+    # Global shuffle: slot i -> original feature index shuffled_order[i].
+    shuffled_order = rng.permutation(n_total_features)
+    subsample_feature_indices: list[np.ndarray | None] = []
+    pool: list[int] = []
+
+    for size in subsample_sizes:
+        if size >= n_total_features:
+            subsample_feature_indices.append(None)
+            continue
+
+        slots, pool = _draw_balanced_from_pool(pool, size, n_total_features, rng)
+        original_indices = shuffled_order[np.array(slots)]
+        subsample_feature_indices.append(np.sort(original_indices))
+
+    return subsample_feature_indices
+
+
+def _subsample_features_random(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Each estimator independently draws a random subset of features."""
+    subsample_feature_indices: list[np.ndarray | None] = []
+
+    for size in subsample_sizes:
+        if size >= n_total_features:
+            subsample_feature_indices.append(None)
+        else:
+            indices = rng.permutation(n_total_features)[:size]
+            subsample_feature_indices.append(np.sort(indices))
+
+    return subsample_feature_indices
+
+
+def _subsample_features_constant_and_balanced(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    rng: np.random.Generator,
+    constant_feature_count: int,
+) -> list[np.ndarray | None]:
+    """Always include the first N features, balanced round-robin for the rest.
+
+    The constant features (indices 0..n_constant-1) are always included. The
+    remaining budget is filled using balanced round-robin sampling from the
+    non-constant features (indices n_constant..n_total-1). Non-constant features
+    are globally shuffled once so that consecutive pool positions correspond to
+    unrelated original features, preventing correlated neighboring columns from
+    clustering in the same estimator.
+    """
+    n_constant = min(constant_feature_count, n_total_features)
+    n_non_constant = n_total_features - n_constant
+
+    # Global shuffle of non-constant features: slot i -> original feature index.
+    non_constant_shuffled = rng.permutation(np.arange(n_constant, n_total_features))
+    subsample_feature_indices: list[np.ndarray | None] = []
+    pool: list[int] = []
+
+    for size in subsample_sizes:
+        if size >= n_total_features:
+            subsample_feature_indices.append(None)
+            continue
+
+        if size <= n_constant:
+            # Budget is less than constant count; just take the first `size` features.
+            subsample_feature_indices.append(np.arange(size))
+            continue
+
+        # Always include the first n_constant features, fill rest via balanced pool.
+        remaining_budget = size - n_constant
+        slots, pool = _draw_balanced_from_pool(
+            pool, remaining_budget, n_non_constant, rng
+        )
+
+        non_constant_indices = non_constant_shuffled[np.array(slots)]
+        all_indices = np.concatenate([np.arange(n_constant), non_constant_indices])
+        subsample_feature_indices.append(np.sort(all_indices))
+
+    return subsample_feature_indices
 
 
 def generate_classification_ensemble_configs(  # noqa: PLR0913

@@ -14,15 +14,13 @@ import torch
 from sklearn.model_selection import StratifiedKFold
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.preprocessing import (
-    EnsembleConfig,
-    fit_preprocessing,
-)
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
+    from tabpfn.preprocessing import EnsembleConfig
 
 
 @dataclass
@@ -436,29 +434,25 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         feature_schema = FeatureSchema.from_only_categorical_indices(
             cat_ix, num_columns
         )
-        preprocessing_iterator = fit_preprocessing(
+        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
             configs=conf,
-            X_train=x_train_raw,
-            y_train=y_train,
+            n_samples=x_train_raw.shape[0],
             feature_schema=feature_schema,
             random_state=self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
-            parallel_mode="block",
         )
-        (
-            configs,
-            preprocessors,
-            X_trains_preprocessed,
-            y_trains_preprocessed,
-            feature_schema_preprocessed,
-        ) = list(zip(*preprocessing_iterator))
-        X_trains_preprocessed = list(X_trains_preprocessed)
-        y_trains_preprocessed = list(y_trains_preprocessed)
+        ensemble_members = ensemble_preprocessor.fit_transform_ensemble_members(
+            X_train=x_train_raw,
+            y_train=y_train,
+        )
+        X_trains_preprocessed = [m.X_train for m in ensemble_members]
+        y_trains_preprocessed = [m.y_train for m in ensemble_members]
+        feature_schema_preprocessed = [m.feature_schema for m in ensemble_members]
 
         ## Process test data for all ensemble estimators.
-        X_tests_preprocessed = []
-        for _, estim_preprocessor in zip(configs, preprocessors):
-            X_tests_preprocessed.append(estim_preprocessor.transform(x_test_raw).X)
+        X_tests_preprocessed = [
+            m.transform_X_test(x_test_raw) for m in ensemble_members
+        ]
 
         ## Convert to tensors.
         for i in range(len(X_trains_preprocessed)):

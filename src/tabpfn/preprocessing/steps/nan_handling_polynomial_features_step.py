@@ -88,6 +88,18 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
         return feature_schema
 
     @override
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+        """Return the number of added polynomial features."""
+        del n_samples
+        n_features = feature_schema.num_columns
+        if n_features == 0:
+            return 0
+        n_polynomials = (n_features * (n_features - 1)) // 2 + n_features
+        if self.max_poly_features:
+            n_polynomials = min(self.max_poly_features, n_polynomials)
+        return n_polynomials
+
+    @override
     def _transform(
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:

@@ -294,6 +294,23 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 ].astype(transformed[:, col].dtype)
         return transformed, None, None  # type: ignore
 
+    @override
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+        """Return the number of added features.
+
+        For ordinal, numeric, and none encodings this is always 0 (same column count).
+        For one-hot encoding the true value depends on data cardinality and cannot be
+        determined before fitting, so we still return 0.
+        A warning is emitted upstream when one-hot is combined with feature subsampling.
+        """
+        del n_samples, feature_schema
+        return 0
+
+    @override
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """One-hot encoding creates columns depending on data cardinality."""
+        return self.categorical_transform_name == "onehot"
+
 
 __all__ = [
     "EncodeCategoricalFeaturesStep",

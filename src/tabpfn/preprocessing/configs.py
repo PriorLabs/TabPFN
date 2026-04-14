@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
@@ -11,6 +12,14 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
+
+
+class FeatureSubsamplingMethod(str, Enum):
+    """Method for subsampling features if dataset exceeds max_features_per_estimator."""
+
+    BALANCED = "balanced"
+    RANDOM = "random"
+    CONSTANT_AND_BALANCED = "constant_and_balanced"
 
 
 @dataclass(frozen=True, eq=True)
@@ -171,6 +180,7 @@ class RegressorEnsembleConfig(EnsembleConfig):
 __all__ = [
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
+    "FeatureSubsamplingMethod",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
 ]

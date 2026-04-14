@@ -72,6 +72,7 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
+    FeatureSubsamplingMethod,
     PreprocessorConfig,
     clean_data,
     generate_classification_ensemble_configs,
@@ -769,11 +770,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
             # Note: we use the static_seed so we're independent of the random generation
             # inside the initialize function above
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
         )
 
         self.executor_ = create_inference_engine(
@@ -890,16 +897,21 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
             # Note: we use the static_seed so we're independent of the random generation
             # inside the initialize function above
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(
             X_train=X,
             y_train=y,
-            feature_schema=self.inferred_feature_schema_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices=self.devices_,

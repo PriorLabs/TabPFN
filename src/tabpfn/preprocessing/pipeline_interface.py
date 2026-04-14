@@ -148,6 +148,11 @@ class PreprocessingStep:
         Returns:
             PreprocessingStepResult with transformed data and updated feature schema.
         """
+        # Reset cached validation state so re-fitting is safe.
+        if hasattr(self, "n_added_columns_"):
+            del self.n_added_columns_
+        if hasattr(self, "modality_added_"):
+            del self.modality_added_
         self.feature_schema_updated_ = self._fit(X, feature_schema)
         return self.transform(X, is_test=False)
 
@@ -176,6 +181,23 @@ class PreprocessingStep:
             X_added=X_added,
             modality_added=modality_added,
         )
+
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+        """Return the number of added features.
+
+        This needs to be overridden by subclasses that add features.
+        """
+        del n_samples, feature_schema
+        return 0
+
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """Return True if this step's feature expansion depends on data values.
+
+        Override to return True for steps where ``num_added_features()`` is an
+        approximation because the true count depends on fitting data (e.g.
+        one-hot encoding cardinality).
+        """
+        return False
 
     def _validate_added_data(
         self,
@@ -277,6 +299,29 @@ class PreprocessingPipeline:
             X, self.initial_feature_schema_, is_fitting=False
         )
         return PreprocessingPipelineResult(X=X, feature_schema=updated_schema)
+
+    def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
+        """Return the number of added features.
+
+        Threads an evolving feature schema through the steps so that each step
+        sees the feature count that includes columns added by prior steps.
+        """
+        total_added = 0
+        current_schema = feature_schema
+        for step, _ in self.steps:
+            added = step.num_added_features(n_samples, current_schema)
+            total_added += added
+            if added > 0:
+                current_schema = current_schema.append_columns(
+                    FeatureModality.NUMERICAL, added
+                )
+        return total_added
+
+    def has_data_dependent_feature_expansion(self) -> bool:
+        """Return True if any step has data-dependent feature expansion."""
+        return any(
+            step.has_data_dependent_feature_expansion() for step, _ in self.steps
+        )
 
     def _process_steps(
         self,

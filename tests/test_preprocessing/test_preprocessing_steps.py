@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from functools import partial
 from typing_extensions import override
@@ -22,12 +23,26 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
+    AddSVDFeaturesStep,
     DifferentiableZNormStep,
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
 )
+from tabpfn.preprocessing.steps.remove_constant_features_step import (
+    RemoveConstantFeaturesStep,
+)
+
+
+def _get_schema(num_columns: int) -> FeatureSchema:
+    """Create a schema with all numerical features."""
+    return FeatureSchema(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(num_columns)
+        ]
+    )
 
 
 def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
@@ -45,7 +60,7 @@ def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
         partial(
             ReshapeFeatureDistributionsStep,
             transform_name="none",
-            append_to_original=True,
+            append_to_original="auto",
             apply_to_categorical=False,
         )
     ]
@@ -126,6 +141,66 @@ def test__preprocessing_steps__transform__no_sample_interdependence():
         assert result_full.feature_schema.indices_for(
             FeatureModality.CATEGORICAL
         ) == result_subset.feature_schema.indices_for(FeatureModality.CATEGORICAL)
+
+
+def _make_step(cls: Callable[..., PreprocessingStep]) -> PreprocessingStep:
+    """Create a step, pinning random_state=0 when the constructor accepts it."""
+    sig = inspect.signature(cls)
+    if "random_state" in sig.parameters:
+        return cls(random_state=0)
+    return cls()
+
+
+def test__preprocessing_steps__refit_safety():
+    """Fitting a step on dataset A then re-fitting on dataset B must produce
+    the same result as a fresh step fit only on dataset B.
+
+    This guards against internal state (e.g. cached flags, overwritten init
+    params) leaking across fits.
+    """
+    rng = np.random.default_rng(42)
+    cat_inds = [1, 3]
+
+    # Dataset A: small, few features.
+    n_a, f_a = 30, 4
+    schema_a = _make_metadata(f_a, cat_inds)
+    x_a = _get_random_data(rng, n_a, f_a, cat_inds)
+
+    # Dataset B: larger, more features (triggers different code-paths in
+    # steps that branch on feature count, e.g. SVD, append_to_original).
+    n_b, f_b = 50, 8
+    cat_inds_b = [1, 3]
+    schema_b = _make_metadata(f_b, cat_inds_b)
+    x_b = _get_random_data(rng, n_b, f_b, cat_inds_b)
+
+    for cls in _get_preprocessing_steps():
+        # Fit on A, then re-fit on B with the same instance.
+        step_reused = _make_step(cls)
+        step_reused.fit_transform(x_a, schema_a)
+        reused_result = step_reused.fit_transform(x_b, schema_b)
+
+        # Fresh instance fit only on B.
+        step_fresh = _make_step(cls)
+        fresh_result = step_fresh.fit_transform(x_b, schema_b)
+
+        assert reused_result.X.shape == fresh_result.X.shape, (
+            f"Refit shape mismatch for {cls}: "
+            f"{reused_result.X.shape} vs {fresh_result.X.shape}"
+        )
+        assert np.allclose(reused_result.X, fresh_result.X, equal_nan=True), (
+            f"Refit output mismatch for {cls}"
+        )
+        if reused_result.X_added is not None or fresh_result.X_added is not None:
+            assert reused_result.X_added is not None, (
+                f"Refit X_added presence mismatch for {cls}: reused_result.X_added is None"  # noqa: E501
+            )
+            assert fresh_result.X_added is not None, (
+                f"Refit X_added presence mismatch for {cls}: fresh_result.X_added is None"  # noqa: E501
+            )
+
+            assert np.allclose(
+                reused_result.X_added, fresh_result.X_added, equal_nan=True
+            ), f"Refit X_added mismatch for {cls}"
 
 
 def test__pipeline__handles_added_columns_from_fingerprint_step():
@@ -275,3 +350,46 @@ def test__order_preserving_column_transformer():
     # OrderPreserving transformer does not shuffle column order
     preserved_output = preserving_transformer.fit_transform(mock_data_df)
     np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
+
+
+def test__pipeline__num_added_features():
+    """Test that the pipeline returns the correct number of added features."""
+    pipeline = PreprocessingPipeline(
+        steps=[
+            ReshapeFeatureDistributionsStep(
+                transform_name="quantile_uni",
+                append_to_original="auto",
+                random_state=42,
+                max_features_per_estimator=500,
+            ),
+            AddFingerprintFeaturesStep(),
+        ]
+    )
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 11
+    assert pipeline.num_added_features(100, _get_schema(num_columns=501)) == 1
+
+    pipeline = PreprocessingPipeline(
+        steps=[
+            ReshapeFeatureDistributionsStep(
+                transform_name="quantile_uni",
+                append_to_original="auto",
+                random_state=42,
+                max_features_per_estimator=500,
+            ),
+            AddSVDFeaturesStep(global_transformer_name="svd", random_state=42),
+        ]
+    )
+    # Reshape adds 10 (append_to_original), then SVD sees 20 features and adds
+    # min(100//10+1, 20//2) = min(11, 10) = 10. Total added = 20.
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 10 + 10
+
+    pipeline = PreprocessingPipeline(
+        steps=[
+            RemoveConstantFeaturesStep(),
+            AddFingerprintFeaturesStep(),
+        ]
+    )
+    # Note that we currently don't count the removed features as -1.
+    # This is a minor effect that we ignore for now. In the future,
+    # we will make sure that the pipeline never actually sees constant features.
+    assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 1

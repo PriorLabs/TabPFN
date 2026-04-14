@@ -11,6 +11,16 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
+def _get_schema(num_columns: int) -> FeatureSchema:
+    """Create a schema with all numerical features."""
+    return FeatureSchema(
+        features=[
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(num_columns)
+        ]
+    )
+
+
 def _make_metadata(n_features: int, cat_indices: list[int]) -> FeatureSchema:
     return FeatureSchema.from_only_categorical_indices(cat_indices, n_features)
 
@@ -255,48 +265,6 @@ def test__reshape__all_categoricals__apply_to_cat_false():
     assert result.X.shape == (n_samples, n_features)
 
 
-def test__reshape__subsampling__modalities_filtered():
-    """Test that feature subsampling correctly filters modalities.
-
-    When features exceed max_features_per_estimator, a random subset is kept.
-    Both categorical and numerical indices should be valid after subsampling.
-    """
-    rng = np.random.default_rng(42)
-    n_samples = 100
-    n_features = 600  # More than max_features_per_estimator
-    max_features = 500
-    cat_indices = [10, 50, 100, 200, 300, 400, 500, 550]
-
-    X = _make_test_data(rng, n_samples, n_features, cat_indices)
-    feature_modalities = _make_metadata(n_features, cat_indices)
-
-    step = ReshapeFeatureDistributionsStep(
-        transform_name="none",
-        apply_to_categorical=False,
-        append_to_original=False,
-        max_features_per_estimator=max_features,
-        random_state=42,
-    )
-    result = step.fit_transform(X, feature_modalities)
-
-    # Output should be capped at max_features
-    assert result.X.shape == (n_samples, max_features)
-
-    # Categorical indices should be subset and remapped
-    result_cat = result.feature_schema.indices_for(FeatureModality.CATEGORICAL)
-    result_num = result.feature_schema.indices_for(FeatureModality.NUMERICAL)
-
-    # The categorical indices should be at the start (due to passthrough first)
-    # and should be a subset of the original categorical features
-    assert len(result_cat) <= len(cat_indices)
-    # All returned categorical indices should be valid
-    assert all(0 <= idx < max_features for idx in result_cat)
-    # All returned numerical indices should be valid
-    assert all(0 <= idx < max_features for idx in result_num)
-    # Together they should cover all output features
-    assert sorted(result_cat + result_num) == list(range(max_features))
-
-
 @pytest.mark.parametrize(
     ("append_to_original", "apply_to_categorical"),
     [
@@ -433,28 +401,45 @@ def test__preprocessing_large_dataset():
 
 
 @pytest.mark.parametrize(
-    ("append_to_original_setting", "num_features", "expected_output_features"),
+    (
+        "append_to_original_setting",
+        "num_features",
+        "expected_output_features",
+        "expected_num_added_features",
+        "apply_to_categorical",
+    ),
     [
         # Test 'auto' mode below the threshold: should append original features
-        pytest.param("auto", 10, 20, id="auto_below_threshold_appends"),
+        pytest.param("auto", 10, 20, 10, True, id="auto_below_threshold_appends"),
         # Test 'auto' mode above the threshold: should NOT append original features
-        pytest.param("auto", 600, 500, id="auto_above_threshold_replaces"),
+        # (step no longer subsamples; all 600 features pass through)
+        pytest.param("auto", 600, 600, 0, True, id="auto_above_threshold_replaces"),
         # If n features more than half of max_features_per_estimator we do not append
-        pytest.param("auto", 300, 300, id="auto_below_half_threshold_replaces"),
-        # True: always append after capping (600 → capped 500 → doubled)
-        pytest.param(True, 600, 1000, id="true_always_appends"),
+        pytest.param(
+            "auto", 300, 300, 0, True, id="auto_below_half_threshold_replaces"
+        ),
+        # True: always append (no step-level capping, so 600 + 600 = 1200)
+        pytest.param(True, 600, 1200, 600, True, id="true_always_appends"),
         # Test False: should never append
-        pytest.param(False, 10, 10, id="false_never_appends"),
+        pytest.param(False, 10, 10, 0, True, id="false_never_appends"),
+        # Test 'auto' mode below the threshold: should append original features
+        # but only numericals are added
+        pytest.param(
+            "auto", 10, 15, 5, False, id="auto_below_threshold_appends_no_cat"
+        ),
     ],
 )
 def test__reshape_step_append_original_logic(
     append_to_original_setting: bool | Literal["auto"],
     num_features: int,
     expected_output_features: int,
+    expected_num_added_features: int,
+    apply_to_categorical: bool,
 ):
     """Tests the `append_to_original` logic, including the "auto" mode which
     depends on the APPEND_TO_ORIGINAL_THRESHOLD class constant (500).
     """
+    assert num_features % 2 == 0
     num_samples = 100
     rng = np.random.default_rng(42)
     X = rng.random((num_samples, num_features))
@@ -464,15 +449,36 @@ def test__reshape_step_append_original_logic(
         append_to_original=append_to_original_setting,
         random_state=42,
         max_features_per_estimator=500,
+        apply_to_categorical=apply_to_categorical,
     )
-
-    # TODO: Create helper function to get metadata features.
 
     features = [
         Feature(name=None, modality=FeatureModality.NUMERICAL)
-        for _ in range(num_features)
+        for _ in range(num_features // 2)
+    ] + [
+        Feature(name=None, modality=FeatureModality.CATEGORICAL)
+        for _ in range(num_features // 2)
     ]
-    result = preprocessing_step.fit_transform(X, FeatureSchema(features=features))  # type: ignore
+    feature_schema = FeatureSchema(features=features)
+    result = preprocessing_step.fit_transform(X, feature_schema)  # type: ignore
 
     assert result.X.shape[0] == num_samples
     assert result.X.shape[1] == expected_output_features
+
+    assert (
+        preprocessing_step.num_added_features(num_samples, feature_schema)
+        == expected_num_added_features
+    )
+
+
+def test__num_added_features():
+    """Test that the step returns the correct number of added features."""
+    step = ReshapeFeatureDistributionsStep(
+        transform_name="quantile_uni",
+        append_to_original="auto",
+        random_state=42,
+        max_features_per_estimator=500,
+    )
+    assert step.num_added_features(100, _get_schema(num_columns=10)) == 10
+    assert step.num_added_features(100, _get_schema(num_columns=501)) == 0
+    assert step.num_added_features(100, _get_schema(num_columns=250)) == 250

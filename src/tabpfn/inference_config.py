@@ -128,6 +128,22 @@ class InferenceConfig:
             indices are repeated for the remaining estimators.
     """
 
+    FEATURE_SUBSAMPLING_METHOD: Literal[
+        "balanced", "random", "constant_and_balanced"
+    ] = "random"
+    """The method used to subsample features when the dataset has more features than
+    max_features_per_estimator. The options are:
+        - "random": Each estimator independently draws a random subset of features.
+        - "balanced": Round-robin sampling from a shared shuffled pool so each feature
+          appears approximately equally across estimators.
+        - "constant_and_balanced": Always include the first N features (see
+          CONSTANT_FEATURE_COUNT), then use balanced subsampling for the rest.
+    """
+    CONSTANT_FEATURE_COUNT: int = 50
+    """The number of leading features that are always included when using the
+    'constant_and_balanced' feature subsampling method. Only used when
+    FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
+
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
@@ -263,6 +279,8 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
         FINGERPRINT_FEATURE=True,
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
+        FEATURE_SUBSAMPLING_METHOD="random",
+        CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
@@ -286,6 +304,8 @@ def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> Inferenc
         FINGERPRINT_FEATURE=True,
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
+        FEATURE_SUBSAMPLING_METHOD="random",
+        CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
@@ -312,6 +332,8 @@ def _get_v2_6_config(
         FINGERPRINT_FEATURE=True,
         POLYNOMIAL_FEATURES="no" if task_type == "multiclass" else 10,
         SUBSAMPLE_SAMPLES=None,
+        FEATURE_SUBSAMPLING_METHOD="random",
+        CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=("none",),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
