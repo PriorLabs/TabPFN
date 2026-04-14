@@ -14,7 +14,6 @@ import torch
 from sklearn.base import (
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 # --- TabPFN imports ---
 from tabpfn.constants import (
@@ -33,6 +32,7 @@ from tabpfn.inference import (
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
 from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.telemetry import initialize_telemetry as _initialize_telemetry
 from tabpfn.utils import (
     DevicesSpecification,
     infer_devices,
@@ -419,13 +419,8 @@ def estimator_to_device(
 
 
 def initialize_telemetry() -> None:
-    """Initialize telemetry and acknowledge anonymous session.
-
-    If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
-    no action is taken.
-    """
-    ping()
-    capture_session()
+    """Initialize telemetry and acknowledge an anonymous process session."""
+    _initialize_telemetry()
 
 
 def get_embeddings(

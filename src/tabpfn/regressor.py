@@ -70,6 +70,7 @@ from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.telemetry import is_telemetry_suppressed
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -469,7 +470,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         initialize_telemetry()
 
         # Only anonymously record `fit_mode` usage
-        log_model_init_params(self, {"fit_mode": self.fit_mode})
+        if not is_telemetry_suppressed():
+            log_model_init_params(self, {"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
