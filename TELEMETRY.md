@@ -20,7 +20,7 @@ Here's the full list:
 - `ping` – sent when models initialize, used to check liveness  
 - `fit_called` – sent when you call `fit`  
 - `predict_called` – sent when you call `predict`
-- `session` - sent whenever a user initializes a TabPFN estimator.
+- `session` - sent once per Python process when telemetry is initialized by a TabPFN estimator.
 
 ### Metadata (all events)
 - `python_version` – version of Python you're running

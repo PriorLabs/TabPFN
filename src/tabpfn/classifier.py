@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import copy
+import inspect
 import logging
 import warnings
 from collections.abc import Callable, Sequence
@@ -81,6 +82,7 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.telemetry import is_telemetry_suppressed, suppress_telemetry
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -108,6 +110,19 @@ if TYPE_CHECKING:
         from sklearn.base import Tags
     except ImportError:
         Tags = Any
+
+
+def _call_without_telemetry(
+    bound_method: Callable[..., Any],
+    /,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Call a TabPFN method without its outer telemetry decorators."""
+    method = inspect.unwrap(bound_method)
+    self = bound_method.__self__  # type: ignore[attr-defined]
+    return method(self, *args, **kwargs)
+
 
 DEFAULT_CLASSIFICATION_EVAL_METRIC = ClassifierEvalMetrics.ACCURACY
 
@@ -485,7 +500,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         initialize_telemetry()
 
         # Only anonymously record `fit_mode` usage
-        log_model_init_params(self, {"fit_mode": self.fit_mode})
+        if not is_telemetry_suppressed():
+            log_model_init_params(self, {"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -723,7 +739,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         params.update(forced)
         params.update(overwrite_kwargs)
 
-        return TabPFNClassifier(**params)
+        with suppress_telemetry():
+            return TabPFNClassifier(**params)
 
     @config_context(transform_output="default")  # type: ignore
     @track_model_call(model_method="fit", param_names=["X", "y"])
@@ -1033,10 +1050,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     message=".*haven't specified any tuning configuration*",
                     category=UserWarning,
                 )
-                calibration_classifier.fit(X_train_NtF, y_train_Nt)
+                _call_without_telemetry(
+                    calibration_classifier.fit,
+                    X_train_NtF,
+                    y_train_Nt,
+                )
 
             # E=num estimators, Nh=num holdout samples, C=num classes
-            raw_logits_ENhC = calibration_classifier.predict_raw_logits(X=X_holdout_NhF)
+            raw_logits_ENhC = _call_without_telemetry(
+                calibration_classifier.predict_raw_logits,
+                X=X_holdout_NhF,
+            )
             holdout_raw_logits.append(raw_logits_ENhC)
 
         holdout_raw_logits_all = np.concatenate(holdout_raw_logits, axis=1)
