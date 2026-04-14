@@ -320,6 +320,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
     ) -> dict[str, Any]:
         """Return a deep-copy of base_config with an optional n_estimators override."""
         config = copy.deepcopy(base_config)
+        existing_inference_config = dict(config.get("inference_config", {}) or {})
+        existing_inference_config["ENABLE_GPU_PREPROCESSING"] = False
+        config["inference_config"] = existing_inference_config
         if n_estimators_override is not None:
             config["n_estimators"] = n_estimators_override
         return config
@@ -331,9 +334,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
     ) -> dict[str, Any]:
         """Return eval config with n_estimators override and subsample setting."""
         config = self._build_estimator_config(base_config, n_estimators_override)
-        existing = dict(config.get("inference_config", {}) or {})
-        existing["SUBSAMPLE_SAMPLES"] = self.n_inference_subsample_samples
-        config["inference_config"] = existing
+        config["inference_config"]["SUBSAMPLE_SAMPLES"] = (
+            self.n_inference_subsample_samples
+        )
         return config
 
     def _training_forward(self, *args: Any, **kwargs: Any) -> Any:

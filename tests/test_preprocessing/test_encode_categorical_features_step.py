@@ -5,7 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import (
+    Feature,
+    FeatureModality,
+    FeatureSchema,
+    GPUTransformType,
+)
 from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
 
@@ -379,3 +384,164 @@ def test__encode_categorical__onehot__max_cardinality_filters_high_cardinality()
     )
     result_no_limit = step_no_limit.fit_transform(X, feature_schema)
     assert result_no_limit.X.shape[1] > result.X.shape[1]
+
+
+def _make_schema_with_gpu_marks(
+    n_features: int,
+    cat_indices: list[int],
+    gpu_quantile_indices: list[int],
+) -> FeatureSchema:
+    """Create FeatureSchema with scheduled_gpu_transform on specified columns."""
+    cat_set = set(cat_indices)
+    gpu_set = set(gpu_quantile_indices)
+    features = []
+    for i in range(n_features):
+        modality = (
+            FeatureModality.CATEGORICAL if i in cat_set else FeatureModality.NUMERICAL
+        )
+        mark = GPUTransformType.QUANTILE if i in gpu_set else None
+        features.append(
+            Feature(name=None, modality=modality, scheduled_gpu_transform=mark)
+        )
+    return FeatureSchema(features=features)
+
+
+class TestCarryOverGpuTransformMarks:
+    """Tests for scheduled_gpu_transform preservation through encoding."""
+
+    def test__ordinal__marks_follow_column_reorder(self):
+        """GPU quantile marks on numerical cols survive ordinal encoding reorder.
+
+        Input: cats at [1, 4], numerical at [0, 2, 3, 5], GPU marks on [0, 2, 3, 5].
+        Ordinal encoding reorders to [cat(1), cat(4), num(0), num(2), num(3), num(5)].
+        Marks should land on output [2, 3, 4, 5].
+        """
+        rng = np.random.default_rng(42)
+        n_features = 6
+        cat_indices = [1, 4]
+        num_indices = [0, 2, 3, 5]
+
+        X = _make_test_data(rng, 50, n_features, cat_indices)
+        schema = _make_schema_with_gpu_marks(n_features, cat_indices, num_indices)
+
+        step = EncodeCategoricalFeaturesStep("ordinal", random_state=42)
+        result = step.fit_transform(X, schema)
+
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        assert marked == [2, 3, 4, 5], (
+            f"Expected marks at [2,3,4,5] after reorder, got {marked}"
+        )
+        # Categoricals must NOT be marked
+        for idx in result.feature_schema.indices_for(FeatureModality.CATEGORICAL):
+            assert result.feature_schema.features[idx].scheduled_gpu_transform is None
+
+    def test__ordinal_very_common_categories__marks_preserved(self):
+        """Marks survive when _very_common_categories filters out some cats.
+
+        If a categorical column is filtered out (not common enough), it moves
+        to the remainder alongside numerical columns. Marks on numerical
+        columns must still land on the correct output positions.
+        """
+        rng = np.random.default_rng(42)
+        n_features = 6
+        cat_indices = [0, 1]
+        num_indices = [2, 3, 4, 5]
+
+        X = _make_test_data(rng, 100, n_features, cat_indices)
+        # Make cat 0 very common (passes filter), cat 1 rare (filtered out)
+        X[:, 0] = rng.integers(0, 3, size=100).astype(float)  # 3 cats, common
+        X[:, 1] = np.arange(100).astype(float)  # 100 unique, fails cardinality check
+
+        schema = _make_schema_with_gpu_marks(n_features, cat_indices, num_indices)
+
+        step = EncodeCategoricalFeaturesStep(
+            "ordinal_very_common_categories", random_state=42
+        )
+        result = step.fit_transform(X, schema)
+
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        # cat 0 passes filter -> encoded at output[0]
+        # cat 1 fails filter -> goes to remainder (NOT marked)
+        # nums [2,3,4,5] -> go to remainder (marked)
+        # Only numerical columns should be marked, not the filtered-out cat
+        for idx in marked:
+            assert (
+                result.feature_schema.features[idx].modality
+                == FeatureModality.NUMERICAL
+            )
+
+    def test__numeric_mode__marks_preserved_in_place(self):
+        """With 'numeric' encoding (no ColumnTransformer), marks stay in place."""
+        rng = np.random.default_rng(42)
+        n_features = 5
+        cat_indices = [1, 3]
+        gpu_marks = [0, 2, 4]
+
+        X = _make_test_data(rng, 50, n_features, cat_indices)
+        schema = _make_schema_with_gpu_marks(n_features, cat_indices, gpu_marks)
+
+        step = EncodeCategoricalFeaturesStep("numeric", random_state=42)
+        result = step.fit_transform(X, schema)
+
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        assert marked == gpu_marks
+
+    def test__none_mode__marks_preserved_in_place(self):
+        """With 'none' encoding, marks stay in place."""
+        rng = np.random.default_rng(42)
+        n_features = 4
+        cat_indices = [2]
+        gpu_marks = [0, 1, 3]
+
+        X = _make_test_data(rng, 50, n_features, cat_indices)
+        schema = _make_schema_with_gpu_marks(n_features, cat_indices, gpu_marks)
+
+        step = EncodeCategoricalFeaturesStep("none", random_state=42)
+        result = step.fit_transform(X, schema)
+
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        assert marked == gpu_marks
+
+    def test__onehot__marks_land_on_remainder_columns(self):
+        """GPU quantile marks survive one-hot encoding on the remainder columns.
+
+        Input: 4 features, cat at [1] (3 categories), marks on [0, 2, 3].
+        One-hot expands cat 1 into 3 columns at the front.
+        Remainder = [col 0, col 2, col 3] at output positions [3, 4, 5].
+        Marks should land on output [3, 4, 5].
+        """
+        rng = np.random.default_rng(42)
+        n_features = 4
+        cat_indices = [1]
+        gpu_marks = [0, 2, 3]
+
+        X = _make_test_data(rng, 50, n_features, cat_indices)
+        X[:, 1] = rng.integers(0, 3, size=50).astype(float)
+        schema = _make_schema_with_gpu_marks(n_features, cat_indices, gpu_marks)
+
+        step = EncodeCategoricalFeaturesStep("onehot", random_state=42)
+        result = step.fit_transform(X, schema)
+
+        # 3 onehot columns + 3 remainder columns = 6 total
+        assert result.X.shape[1] == 6
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        # Marks should be on the 3 remainder columns (the original numerical cols)
+        assert marked == [3, 4, 5]
+        # None of the onehot-expanded categorical columns should be marked
+        for idx in result.feature_schema.indices_for(FeatureModality.CATEGORICAL):
+            assert result.feature_schema.features[idx].scheduled_gpu_transform is None
+
+    def test__no_marks__fast_path_returns_unchanged(self):
+        """When no features are marked, the carry-over is a no-op."""
+        rng = np.random.default_rng(42)
+        n_features = 5
+        cat_indices = [1, 3]
+
+        X = _make_test_data(rng, 50, n_features, cat_indices)
+        schema = _make_feature_schema(n_features, cat_indices)  # no marks
+
+        step = EncodeCategoricalFeaturesStep("ordinal", random_state=42)
+        result = step.fit_transform(X, schema)
+
+        marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
+        assert marked == []

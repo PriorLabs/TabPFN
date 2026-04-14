@@ -11,16 +11,29 @@ from .pipeline_interface import (
     TorchPreprocessingStep,
     TorchPreprocessingStepResult,
 )
-from .steps import TorchSoftClipOutliersStep, TorchStandardScalerStep
+from .steps import (
+    TorchAddFingerprintFeaturesStep,
+    TorchQuantileTransformerStep,
+    TorchSelectiveQuantileTransformerStep,
+    TorchShuffleFeaturesStep,
+    TorchSoftClipOutliersStep,
+    TorchStandardScalerStep,
+)
+from .torch_quantile_transformer import TorchQuantileTransformer
 from .torch_soft_clip_outliers import TorchSoftClipOutliers
 from .torch_standard_scaler import TorchStandardScaler
 
 __all__ = [
     "FeatureSchema",
+    "TorchAddFingerprintFeaturesStep",
     "TorchPreprocessingPipeline",
     "TorchPreprocessingPipelineOutput",
     "TorchPreprocessingStep",
     "TorchPreprocessingStepResult",
+    "TorchQuantileTransformer",
+    "TorchQuantileTransformerStep",
+    "TorchSelectiveQuantileTransformerStep",
+    "TorchShuffleFeaturesStep",
     "TorchSoftClipOutliers",
     "TorchSoftClipOutliersStep",
     "TorchStandardScaler",
