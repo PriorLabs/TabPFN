@@ -126,11 +126,7 @@ def fix_dtypes(  # noqa: D103
     if convert_dtype:
         X = X.convert_dtypes()
 
-    bool_columns = X.select_dtypes(include=["bool"]).columns
-    if len(bool_columns) > 0:
-        X[bool_columns] = X[bool_columns].astype(numeric_dtype)
-
-    numerical_columns = X.select_dtypes(include=["number"]).columns
+    numerical_columns = X.select_dtypes(include=["number", "bool"]).columns
     if len(numerical_columns) > 0:
         X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
     return X
