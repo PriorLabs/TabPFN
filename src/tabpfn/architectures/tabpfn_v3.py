@@ -1661,8 +1661,8 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.ninp = config.embed_dim
-        self.inference_row_chunk_size = config.inference_row_chunk_size
-        self.inference_col_chunk_size = config.inference_col_chunk_size
+        self.inference_row_chunk_size = 2048
+        self.inference_col_chunk_size = 4
 
     @override
     def forward(
