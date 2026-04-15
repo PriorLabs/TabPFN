@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import torch
 
 
@@ -85,7 +87,12 @@ class TorchTruncatedSVD:
 
         # Compute full SVD: X = U @ diag(S) @ V^T
         # torch.linalg.svd returns V^T directly (not V)
-        u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*linalg_svd.*not currently supported on the MPS backend.*",
+            )
+            u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
 
         # Truncate to n_components
         u = u[:, :n_components]
