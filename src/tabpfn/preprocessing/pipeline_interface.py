@@ -104,6 +104,8 @@ class PreprocessingStep:
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         """Underlying method of the preprocessor to implement by subclasses.
 
@@ -111,6 +113,8 @@ class PreprocessingStep:
             X: 2d array of shape (n_samples, n_features). For steps registered
                 with specific modalities, this is only the relevant columns.
             feature_schema: feature schema for the input columns.
+            y: Optional target array. Required by steps that need target
+                information (e.g., target encoding).
 
         Returns:
             Feature schema after the transform.
@@ -138,12 +142,16 @@ class PreprocessingStep:
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> PreprocessingStepResult:
         """Fits the preprocessor and transforms the data.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
             feature_schema: feature schema.
+            y: Optional target array. Passed through to ``_fit`` for steps
+                that need target information (e.g., target encoding).
 
         Returns:
             PreprocessingStepResult with transformed data and updated feature schema.
@@ -153,7 +161,7 @@ class PreprocessingStep:
             del self.n_added_columns_
         if hasattr(self, "modality_added_"):
             del self.modality_added_
-        self.feature_schema_updated_ = self._fit(X, feature_schema)
+        self.feature_schema_updated_ = self._fit(X, feature_schema, y=y)
         return self.transform(X, is_test=False)
 
     def transform(
@@ -266,18 +274,24 @@ class PreprocessingPipeline:
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> PreprocessingPipelineResult:
         """Fit and transform the data using the pipeline.
 
         Args:
             X: 2d array of shape (n_samples, n_features).
             feature_schema: feature schema.
+            y: Optional target array. Passed through to steps that need target
+                information (e.g., target encoding).
 
         Returns:
             PreprocessingPipelineResult with transformed data and updated schema.
         """
         self.initial_feature_schema_ = feature_schema
-        X, feature_schema = self._process_steps(X, feature_schema, is_fitting=True)
+        X, feature_schema = self._process_steps(
+            X, feature_schema, is_fitting=True, y=y
+        )
         self.final_feature_schema_ = feature_schema
         return PreprocessingPipelineResult(X=X, feature_schema=feature_schema)
 
@@ -329,6 +343,7 @@ class PreprocessingPipeline:
         feature_schema: FeatureSchema,
         *,
         is_fitting: bool,
+        y: np.ndarray | None = None,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Process all pipeline steps.
 
@@ -336,6 +351,7 @@ class PreprocessingPipeline:
             X: Input array of shape (n_samples, n_features).
             feature_schema: Feature schema.
             is_fitting: If True, call fit_transform on steps; otherwise transform.
+            y: Optional target array. Passed through to steps during fitting.
 
         Returns:
             Tuple of (transformed array, updated feature schema).
@@ -353,7 +369,7 @@ class PreprocessingPipeline:
                 X_slice = X[:, indices]
                 result = (
                     step.fit_transform(
-                        X_slice, feature_schema.slice_for_indices(indices)
+                        X_slice, feature_schema.slice_for_indices(indices), y=y
                     )
                     if is_fitting
                     else step.transform(X_slice)
@@ -381,7 +397,7 @@ class PreprocessingPipeline:
                 # internally (will be deprecated going forward). For backwards
                 # compatibility, we still handle these here.
                 result = (
-                    step.fit_transform(X, feature_schema)
+                    step.fit_transform(X, feature_schema, y=y)
                     if is_fitting
                     else step.transform(X)
                 )

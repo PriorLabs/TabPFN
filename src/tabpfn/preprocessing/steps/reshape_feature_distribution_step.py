@@ -242,6 +242,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         n_samples, n_features = X.shape
         transformer, output_schema = self._create_transformers_and_new_schema(

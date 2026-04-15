@@ -26,6 +26,7 @@ from tabpfn.preprocessing.steps import (
     AddSVDFeaturesStep,
     DifferentiableZNormStep,
     ReshapeFeatureDistributionsStep,
+    TargetEncodingStep,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
     OrderPreservingColumnTransformer,
@@ -54,6 +55,7 @@ def _get_preprocessing_steps() -> list[Callable[..., PreprocessingStep],]:
             and issubclass(cls, PreprocessingStep)
             and cls is not PreprocessingStep
             and cls is not DifferentiableZNormStep  # works on torch tensors
+            and cls is not TargetEncodingStep  # requires y and task_type
         )
     ]
     extras: list[Callable[..., PreprocessingStep]] = [
@@ -272,7 +274,7 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
         """A step that incorrectly returns more columns than it received."""
 
         @override
-        def _fit(self, X: np.ndarray, metadata: FeatureSchema) -> FeatureSchema:
+        def _fit(self, X: np.ndarray, metadata: FeatureSchema, *, y=None) -> FeatureSchema:
             return metadata
 
         @override

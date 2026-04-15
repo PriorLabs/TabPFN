@@ -12,6 +12,8 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
@@ -29,6 +31,8 @@ class DifferentiableZNormStep(PreprocessingStep):
         self,
         X: torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         self.means = X.mean(dim=0, keepdim=True)
         self.stds = X.std(dim=0, keepdim=True)

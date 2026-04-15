@@ -38,6 +38,8 @@ class ShuffleFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         _, rng = infer_random_state(self.random_state)
         if self.shuffle_method == "rotate":

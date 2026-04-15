@@ -164,6 +164,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
         ct, categorical_features = self._get_transformer(X, categorical_features)
@@ -269,6 +271,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> PreprocessingStepResult:
         Xt, output_feature_schema = self._fit_transform_internal(X, feature_schema)
         self.feature_schema_updated_ = output_feature_schema

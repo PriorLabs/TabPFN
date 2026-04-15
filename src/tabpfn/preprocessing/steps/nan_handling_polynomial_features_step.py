@@ -41,6 +41,8 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         assert len(X.shape) == 2, "Input data must be 2D, i.e. (n_samples, n_features)"
         _, rng = infer_random_state(self.random_state)

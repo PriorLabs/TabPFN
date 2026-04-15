@@ -29,6 +29,8 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()

@@ -30,6 +30,7 @@ from .reshape_feature_distribution_step import (
 from .safe_power_transformer import SafePowerTransformer
 from .shuffle_features_step import ShuffleFeaturesStep
 from .squashing_scaler_transformer import SquashingScaler
+from .target_encoding_step import TargetEncodingStep
 
 __all__ = [
     "AdaptiveQuantileTransformer",
@@ -44,6 +45,7 @@ __all__ = [
     "SafePowerTransformer",
     "ShuffleFeaturesStep",
     "SquashingScaler",
+    "TargetEncodingStep",
     "get_all_kdi_transformers",
     "get_all_reshape_feature_distribution_preprocessors",
 ]

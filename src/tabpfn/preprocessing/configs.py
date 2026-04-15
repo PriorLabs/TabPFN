@@ -119,6 +119,10 @@ class PreprocessorConfig:
     ) = None
     max_onehot_cardinality: int | None = None
     differentiable: bool = False
+    target_encoding: bool = False
+    target_encoding_n_folds: int = 5
+    target_encoding_smoothing: float = 10.0
+    target_encoding_duplicate_features: bool = True
 
     @override
     def __str__(self) -> str:
@@ -131,6 +135,7 @@ class PreprocessorConfig:
                 if self.global_transformer_name is not None
                 else ""
             )
+            + ("_target_encoding" if self.target_encoding else "")
         )
 
 

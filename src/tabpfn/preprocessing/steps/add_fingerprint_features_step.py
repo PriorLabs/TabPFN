@@ -53,6 +53,8 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         self,
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
+        *,
+        y: np.ndarray | None = None,
     ) -> FeatureSchema:
         # Store n_cells as a deterministic salt appended to every hash input.
         # This prevents the fingerprint for a given row from being the same

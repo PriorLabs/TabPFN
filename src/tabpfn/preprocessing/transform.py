@@ -69,7 +69,7 @@ def _fit_preprocessing_one(
         X_train = X_train.copy()
         y_train = y_train.copy()
 
-    res = pipeline.fit_transform(X_train, feature_schema)
+    res = pipeline.fit_transform(X_train, feature_schema, y=y_train)
 
     y_train_processed = _transform_labels_one(config, y_train)
 

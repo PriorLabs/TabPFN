@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from tabpfn.preprocessing.configs import ClassifierEnsembleConfig
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
     PreprocessingStep,
@@ -18,6 +19,7 @@ from tabpfn.preprocessing.steps import (
     RemoveConstantFeaturesStep,
     ReshapeFeatureDistributionsStep,
     ShuffleFeaturesStep,
+    TargetEncodingStep,
 )
 
 if TYPE_CHECKING:
@@ -73,6 +75,22 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             )
         )
+
+        if pconfig.target_encoding:
+            task_type: Literal["classification", "regression"] = (
+                "classification"
+                if isinstance(config, ClassifierEnsembleConfig)
+                else "regression"
+            )
+            steps.append(
+                TargetEncodingStep(
+                    task_type=task_type,
+                    n_folds=pconfig.target_encoding_n_folds,
+                    smoothing=pconfig.target_encoding_smoothing,
+                    duplicate_features=pconfig.target_encoding_duplicate_features,
+                    random_state=random_state,
+                )
+            )
 
         steps.append(
             EncodeCategoricalFeaturesStep(
