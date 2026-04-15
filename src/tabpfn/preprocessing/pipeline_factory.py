@@ -87,6 +87,7 @@ def create_preprocessing_pipeline(
                     task_type=task_type,
                     n_folds=pconfig.target_encoding_n_folds,
                     smoothing=pconfig.target_encoding_smoothing,
+                    multiclass_strategy=pconfig.target_encoding_multiclass_strategy,
                     duplicate_features=pconfig.target_encoding_duplicate_features,
                     random_state=random_state,
                 )

@@ -118,10 +118,11 @@ class TestBinaryClassification:
 
 
 # ---------------------------------------------------------------------------
-# Multiclass classification
+# Multiclass classification — ordinal strategy (default)
 # ---------------------------------------------------------------------------
-class TestMulticlassClassification:
+class TestMulticlassOrdinal:
     def test_duplicate_true_shape(self) -> None:
+        """Ordinal strategy: 1 TE column per categorical regardless of n_classes."""
         n_num, n_cat, n_classes = 3, 2, 4
         X, schema = _make_mixed_data(n_num=n_num, n_cat=n_cat)
         y = _make_multiclass_target(n_samples=X.shape[0], n_classes=n_classes)
@@ -131,7 +132,8 @@ class TestMulticlassClassification:
         )
         result = step.fit_transform(X, schema, y=y)
 
-        expected_cols = n_num + n_cat + n_cat * n_classes
+        # ordinal: 1 TE col per categorical, same as binary
+        expected_cols = n_num + n_cat + n_cat
         assert result.X.shape == (X.shape[0], expected_cols)
 
     def test_duplicate_false_shape(self) -> None:
@@ -144,8 +146,94 @@ class TestMulticlassClassification:
         )
         result = step.fit_transform(X, schema, y=y)
 
+        expected_cols = n_num + n_cat  # replace 1:1
+        assert result.X.shape == (X.shape[0], expected_cols)
+
+    def test_ordinal_is_default(self) -> None:
+        """Verify ordinal is the default multiclass strategy."""
+        step = TargetEncodingStep(task_type="classification", random_state=42)
+        assert step.multiclass_strategy == "ordinal"
+
+    def test_transform_consistent_shape(self) -> None:
+        n_num, n_cat, n_classes = 2, 1, 3
+        X_train, schema = _make_mixed_data(
+            n_samples=80, n_num=n_num, n_cat=n_cat, seed=1
+        )
+        X_test, _ = _make_mixed_data(
+            n_samples=20, n_num=n_num, n_cat=n_cat, seed=2
+        )
+        y_train = _make_multiclass_target(n_samples=80, n_classes=n_classes, seed=1)
+
+        step = TargetEncodingStep(
+            task_type="classification", duplicate_features=True, random_state=42
+        )
+        train_result = step.fit_transform(X_train, schema, y=y_train)
+        test_result = step.transform(X_test, is_test=True)
+
+        expected_cols = n_num + n_cat + n_cat  # ordinal: 1 col per cat
+        assert train_result.X.shape[1] == expected_cols
+        assert test_result.X.shape[1] == expected_cols
+
+
+# ---------------------------------------------------------------------------
+# Multiclass classification — per_class strategy
+# ---------------------------------------------------------------------------
+class TestMulticlassPerClass:
+    def test_duplicate_true_shape(self) -> None:
+        """Per-class strategy: n_classes TE columns per categorical."""
+        n_num, n_cat, n_classes = 3, 2, 4
+        X, schema = _make_mixed_data(n_num=n_num, n_cat=n_cat)
+        y = _make_multiclass_target(n_samples=X.shape[0], n_classes=n_classes)
+
+        step = TargetEncodingStep(
+            task_type="classification",
+            multiclass_strategy="per_class",
+            duplicate_features=True,
+            random_state=42,
+        )
+        result = step.fit_transform(X, schema, y=y)
+
+        expected_cols = n_num + n_cat + n_cat * n_classes
+        assert result.X.shape == (X.shape[0], expected_cols)
+
+    def test_duplicate_false_shape(self) -> None:
+        n_num, n_cat, n_classes = 3, 2, 4
+        X, schema = _make_mixed_data(n_num=n_num, n_cat=n_cat)
+        y = _make_multiclass_target(n_samples=X.shape[0], n_classes=n_classes)
+
+        step = TargetEncodingStep(
+            task_type="classification",
+            multiclass_strategy="per_class",
+            duplicate_features=False,
+            random_state=42,
+        )
+        result = step.fit_transform(X, schema, y=y)
+
         expected_cols = n_num + n_cat * n_classes
         assert result.X.shape == (X.shape[0], expected_cols)
+
+    def test_transform_consistent_shape(self) -> None:
+        n_num, n_cat, n_classes = 2, 1, 3
+        X_train, schema = _make_mixed_data(
+            n_samples=80, n_num=n_num, n_cat=n_cat, seed=1
+        )
+        X_test, _ = _make_mixed_data(
+            n_samples=20, n_num=n_num, n_cat=n_cat, seed=2
+        )
+        y_train = _make_multiclass_target(n_samples=80, n_classes=n_classes, seed=1)
+
+        step = TargetEncodingStep(
+            task_type="classification",
+            multiclass_strategy="per_class",
+            duplicate_features=True,
+            random_state=42,
+        )
+        train_result = step.fit_transform(X_train, schema, y=y_train)
+        test_result = step.transform(X_test, is_test=True)
+
+        expected_cols = n_num + n_cat + n_cat * n_classes
+        assert train_result.X.shape[1] == expected_cols
+        assert test_result.X.shape[1] == expected_cols
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +382,8 @@ class TestTransform:
         te_col = test_result.X[:, -1]
         assert np.all(te_col == te_col[0])  # all same value
 
-    def test_multiclass_transform(self) -> None:
+    def test_multiclass_ordinal_transform(self) -> None:
+        """Multiclass with default ordinal strategy produces 1 col per cat."""
         n_num, n_cat, n_classes = 2, 1, 3
         X_train, schema = _make_mixed_data(
             n_samples=80, n_num=n_num, n_cat=n_cat, seed=1
@@ -310,7 +399,7 @@ class TestTransform:
         train_result = step.fit_transform(X_train, schema, y=y_train)
         test_result = step.transform(X_test, is_test=True)
 
-        expected_cols = n_num + n_cat + n_cat * n_classes
+        expected_cols = n_num + n_cat + n_cat  # ordinal: 1 col per cat
         assert train_result.X.shape[1] == expected_cols
         assert test_result.X.shape[1] == expected_cols
 

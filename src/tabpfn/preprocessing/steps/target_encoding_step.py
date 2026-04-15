@@ -30,15 +30,24 @@ class TargetEncodingStep(PreprocessingStep):
     """Target-encode categorical features using out-of-fold predictions.
 
     For binary classification and regression, each category is encoded as a single
-    smoothed target statistic.  For multiclass classification, each category produces
-    one encoded column per class (conditional class probability).
+    smoothed target statistic (E[y | feature=category]).
+
+    For multiclass classification the encoding strategy is controlled by
+    ``multiclass_strategy``:
+
+    * ``"ordinal"`` (default) — treat class labels as ordinal integers and
+      compute E[y | feature=category].  Produces **1 column per categorical**,
+      same as binary/regression.
+    * ``"per_class"`` — compute per-class conditional probabilities
+      P(y=c | feature=category) for every class.  Produces **n_classes columns
+      per categorical**.
 
     Training data is encoded using K-fold OOF predictions to prevent target leakage.
     Test data is encoded using full training-set statistics.
 
     This is a bare step (no modality registration) because when
-    ``duplicate_features=False`` with multiclass targets, the output column count
-    differs from the input.
+    ``multiclass_strategy="per_class"`` and ``duplicate_features=False``, the
+    output column count differs from the input.
 
     Parameters
     ----------
@@ -50,6 +59,11 @@ class TargetEncodingStep(PreprocessingStep):
     smoothing : float, default=10.0
         Bayesian smoothing parameter.  Higher values shrink category encodings
         toward the global prior more aggressively.
+    multiclass_strategy : {"ordinal", "per_class"}, default="ordinal"
+        How to encode multiclass targets.  ``"ordinal"`` produces a single
+        column per categorical (treats labels as ordered integers).
+        ``"per_class"`` produces one column per class per categorical.
+        Ignored for binary classification and regression.
     duplicate_features : bool, default=True
         If True, keep original categorical columns unchanged and append
         target-encoded columns as new numerical features.  If False, replace
@@ -64,6 +78,7 @@ class TargetEncodingStep(PreprocessingStep):
         task_type: Literal["classification", "regression"],
         n_folds: int = 5,
         smoothing: float = 10.0,
+        multiclass_strategy: Literal["ordinal", "per_class"] = "ordinal",
         duplicate_features: bool = True,
         random_state: int | np.random.Generator | None = None,
     ):
@@ -71,6 +86,7 @@ class TargetEncodingStep(PreprocessingStep):
         self.task_type = task_type
         self.n_folds = n_folds
         self.smoothing = smoothing
+        self.multiclass_strategy = multiclass_strategy
         self.duplicate_features = duplicate_features
         self.random_state = random_state
 
@@ -192,7 +208,12 @@ class TargetEncodingStep(PreprocessingStep):
     # Private helpers
     # ------------------------------------------------------------------
     def _infer_target_type(self, y: np.ndarray) -> tuple[str, np.ndarray | None, int]:
-        """Return (target_type, classes, n_targets)."""
+        """Return (target_type, classes, n_targets).
+
+        For multiclass with ``multiclass_strategy="ordinal"``, n_targets is 1
+        (labels treated as ordinal integers).  With ``"per_class"``, n_targets
+        equals the number of classes.
+        """
         if self.task_type == "regression":
             return "regression", None, 1
 
@@ -204,6 +225,8 @@ class TargetEncodingStep(PreprocessingStep):
         n_classes = len(classes)
         if n_classes == 2:
             return "binary", classes, 1
+        if self.multiclass_strategy == "ordinal":
+            return "multiclass", classes, 1
         return "multiclass", classes, n_classes
 
     def _build_target_matrix(self, y: np.ndarray) -> np.ndarray:
@@ -212,7 +235,10 @@ class TargetEncodingStep(PreprocessingStep):
             return y.astype(float).reshape(-1, 1)
         elif self.target_type_ == "binary":
             return (y == self.classes_[-1]).astype(float).reshape(-1, 1)
-        else:  # multiclass
+        elif self.multiclass_strategy == "ordinal":
+            # Treat class labels as ordinal integers → single column
+            return y.astype(float).reshape(-1, 1)
+        else:  # multiclass per_class
             return (y[:, None] == self.classes_[None, :]).astype(float)
 
     def _fit_column(
@@ -415,8 +441,11 @@ class TargetEncodingStep(PreprocessingStep):
 
     @override
     def has_data_dependent_feature_expansion(self) -> bool:
-        # For multiclass, the exact column count depends on n_classes in y.
-        return self.task_type == "classification"
+        # Only per_class multiclass has data-dependent column count.
+        return (
+            self.task_type == "classification"
+            and self.multiclass_strategy == "per_class"
+        )
 
 
 __all__ = [

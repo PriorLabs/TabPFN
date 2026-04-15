@@ -122,6 +122,7 @@ class PreprocessorConfig:
     target_encoding: bool = False
     target_encoding_n_folds: int = 5
     target_encoding_smoothing: float = 10.0
+    target_encoding_multiclass_strategy: Literal["ordinal", "per_class"] = "ordinal"
     target_encoding_duplicate_features: bool = True
 
     @override
