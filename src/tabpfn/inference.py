@@ -1066,7 +1066,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ensemble_preprocessor.fit_transform_ensemble_members(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
             )
         )
         self._speed_metrics["fit_preprocessing_seconds"] = (
