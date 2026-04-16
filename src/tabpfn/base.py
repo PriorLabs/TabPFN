@@ -343,7 +343,6 @@ def create_inference_engine(  # noqa: PLR0913
             return InferenceEngineExplicitKVCache(
                 X_train=X_train,
                 y_train=y_train,
-                feature_schema=feature_schema,
                 ensemble_preprocessor=ensemble_preprocessor,
                 models=models,
                 devices=devices_,

@@ -1007,12 +1007,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
         *,
-        feature_schema: FeatureSchema,
         ensemble_preprocessor: TabPFNEnsemblePreprocessor,
         models: list[Architecture],
         devices: Sequence[torch.device],
@@ -1020,7 +1019,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         autocast: bool,
-        keep_cache_on_device: bool = False,
+        keep_cache_on_device: bool = True,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -1059,6 +1058,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
+
+        # Cast model weights to force_inference_dtype once per device
+        if self.force_inference_dtype is not None:
+            for model_cache in self.model_caches:
+                model_cache.set_dtype(self.force_inference_dtype)
 
         # Preprocess ensemble members (CPU work)
         fit_preprocess_start = time.perf_counter()
