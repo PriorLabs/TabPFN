@@ -116,7 +116,7 @@ class InferenceConfig:
         - If an int, determines the maximal number of polynomial features to add to the
          original data.
     """
-    SUBSAMPLE_SAMPLES: int | float | list | None = None
+    SUBSAMPLE_SAMPLES: int | float | list | None = 500_000
     """Subsample the input data sample/row-wise before performing any preprocessing
     and the TabPFN forward pass.
         - If None, no subsampling is done.
