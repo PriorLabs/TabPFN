@@ -944,11 +944,9 @@ def load_model(
         model.load_state_dict(full_state)
         model.eval()
         inference_config_dict = dict(checkpoint["inference_config"])
-        if (
-            architecture_name == "tabpfn_v3"
-            and inference_config_dict.get("SUBSAMPLE_SAMPLES") is None
-        ):
-            # Default v3 checkpoints to per-estimator row subsampling of 500K.
+        if inference_config_dict.get("SUBSAMPLE_SAMPLES") is None:
+            # Default to per-estimator row subsampling of 500K when the checkpoint
+            # did not pin a value.
             inference_config_dict["SUBSAMPLE_SAMPLES"] = 500_000
         inference_config = InferenceConfig(**inference_config_dict)
         empty_criterion = None
