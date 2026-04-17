@@ -897,6 +897,16 @@ def _load_checkpoint(path: str) -> dict:
         return torch.load(path, map_location="cpu", weights_only=None)
 
 
+def _set_fallback_defaults(inference_config: dict) -> dict:
+    """Fill in fallback defaults for inference config values."""
+    inference_config_dict = dict(inference_config)
+    if inference_config_dict.get("SUBSAMPLE_SAMPLES") is None:
+        # Default to per-estimator row subsampling of 500K when the checkpoint
+        # did not pin a value.
+        inference_config_dict["SUBSAMPLE_SAMPLES"] = 500_000
+    return inference_config_dict
+
+
 def load_model(
     *,
     path: Path,
@@ -943,7 +953,9 @@ def load_model(
         # checkpoint.
         model.load_state_dict(full_state)
         model.eval()
-        inference_config = InferenceConfig(**(checkpoint["inference_config"]))
+        inference_config = InferenceConfig(
+            **_set_fallback_defaults(checkpoint["inference_config"])
+        )
         empty_criterion = None
         return model, empty_criterion, model_config, inference_config
 
