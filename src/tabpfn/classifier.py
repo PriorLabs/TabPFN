@@ -777,6 +777,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             random_state=static_seed,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+            enable_gpu_preprocessing=self.inference_config_.ENABLE_GPU_PREPROCESSING,
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),

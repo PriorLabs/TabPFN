@@ -7,6 +7,7 @@ from __future__ import annotations
 import pathlib
 import typing
 from collections.abc import Sequence
+from inspect import signature
 from typing import TYPE_CHECKING, Literal, Union
 
 import numpy as np
@@ -29,6 +30,7 @@ from tabpfn.inference import (
     InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCacheKV,
     InferenceEngineCachePreprocessing,
+    InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
 from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
@@ -332,6 +334,23 @@ def create_inference_engine(  # noqa: PLR0913
             inference_mode=inference_mode,
         )
     if fit_mode == "fit_with_cache":
+        # Use explicit KV cache engine for models that support it (e.g. v3),
+        # fall back to model-internal KV cache engine for older architectures.
+        _uses_explicit_cache = any(
+            "return_kv_cache" in signature(m.forward).parameters for m in models
+        )
+        if _uses_explicit_cache:
+            return InferenceEngineExplicitKVCache(
+                X_train=X_train,
+                y_train=y_train,
+                ensemble_preprocessor=ensemble_preprocessor,
+                models=models,
+                devices=devices_,
+                dtype_byte_size=byte_size,
+                force_inference_dtype=forced_inference_dtype_,
+                save_peak_mem=memory_saving_mode,
+                autocast=use_autocast_,
+            )
         return InferenceEngineCacheKV(
             X_train=X_train,
             y_train=y_train,

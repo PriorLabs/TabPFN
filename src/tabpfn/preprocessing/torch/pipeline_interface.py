@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import abc
 import dataclasses
+import time
 from typing_extensions import override
 
 import torch
@@ -101,11 +102,14 @@ class TorchPreprocessingPipeline:
     where each step targets specific feature modalities. Steps can target
     multiple modalities at once (e.g., StandardScaler for both NUMERICAL
     and CATEGORICAL features).
+
+    Steps registered with ``modalities=None`` receive ALL column indices. This is
+    used for steps that must operate on the full tensor (e.g., shuffle).
     """
 
     def __init__(
         self,
-        steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]],
+        steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]],
         *,
         keep_fitted_cache: bool = False,
     ) -> None:
@@ -113,7 +117,8 @@ class TorchPreprocessingPipeline:
 
         Args:
             steps: List of (step, modalities) where modalities is a set of
-                FeatureModality values the step should be applied to.
+                FeatureModality values the step should be applied to, or None
+                to apply the step to all columns.
             keep_fitted_cache: Whether to keep the state of the individual steps
                 between calls. If True, the fitted state of all steps will be kept
                 inside the fitted_cache attribute. It can be re-used when parsing
@@ -129,8 +134,14 @@ class TorchPreprocessingPipeline:
         self.fitted_cache: list[dict[str, torch.Tensor] | None] = [None] * len(
             self.steps
         )
+        self.record_timings: bool = False
+        """Set to ``True`` to collect per-step wall-clock timings."""
+        self.step_timings_: dict[str, float] | None = None
+        """Per-step wall-clock time (seconds) from the last ``__call__``.
+        Keyed by ``<index>_<ClassName>``.  Only populated when
+        ``record_timings=True``."""
 
-    def __call__(
+    def __call__(  # noqa: C901
         self,
         x: torch.Tensor,
         feature_schema: FeatureSchema,
@@ -167,8 +178,15 @@ class TorchPreprocessingPipeline:
         if num_train_rows is None:
             num_train_rows = x.shape[0]
 
+        self.step_timings_ = {} if self.record_timings else None
         for i, (step, modalities) in enumerate(self.steps):
-            indices = feature_schema.indices_for_modalities(modalities)
+            if self.record_timings:
+                t0 = time.perf_counter()
+
+            if modalities is None:
+                indices = list(range(x.shape[-1]))
+            else:
+                indices = feature_schema.indices_for_modalities(modalities)
             if not indices:
                 continue
 
@@ -187,10 +205,23 @@ class TorchPreprocessingPipeline:
                     result.added_columns.shape[-1],
                 )
 
+            if result.schema_permutation is not None:
+                feature_schema = feature_schema.apply_permutation(
+                    result.schema_permutation
+                )
+
             self._maybe_update_fitted_cache(i, result)
+
+            if self.record_timings:
+                self.step_timings_[f"{i}_{step.__class__.__name__}"] = (
+                    time.perf_counter() - t0
+                )
 
         if squeeze_batch_dim:
             x = x.squeeze(1)
+
+        # Clear GPU transform marks — all GPU transforms have been applied.
+        feature_schema = feature_schema.clear_gpu_transform_marks()
 
         return TorchPreprocessingPipelineOutput(x=x, feature_schema=feature_schema)
 
@@ -205,7 +236,8 @@ class TorchPreprocessingPipeline:
         return f"TorchPreprocessingPipeline(steps={self.steps})"
 
     def _validate_steps(
-        self, steps: list[tuple[TorchPreprocessingStep, set[FeatureModality]]]
+        self,
+        steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]],
     ) -> None:
         for step in steps:
             if len(step) != 2:
@@ -238,12 +270,16 @@ class TorchPreprocessingStepResult:
         x: Full tensor with columns modified in-place.
         added_columns: Optional new columns to append (e.g., NaN indicators).
         added_modality: Modality for the added columns.
+        fitted_cache: Fitted cache from the step.
+        schema_permutation: Optional column permutation to apply to the feature
+            schema. Used by steps like shuffle that reorder all columns.
     """
 
     x: torch.Tensor
     added_columns: torch.Tensor | None = None
     added_modality: FeatureModality | None = None
     fitted_cache: dict[str, torch.Tensor] | None = None
+    schema_permutation: list[int] | None = None
 
 
 @dataclasses.dataclass
