@@ -1,12 +1,6 @@
 # 📊 Telemetry
 
-This project includes lightweight, anonymous telemetry to help us improve TabPFN.  
-We've designed this with two goals in mind:
-
-1. ✅ Be **fully GDPR-compliant** (no personal data, no sensitive data, no surprises)  
-2. ✅ Be **OSS-friendly and transparent** about what we track and why  
-
-If you'd rather not send telemetry, you can always opt out (see **Opting out**).
+This project includes lightweight, anonymous telemetry to help us improve TabPFN. If you'd rather not send telemetry, you can always opt out (see **Opting out**).
 
 ---
 
