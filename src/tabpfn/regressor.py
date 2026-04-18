@@ -213,6 +213,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
+        ensemble_temperature: float = 1 / 0.9,
         model_path: str
         | Path
         | list[str]
@@ -280,6 +281,27 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   softmax.
                 - If `False`, the softmax function is applied to each set of logits.
                   Then, we average the resulting probabilities of each forward pass.
+
+            ensemble_temperature:
+                Temperature applied to the final ensemble log-probabilities after all
+                estimators have been combined. This is a post-hoc recalibration step
+                that adjusts the sharpness of the predictive distribution without
+                affecting how individual estimators are aggregated.
+
+                The default ``1 / 0.9 ≈ 1.111`` is deliberately paired with the
+                default ``softmax_temperature=0.9``: the per-estimator sharpening
+                (``softmax_temperature=0.9``) improves point-estimate quality (RMSE)
+                by helping ensemble members mix better, while ``ensemble_temperature``
+                compensates for the resulting over-confidence of the final predictive
+                distribution, restoring calibration of quantiles, log-score, and CRPS.
+
+                - Values **below 1.0** sharpen the distribution (more confident,
+                  narrower prediction intervals). Use when the model is under-confident.
+                - Values **above 1.0** flatten the distribution (more uncertain, wider
+                  intervals). Use to improve calibration when the model is
+                  over-confident.
+                - Set both this and ``softmax_temperature`` to ``1.0`` to disable all
+                  temperature scaling.
 
             model_path:
                 The path to the TabPFN model file, i.e., the pre-trained weights.
@@ -441,6 +463,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
+        self.ensemble_temperature = ensemble_temperature
         self.model_path = model_path
         self.device = device
         self.ignore_pretraining_limits = ignore_pretraining_limits
@@ -488,6 +511,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
+                "ensemble_temperature": 1 / 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -496,6 +520,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
+                "ensemble_temperature": 1 / 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -504,6 +529,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
+                "ensemble_temperature": 1 / 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -986,6 +1012,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         logits = logits.log()
         if logits.dtype == torch.float16:
             logits = logits.float()
+
+        # Apply ensemble_temperature as a final recalibration of the predictive
+        # distribution. Dividing log-probabilities by T is equivalent to raising
+        # each probability to the power 1/T before renormalising via softmax.
+        # T > 1 flattens (widens) the distribution; T < 1 sharpens it.
+        # The default 1/0.9 ≈ 1.111 compensates for the sharpening introduced by
+        # softmax_temperature=0.9, restoring calibration while keeping the RMSE
+        # benefit from per-estimator sharpening.
+        if self.ensemble_temperature != 1.0:
+            logits = logits / self.ensemble_temperature
 
         # Determine and return intended output type
         logit_to_output = partial(
