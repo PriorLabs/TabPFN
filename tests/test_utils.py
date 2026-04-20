@@ -9,8 +9,10 @@ import torch
 from torch.torch_version import TorchVersion
 
 from tabpfn.utils import (
+    _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
     infer_devices,
+    translate_probs_across_borders,
 )
 
 
@@ -205,3 +207,21 @@ def test_balance_probas_by_class_counts():
 
     expected_balanced = torch.tensor([[1 / 3, 2 / 3], [0.75, 0.25], [2 / 3, 1 / 3]])
     assert torch.allclose(balanced, expected_balanced, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("batch", [1, 32, 4097])
+def test__translate_probs_across_borders__matches_unchunked(batch: int) -> None:
+    """Chunked path must produce identical output to the unchunked reference."""
+    torch.manual_seed(0)
+    num_buckets = 5000
+    logits = torch.randn(batch, num_buckets)
+    frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+
+    out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+    out_public = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert out_public.shape == out_unchunked.shape
+    # Chunking over the leading dim is per-row independent, so results should
+    # be numerically identical up to kernel-dispatch jitter.
+    assert torch.allclose(out_public, out_unchunked, atol=0.0, rtol=0.0)

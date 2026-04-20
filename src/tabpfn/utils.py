@@ -337,6 +337,25 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     return prob_left_of_ys.clip(0.0, 1.0)
 
 
+def _translate_probs_across_borders_unchunked(
+    logits: torch.Tensor,
+    *,
+    frm: torch.Tensor,
+    to: torch.Tensor,
+) -> torch.Tensor:
+    prob_left = _cdf(logits, borders=frm, ys=to)
+    prob_left[..., 0] = 0.0
+    prob_left[..., -1] = 1.0
+    return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+
+
+# `_cdf` allocates ~8 intermediate tensors of shape (batch, len(to)). Targeting
+# `chunk_size * len(to) <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient
+# around ~80 MB (fp32) and the total under ~1 GB, which holds translate_probs's
+# contribution to peak memory roughly constant in n_test.
+_TRANSLATE_CHUNK_BUDGET_ELEMENTS = 20_000_000
+
+
 def translate_probs_across_borders(
     logits: torch.Tensor,
     *,
@@ -344,6 +363,11 @@ def translate_probs_across_borders(
     to: torch.Tensor,
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
+
+    For large batches the computation is chunked along the leading
+    dimension so that the peak memory footprint of the intermediate
+    ``(batch, len(to))`` tensors allocated inside ``_cdf`` stays bounded.
+    The output is numerically identical to the unchunked version.
 
     Args:
         logits: The logits defining the distribution to translate.
@@ -353,11 +377,27 @@ def translate_probs_across_borders(
     Returns:
         The translated probabilities.
     """
-    prob_left = _cdf(logits, borders=frm, ys=to)
-    prob_left[..., 0] = 0.0
-    prob_left[..., -1] = 1.0
+    batch_shape = logits.shape[:-1]
+    if len(batch_shape) == 0:
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
-    return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    batch_size = 1
+    for dim in batch_shape:
+        batch_size *= dim
+    chunk_size = max(1, _TRANSLATE_CHUNK_BUDGET_ELEMENTS // max(len(to), 1))
+    leading = batch_shape[0]
+    if batch_size <= chunk_size or leading <= 1:
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+
+    # Chunk the leading (typically "test row") dimension.
+    rows_per_chunk = max(1, chunk_size * leading // batch_size)
+    pieces = [
+        _translate_probs_across_borders_unchunked(
+            logits[i : i + rows_per_chunk], frm=frm, to=to
+        )
+        for i in range(0, leading, rows_per_chunk)
+    ]
+    return torch.cat(pieces, dim=0)
 
 
 def remove_non_differentiable_preprocessing_from_models(
