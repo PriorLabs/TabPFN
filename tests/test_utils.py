@@ -9,8 +9,10 @@ import torch
 from torch.torch_version import TorchVersion
 
 from tabpfn.utils import (
+    _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
     infer_devices,
+    translate_probs_across_borders,
 )
 
 
@@ -205,3 +207,63 @@ def test_balance_probas_by_class_counts():
 
     expected_balanced = torch.tensor([[1 / 3, 2 / 3], [0.75, 0.25], [2 / 3, 1 / 3]])
     assert torch.allclose(balanced, expected_balanced, rtol=1e-4, atol=1e-4)
+
+
+@pytest.mark.parametrize("batch", [1, 32, 4097])
+def test__translate_probs_across_borders__matches_unchunked(batch: int) -> None:
+    """Chunked path must produce identical output to the unchunked reference."""
+    torch.manual_seed(0)
+    num_buckets = 5000
+    logits = torch.randn(batch, num_buckets)
+    frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+
+    out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+    out_public = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    assert out_public.shape == out_unchunked.shape
+    # Each row is processed independently, so chunking must be bit-exact.
+    assert torch.equal(out_public, out_unchunked)
+
+
+@pytest.mark.parametrize("shape", [(128, 200), (3, 128, 200), (2, 3, 128, 200)])
+def test__translate_probs_across_borders__forces_chunking(
+    monkeypatch: pytest.MonkeyPatch, shape: tuple[int, ...]
+) -> None:
+    """Force the chunked path and verify it runs across arbitrary batch shapes.
+
+    Passes a tiny ``chunk_budget_elements`` (= ``num_buckets``) so every batch
+    row triggers its own chunked call, and spies on the unchunked helper to
+    confirm the chunked dispatch is actually used.
+    """
+    torch.manual_seed(1)
+    num_buckets = shape[-1]
+    logits = torch.randn(*shape)
+    frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+
+    out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+
+    call_counter = {"n": 0}
+    orig = _translate_probs_across_borders_unchunked
+
+    def counting_unchunked(*args, **kwargs) -> torch.Tensor:
+        call_counter["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked",
+        counting_unchunked,
+    )
+    out_chunked = translate_probs_across_borders(
+        logits, frm=frm, to=to, chunk_budget_elements=num_buckets
+    )
+
+    total_rows = 1
+    for d in shape[:-1]:
+        total_rows *= d
+    # Expect one unchunked call per chunk: more than one proves we chunked.
+    assert call_counter["n"] > 1
+    assert call_counter["n"] == total_rows  # chunk_size == 1 row here
+    assert out_chunked.shape == out_unchunked.shape
+    assert torch.equal(out_chunked, out_unchunked)
