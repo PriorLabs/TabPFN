@@ -949,10 +949,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             kwargs = {}
             if _model_expectes_task_type_arg(model):
                 kwargs["task_type"] = task_type
-            # When the KV cache is enabled, we assume we are under memory
-            # pressure and enable the saving mode.
-            # TODO: Use the heuristic in this case also.
-            PerformanceOptions(save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR)
+
             forward_start = time.perf_counter()
             with (
                 get_autocast_context(self.device, enabled=autocast),
