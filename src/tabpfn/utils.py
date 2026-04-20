@@ -361,6 +361,7 @@ def translate_probs_across_borders(
     *,
     frm: torch.Tensor,
     to: torch.Tensor,
+    chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
@@ -372,9 +373,17 @@ def translate_probs_across_borders(
     output is numerically identical to the unchunked version.
 
     Args:
-        logits: The logits defining the distribution to translate.
+        logits: The logits defining the distribution to translate. The last
+            dimension indexes buckets from ``frm``; all leading dimensions
+            are treated as independent batch rows. Typical shapes are
+            ``(num_rows, num_buckets)`` (used by ``TabPFNRegressor.predict``)
+            or ``(n_estimators, num_rows, num_buckets)``.
         frm: The borders to translate from.
         to: The borders to translate to.
+        chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
+            processed per chunk. Defaults to a value that keeps each
+            ``_cdf`` transient near ~80 MB (fp32). Lower values reduce peak
+            memory at a small time cost; primarily useful for testing.
 
     Returns:
         The translated probabilities.
@@ -389,7 +398,7 @@ def translate_probs_across_borders(
     # Flatten batch dims so chunking is independent of which dim is large.
     logits_flat = logits.reshape(-1, num_buckets_frm)
     num_rows = logits_flat.shape[0]
-    chunk_size = max(1, _TRANSLATE_CHUNK_BUDGET_ELEMENTS // max(num_buckets_to, 1))
+    chunk_size = max(1, chunk_budget_elements // max(num_buckets_to, 1))
     if num_rows <= chunk_size:
         return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 

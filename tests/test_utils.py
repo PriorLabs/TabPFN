@@ -232,9 +232,9 @@ def test__translate_probs_across_borders__forces_chunking(
 ) -> None:
     """Force the chunked path and verify it runs across arbitrary batch shapes.
 
-    Monkey-patches the chunk budget down to a single row so every batch row
-    goes through the chunked dispatch, and spies on the unchunked helper to
-    confirm it is invoked once per chunk.
+    Passes a tiny ``chunk_budget_elements`` (= ``num_buckets``) so every batch
+    row triggers its own chunked call, and spies on the unchunked helper to
+    confirm the chunked dispatch is actually used.
     """
     torch.manual_seed(1)
     num_buckets = shape[-1]
@@ -244,8 +244,6 @@ def test__translate_probs_across_borders__forces_chunking(
 
     out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
-    # Force many tiny chunks: budget per chunk becomes 1 row worth of elements.
-    monkeypatch.setattr("tabpfn.utils._TRANSLATE_CHUNK_BUDGET_ELEMENTS", num_buckets)
     call_counter = {"n": 0}
     orig = _translate_probs_across_borders_unchunked
 
@@ -257,7 +255,9 @@ def test__translate_probs_across_borders__forces_chunking(
         "tabpfn.utils._translate_probs_across_borders_unchunked",
         counting_unchunked,
     )
-    out_chunked = translate_probs_across_borders(logits, frm=frm, to=to)
+    out_chunked = translate_probs_across_borders(
+        logits, frm=frm, to=to, chunk_budget_elements=num_buckets
+    )
 
     total_rows = 1
     for d in shape[:-1]:
