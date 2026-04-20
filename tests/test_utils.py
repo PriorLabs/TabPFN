@@ -222,6 +222,46 @@ def test__translate_probs_across_borders__matches_unchunked(batch: int) -> None:
     out_public = translate_probs_across_borders(logits, frm=frm, to=to)
 
     assert out_public.shape == out_unchunked.shape
-    # Chunking over the leading dim is per-row independent, so results should
-    # be numerically identical up to kernel-dispatch jitter.
-    assert torch.allclose(out_public, out_unchunked, atol=0.0, rtol=0.0)
+    # Each row is processed independently, so chunking must be bit-exact.
+    assert torch.equal(out_public, out_unchunked)
+
+
+@pytest.mark.parametrize(
+    "shape", [(128, 200), (3, 128, 200), (2, 3, 128, 200)]
+)
+def test__translate_probs_across_borders__forces_chunking(
+    monkeypatch: pytest.MonkeyPatch, shape: tuple[int, ...]
+) -> None:
+    """Force the chunked path via a tiny budget and verify it actually runs
+    across arbitrary batch shapes, matching the unchunked reference exactly."""
+    torch.manual_seed(1)
+    num_buckets = shape[-1]
+    logits = torch.randn(*shape)
+    frm = torch.linspace(-3.0, 3.0, num_buckets + 1)
+    to = torch.linspace(-3.0, 3.0, num_buckets + 1)
+
+    out_unchunked = _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+
+    # Force many tiny chunks: budget per chunk becomes 1 row worth of elements.
+    monkeypatch.setattr("tabpfn.utils._TRANSLATE_CHUNK_BUDGET_ELEMENTS", num_buckets)
+    call_counter = {"n": 0}
+    orig = _translate_probs_across_borders_unchunked
+
+    def counting_unchunked(*args, **kwargs):
+        call_counter["n"] += 1
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "tabpfn.utils._translate_probs_across_borders_unchunked",
+        counting_unchunked,
+    )
+    out_chunked = translate_probs_across_borders(logits, frm=frm, to=to)
+
+    total_rows = 1
+    for d in shape[:-1]:
+        total_rows *= d
+    # Expect one unchunked call per chunk: more than one proves we chunked.
+    assert call_counter["n"] > 1
+    assert call_counter["n"] == total_rows  # chunk_size == 1 row here
+    assert out_chunked.shape == out_unchunked.shape
+    assert torch.equal(out_chunked, out_unchunked)

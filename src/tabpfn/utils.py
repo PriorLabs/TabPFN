@@ -364,10 +364,12 @@ def translate_probs_across_borders(
 ) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
-    For large batches the computation is chunked along the leading
-    dimension so that the peak memory footprint of the intermediate
-    ``(batch, len(to))`` tensors allocated inside ``_cdf`` stays bounded.
-    The output is numerically identical to the unchunked version.
+    For large batches the computation is chunked so that the peak memory
+    footprint of the intermediate ``(batch, len(to))`` tensors allocated
+    inside ``_cdf`` stays bounded. All batch dimensions are flattened
+    before chunking, so the memory cap holds regardless of which batch
+    dimension is large (e.g. `(n_estimators, n_test, num_buckets)`). The
+    output is numerically identical to the unchunked version.
 
     Args:
         logits: The logits defining the distribution to translate.
@@ -378,26 +380,32 @@ def translate_probs_across_borders(
         The translated probabilities.
     """
     batch_shape = logits.shape[:-1]
+    num_buckets_frm = logits.shape[-1]
+    num_buckets_to = to.shape[0]
+
     if len(batch_shape) == 0:
         return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
-    batch_size = 1
-    for dim in batch_shape:
-        batch_size *= dim
-    chunk_size = max(1, _TRANSLATE_CHUNK_BUDGET_ELEMENTS // max(len(to), 1))
-    leading = batch_shape[0]
-    if batch_size <= chunk_size or leading <= 1:
+    # Flatten batch dims so chunking is independent of which dim is large.
+    logits_flat = logits.reshape(-1, num_buckets_frm)
+    num_rows = logits_flat.shape[0]
+    chunk_size = max(1, _TRANSLATE_CHUNK_BUDGET_ELEMENTS // max(num_buckets_to, 1))
+    if num_rows <= chunk_size:
         return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
-    # Chunk the leading (typically "test row") dimension.
-    rows_per_chunk = max(1, chunk_size * leading // batch_size)
-    pieces = [
-        _translate_probs_across_borders_unchunked(
-            logits[i : i + rows_per_chunk], frm=frm, to=to
+    # Preallocate output and write chunks in-place to avoid the transient
+    # `torch.cat` would create (which would double peak memory).
+    out_flat = torch.empty(
+        num_rows,
+        num_buckets_to - 1,
+        dtype=logits.dtype,
+        device=logits.device,
+    )
+    for i in range(0, num_rows, chunk_size):
+        out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
+            logits_flat[i : i + chunk_size], frm=frm, to=to
         )
-        for i in range(0, leading, rows_per_chunk)
-    ]
-    return torch.cat(pieces, dim=0)
+    return out_flat.reshape(*batch_shape, num_buckets_to - 1)
 
 
 def remove_non_differentiable_preprocessing_from_models(
