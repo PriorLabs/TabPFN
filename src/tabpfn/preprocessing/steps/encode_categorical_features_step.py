@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -49,6 +49,68 @@ def _get_least_common_category_count(x_column: np.ndarray) -> int:
         return 0
     counts = np.unique(x_column, return_counts=True)[1]
     return int(counts.min())
+
+
+def _carry_over_features_scheduled_gpu_transforms(  # noqa: C901
+    input_schema: FeatureSchema,
+    output_schema: FeatureSchema,
+    column_transformer: ColumnTransformer | None,
+    n_input_features: int,
+) -> FeatureSchema:
+    """Carry over ``scheduled_gpu_transform`` flags from input to output schema.
+
+    When a ``ColumnTransformer`` is used (ordinal or one-hot encoding), columns
+    are reordered: ``[transformer_output, remainder_in_order]``.  Only the
+    *remainder* portion has a 1:1 mapping back to input columns, so marks are
+    carried over through the remainder mapping.  Transformed columns (ordinal-
+    encoded categoricals or one-hot expanded columns) never carry marks.
+
+    When no ``ColumnTransformer`` is used (``"numeric"`` / ``"none"`` modes)
+    the columns are unchanged and flags are copied by position.
+    """
+    if not any(f.scheduled_gpu_transform for f in input_schema.features):
+        return output_schema
+
+    new_features = list(output_schema.features)
+
+    if column_transformer is None:
+        # No reordering — identity mapping
+        for i in range(min(n_input_features, len(new_features))):
+            mark = input_schema.features[i].scheduled_gpu_transform
+            if mark is not None:
+                f = new_features[i]
+                new_features[i] = Feature(
+                    name=f.name, modality=f.modality, scheduled_gpu_transform=mark
+                )
+    else:
+        # Use the fitted ColumnTransformer's remainder mapping.
+        # The remainder columns have a 1:1 mapping to input columns that
+        # were NOT consumed by the named transformers.  This works for both
+        # ordinal encoding (1:1 cat mapping + remainder) and one-hot
+        # encoding (expanded cat columns + remainder).
+        ct_input_cols: set[int] = set()
+        for _name, _transformer, cols in column_transformer.transformers_:
+            if _name == "remainder":
+                continue
+            if isinstance(cols, list):
+                ct_input_cols.update(cols)
+        remainder_input_cols = [
+            i for i in range(n_input_features) if i not in ct_input_cols
+        ]
+        remainder_start = column_transformer.output_indices_["remainder"].start
+        for offset, in_idx in enumerate(remainder_input_cols):
+            out_idx = remainder_start + offset
+            if out_idx < len(new_features) and in_idx < len(input_schema.features):
+                mark = input_schema.features[in_idx].scheduled_gpu_transform
+                if mark is not None:
+                    f = new_features[out_idx]
+                    new_features[out_idx] = Feature(
+                        name=f.name,
+                        modality=f.modality,
+                        scheduled_gpu_transform=mark,
+                    )
+
+    return FeatureSchema(features=new_features)
 
 
 class EncodeCategoricalFeaturesStep(PreprocessingStep):
@@ -165,20 +227,25 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
-        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        ct, categorical_features = self._get_transformer(X, categorical_features)
-        n_features = X.shape[1]  # Default, may change for one-hot
+        input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
+        n_input_features = X.shape[1]
+        ct, ct_cat_features = self._get_transformer(X, input_cat_features)
+        n_features = n_input_features  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return FeatureSchema.from_only_categorical_indices(
-                categorical_features, n_features
+            out = FeatureSchema.from_only_categorical_indices(
+                ct_cat_features, n_features
+            )
+            return _carry_over_features_scheduled_gpu_transforms(
+                feature_schema, out, None, n_input_features
             )
 
         _, rng = infer_random_state(self.random_state)
 
+        categorical_features = ct_cat_features
         if self.categorical_transform_name.startswith("ordinal"):
             ct.fit(X)
-            categorical_features = list(range(len(categorical_features)))
+            categorical_features = list(range(len(ct_cat_features)))
 
             self.random_mappings_ = {}
             if self.categorical_transform_name.endswith("_shuffled"):
@@ -196,7 +263,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             else:
                 n_features = Xt.shape[1]
                 categorical_features = _get_all_cat_indices_after_onehot(
-                    ct, n_features, categorical_features
+                    ct, n_features, ct_cat_features
                 )
         else:
             raise ValueError(
@@ -205,8 +272,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
         self.categorical_transformer_ = ct
 
-        return FeatureSchema.from_only_categorical_indices(
+        out = FeatureSchema.from_only_categorical_indices(
             categorical_features, n_features
+        )
+        return _carry_over_features_scheduled_gpu_transforms(
+            feature_schema, out, ct, n_input_features
         )
 
     def _fit_transform_internal(
@@ -214,20 +284,25 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         X: np.ndarray,
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
-        categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        ct, categorical_features = self._get_transformer(X, categorical_features)
-        n_features = X.shape[1]  # Default, may change for one-hot
+        input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
+        n_input_features = X.shape[1]
+        ct, ct_cat_features = self._get_transformer(X, input_cat_features)
+        n_features = n_input_features  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
-            return X, FeatureSchema.from_only_categorical_indices(
-                categorical_features, n_features
+            out = FeatureSchema.from_only_categorical_indices(
+                ct_cat_features, n_features
+            )
+            return X, _carry_over_features_scheduled_gpu_transforms(
+                feature_schema, out, None, n_input_features
             )
 
         _, rng = infer_random_state(self.random_state)
 
+        categorical_features = ct_cat_features
         if self.categorical_transform_name.startswith("ordinal"):
             Xt = ct.fit_transform(X)
-            categorical_features = list(range(len(categorical_features)))
+            categorical_features = list(range(len(ct_cat_features)))
 
             self.random_mappings_ = {}
             if self.categorical_transform_name.endswith("_shuffled"):
@@ -252,7 +327,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             else:
                 n_features = Xt.shape[1]
                 categorical_features = _get_all_cat_indices_after_onehot(
-                    ct, n_features, categorical_features
+                    ct, n_features, ct_cat_features
                 )
         else:
             raise ValueError(
@@ -260,8 +335,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        return Xt, FeatureSchema.from_only_categorical_indices(
+        out = FeatureSchema.from_only_categorical_indices(
             categorical_features, n_features
+        )
+        return Xt, _carry_over_features_scheduled_gpu_transforms(
+            feature_schema, out, ct, n_input_features
         )
 
     @override

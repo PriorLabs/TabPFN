@@ -19,6 +19,9 @@ from tabpfn.preprocessing.steps import (
     ReshapeFeatureDistributionsStep,
     ShuffleFeaturesStep,
 )
+from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
+    is_gpu_quantile_eligible,
+)
 
 if TYPE_CHECKING:
     import numpy as np
@@ -43,8 +46,17 @@ def create_preprocessing_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
+    enable_gpu_preprocessing: bool = False,
 ) -> PreprocessingPipeline:
-    """Convert the ensemble configuration to a preprocessing pipeline."""
+    """Convert the ensemble configuration to a preprocessing pipeline.
+
+    Args:
+        config: Ensemble configuration.
+        random_state: Random state for reproducibility.
+        enable_gpu_preprocessing: When True, the quantile transform (if GPU-
+            eligible), SVD, and shuffle steps are omitted from the CPU pipeline
+            because they will run on GPU instead.
+    """
     steps: list[PreprocessingStep | StepWithModalities] = []
 
     pconfig = config.preprocess_config
@@ -61,16 +73,26 @@ def create_preprocessing_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
+    # Decide whether the quantile transform moves to GPU.
+    # The reshape step still runs on CPU (handling subsampling, categorical
+    # reclassification, append_to_original) but uses "none" (identity) as the
+    # transform so the actual quantile work happens on GPU.
+    schedule_quantile_for_gpu = enable_gpu_preprocessing and is_gpu_quantile_eligible(
+        pconfig.name
+    )
+
     if pconfig.differentiable:
         steps.append(DifferentiableZNormStep())
     else:
+        reshape_transform_name = "none" if schedule_quantile_for_gpu else pconfig.name
         steps.append(
             ReshapeFeatureDistributionsStep(
-                transform_name=pconfig.name,
+                transform_name=reshape_transform_name,
                 append_to_original=pconfig.append_original,
                 max_features_per_estimator=pconfig.max_features_per_estimator,
                 apply_to_categorical=(pconfig.categorical_name == "numeric"),
                 random_state=random_state,
+                schedule_quantile_for_gpu=schedule_quantile_for_gpu,
             )
         )
 
@@ -82,26 +104,41 @@ def create_preprocessing_pipeline(
             )
         )
 
-        use_global_transformer = (
-            pconfig.global_transformer_name is not None
+        # SVD moves to GPU when enable_gpu_preprocessing is on.
+        if not enable_gpu_preprocessing:
+            use_global_transformer = (
+                pconfig.global_transformer_name is not None
+                and pconfig.global_transformer_name != "None"
+            )
+            if use_global_transformer:
+                steps.append(
+                    AddSVDFeaturesStep(
+                        global_transformer_name=pconfig.global_transformer_name,  # type: ignore
+                        random_state=random_state,
+                    )
+                )
+
+    # Fingerprint moves to the GPU pipeline only when quantile or SVD is on
+    # GPU (those steps precede fingerprint and change the data the hash sees).
+    # When neither is on GPU, fingerprint stays on CPU at its original position.
+    fingerprint_on_gpu = enable_gpu_preprocessing and (
+        schedule_quantile_for_gpu
+        or (
+            not pconfig.differentiable
+            and pconfig.global_transformer_name is not None
             and pconfig.global_transformer_name != "None"
         )
-        if use_global_transformer:
-            steps.append(
-                AddSVDFeaturesStep(
-                    global_transformer_name=pconfig.global_transformer_name,  # type: ignore
-                    random_state=random_state,
-                )
-            )
-
-    if config.add_fingerprint_feature:
+    )
+    if config.add_fingerprint_feature and not fingerprint_on_gpu:
         steps.append(AddFingerprintFeaturesStep())
 
-    steps.append(
-        ShuffleFeaturesStep(
-            shuffle_method=config.feature_shift_decoder,
-            shuffle_index=config.feature_shift_count,
-            random_state=random_state,
-        ),
-    )
+    # Shuffle moves to GPU when enable_gpu_preprocessing is on.
+    if not enable_gpu_preprocessing:
+        steps.append(
+            ShuffleFeaturesStep(
+                shuffle_method=config.feature_shift_decoder,
+                shuffle_index=config.feature_shift_count,
+                random_state=random_state,
+            ),
+        )
     return PreprocessingPipeline(steps)
