@@ -1,1 +1,0 @@
-Reduce TabPFNRegressor peak GPU memory at large test-set sizes by chunking the row dimension inside `translate_probs_across_borders`. Output is unchanged; peak drops ~60% at `n_test=250k` (57.6 GB → 22.8 GB on an H100). (NOTE: rename this file to `<PR_NUMBER>.fixed.md` when opening the PR.)
