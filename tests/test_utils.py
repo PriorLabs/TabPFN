@@ -226,14 +226,16 @@ def test__translate_probs_across_borders__matches_unchunked(batch: int) -> None:
     assert torch.equal(out_public, out_unchunked)
 
 
-@pytest.mark.parametrize(
-    "shape", [(128, 200), (3, 128, 200), (2, 3, 128, 200)]
-)
+@pytest.mark.parametrize("shape", [(128, 200), (3, 128, 200), (2, 3, 128, 200)])
 def test__translate_probs_across_borders__forces_chunking(
     monkeypatch: pytest.MonkeyPatch, shape: tuple[int, ...]
 ) -> None:
-    """Force the chunked path via a tiny budget and verify it actually runs
-    across arbitrary batch shapes, matching the unchunked reference exactly."""
+    """Force the chunked path and verify it runs across arbitrary batch shapes.
+
+    Monkey-patches the chunk budget down to a single row so every batch row
+    goes through the chunked dispatch, and spies on the unchunked helper to
+    confirm it is invoked once per chunk.
+    """
     torch.manual_seed(1)
     num_buckets = shape[-1]
     logits = torch.randn(*shape)
@@ -247,7 +249,7 @@ def test__translate_probs_across_borders__forces_chunking(
     call_counter = {"n": 0}
     orig = _translate_probs_across_borders_unchunked
 
-    def counting_unchunked(*args, **kwargs):
+    def counting_unchunked(*args, **kwargs) -> torch.Tensor:
         call_counter["n"] += 1
         return orig(*args, **kwargs)
 
