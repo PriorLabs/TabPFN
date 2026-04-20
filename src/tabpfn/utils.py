@@ -390,7 +390,8 @@ def translate_probs_across_borders(
     """
     batch_shape = logits.shape[:-1]
     num_buckets_frm = logits.shape[-1]
-    num_buckets_to = to.shape[0]
+    num_borders_to = to.shape[0]
+    num_buckets_to = num_borders_to - 1
 
     if len(batch_shape) == 0:
         return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
@@ -398,7 +399,9 @@ def translate_probs_across_borders(
     # Flatten batch dims so chunking is independent of which dim is large.
     logits_flat = logits.reshape(-1, num_buckets_frm)
     num_rows = logits_flat.shape[0]
-    chunk_size = max(1, chunk_budget_elements // max(num_buckets_to, 1))
+    # The dominant intermediates inside `_cdf` are of shape
+    # `(batch, num_borders_to)`, so budget against borders, not buckets.
+    chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
     if num_rows <= chunk_size:
         return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
 
@@ -406,7 +409,7 @@ def translate_probs_across_borders(
     # `torch.cat` would create (which would double peak memory).
     out_flat = torch.empty(
         num_rows,
-        num_buckets_to - 1,
+        num_buckets_to,
         dtype=logits.dtype,
         device=logits.device,
     )
@@ -414,7 +417,7 @@ def translate_probs_across_borders(
         out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
             logits_flat[i : i + chunk_size], frm=frm, to=to
         )
-    return out_flat.reshape(*batch_shape, num_buckets_to - 1)
+    return out_flat.reshape(*batch_shape, num_buckets_to)
 
 
 def remove_non_differentiable_preprocessing_from_models(
