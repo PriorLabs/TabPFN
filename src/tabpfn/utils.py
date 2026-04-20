@@ -337,27 +337,87 @@ def _cdf(logits: torch.Tensor, borders: torch.Tensor, ys: torch.Tensor) -> torch
     return prob_left_of_ys.clip(0.0, 1.0)
 
 
-def translate_probs_across_borders(
+def _translate_probs_across_borders_unchunked(
     logits: torch.Tensor,
     *,
     frm: torch.Tensor,
     to: torch.Tensor,
 ) -> torch.Tensor:
+    prob_left = _cdf(logits, borders=frm, ys=to)
+    prob_left[..., 0] = 0.0
+    prob_left[..., -1] = 1.0
+    return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+
+
+# `_cdf` allocates ~8 intermediate tensors of shape (batch, len(to)). Targeting
+# `chunk_size * len(to) <= _TRANSLATE_CHUNK_BUDGET_ELEMENTS` keeps each transient
+# around ~80 MB (fp32) and the total under ~1 GB, which holds translate_probs's
+# contribution to peak memory roughly constant in n_test.
+_TRANSLATE_CHUNK_BUDGET_ELEMENTS = 20_000_000
+
+
+def translate_probs_across_borders(
+    logits: torch.Tensor,
+    *,
+    frm: torch.Tensor,
+    to: torch.Tensor,
+    chunk_budget_elements: int = _TRANSLATE_CHUNK_BUDGET_ELEMENTS,
+) -> torch.Tensor:
     """Translate the probabilities across the borders.
 
+    For large batches the computation is chunked so that the peak memory
+    footprint of the intermediate ``(batch, len(to))`` tensors allocated
+    inside ``_cdf`` stays bounded. All batch dimensions are flattened
+    before chunking, so the memory cap holds regardless of which batch
+    dimension is large (e.g. `(n_estimators, n_test, num_buckets)`). The
+    output is numerically identical to the unchunked version.
+
     Args:
-        logits: The logits defining the distribution to translate.
+        logits: The logits defining the distribution to translate. The last
+            dimension indexes buckets from ``frm``; all leading dimensions
+            are treated as independent batch rows. Typical shapes are
+            ``(num_rows, num_buckets)`` (used by ``TabPFNRegressor.predict``)
+            or ``(n_estimators, num_rows, num_buckets)``.
         frm: The borders to translate from.
         to: The borders to translate to.
+        chunk_budget_elements: Maximum number of ``logits[..., -1]`` elements
+            processed per chunk. Defaults to a value that keeps each
+            ``_cdf`` transient near ~80 MB (fp32). Lower values reduce peak
+            memory at a small time cost; primarily useful for testing.
 
     Returns:
         The translated probabilities.
     """
-    prob_left = _cdf(logits, borders=frm, ys=to)
-    prob_left[..., 0] = 0.0
-    prob_left[..., -1] = 1.0
+    batch_shape = logits.shape[:-1]
+    num_buckets_frm = logits.shape[-1]
+    num_borders_to = to.shape[0]
+    num_buckets_to = num_borders_to - 1
 
-    return (prob_left[..., 1:] - prob_left[..., :-1]).clamp_min(0.0)
+    if len(batch_shape) == 0:
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+
+    # Flatten batch dims so chunking is independent of which dim is large.
+    logits_flat = logits.reshape(-1, num_buckets_frm)
+    num_rows = logits_flat.shape[0]
+    # The dominant intermediates inside `_cdf` are of shape
+    # `(batch, num_borders_to)`, so budget against borders, not buckets.
+    chunk_size = max(1, chunk_budget_elements // max(num_borders_to, 1))
+    if num_rows <= chunk_size:
+        return _translate_probs_across_borders_unchunked(logits, frm=frm, to=to)
+
+    # Preallocate output and write chunks in-place to avoid the transient
+    # `torch.cat` would create (which would double peak memory).
+    out_flat = torch.empty(
+        num_rows,
+        num_buckets_to,
+        dtype=logits.dtype,
+        device=logits.device,
+    )
+    for i in range(0, num_rows, chunk_size):
+        out_flat[i : i + chunk_size] = _translate_probs_across_borders_unchunked(
+            logits_flat[i : i + chunk_size], frm=frm, to=to
+        )
+    return out_flat.reshape(*batch_shape, num_buckets_to)
 
 
 def remove_non_differentiable_preprocessing_from_models(
