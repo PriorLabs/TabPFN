@@ -9,7 +9,6 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     import numpy as np
-    import numpy.typing as npt
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
@@ -146,8 +145,6 @@ class EnsembleConfig:
         polynomial_features: Maximum number of polynomial features to add, if any.
         feature_shift_count: How much to shift the features columns.
         feature_shift_decoder: How to shift features.
-        subsample_ix: Indices of samples to use for this ensemble member.
-            If `None`, no subsampling is done.
         outlier_removal_std: Number of standard deviations from the mean to consider a
             sample an outlier. If `None`, no outliers are removed.
     """
@@ -157,7 +154,6 @@ class EnsembleConfig:
     polynomial_features: Literal["no", "all"] | int
     feature_shift_count: int
     feature_shift_decoder: Literal["shuffle", "rotate"] | None
-    subsample_ix: npt.NDArray[np.int64] | None  # OPTIM: Could use uintp
     outlier_removal_std: float | None
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int

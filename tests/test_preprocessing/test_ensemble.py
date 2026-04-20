@@ -29,7 +29,7 @@ def test__get_subsample_indices_for_estimators():
     kwargs = {
         "num_estimators": 3,
         "max_index": 5,
-        "static_seed": 42,
+        "rng": np.random.default_rng(42),
     }
 
     subsample_samples = [
@@ -71,6 +71,64 @@ def test__get_subsample_indices_for_estimators():
     for subsample_index in subsample_indices:
         assert subsample_index is not None
         assert len(subsample_index) == 2
+
+
+def test__get_subsample_indices_for_estimators__balanced_coverage():
+    """Each row appears exactly the same number of times across estimators.
+
+    Exact balance holds when n_rows % subsample_size == 0: the pool then
+    exhausts precisely at estimator boundaries, so refills always start with an
+    empty already-selected set and every cycle covers all rows exactly once.
+    """
+    n_rows = 10
+    subsample_size = 5  # 10 % 5 == 0 -> exact balance guaranteed
+    num_estimators = 4  # 4 * 5 = 20 draws, 20 / 10 = 2 per row
+
+    indices = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_size,
+        num_estimators=num_estimators,
+        max_index=n_rows,
+        rng=np.random.default_rng(0),
+    )
+
+    assert len(indices) == num_estimators
+    for idx in indices:
+        assert idx is not None
+        assert len(idx) == subsample_size
+        assert len(set(idx)) == subsample_size  # no duplicates within one estimator
+
+    counts = np.bincount(np.concatenate(indices), minlength=n_rows)
+    assert counts.min() == 2
+    assert counts.max() == 2
+
+
+def test__get_subsample_indices_for_estimators__balanced_coverage_float():
+    """Float subsample_samples also produces exact balanced row coverage.
+
+    Uses frac=0.2 so that size = int(0.2 * 20) + 1 = 5, and 20 % 5 == 0,
+    ensuring pool cycles align with estimator boundaries.
+    """
+    n_rows = 20
+    num_estimators = 8
+    frac = 0.2  # size = int(0.2 * 20) + 1 = 5, 20 % 5 == 0 -> exact balance
+    # 8 * 5 = 40 draws, 40 / 20 = 2 per row
+
+    indices = _get_subsample_indices_for_estimators(
+        subsample_samples=frac,
+        num_estimators=num_estimators,
+        max_index=n_rows,
+        rng=np.random.default_rng(1),
+    )
+
+    assert len(indices) == num_estimators
+    subsample_size = int(frac * n_rows) + 1  # = 5
+    for idx in indices:
+        assert idx is not None
+        assert len(idx) == subsample_size
+
+    counts = np.bincount(np.concatenate(indices), minlength=n_rows)
+    assert counts.min() == 2
+    assert counts.max() == 2
 
 
 def test__get_subsample_feature_indices__no_subsampling_needed():
@@ -145,8 +203,6 @@ def test__transform_X_test__applies_feature_subsampling() -> None:
 
     configs = generate_classification_ensemble_configs(
         num_estimators=3,
-        subsample_samples=None,
-        max_index=2,
         add_fingerprint_feature=False,
         polynomial_features="no",
         feature_shift_decoder=None,
@@ -400,8 +456,6 @@ def test__end_to_end__balanced_feature_subsampling():
 
     configs = generate_classification_ensemble_configs(
         num_estimators=n_estimators,
-        subsample_samples=None,
-        max_index=2,
         add_fingerprint_feature=False,
         polynomial_features="no",
         feature_shift_decoder=None,
