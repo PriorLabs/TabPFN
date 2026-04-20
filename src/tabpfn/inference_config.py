@@ -128,7 +128,7 @@ class InferenceConfig:
             indices are repeated for the remaining estimators.
     """
 
-    ENABLE_GPU_PREPROCESSING: bool = True
+    ENABLE_GPU_PREPROCESSING: bool = False
     """Move quantile transform, SVD feature generation, and feature shuffling to
     GPU / torch.  When ``True`` (default), these operations run on the same device as
     the model, which can be significantly faster for large datasets (>10 k rows).
