@@ -159,7 +159,7 @@ class TabPFNEnsemblePreprocessor:
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
             num_estimators=len(self.configs),
-            max_index=n_samples,
+            n_samples=n_samples,
             rng=rng_rows,
         )
 
@@ -255,7 +255,7 @@ def _subsample_rows_balanced(
     n_rows: int,
     num_estimators: int,
     rng: np.random.Generator,
-) -> list[npt.NDArray[np.int64] | None]:
+) -> list[npt.NDArray[np.int64]] | None:
     """Balanced round-robin row subsampling from a shared shuffled pool.
 
     Rows are globally shuffled once so consecutive pool positions correspond to
@@ -264,7 +264,7 @@ def _subsample_rows_balanced(
     approximately the same number of times across all estimators.
     """
     if subsample_size >= n_rows:
-        return [None] * num_estimators  # type: ignore[return-value]
+        return None
 
     shuffled_order = rng.permutation(n_rows)
     result: list[npt.NDArray[np.int64] | None] = []
@@ -281,9 +281,9 @@ def _subsample_rows_balanced(
 def _get_subsample_indices_for_estimators(  # noqa: C901
     subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
-    max_index: int,
+    n_samples: int,
     rng: np.random.Generator,
-) -> list[None] | list[np.ndarray]:
+) -> list[np.ndarray] | None:
     """Get the indices of the rows to subsample for each estimator.
 
     Args:
@@ -292,7 +292,7 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
             list of arrays of indices, use those indices directly (balanced across
             estimators). If `None`, no subsampling is done.
         num_estimators: Number of estimators to generate subsample indices for.
-        max_index: Total number of rows. Only used if subsample_samples is int/float.
+        n_samples: Total number of rows. Only used if subsample_samples is int/float.
         rng: Random number generator.
 
     Returns:
@@ -302,10 +302,10 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
     if isinstance(subsample_samples, int):
         if subsample_samples < 1:
             raise ValueError(f"{subsample_samples=} must be >= 1 if int")
-        size = min(subsample_samples, max_index)
+        size = min(subsample_samples, n_samples)
         return _subsample_rows_balanced(
             subsample_size=size,
-            n_rows=max_index,
+            n_rows=n_samples,
             num_estimators=num_estimators,
             rng=rng,
         )
@@ -313,10 +313,10 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
     if isinstance(subsample_samples, float):
         if not (0 < subsample_samples < 1):
             raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
-        size = int(subsample_samples * max_index) + 1
+        size = int(subsample_samples * n_samples) + 1
         return _subsample_rows_balanced(
             subsample_size=size,
-            n_rows=max_index,
+            n_rows=n_samples,
             num_estimators=num_estimators,
             rng=rng,
         )
@@ -342,7 +342,7 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         return [np.array(subsample) for subsample in subsample_indices]
 
     if subsample_samples is None:
-        return [None] * num_estimators  # type: ignore[return-value]
+        return None
 
     raise ValueError(f"Invalid subsample_samples: {subsample_samples}")
 

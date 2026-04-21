@@ -120,7 +120,7 @@ def fit_preprocessing(
     parallel_mode: Literal["block", "as-ready", "in-order"],
     pipelines: Sequence[PreprocessingPipeline],
     subsample_feature_indices: list[np.ndarray | None] | None = None,
-    subsample_row_indices: list[np.ndarray | None] | None = None,
+    subsample_row_indices: list[np.ndarray] | None = None,
 ) -> Iterator[
     tuple[
         int,
@@ -173,16 +173,16 @@ def fit_preprocessing(
         )
 
     if subsample_feature_indices is None:
-        subsample_feature_indices = [None] * len(configs)
-    if len(subsample_feature_indices) != len(configs):
+        subsample_feature_indices = [None] * len(configs)  # type: ignore[assignment]
+    elif len(subsample_feature_indices) != len(configs):
         raise ValueError(
             f"subsample_feature_indices has {len(subsample_feature_indices)} "
             f"elements, but configs has {len(configs)} elements"
         )
 
     if subsample_row_indices is None:
-        subsample_row_indices = [None] * len(configs)
-    if len(subsample_row_indices) != len(configs):
+        subsample_row_indices = [None] * len(configs)  # type: ignore[assignment]
+    elif len(subsample_row_indices) != len(configs):
         raise ValueError(
             f"subsample_row_indices has {len(subsample_row_indices)} "
             f"elements, but configs has {len(configs)} elements"
@@ -210,6 +210,6 @@ def fit_preprocessing(
             row_indices=row_idx,
         )
         for config_index, (config, pipeline, feat_idx, row_idx) in enumerate(
-            zip(configs, pipelines, subsample_feature_indices, subsample_row_indices)
+            zip(configs, pipelines, subsample_feature_indices, subsample_row_indices)  # type: ignore[arg-type]
         )
     )

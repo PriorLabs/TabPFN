@@ -84,7 +84,7 @@ def test__get_subsample_indices_for_estimators__balanced_coverage():
     indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_size,
         num_estimators=num_estimators,
-        max_index=n_rows,
+        n_samples=n_rows,
         rng=np.random.default_rng(0),
     )
 
@@ -113,7 +113,7 @@ def test__get_subsample_indices_for_estimators__balanced_coverage_float():
     indices = _get_subsample_indices_for_estimators(
         subsample_samples=frac,
         num_estimators=num_estimators,
-        max_index=n_rows,
+        n_samples=n_rows,
         rng=np.random.default_rng(1),
     )
 
