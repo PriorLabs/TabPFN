@@ -26,7 +26,7 @@ def _get_schema(n_features: int) -> FeatureSchema:
 
 def test__get_subsample_indices_for_estimators():
     """Test that different subsample_samples arguments work as expected."""
-    common_kwargs = {"num_estimators": 3, "max_index": 5}
+    common_kwargs = {"num_estimators": 3, "n_samples": 5}
 
     subsample_samples = [
         np.array([0, 1, 2, 3, 4]),
