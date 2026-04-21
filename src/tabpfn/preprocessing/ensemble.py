@@ -272,7 +272,7 @@ def _subsample_rows_balanced(
 
     for _ in range(num_estimators):
         slots, pool = _draw_balanced_from_pool(pool, subsample_size, n_rows, rng)
-        original_indices = shuffled_order[np.array(slots)]
+        original_indices = shuffled_order[slots]
         result.append(np.sort(original_indices))
 
     return result

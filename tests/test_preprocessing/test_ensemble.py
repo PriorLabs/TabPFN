@@ -26,11 +26,7 @@ def _get_schema(n_features: int) -> FeatureSchema:
 
 def test__get_subsample_indices_for_estimators():
     """Test that different subsample_samples arguments work as expected."""
-    kwargs = {
-        "num_estimators": 3,
-        "max_index": 5,
-        "rng": np.random.default_rng(42),
-    }
+    common_kwargs = {"num_estimators": 3, "max_index": 5}
 
     subsample_samples = [
         np.array([0, 1, 2, 3, 4]),
@@ -43,7 +39,8 @@ def test__get_subsample_indices_for_estimators():
     ]
     subsample_indices = _get_subsample_indices_for_estimators(
         subsample_samples=subsample_samples,
-        **kwargs,
+        rng=np.random.default_rng(42),
+        **common_kwargs,
     )
     assert len(subsample_indices) == 3
     for subsample_index, expected_subsample_index in zip(
@@ -52,20 +49,20 @@ def test__get_subsample_indices_for_estimators():
         assert subsample_index is not None
         assert (subsample_index == expected_subsample_index).all()
 
-    subsample_samples = 0.5
     subsample_indices = _get_subsample_indices_for_estimators(
-        subsample_samples=subsample_samples,
-        **kwargs,
+        subsample_samples=0.5,
+        rng=np.random.default_rng(42),
+        **common_kwargs,
     )
     assert len(subsample_indices) == 3
     for subsample_index in subsample_indices:
         assert subsample_index is not None
-        assert len(subsample_index) == 3  # (max_index + 1) * 0.5
+        assert len(subsample_index) == 3  # int(0.5 * 5) + 1 = 3
 
-    subsample_samples = 2
     subsample_indices = _get_subsample_indices_for_estimators(
-        subsample_samples=subsample_samples,
-        **kwargs,
+        subsample_samples=2,
+        rng=np.random.default_rng(42),
+        **common_kwargs,
     )
     assert len(subsample_indices) == 3
     for subsample_index in subsample_indices:
