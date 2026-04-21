@@ -7,7 +7,12 @@ from typing import Literal
 import numpy as np
 import pytest
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import (
+    Feature,
+    FeatureModality,
+    FeatureSchema,
+    GPUTransformType,
+)
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
 
 
@@ -469,6 +474,39 @@ def test__reshape_step_append_original_logic(
         preprocessing_step.num_added_features(num_samples, feature_schema)
         == expected_num_added_features
     )
+
+
+def test__schedule_quantile_for_gpu__auto_resolves_to_false__numerical_columns_marked():
+    """When append_to_original='auto' resolves to False, numerical columns must
+    be marked with GPUTransformType.QUANTILE when schedule_quantile_for_gpu=True.
+    """
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 100, 4
+    feature_schema = _make_metadata(n_features, cat_indices=[])
+    X = rng.random((n_samples, n_features))
+
+    # max_features_per_estimator=6 → threshold/2=3 < n_features=4,
+    # so "auto" resolves to append_to_original_decision_=False.
+    step = ReshapeFeatureDistributionsStep(
+        transform_name="quantile_uni",
+        append_to_original="auto",
+        max_features_per_estimator=6,
+        schedule_quantile_for_gpu=True,
+        random_state=42,
+    )
+    result = step.fit_transform(X, feature_schema)
+
+    assert not step.append_to_original_decision_, (
+        "precondition: auto must resolve to False"
+    )
+
+    numerical_indices = result.feature_schema.indices_for(FeatureModality.NUMERICAL)
+    assert len(numerical_indices) > 0
+    for idx in numerical_indices:
+        assert (
+            result.feature_schema.features[idx].scheduled_gpu_transform
+            == GPUTransformType.QUANTILE
+        ), f"feature {idx} should have QUANTILE scheduled for GPU"
 
 
 def test__num_added_features():
