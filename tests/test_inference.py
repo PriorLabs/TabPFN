@@ -38,6 +38,7 @@ class _TestModel(Architecture):
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
     ) -> Tensor: ...
 
     @overload
@@ -49,6 +50,7 @@ class _TestModel(Architecture):
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
     ) -> dict[str, Tensor]: ...
 
     @override

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import time
 from abc import abstractmethod
 from typing_extensions import TypeAlias
 
@@ -262,6 +263,14 @@ class PreprocessingPipeline:
         self._raw_steps = steps
         self.steps = self._validate_steps(steps)
 
+    step_timings_: dict[str, float] | None
+    """Per-step wall-clock time (seconds) from the last ``fit_transform`` or
+    ``transform`` call.  Keyed by ``<index>_<ClassName>``.
+    Only populated when ``record_timings=True``."""
+
+    record_timings: bool = False
+    """Set to ``True`` to collect per-step wall-clock timings."""
+
     def fit_transform(
         self,
         X: np.ndarray | torch.Tensor,
@@ -344,7 +353,11 @@ class PreprocessingPipeline:
         # inside the loop for steps that target specific modalities.
         X = X.copy() if isinstance(X, np.ndarray) else X.clone()
 
-        for step, modalities in self.steps:
+        self.step_timings_ = {} if self.record_timings else None
+        for step_idx, (step, modalities) in enumerate(self.steps):
+            if self.record_timings:
+                t0 = time.perf_counter()
+
             if modalities:
                 indices = feature_schema.indices_for_modalities(modalities)
                 if not indices:
@@ -390,6 +403,10 @@ class PreprocessingPipeline:
                 X, feature_schema = self._maybe_append_added_columns(
                     X, feature_schema, result
                 )
+
+            if self.record_timings:
+                step_key = f"{step_idx}_{step.__class__.__name__}"
+                self.step_timings_[step_key] = time.perf_counter() - t0
 
         return X, feature_schema
 

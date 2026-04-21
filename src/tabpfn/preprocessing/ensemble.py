@@ -86,6 +86,7 @@ class TabPFNEnsemblePreprocessor:
         random_state: int | np.random.Generator,
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
+        enable_gpu_preprocessing: bool = False,
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
     ) -> None:
@@ -101,6 +102,7 @@ class TabPFNEnsemblePreprocessor:
             keep_fitted_cache: Whether to keep the fitted cache for gpu preprocessing.
                 For the cpu preprocessors, the cache is always kept implicitly in the
                 preprocessor objects.
+            enable_gpu_preprocessing: Whether to move quantile/SVD/shuffle to GPU.
             feature_subsampling_method: Method for subsampling features. One of
                 "balanced", "random", or "constant_and_balanced".
             constant_feature_count: Number of leading features to always include
@@ -113,12 +115,19 @@ class TabPFNEnsemblePreprocessor:
         self.keep_fitted_cache = keep_fitted_cache
 
         self.random_state = random_state
+        self.enable_gpu_preprocessing = enable_gpu_preprocessing
         _, self.rng = infer_random_state(random_state)
 
-        pipeline_seeds = self.rng.integers(0, np.iinfo(np.int32).max, len(self.configs))
+        self.pipeline_seeds = self.rng.integers(
+            0, np.iinfo(np.int32).max, len(self.configs)
+        )
         self.pipelines = [
-            create_preprocessing_pipeline(config, random_state=int(seed))
-            for config, seed in zip(self.configs, pipeline_seeds)
+            create_preprocessing_pipeline(
+                config,
+                random_state=int(seed),
+                enable_gpu_preprocessing=enable_gpu_preprocessing,
+            )
+            for config, seed in zip(self.configs, self.pipeline_seeds)
         ]
 
         max_features_per_estimator = [
@@ -148,17 +157,21 @@ class TabPFNEnsemblePreprocessor:
             feature_schema=self.feature_schema,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             parallel_mode=parallel_mode,
-            subsample_feature_indices=self.subsample_feature_indices,
             pipelines=self.pipelines,
+            subsample_feature_indices=self.subsample_feature_indices,
         )
 
-        gpu_preprocessors = []
-        for config in self.configs:
-            gpu_preprocessor = create_gpu_preprocessing_pipeline(
-                config=config,
-                keep_fitted_cache=self.keep_fitted_cache,
-            )
-            gpu_preprocessors.append(gpu_preprocessor)
+        if not self.enable_gpu_preprocessing:
+            # Legacy path: create GPU pipelines upfront (before CPU
+            # preprocessing) since they only contain the outlier removal step
+            # and don't need CPU metadata.
+            gpu_preprocessors = [
+                create_gpu_preprocessing_pipeline(
+                    config=config,
+                    keep_fitted_cache=self.keep_fitted_cache,
+                )
+                for config in self.configs
+            ]
 
         for (
             config_index,
@@ -168,10 +181,25 @@ class TabPFNEnsemblePreprocessor:
             y_train_preprocessed,
             feature_schema_preprocessed,
         ) in preprocessed_data_iterator:
+            if self.enable_gpu_preprocessing:
+                # The CPU output schema carries scheduled_gpu_transform
+                # annotations set by ReshapeFeatureDistributionsStep,
+                # so the GPU factory can read target indices directly.
+                gpu_preprocessor = create_gpu_preprocessing_pipeline(
+                    config=config,
+                    keep_fitted_cache=self.keep_fitted_cache,
+                    enable_gpu_preprocessing=True,
+                    feature_schema=feature_schema_preprocessed,
+                    n_train_samples=X_train_preprocessed.shape[0],
+                    random_state=int(self.pipeline_seeds[config_index]),
+                )
+            else:
+                gpu_preprocessor = gpu_preprocessors[config_index]  # type: ignore
+
             yield TabPFNEnsembleMember(
                 config=config,
                 cpu_preprocessor=cpu_preprocessor,
-                gpu_preprocessor=gpu_preprocessors[config_index],
+                gpu_preprocessor=gpu_preprocessor,
                 X_train=X_train_preprocessed,
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,

@@ -1022,6 +1022,7 @@ def test__tabpfn_classifier__preprocessing_consistency_fit_vs_fit_from_prep() ->
         device="auto",
         random_state=common_seed,
         fit_mode="fit_preprocessors",  # A standard mode that preprocesses on fit
+        inference_config={"ENABLE_GPU_PREPROCESSING": False},
     )
     # 'batched' mode is required for get_preprocessed_datasets
     #  and fit_from_preprocessed

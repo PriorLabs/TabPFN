@@ -25,6 +25,16 @@ class FeatureModality(str, Enum):
     CONSTANT = "constant"
 
 
+class GPUTransformType(str, Enum):
+    """GPU transform types that a feature column can be marked for.
+
+    Used to flag columns during CPU preprocessing so the GPU pipeline
+    knows which transforms to apply.
+    """
+
+    QUANTILE = "quantile"
+
+
 @dataclasses.dataclass
 class Feature:
     """A single feature with its name and modality.
@@ -32,10 +42,15 @@ class Feature:
     Attributes:
         name: The name of the feature.
         modality: The modality (type) of the feature.
+        scheduled_gpu_transform: When set, indicates that this column still
+            needs the specified GPU transform.  Set by CPU preprocessing
+            steps (e.g. :class:`ReshapeFeatureDistributionsStep`) and
+            cleared by the GPU pipeline after the transform has been applied.
     """
 
     name: str | None
     modality: FeatureModality
+    scheduled_gpu_transform: GPUTransformType | None = None
 
 
 @dataclasses.dataclass
@@ -92,6 +107,30 @@ class FeatureSchema:
     def indices_for(self, modality: FeatureModality) -> list[int]:
         """Get column indices for a single modality."""
         return [i for i, f in enumerate(self.features) if f.modality == modality]
+
+    def get_indices_marked_for_gpu_quantile_transform(self) -> list[int]:
+        """Get column indices marked for GPU quantile transform."""
+        return [
+            i
+            for i, f in enumerate(self.features)
+            if f.scheduled_gpu_transform == GPUTransformType.QUANTILE
+        ]
+
+    def clear_gpu_transform_marks(self) -> FeatureSchema:
+        """Return a new schema with all GPU transform marks cleared.
+
+        Called by the GPU pipeline after transforms have been applied.
+        """
+        if not any(f.scheduled_gpu_transform for f in self.features):
+            return self
+        return FeatureSchema(
+            features=[
+                Feature(name=f.name, modality=f.modality)
+                if f.scheduled_gpu_transform
+                else f
+                for f in self.features
+            ],
+        )
 
     def indices_for_modalities(
         self, modalities: Iterable[FeatureModality]
@@ -166,6 +205,7 @@ class FeatureSchema:
             new_features[original_idx] = Feature(
                 name=step_feature.name,
                 modality=step_feature.modality,
+                scheduled_gpu_transform=step_feature.scheduled_gpu_transform,
             )
         return FeatureSchema(features=new_features)
 

@@ -17,12 +17,18 @@ from sklearn.preprocessing import (
     RobustScaler,
 )
 
-from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import (
+    Feature,
+    FeatureModality,
+    FeatureSchema,
+    GPUTransformType,
+)
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
+    get_user_n_quantiles_for_preset,
 )
 from tabpfn.preprocessing.steps.kdi_transformer import (
     KDITransformerWithNaN,
@@ -127,6 +133,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         append_to_original: bool | Literal["auto"] = False,
         max_features_per_estimator: int = 500,
         random_state: int | np.random.Generator | None = None,
+        schedule_quantile_for_gpu: bool = False,
     ):
         super().__init__()
 
@@ -138,6 +145,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
+        self.schedule_quantile_for_gpu = schedule_quantile_for_gpu
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
     def _create_transformers_and_new_schema(
@@ -234,6 +242,24 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             categorical_indices=sorted(cat_ix),
             num_columns=n_output_features,
         )
+
+        if self.schedule_quantile_for_gpu:
+            if self.append_to_original_decision_:
+                # Output: [original_all, transformed_copies]
+                # The appended copies are the GPU quantile targets.
+                gpu_target = range(n_features, n_output_features)
+            else:
+                # All NUMERICAL columns in the output are the targets.
+                # (Using schema indices rather than trans_ixs because the
+                # ColumnTransformer may reorder columns, e.g. cats first.)
+                gpu_target = new_schema.indices_for(FeatureModality.NUMERICAL)
+            for idx in gpu_target:
+                f = new_schema.features[idx]
+                new_schema.features[idx] = Feature(
+                    name=f.name,
+                    modality=f.modality,
+                    scheduled_gpu_transform=GPUTransformType.QUANTILE,
+                )
 
         return transformer, new_schema
 
@@ -411,32 +437,40 @@ def get_all_reshape_feature_distribution_preprocessors(
         ),
         "quantile_uni_coarse": AdaptiveQuantileTransformer(
             output_distribution="uniform",
-            n_quantiles=max(num_examples // 10, 2),
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_uni_coarse", num_examples
+            ),
             random_state=random_state,
         ),
         "quantile_norm_coarse": AdaptiveQuantileTransformer(
             output_distribution="normal",
-            n_quantiles=max(num_examples // 10, 2),
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_norm_coarse", num_examples
+            ),
             random_state=random_state,
         ),
         "quantile_uni": AdaptiveQuantileTransformer(
             output_distribution="uniform",
-            n_quantiles=max(num_examples // 5, 2),
+            n_quantiles=get_user_n_quantiles_for_preset("quantile_uni", num_examples),
             random_state=random_state,
         ),
         "quantile_norm": AdaptiveQuantileTransformer(
             output_distribution="normal",
-            n_quantiles=max(num_examples // 5, 2),
+            n_quantiles=get_user_n_quantiles_for_preset("quantile_norm", num_examples),
             random_state=random_state,
         ),
         "quantile_uni_fine": AdaptiveQuantileTransformer(
             output_distribution="uniform",
-            n_quantiles=num_examples,
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_uni_fine", num_examples
+            ),
             random_state=random_state,
         ),
         "quantile_norm_fine": AdaptiveQuantileTransformer(
             output_distribution="normal",
-            n_quantiles=num_examples,
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_norm_fine", num_examples
+            ),
             random_state=random_state,
         ),
         "squashing_scaler_default": SquashingScaler(),

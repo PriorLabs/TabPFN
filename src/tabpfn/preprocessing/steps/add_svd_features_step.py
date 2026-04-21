@@ -18,6 +18,24 @@ if TYPE_CHECKING:
     import numpy as np
 
 
+def get_svd_n_components(
+    global_transformer_name: Literal["svd", "svd_quarter_components"],
+    n_samples: int,
+    n_features: int,
+) -> int:
+    """Compute the number of SVD components matching the TabPFN convention.
+
+    Used by both the sklearn and torch SVD feature steps.
+    """
+    if global_transformer_name == "svd":
+        divisor = 2
+    elif global_transformer_name == "svd_quarter_components":
+        divisor = 4
+    else:
+        raise ValueError(f"Invalid global transformer name: {global_transformer_name}.")
+    return max(1, min(n_samples // 10 + 1, n_features // divisor))
+
+
 class AddSVDFeaturesStep(PreprocessingStep):
     """Append low-rank SVD projection features to the input.
 
@@ -102,14 +120,7 @@ def get_svd_features_transformer(
     random_state: int | None = None,
 ) -> Pipeline:
     """Returns a transformer to add SVD features to the data."""
-    if global_transformer_name == "svd":
-        divisor = 2
-    elif global_transformer_name == "svd_quarter_components":
-        divisor = 4
-    else:
-        raise ValueError(f"Invalid global transformer name: {global_transformer_name}.")
-
-    n_components = max(1, min(n_samples // 10 + 1, n_features // divisor))
+    n_components = get_svd_n_components(global_transformer_name, n_samples, n_features)
     return Pipeline(
         steps=[
             (
