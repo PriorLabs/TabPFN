@@ -665,11 +665,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         ensemble_configs = generate_regression_ensemble_configs(
             num_estimators=self.n_estimators,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
-            max_index=len(X),
             preprocessor_configs=self.inference_config_.PREPROCESS_TRANSFORMS,
             target_transforms=target_preprocessors,
             random_state=random_state,
@@ -829,6 +827,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
             constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
         )
 
         self.executor_ = create_inference_engine(

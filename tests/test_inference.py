@@ -363,8 +363,6 @@ def _create_test_ensemble_configs(
     ]
     return generate_classification_ensemble_configs(
         num_estimators=n_configs,
-        subsample_samples=None,
-        max_index=n_classes - 1,
         add_fingerprint_feature=True,
         polynomial_features="all",
         feature_shift_decoder="shuffle",
