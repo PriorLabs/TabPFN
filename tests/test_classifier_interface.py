@@ -1234,6 +1234,35 @@ def test__predict__batch_size_predict__matches_unbatched(
     np.testing.assert_allclose(raw_logits_all, raw_logits_batched, atol=1e-5, rtol=1e-5)
 
 
+@pytest.mark.parametrize("batch_size_predict", [0, -1])
+def test__predict__batch_size_predict__invalid_raises(
+    X_y: tuple[np.ndarray, np.ndarray],
+    batch_size_predict: int,
+) -> None:
+    """Test that invalid batch_size_predict raises ValueError."""
+    X, y = X_y
+
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    with pytest.raises(ValueError, match="batch_size must be a positive integer"):
+        model.predict(X, batch_size_predict=batch_size_predict)
+
+
+def test__predict__batch_size_predict__larger_than_dataset(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Test that batch_size_predict larger than dataset still works."""
+    X, y = X_y
+
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model.fit(X, y)
+
+    pred_all = model.predict(X)
+    pred_batched = model.predict(X, batch_size_predict=len(X) + 100)
+    np.testing.assert_array_equal(pred_all, pred_batched)
+
+
 def test__create_default_for_version__v2__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
 

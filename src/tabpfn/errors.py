@@ -72,7 +72,9 @@ class TabPFNOutOfMemoryError(TabPFNError):
             f"Solution: Use batch_size_predict to split test data"
             f" into smaller batches:\n\n"
             f"    model.{predict_method}("
-            f"X_test, batch_size_predict=100)"
+            f"X_test, batch_size_predict=100)\n\n"
+            f"The optimal batch size depends on your hardware and dataset."
+            f" Start with a small value and increase if needed."
         )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"

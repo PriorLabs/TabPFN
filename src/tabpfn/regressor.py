@@ -1294,29 +1294,32 @@ def _concatenate_regression_results(
         return np.concatenate(results, axis=0)
 
     if output_type == "quantiles":
+        quantile_results = typing.cast("list[list[np.ndarray]]", results)
         return [
-            np.concatenate([r[q] for r in results], axis=0)
-            for q in range(len(results[0]))
+            np.concatenate([r[q] for r in quantile_results], axis=0)
+            for q in range(len(quantile_results[0]))
         ]
 
     if output_type in ("main", "full"):
+        dict_results = typing.cast("list[MainOutputDict]", results)
         main = MainOutputDict(
-            mean=np.concatenate([r["mean"] for r in results], axis=0),
-            median=np.concatenate([r["median"] for r in results], axis=0),
-            mode=np.concatenate([r["mode"] for r in results], axis=0),
+            mean=np.concatenate([r["mean"] for r in dict_results], axis=0),
+            median=np.concatenate([r["median"] for r in dict_results], axis=0),
+            mode=np.concatenate([r["mode"] for r in dict_results], axis=0),
             quantiles=[
-                np.concatenate([r["quantiles"][q] for r in results], axis=0)
-                for q in range(len(results[0]["quantiles"]))
+                np.concatenate([r["quantiles"][q] for r in dict_results], axis=0)
+                for q in range(len(dict_results[0]["quantiles"]))
             ],
         )
         if output_type == "main":
             return main
         # criterion is a model-level attribute (raw_space_bardist_), identical
         # across all batches, so we take it from the first result.
+        full_results = typing.cast("list[FullOutputDict]", results)
         return FullOutputDict(
             **main,
-            criterion=results[0]["criterion"],
-            logits=torch.cat([r["logits"] for r in results], dim=0),
+            criterion=full_results[0]["criterion"],
+            logits=torch.cat([r["logits"] for r in full_results], dim=0),
         )
 
     raise ValueError(f"Invalid output type: {output_type}")
