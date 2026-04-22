@@ -260,6 +260,63 @@ class TestTorchSVDIntegration:
         )
 
 
+class TestChunkedSVDEquivalence:
+    """Tests that chunked transform paths produce identical results to unchunked."""
+
+    def test__svd_transform__row_chunks_match_unchunked(self, monkeypatch):
+        """Row-chunked SVD transform must give identical results to unchunked."""
+        torch.manual_seed(42)
+        x_train = torch.randn(60, 15, dtype=torch.float32)
+        x_test = torch.randn(40, 15, dtype=torch.float32)
+        x_test[5] = float("nan")
+
+        svd = TorchTruncatedSVD(n_components=5)
+        cache = svd.fit(x_train)
+        result_full = svd.transform(x_test, cache)
+
+        monkeypatch.setattr(
+            TorchTruncatedSVD, "_get_transform_chunk_size", lambda _, _x, _c: 9
+        )
+        result_chunked = svd.transform(x_test, cache)
+
+        assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
+
+    def test__fit__lowrank_svd_close_to_exact_svd(self):
+        """svd_lowrank result should be close to exact SVD for the top components.
+
+        Uses n=100, f=10001 which satisfies both lowrank trigger conditions:
+        n*f=1,000,100 > 1,000,000 and min(100,10001)=100 >= 2*(5+10)=30.
+        """
+        torch.manual_seed(0)
+        n_samples, n_features, n_components = 100, 10001, 5
+
+        # Low-rank structured matrix so the top-k approximation is meaningful
+        factors = torch.randn(n_samples, 10) @ torch.randn(10, n_features)
+        noise = 0.01 * torch.randn(n_samples, n_features)
+        x = (factors + noise).float()
+
+        # TorchTruncatedSVD should choose the lowrank path
+        svd = TorchTruncatedSVD(n_components=n_components)
+        cache = svd.fit(x)
+
+        # Exact reference: thin SVD truncated to n_components
+        _, s_exact, vh_exact = torch.linalg.svd(x, full_matrices=False)
+        s_exact = s_exact[:n_components]
+        vh_exact = vh_exact[:n_components]
+
+        s_lowrank = cache["singular_values"]
+        vh_lowrank = cache["components"]
+
+        # Singular values from lowrank should be close to exact top-k values
+        assert s_lowrank.shape == (n_components,)
+        torch.testing.assert_close(s_lowrank, s_exact, rtol=0.05, atol=1.0)
+
+        # Transformed output should be close up to per-component sign flips
+        proj_exact = (x @ vh_exact.T).abs()
+        proj_lowrank = (x @ vh_lowrank.T).abs()
+        torch.testing.assert_close(proj_lowrank, proj_exact, rtol=0.05, atol=1.0)
+
+
 class TestAddSVDFeaturesStep:
     """Tests for AddSVDFeaturesStep pipeline step."""
 
