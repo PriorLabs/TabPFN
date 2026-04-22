@@ -61,12 +61,66 @@ class TorchQuantileTransformer:
         references = torch.linspace(
             0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
         )
-        quantiles = torch.nanquantile(x.to(compute_dtype), references, dim=0)
+
+        x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
+        quantiles = self._nanquantile_chunked(x_compute, references)
+
         # Ensure monotonicity (handle floating point issues)
         # Use cumulative maximum along the quantile dimension
         quantiles = torch.cummax(quantiles, dim=0).values
 
         return {"quantiles": quantiles, "references": references}
+
+    def _nanquantile_chunked(
+        self,
+        x: torch.Tensor,
+        references: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute nanquantile in column-chunks to bound peak memory.
+
+        ``torch.nanquantile`` internally sorts the data along dim=0, requiring
+        O(N * F) temporary memory for the sorted copy.  Since each column is
+        independent, we can process subsets of columns to keep peak memory at
+        O(N * chunk_cols) instead of O(N * F).
+        """
+        original_shape = x.shape  # [N, ...]
+        n_samples = x.shape[0]
+
+        # Flatten trailing dimensions to [N, F]
+        x_flat = x.reshape(n_samples, -1) if x.ndim > 2 else x
+
+        n_features = x_flat.shape[1] if x_flat.ndim > 1 else 1
+
+        # Compute chunk size.  Empirically, torch.nanquantile needs roughly
+        # 10x input size of temporary memory (sort buffer + indexing).  We
+        # target ~2 GB of intermediates, which lets 100k x 500 fit in one
+        # shot (no chunking overhead for mid-size data) while still keeping
+        # 1M-row datasets bounded at ~2 GB of workspace per chunk.
+        element_size = x_flat.element_size()
+        overhead_factor = 10
+        target_bytes = 2 * 1024**3  # 2 GB
+        bytes_per_col = n_samples * element_size * overhead_factor
+        chunk_cols = max(1, target_bytes // max(bytes_per_col, 1))
+
+        if n_features <= chunk_cols:
+            # Small enough to process all at once
+            quantiles = torch.nanquantile(x, references, dim=0)
+        else:
+            # Process column-chunks and concatenate
+            chunks = []
+            for col_start in range(0, n_features, chunk_cols):
+                col_end = min(col_start + chunk_cols, n_features)
+                q_chunk = torch.nanquantile(
+                    x_flat[:, col_start:col_end], references, dim=0
+                )
+                chunks.append(q_chunk)
+            quantiles = torch.cat(chunks, dim=-1)
+
+            # Reshape back to [n_quantiles, ...] matching original trailing dims
+            if x.ndim > 2:
+                quantiles = quantiles.reshape(len(references), *original_shape[1:])
+
+        return quantiles
 
     def transform(
         self,
@@ -74,6 +128,9 @@ class TorchQuantileTransformer:
         fitted_cache: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """Transform the data to uniform distribution using fitted quantiles.
+
+        Automatically processes in row-chunks when the data is large to keep
+        peak intermediate memory bounded (~2 GB of temporaries).
 
         Args:
             x: Input tensor to transform.
@@ -96,11 +153,46 @@ class TorchQuantileTransformer:
         compute_dtype = quantiles.dtype
         x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
 
-        nan_mask = torch.isnan(x_compute)
-        result = self._interpolate(x_compute, quantiles, references)
-        nan_fill = torch.tensor(float("nan"), device=x.device, dtype=compute_dtype)
-        result = torch.where(nan_mask, nan_fill, result)
+        chunk_size = self._get_transform_chunk_size(x_compute)
+        n_samples = x_compute.shape[0]
+
+        if n_samples <= chunk_size:
+            result = self._transform_chunk(x_compute, quantiles, references)
+        else:
+            chunks = []
+            for start in range(0, n_samples, chunk_size):
+                chunk = x_compute[start : start + chunk_size]
+                chunks.append(self._transform_chunk(chunk, quantiles, references))
+            result = torch.cat(chunks, dim=0)
+
         return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+
+    def _transform_chunk(
+        self,
+        x: torch.Tensor,
+        quantiles: torch.Tensor,
+        references: torch.Tensor,
+    ) -> torch.Tensor:
+        """Transform a single chunk, preserving NaN positions."""
+        nan_mask = torch.isnan(x)
+        result = self._interpolate(x, quantiles, references)
+        nan_fill = torch.tensor(float("nan"), device=x.device, dtype=x.dtype)
+        return torch.where(nan_mask, nan_fill, result)
+
+    def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
+        """Compute a row-chunk size that keeps intermediate memory bounded.
+
+        ``_interpolate`` creates ~15x intermediate memory per input element
+        (forward + backward searchsorted, gather, slope tensors).  We target
+        ~2 GB of intermediates so that even very large datasets stay within
+        reasonable GPU memory.
+        """
+        n_features = x.shape[-1] if x.ndim > 1 else 1
+        element_size = x.element_size()
+        overhead_factor = 15
+        target_bytes = 2 * 1024**3  # 2 GB
+        bytes_per_row = n_features * element_size * overhead_factor
+        return max(1_000, target_bytes // max(bytes_per_row, 1))
 
     def _interpolate(
         self,

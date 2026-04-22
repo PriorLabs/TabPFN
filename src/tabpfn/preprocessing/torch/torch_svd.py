@@ -42,8 +42,9 @@ class TorchTruncatedSVD:
     """Truncated SVD for PyTorch tensors.
 
     Similar to sklearn's TruncatedSVD but without any implicit state.
-    The state is returned explicitly. Uses full SVD and truncates to
-    n_components (efficient for typical TabPFN dimensions).
+    The state is returned explicitly. Uses randomized SVD
+    (``torch.svd_lowrank``) for large matrices and exact
+    ``torch.linalg.svd`` for small ones.
 
     Note: Unlike sklearn's TruncatedSVD, this does not center the data.
     If centering is needed, apply it before calling fit.
@@ -60,6 +61,11 @@ class TorchTruncatedSVD:
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the truncated SVD on the training data.
 
+        Uses randomized SVD (``torch.svd_lowrank``) when ``n_components`` is
+        much smaller than the matrix dimensions.  This reduces memory from
+        O(N * min(N, F)) to O(N * n_components) — a large saving when
+        n_components << min(N, F) (e.g. 128 vs 500).
+
         Args:
             x: Input tensor with shape [n_samples, n_features].
 
@@ -69,6 +75,17 @@ class TorchTruncatedSVD:
                     [n_components, n_features]
                 - "singular_values": The singular values [n_components]
         """
+        orig_device = x.device
+
+        if x.device.type == "mps":
+            warnings.warn(
+                "SVD operators ('aten::linalg_svd', 'aten::linalg_qr') are not "
+                "currently supported on the MPS backend and will fall back to "
+                "run on the CPU. This may have performance implications.",
+                stacklevel=2,
+            )
+            x = x.cpu()
+
         n_samples, n_features = x.shape
 
         # Handle NaN values by replacing with 0 for SVD computation
@@ -79,25 +96,43 @@ class TorchTruncatedSVD:
         n_components = min(self.n_components, n_samples, n_features)
         n_components = max(1, n_components)
 
-        # torch.linalg.svd requires float32 or float64; cast up if needed
+        # torch SVD ops require float32 or float64; cast up if needed
         compute_dtype = x_filled.dtype
         if compute_dtype not in (torch.float32, torch.float64):
             compute_dtype = torch.float32
             x_filled = x_filled.to(compute_dtype)
 
-        # Compute full SVD: X = U @ diag(S) @ V^T
-        # torch.linalg.svd returns V^T directly (not V)
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore",
-                message=".*linalg_svd.*not currently supported on the MPS backend.*",
-            )
-            u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
+        # Use randomized SVD only when it is both (a) accurate — the matrix
+        # is large enough that the top components are well-separated — and
+        # (b) faster — the projected rank q is well below the matrix rank.
+        # Benchmark shows svd_lowrank becomes favorable once
+        # min(N, F) >= 2*q; below that, the random-projection overhead
+        # exceeds the savings from avoiding the full decomposition.
+        oversampling = 10  # matches sklearn's TruncatedSVD n_oversamples default
+        q = n_components + oversampling
+        use_lowrank = (
+            n_samples * n_features > 1_000_000 and min(n_samples, n_features) >= 2 * q
+        )
 
-        # Truncate to n_components
-        u = u[:, :n_components]
-        s = s[:n_components]
-        vh = vh[:n_components, :]
+        if use_lowrank:
+            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T
+            u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
+            # Truncate oversampling dimensions
+            u = u[:, :n_components]
+            s = s[:n_components]
+            vh = v[:, :n_components].T  # V [n_features, q] → V^T [n_comp, n_features]
+        else:
+            # Fall back to full SVD for small matrices or when n_components
+            # is close to min(n_samples, n_features).
+            with warnings.catch_warnings():  # warning thrown above already
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*linalg_svd.*not currently supported on the MPS backend.*",  # noqa: E501
+                )
+                u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
+            u = u[:, :n_components]
+            s = s[:n_components]
+            vh = vh[:n_components, :]
 
         # Apply sign flip for deterministic output.
         # We use the same convention as sklearn (u_based_decision=False:
@@ -108,8 +143,8 @@ class TorchTruncatedSVD:
         u, vh = _svd_flip_stable(u, vh)
 
         return {
-            "components": vh,
-            "singular_values": s,
+            "components": vh.to(orig_device),
+            "singular_values": s.to(orig_device),
         }
 
     def transform(
@@ -118,6 +153,9 @@ class TorchTruncatedSVD:
         fitted_cache: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         """Project the data onto the SVD components.
+
+        Automatically processes in row-chunks when the data is large to keep
+        peak intermediate memory bounded.
 
         Args:
             x: Input tensor to transform [n_samples, n_features].
@@ -130,26 +168,53 @@ class TorchTruncatedSVD:
             raise ValueError("Invalid fitted cache. Must contain 'components'.")
 
         components = fitted_cache["components"]
-
-        # Components may be in float32 (from fit) while input is float16.
-        # Compute in the components dtype, then cast back.
         orig_dtype = x.dtype
         compute_dtype = components.dtype
 
-        # Handle NaN values: preserve them in output
+        chunk_size = self._get_transform_chunk_size(x, components)
+        n_samples = x.shape[0]
+
+        if n_samples <= chunk_size:
+            result = self._transform_chunk(x, components, compute_dtype)
+        else:
+            chunks = []
+            for start in range(0, n_samples, chunk_size):
+                chunk = x[start : start + chunk_size]
+                chunks.append(self._transform_chunk(chunk, components, compute_dtype))
+            result = torch.cat(chunks, dim=0)
+
+        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+
+    def _transform_chunk(
+        self,
+        x: torch.Tensor,
+        components: torch.Tensor,
+        compute_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Transform a single chunk, preserving NaN rows."""
         x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
         nan_mask = torch.isnan(x_compute)
         x_filled = torch.where(nan_mask, torch.zeros_like(x_compute), x_compute)
-
-        # Project: X @ V (V = components.T)
         result = x_filled @ components.T
-
-        # If any input feature was NaN, the corresponding output should be NaN
-        # Since projection is a linear combination, any NaN input affects all outputs
         any_nan_per_row = nan_mask.any(dim=-1, keepdim=True)
         nan_fill = torch.tensor(float("nan"), device=x.device, dtype=compute_dtype)
-        result = torch.where(any_nan_per_row.expand_as(result), nan_fill, result)
-        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+        return torch.where(any_nan_per_row.expand_as(result), nan_fill, result)
+
+    def _get_transform_chunk_size(
+        self, x: torch.Tensor, components: torch.Tensor
+    ) -> int:
+        """Compute a row-chunk size that keeps intermediate memory bounded.
+
+        Transform creates ~3x N*F intermediates (dtype cast, nan_mask,
+        x_filled) plus the N*C result.  Target ~2 GB of temporaries.
+        """
+        n_features = x.shape[-1]
+        n_components = components.shape[0]
+        element_size = max(x.element_size(), components.element_size())
+        # x_compute + nan_mask(~1B) + x_filled + result
+        bytes_per_row = (3 * n_features + n_components) * element_size
+        target_bytes = 2 * 1024**3  # 2 GB
+        return max(1_000, target_bytes // max(bytes_per_row, 1))
 
     def __call__(
         self,
@@ -241,6 +306,9 @@ class TorchSafeStandardScaler:
     ) -> torch.Tensor:
         """Apply the fitted scaling to the data (no mean centering).
 
+        Automatically processes in row-chunks when the data is large to keep
+        peak intermediate memory bounded.
+
         Args:
             x: Input tensor to transform.
             fitted_cache: Cache returned by fit.
@@ -252,10 +320,31 @@ class TorchSafeStandardScaler:
             raise ValueError("Invalid fitted cache. Must contain 'std'.")
 
         std = fitted_cache["std"]
-
-        # Align dtype: std is in float32+ from fit, input may be float16
         orig_dtype = x.dtype
         compute_dtype = std.dtype
+
+        chunk_size = self._get_transform_chunk_size(x)
+        n_samples = x.shape[0]
+
+        if n_samples <= chunk_size:
+            result = self._transform_chunk(x, fitted_cache, compute_dtype)
+        else:
+            chunks = []
+            for start in range(0, n_samples, chunk_size):
+                chunk = x[start : start + chunk_size]
+                chunks.append(self._transform_chunk(chunk, fitted_cache, compute_dtype))
+            result = torch.cat(chunks, dim=0)
+
+        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+
+    def _transform_chunk(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+        compute_dtype: torch.dtype,
+    ) -> torch.Tensor:
+        """Transform a single chunk."""
+        std = fitted_cache["std"]
         x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
 
         # Replace inf with nan before scaling
@@ -282,10 +371,21 @@ class TorchSafeStandardScaler:
 
         # Replace any inf that might have been created with nan, then impute
         # remaining non-finite values (matching CPU post-imputation safety net)
-        result = torch.where(
+        return torch.where(
             torch.isfinite(x_scaled), x_scaled, torch.zeros_like(x_scaled)
         )
-        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
+
+    def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
+        """Compute a row-chunk size that keeps intermediate memory bounded.
+
+        Transform creates ~5x N*F intermediates (dtype cast, isinf check,
+        nan_mask, imputed, scaled, clipped, finite-check).  Target ~2 GB.
+        """
+        n_features = x.shape[-1] if x.ndim > 1 else 1
+        element_size = x.element_size()
+        bytes_per_row = n_features * element_size * 5
+        target_bytes = 2 * 1024**3  # 2 GB
+        return max(1_000, target_bytes // max(bytes_per_row, 1))
 
     def __call__(
         self,
