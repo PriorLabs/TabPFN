@@ -194,11 +194,10 @@ class TorchTruncatedSVD:
         """Transform a single chunk, preserving NaN rows."""
         x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
         nan_mask = torch.isnan(x_compute)
-        x_filled = torch.where(nan_mask, torch.zeros_like(x_compute), x_compute)
+        x_filled = torch.where(nan_mask, 0.0, x_compute)
         result = x_filled @ components.T
         any_nan_per_row = nan_mask.any(dim=-1, keepdim=True)
-        nan_fill = torch.tensor(float("nan"), device=x.device, dtype=compute_dtype)
-        return torch.where(any_nan_per_row.expand_as(result), nan_fill, result)
+        return torch.where(any_nan_per_row, float("nan"), result)
 
     def _get_transform_chunk_size(
         self, x: torch.Tensor, components: torch.Tensor
@@ -371,9 +370,7 @@ class TorchSafeStandardScaler:
 
         # Replace any inf that might have been created with nan, then impute
         # remaining non-finite values (matching CPU post-imputation safety net)
-        return torch.where(
-            torch.isfinite(x_scaled), x_scaled, torch.zeros_like(x_scaled)
-        )
+        return torch.where(torch.isfinite(x_scaled), x_scaled, 0.0)
 
     def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.

@@ -178,8 +178,7 @@ class TorchQuantileTransformer:
         """Transform a single chunk, preserving NaN positions."""
         nan_mask = torch.isnan(x)
         result = self._interpolate(x, quantiles, references)
-        nan_fill = torch.tensor(float("nan"), device=x.device, dtype=x.dtype)
-        return torch.where(nan_mask, nan_fill, result)
+        return torch.where(nan_mask, float("nan"), result)
 
     def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.
