@@ -282,14 +282,6 @@ def _batched_scaled_dot_product_attention(
     k_BJSD = k_BSJD.permute(0, 2, 1, 3)
     v_BJSD = v_BSJD.permute(0, 2, 1, 3)
 
-    # MPS's scaled_dot_product_attention silently returns wrong values when given
-    # non-contiguous inputs produced by a permute (PyTorch MPS backend bug).
-    # Force contiguous layout so the kernel operates on well-formed tensors.
-    if q_BHSD.device.type == "mps":
-        q_BHSD = q_BHSD.contiguous()
-        k_BJSD = k_BJSD.contiguous()
-        v_BJSD = v_BJSD.contiguous()
-
     # In the case of multi-query attention, the keys and values will have only one head.
     # GQA is only supported with fp16/bf16 dtypes - the fused attention kernels
     # don't support GQA with float32.
@@ -321,14 +313,29 @@ def _batched_scaled_dot_product_attention(
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
+    # MPS's scaled_dot_product_attention silently returns wrong values when given
+    # non-contiguous inputs (the permute above and, for multi-query attention, the
+    # expand below both produce non-contiguous tensors). PyTorch bug:
+    # https://github.com/pytorch/pytorch/issues/181133
+    # We apply .contiguous() to the per-chunk slices rather than the full tensors,
+    # to avoid doubling peak memory.
+    on_mps = q_BHSD.device.type == "mps"
+
     with sdpa_kernel(backends=backends):
         outputs = []
         for i in range(num_iterations):
+            q_chunk = q_BHSD[i * sub_batch : (i + 1) * sub_batch]
+            k_chunk = keys[i * sub_batch : (i + 1) * sub_batch]
+            v_chunk = values[i * sub_batch : (i + 1) * sub_batch]
+            if on_mps:
+                q_chunk = q_chunk.contiguous()
+                k_chunk = k_chunk.contiguous()
+                v_chunk = v_chunk.contiguous()
             outputs.append(
                 torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
-                    keys[i * sub_batch : (i + 1) * sub_batch],
-                    values[i * sub_batch : (i + 1) * sub_batch],
+                    q_chunk,
+                    k_chunk,
+                    v_chunk,
                     attn_mask=None,
                     **enable_gqa,
                 )
