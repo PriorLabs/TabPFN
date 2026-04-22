@@ -851,22 +851,19 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
             ens_model = deepcopy(models[ensemble_member.config._model_index])
             ens_model = ens_model.to(device)
-            if force_inference_dtype is not None:
-                ens_model = ens_model.type(force_inference_dtype)
 
             gpu_preprocess_start = time.perf_counter()
             X = ensemble_member.X_train
             y = ensemble_member.y_train
 
-            inference_dtype = (
-                force_inference_dtype
-                if force_inference_dtype is not None
-                else torch.float32
-            )
-
-            X = torch.as_tensor(X, dtype=inference_dtype, device=device)
+            # Use force_inference_dtype when set (e.g. float64) so GPU
+            # preprocessing sees the same precision as fit_preprocessors mode.
+            tensor_dtype = force_inference_dtype or torch.float32
+            if not isinstance(X, torch.Tensor):
+                X = torch.as_tensor(X, dtype=tensor_dtype, device=device)
             X = X.unsqueeze(1)
-            y = torch.as_tensor(y, dtype=inference_dtype, device=device)
+            if not isinstance(y, torch.Tensor):
+                y = torch.as_tensor(y, dtype=tensor_dtype, device=device)
 
             X, updated_schema = _maybe_run_gpu_preprocessing(
                 X,
@@ -932,16 +929,8 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             preprocess_start = time.perf_counter()
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
-            inference_dtype = (
-                self.force_inference_dtype
-                if self.force_inference_dtype is not None
-                else torch.float32
-            )
-            X_test = torch.as_tensor(
-                X_test,
-                dtype=inference_dtype,
-                device=self.device,
-            )
+            tensor_dtype = self.force_inference_dtype or torch.float32
+            X_test = torch.as_tensor(X_test, dtype=tensor_dtype, device=self.device)
             X_test = X_test.unsqueeze(1)
             X_test, updated_schema = _maybe_run_gpu_preprocessing(
                 X_test,
