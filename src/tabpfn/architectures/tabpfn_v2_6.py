@@ -282,6 +282,14 @@ def _batched_scaled_dot_product_attention(
     k_BJSD = k_BSJD.permute(0, 2, 1, 3)
     v_BJSD = v_BSJD.permute(0, 2, 1, 3)
 
+    # MPS's scaled_dot_product_attention silently returns wrong values when given
+    # non-contiguous inputs produced by a permute (PyTorch MPS backend bug).
+    # Force contiguous layout so the kernel operates on well-formed tensors.
+    if q_BHSD.device.type == "mps":
+        q_BHSD = q_BHSD.contiguous()
+        k_BJSD = k_BJSD.contiguous()
+        v_BJSD = v_BJSD.contiguous()
+
     # In the case of multi-query attention, the keys and values will have only one head.
     # GQA is only supported with fp16/bf16 dtypes - the fused attention kernels
     # don't support GQA with float32.
