@@ -75,13 +75,18 @@ class PerformanceOptions:
     throughput by reducing memory pressure and the number of CPU<->GPU
     synchronisation points required for memory allocations."""
 
-    force_recompute_layer: bool = False
+    force_recompute_layer: bool | int = False
     """Enable activation checkpointing (gradient recomputation) for all layers.
 
     When ``True``, intermediate activations are not stored during the forward pass;
     instead they are recomputed from scratch during the backward pass.  This trades
     compute for memory and is useful when training with very large context sizes.
     Has no effect during inference (``torch.no_grad`` / ``torch.inference_mode``).
+
+    Some models support passing an integer value, where 0 corresponds to no
+    checkpointing, and higher values correspond to more aggressive checkpointing.
+    This allows to tune the compute/memory tradeoff more finely. Models will clip the
+    value to their maximum supported level of checkpointing.
     """
 
     use_chunkwise_inference: bool = False
