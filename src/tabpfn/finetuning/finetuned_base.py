@@ -637,15 +637,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
+        X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
+            ensure_compatible_fit_inputs_sklearn(
+                X,
+                y,
+                estimator=self.finetuned_estimator_,
+                ensure_y_numeric=self._model_type == "regressor",
+            )
+        )
         self.X_ = X
         self.y_ = y
-
-        X, y, _, _ = ensure_compatible_fit_inputs_sklearn(
-            X,
-            y,
-            estimator=self.finetuned_estimator_,
-            ensure_y_numeric=self._model_type == "regressor",
-        )
+        X, y = X_validated, y_validated
 
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
