@@ -637,6 +637,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
+        # Retain the raw training inputs so the final inference model can be
+        # fitted with feature names intact when ``X`` is a pandas DataFrame.
+        self.X_ = X
+        self.y_ = y
+
         X, y, _, _ = ensure_compatible_fit_inputs_sklearn(
             X,
             y,
@@ -644,8 +649,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             ensure_y_numeric=self._model_type == "regressor",
         )
 
-        self.X_ = X
-        self.y_ = y
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
             X_val, y_val, _, _ = ensure_compatible_fit_inputs_sklearn(

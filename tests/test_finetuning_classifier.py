@@ -9,6 +9,7 @@ This module contains tests for:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -17,6 +18,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import numpy as np
+import pandas as pd
 import pytest
 import sklearn
 import torch
@@ -389,6 +391,76 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     predictions = finetuned_clf.predict(X_test)
     assert predictions.shape[0] == X_test.shape[0]
     assert all(pred in np.unique(y_train) for pred in predictions)
+
+
+@pytest.mark.parametrize("use_val", [False, True])
+def test__finetuned_tabpfn_classifier__preserves_pandas_feature_names(
+    use_val: bool,
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Regression test for https://github.com/PriorLabs/TabPFN/issues/872.
+
+    When ``X`` (and optionally ``X_val``) are pandas DataFrames, the final
+    inference model must be fitted with the same feature names so that
+    ``predict_proba`` on a DataFrame does not warn about missing feature names.
+    """
+    X, y = synthetic_data
+    n_classes = len(np.unique(y))
+    feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+    X_df = pd.DataFrame(X, columns=feature_names)
+
+    X_train, X_temp, y_train, y_temp = train_test_split(
+        X_df, y, test_size=0.4, random_state=42
+    )
+    X_val, X_test, y_val, _ = train_test_split(
+        X_temp, y_temp, test_size=0.5, random_state=42
+    )
+
+    finetuned_clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=2,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=False,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+        lr_warmup_only=False,
+    )
+
+    mock_forward = create_mock_architecture_forward(n_classes=n_classes)
+
+    with mock.patch.object(
+        PerFeatureTransformer,
+        "forward",
+        autospec=True,
+        side_effect=mock_forward,
+    ):
+        if use_val:
+            finetuned_clf.fit(X_train, y_train, X_val=X_val, y_val=y_val)
+        else:
+            finetuned_clf.fit(X_train, y_train)
+
+    inference_clf = finetuned_clf.finetuned_inference_classifier_
+    assert hasattr(inference_clf, "feature_names_in_")
+    assert list(inference_clf.feature_names_in_) == feature_names
+
+    with (
+        warnings.catch_warnings(),
+        mock.patch.object(
+            PerFeatureTransformer,
+            "forward",
+            autospec=True,
+            side_effect=mock_forward,
+        ),
+    ):
+        warnings.simplefilter("error", UserWarning)
+        finetuned_clf.predict_proba(X_test)
 
 
 # =============================================================================
