@@ -313,5 +313,3 @@ def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> Inferenc
         _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
         _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
     )
-
-
