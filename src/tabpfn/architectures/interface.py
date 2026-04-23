@@ -85,7 +85,7 @@ class PerformanceOptions:
 
     Some models support passing an integer value, where 0 corresponds to no
     checkpointing, and higher values correspond to more aggressive checkpointing.
-    This allows to tune the compute/memory tradeoff more finely. Models will clip the
+    This allows for finer tuning of the compute/memory tradeoff. Models will clip the
     value to their maximum supported level of checkpointing.
     """
 
