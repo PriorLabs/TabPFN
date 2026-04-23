@@ -559,11 +559,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         passed to the constructor is considered.
 
         Returns:
-            The active inference config.
+            A deep copy of the active inference config.
         """
         if not hasattr(self, "inference_config_"):
             self._initialize_model_variables()
-        return self.inference_config_
+        return copy.deepcopy(self.inference_config_)
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
