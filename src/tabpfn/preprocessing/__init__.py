@@ -16,8 +16,6 @@ from .pipeline_interface import PreprocessingPipeline
 from .presets import (
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
-    v2_6_classifier_preprocessor_configs,
-    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -36,8 +34,6 @@ __all__ = [
     "generate_regression_ensemble_configs",
     "v2_5_classifier_preprocessor_configs",
     "v2_5_regressor_preprocessor_configs",
-    "v2_6_classifier_preprocessor_configs",
-    "v2_6_regressor_preprocessor_configs",
     "v2_classifier_preprocessor_configs",
     "v2_regressor_preprocessor_configs",
 ]

@@ -15,8 +15,6 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
-    v2_6_classifier_preprocessor_configs,
-    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -260,18 +258,6 @@ class InferenceConfig:
                 return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
                 return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
-        elif model_version == ModelVersion.V2_6:
-            if task_type == "multiclass":
-                return _get_v2_6_config(
-                    preprocessor_configs=v2_6_classifier_preprocessor_configs(),
-                    task_type=task_type,
-                )
-            if task_type == "regression":
-                return _get_v2_6_config(
-                    preprocessor_configs=v2_6_regressor_preprocessor_configs(),
-                    task_type=task_type,
-                )
-
         raise ValueError(
             f"No inference config is configured for {model_version=}. "
             "Please make sure you are using a correct model checkpoint that contains "
@@ -329,29 +315,3 @@ def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> Inferenc
     )
 
 
-def _get_v2_6_config(
-    preprocessor_configs: list[PreprocessorConfig],
-    task_type: TaskType,
-) -> InferenceConfig:
-    return InferenceConfig(
-        MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
-        MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
-        MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE=100,
-        OUTLIER_REMOVAL_STD=None,
-        FEATURE_SHIFT_METHOD="shuffle",
-        CLASS_SHIFT_METHOD="shuffle",
-        FINGERPRINT_FEATURE=True,
-        POLYNOMIAL_FEATURES="no" if task_type == "multiclass" else 10,
-        SUBSAMPLE_SAMPLES=None,
-        FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
-        PREPROCESS_TRANSFORMS=preprocessor_configs,
-        REGRESSION_Y_PREPROCESS_TRANSFORMS=("none",),
-        USE_SKLEARN_16_DECIMAL_PRECISION=False,
-        MAX_NUMBER_OF_CLASSES=10,
-        MAX_NUMBER_OF_FEATURES=2000,
-        MAX_NUMBER_OF_SAMPLES=50_000,
-        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
-        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
-        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
-    )
