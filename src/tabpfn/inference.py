@@ -949,10 +949,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             kwargs = {}
             if _model_expectes_task_type_arg(model):
                 kwargs["task_type"] = task_type
-            # When the KV cache is enabled, we assume we are under memory
-            # pressure and enable the saving mode.
-            # TODO: Use the heuristic in this case also.
-            PerformanceOptions(save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR)
+
             forward_start = time.perf_counter()
             with (
                 get_autocast_context(self.device, enabled=autocast),
@@ -1005,6 +1002,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
     When ``keep_cache_on_device=True``, each per-estimator cache is kept
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
+
+    At predict, only X_test is preprocessed (CPU and GPU). The model is
+    called with ``x_is_test_only=True``. ``y`` still carries the full
+    train labels for the many-class decoder.
     """
 
     def __init__(
@@ -1030,7 +1031,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         Args:
             X_train: The training data.
             y_train: The training target.
-            feature_schema: The feature schema.
             ensemble_preprocessor: The ensemble preprocessor to use.
             models: The models to use.
             devices: Devices to use for inference. If multiple devices are
@@ -1054,15 +1054,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
-        self.X_train_shape_before_preprocessing = X_train.shape
 
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
-
-        # Cast model weights to force_inference_dtype once per device
-        if self.force_inference_dtype is not None:
-            for model_cache in self.model_caches:
-                model_cache.set_dtype(self.force_inference_dtype)
 
         # Preprocess ensemble members (CPU work)
         fit_preprocess_start = time.perf_counter()
@@ -1091,7 +1085,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             for ensemble_member in self.ensemble_members
         )
         timed_caches = _TimedIterator(parallel_execute(devices, build_functions))
-        self.caches: list = list(timed_caches)
+        self.kv_caches: list = list(timed_caches)
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
     def _build_cache(
@@ -1112,6 +1106,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         in parallel threads.
         """
         model = self.model_caches[model_index].get(device)
+
+        # Cast model weights to match force_inference_dtype (else linear
+        # layers throw a Half/Float mismatch — matches CacheKV).
+        if self.force_inference_dtype is not None:
+            model.type(self.force_inference_dtype)
 
         tensor_dtype = self.force_inference_dtype or torch.float32
         if not isinstance(X_train, torch.Tensor):
@@ -1178,9 +1177,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             for model_cache in self.model_caches:
                 model_cache.set_dtype(self.force_inference_dtype)
 
+        # The predict path only processes X_test (x_is_test_only=True),
+        # so base the heuristic on the test shape only.
         save_peak_mem = should_save_peak_mem(
             memory_saving_mode=self.save_peak_mem,
-            X_train_shape=tuple[int, int](self.X_train_shape_before_preprocessing),
+            X_train_shape=(0, X.shape[1]),
             X_test_shape=tuple[int, int](X.shape),
             devices=devices,
             dtype_byte_size=self.dtype_byte_size,
@@ -1190,7 +1191,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             partial(
                 self._call_model,
                 cache_index=i,
-                X_train=ensemble_member.X_train,
                 X_test=ensemble_member.transform_X_test(X),
                 y_train=ensemble_member.y_train,
                 feature_schema=ensemble_member.feature_schema,
@@ -1219,7 +1219,6 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         *,
         device: torch.device,
         cache_index: int,
-        X_train: torch.Tensor | np.ndarray,
         X_test: torch.Tensor | np.ndarray,
         y_train: torch.Tensor | np.ndarray,
         feature_schema: FeatureSchema,
@@ -1233,16 +1232,36 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         """Execute a model forward pass on the provided device.
 
         Each ensemble member (estimator) has its own KV cache at
-        ``self.caches[cache_index]``.  When ``keep_cache_on_device`` is True,
+        ``self.kv_caches[cache_index]``.  When ``keep_cache_on_device`` is True,
         the cache is moved to ``device`` on the first call and kept there.
+
+        Only X_test is uploaded and preprocessed — the v3 model's cache
+        fast path never reads train rows when ``x_is_test_only=True``.
 
         May be executed in parallel across threads, one per device.
         """
         model = self.model_caches[model_index].get(device)
 
-        X_full, y_train = _prepare_model_inputs(
-            device, self.force_inference_dtype, X_train, X_test, y_train
+        dtype = self.force_inference_dtype or torch.float32
+        X_test_tensor = torch.as_tensor(X_test, dtype=dtype, device=device).unsqueeze(1)
+        y_train = torch.as_tensor(y_train, dtype=dtype, device=device)
+
+        X_test_tensor, feature_schema = _maybe_run_gpu_preprocessing(
+            X_test_tensor,
+            gpu_preprocessor=gpu_preprocessor,
+            num_train_rows=0,
+            use_fitted_cache=True,
+            feature_schema=feature_schema,
         )
+
+        # Cast post-preproc tensors back to force_inference_dtype if set —
+        # GPU preprocessing may emit fp32 internally (SVD/quantile for
+        # numerical stability) even under a fp16 run. Matches CacheKV.
+        if self.force_inference_dtype is not None:
+            X_test_tensor = X_test_tensor.type(self.force_inference_dtype)
+            y_train = y_train.type(self.force_inference_dtype)
+
+        batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
 
         performance_options = model.get_default_performance_options()
         performance_options = dataclasses.replace(
@@ -1252,38 +1271,29 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             else None,
         )
 
-        # Reuse fitted gpu preprocessor state from _build_cache
-        X_full, feature_schema = _maybe_run_gpu_preprocessing(
-            X_full,
-            gpu_preprocessor=gpu_preprocessor,
-            num_train_rows=X_train.shape[0],
-            use_fitted_cache=True,
-            feature_schema=feature_schema,
-        )
-        batched_cat_ix = [feature_schema.indices_for(FeatureModality.CATEGORICAL)]
-
         kwargs = {}
         if _model_expectes_task_type_arg(model):
             kwargs["task_type"] = task_type
 
         # Get cache for this estimator and move to target device
-        cache = self.caches[cache_index]
+        cache = self.kv_caches[cache_index]
         cache_on_device = cache.to(device)
         if self.keep_cache_on_device:
             # Persist on-device copy so subsequent calls skip the transfer
-            self.caches[cache_index] = cache_on_device
+            self.kv_caches[cache_index] = cache_on_device
 
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(),
         ):
             return model(
-                X_full,
+                X_test_tensor,
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
                 performance_options=performance_options,
                 kv_cache=cache_on_device,
+                x_is_test_only=True,
                 **kwargs,
             )
 

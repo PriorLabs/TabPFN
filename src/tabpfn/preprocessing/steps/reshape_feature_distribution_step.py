@@ -244,7 +244,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         )
 
         if self.schedule_quantile_for_gpu:
-            if self.append_to_original:
+            if self.append_to_original_decision_:
                 # Output: [original_all, transformed_copies]
                 # The appended copies are the GPU quantile targets.
                 gpu_target = range(n_features, n_output_features)

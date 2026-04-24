@@ -62,7 +62,6 @@ def _make_config(
         add_fingerprint_feature=fingerprint,
         polynomial_features="no",
         feature_shift_decoder=feature_shift_decoder,
-        subsample_ix=None,
         outlier_removal_std=outlier_removal_std,
         _model_index=0,
     )

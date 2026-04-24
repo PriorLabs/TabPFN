@@ -34,6 +34,7 @@ def _fit_preprocessing_one(
     feature_schema: FeatureSchema,
     pipeline: PreprocessingPipeline,
     feature_indices: np.ndarray | None = None,
+    row_indices: np.ndarray | None = None,
 ) -> tuple[
     int,
     EnsembleConfig,
@@ -53,15 +54,16 @@ def _fit_preprocessing_one(
         pipeline: Preprocessing pipeline.
         feature_indices: Indices of features to select. If not provided, all features
             are used.
+        row_indices: Indices of rows to select. If not provided, all rows are used.
 
     Returns:
         Tuple containing the config index, ensemble configuration, the fitted
         preprocessing pipeline, the transformed training data, the transformed target,
         and the feature schema.
     """
-    if config.subsample_ix is not None:
-        X_train = X_train[config.subsample_ix]
-        y_train = y_train[config.subsample_ix]
+    if row_indices is not None:
+        X_train = X_train[row_indices]
+        y_train = y_train[row_indices]
     if feature_indices is not None:
         X_train = X_train[..., feature_indices]
         feature_schema = feature_schema.slice_for_indices(feature_indices.tolist())
@@ -118,6 +120,7 @@ def fit_preprocessing(
     parallel_mode: Literal["block", "as-ready", "in-order"],
     pipelines: Sequence[PreprocessingPipeline],
     subsample_feature_indices: list[np.ndarray | None] | None = None,
+    subsample_row_indices: list[np.ndarray] | None = None,
 ) -> Iterator[
     tuple[
         int,
@@ -155,6 +158,8 @@ def fit_preprocessing(
         pipelines: Preprocessing pipelines, one per configuration.
         subsample_feature_indices: Indices of features to subsample. If not provided,
             no features are subsampled.
+        subsample_row_indices: Indices of rows to subsample per estimator. If not
+            provided, no row subsampling is done.
 
     Returns:
         Iterator of tuples containing the config index, ensemble configuration, the
@@ -168,10 +173,18 @@ def fit_preprocessing(
         )
 
     if subsample_feature_indices is None:
-        subsample_feature_indices = [None] * len(configs)
-    if len(subsample_feature_indices) != len(configs):
+        subsample_feature_indices = [None] * len(configs)  # type: ignore[assignment]
+    elif len(subsample_feature_indices) != len(configs):
         raise ValueError(
             f"subsample_feature_indices has {len(subsample_feature_indices)} "
+            f"elements, but configs has {len(configs)} elements"
+        )
+
+    if subsample_row_indices is None:
+        subsample_row_indices = [None] * len(configs)  # type: ignore[assignment]
+    elif len(subsample_row_indices) != len(configs):
+        raise ValueError(
+            f"subsample_row_indices has {len(subsample_row_indices)} "
             f"elements, but configs has {len(configs)} elements"
         )
 
@@ -194,8 +207,9 @@ def fit_preprocessing(
             feature_schema=feature_schema,
             pipeline=pipeline,
             feature_indices=feat_idx,
+            row_indices=row_idx,
         )
-        for config_index, (config, pipeline, feat_idx) in enumerate(
-            zip(configs, pipelines, subsample_feature_indices)
+        for config_index, (config, pipeline, feat_idx, row_idx) in enumerate(
+            zip(configs, pipelines, subsample_feature_indices, subsample_row_indices)  # type: ignore[arg-type]
         )
     )

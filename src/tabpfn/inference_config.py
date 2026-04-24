@@ -128,11 +128,11 @@ class InferenceConfig:
             indices are repeated for the remaining estimators.
     """
 
-    ENABLE_GPU_PREPROCESSING: bool = True
+    ENABLE_GPU_PREPROCESSING: bool = False
     """Move quantile transform, SVD feature generation, and feature shuffling to
-    GPU / torch.  When ``True`` (default), these operations run on the same device as
+    GPU / torch.  When ``True``, these operations run on the same device as
     the model, which can be significantly faster for large datasets (>10 k rows).
-    When ``False``, all preprocessing runs on CPU / sklearn as before.
+    When ``False`` (default), all preprocessing runs on CPU / sklearn as before.
 
     Only ``quantile_uni*`` transforms are accelerated (the torch quantile
     transformer only supports uniform output).  Other transforms stay on CPU

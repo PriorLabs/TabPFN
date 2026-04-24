@@ -89,6 +89,7 @@ class TabPFNEnsemblePreprocessor:
         enable_gpu_preprocessing: bool = False,
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
+        subsample_samples: int | float | list[np.ndarray] | None = None,
     ) -> None:
         """Init.
 
@@ -107,6 +108,10 @@ class TabPFNEnsemblePreprocessor:
                 "balanced", "random", or "constant_and_balanced".
             constant_feature_count: Number of leading features to always include
                 when using the "constant_and_balanced" method.
+            subsample_samples: Method to subsample rows per estimator. If int,
+                subsample that many samples. If float, subsample that fraction of
+                samples. If a list of index arrays, use those indices directly. If
+                ``None``, no row subsampling is done.
         """
         super().__init__()
         self.configs = configs
@@ -116,9 +121,17 @@ class TabPFNEnsemblePreprocessor:
 
         self.random_state = random_state
         self.enable_gpu_preprocessing = enable_gpu_preprocessing
-        _, self.rng = infer_random_state(random_state)
+        _, rng = infer_random_state(random_state)
+        # Derive independent seeds for each random step in one batch so that
+        # each step's stream is unaffected by what happens in the others.
+        seed_pipelines, seed_features, seed_rows = rng.integers(
+            0, np.iinfo(np.int64).max, 3
+        )
+        rng_pipelines = np.random.default_rng(seed=seed_pipelines)
+        rng_features = np.random.default_rng(seed=seed_features)
+        rng_rows = np.random.default_rng(seed=seed_rows)
 
-        self.pipeline_seeds = self.rng.integers(
+        self.pipeline_seeds = rng_pipelines.integers(
             0, np.iinfo(np.int32).max, len(self.configs)
         )
         self.pipelines = [
@@ -138,9 +151,16 @@ class TabPFNEnsemblePreprocessor:
             n_samples=n_samples,
             feature_schema=self.feature_schema,
             max_features_per_estimator=max_features_per_estimator,
-            rng=self.rng,
+            rng=rng_features,
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
+        )
+
+        self.subsample_row_indices = _get_subsample_indices_for_estimators(
+            subsample_samples=subsample_samples,
+            num_estimators=len(self.configs),
+            n_samples=n_samples,
+            rng=rng_rows,
         )
 
     def fit_transform_ensemble_members_iterator(
@@ -159,6 +179,7 @@ class TabPFNEnsemblePreprocessor:
             parallel_mode=parallel_mode,
             pipelines=self.pipelines,
             subsample_feature_indices=self.subsample_feature_indices,
+            subsample_row_indices=self.subsample_row_indices,
         )
 
         if not self.enable_gpu_preprocessing:
@@ -229,72 +250,78 @@ def _balance(x: Iterable[T], n: int) -> list[T]:
     return list(chain.from_iterable(repeat(elem, n) for elem in x))
 
 
-def _generate_index_permutations(
-    n: int,
-    *,
-    max_index: int,
-    subsample: int | float,
-    random_state: int | np.random.Generator | None,
-) -> list[npt.NDArray[np.int64]]:
-    """Generate indices for subsampling from the data.
+def _subsample_rows_balanced(
+    subsample_size: int,
+    n_rows: int,
+    num_estimators: int,
+    rng: np.random.Generator,
+) -> list[npt.NDArray[np.int64]] | None:
+    """Balanced round-robin row subsampling from a shared shuffled pool.
 
-    Args:
-        n: Number of indices to generate.
-        max_index: Maximum index to generate.
-        subsample:
-            Number of indices to subsample. If `int`, subsample that many
-            indices. If float, subsample that fraction of indices.
-        random_state: Random number generator.
-
-    Returns:
-        List of indices to subsample.
+    Rows are globally shuffled once so consecutive pool positions correspond to
+    unrelated original rows. Each estimator draws ``subsample_size`` slots from
+    a shared pool that refills when exhausted. This ensures every row appears
+    approximately the same number of times across all estimators.
     """
-    _, rng = infer_random_state(random_state)
-    if isinstance(subsample, int):
-        if subsample < 1:
-            raise ValueError(f"{subsample=} must be larger than 1 if int")
-        subsample = min(subsample, max_index)
+    if subsample_size >= n_rows:
+        return None
 
-        return [rng.permutation(max_index)[:subsample] for _ in range(n)]
+    shuffled_order = rng.permutation(n_rows)
+    result: list[npt.NDArray[np.int64] | None] = []
+    pool: list[int] = []
 
-    if isinstance(subsample, float):
-        if not (0 < subsample < 1):
-            raise ValueError(f"{subsample=} must be in (0, 1) if float")
-        subsample = int(subsample * max_index) + 1
-        return [rng.permutation(max_index)[:subsample] for _ in range(n)]
+    for _ in range(num_estimators):
+        slots, pool = _draw_balanced_from_pool(pool, subsample_size, n_rows, rng)
+        original_indices = shuffled_order[slots]
+        result.append(np.sort(original_indices))
 
-    raise ValueError(f"{subsample=} must be int or float.")
+    return result
 
 
-def _get_subsample_indices_for_estimators(
+def _get_subsample_indices_for_estimators(  # noqa: C901
     subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
-    max_index: int,
-    static_seed: int | np.random.Generator | None,
-) -> list[None] | list[np.ndarray]:
+    n_samples: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray] | None:
     """Get the indices of the rows to subsample for each estimator.
 
     Args:
         subsample_samples: Method to subsample rows. If int, subsample that many
             samples. If float, subsample that fraction of samples. If a
-            list of lists of indices, subsample the indices for each estimator.
-            If `None`, no subsampling is done.
+            list of arrays of indices, use those indices directly (balanced across
+            estimators). If `None`, no subsampling is done.
         num_estimators: Number of estimators to generate subsample indices for.
-        max_index: Maximum index to generate for. Only used if subsample_samples is an
-            int or float.
-        static_seed: Static seed to use for the random number generator.
+        n_samples: Total number of rows. Only used if subsample_samples is int/float.
+        rng: Random number generator.
 
     Returns:
-        List of list of indices to subsample for each estimator.
+        List of row-index arrays (one per estimator), or ``None`` entries when no
+        subsampling is needed.
     """
-    if isinstance(subsample_samples, (int, float)):
-        subsample_indices = _generate_index_permutations(
-            n=num_estimators,
-            max_index=max_index,
-            subsample=subsample_samples,
-            random_state=static_seed,
+    if isinstance(subsample_samples, int):
+        if subsample_samples < 1:
+            raise ValueError(f"{subsample_samples=} must be >= 1 if int")
+        size = min(subsample_samples, n_samples)
+        return _subsample_rows_balanced(
+            subsample_size=size,
+            n_rows=n_samples,
+            num_estimators=num_estimators,
+            rng=rng,
         )
-    elif isinstance(subsample_samples, list):
+
+    if isinstance(subsample_samples, float):
+        if not (0 < subsample_samples < 1):
+            raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
+        size = int(subsample_samples * n_samples) + 1
+        return _subsample_rows_balanced(
+            subsample_size=size,
+            n_rows=n_samples,
+            num_estimators=num_estimators,
+            rng=rng,
+        )
+
+    if isinstance(subsample_samples, list):
         if len(subsample_samples) > num_estimators:
             warnings.warn(
                 f"Your list of subsample indices has more elements "
@@ -312,15 +339,12 @@ def _get_subsample_indices_for_estimators(
         leftover = num_estimators % len(subsample_samples)
         if leftover > 0:
             subsample_indices += subsample_samples[:leftover]
-        subsample_indices = [np.array(subsample) for subsample in subsample_indices]
-    elif subsample_samples is None:
-        subsample_indices = [None] * num_estimators
-    else:
-        raise ValueError(
-            f"Invalid subsample_samples: {subsample_samples}",
-        )
+        return [np.array(subsample) for subsample in subsample_indices]
 
-    return subsample_indices
+    if subsample_samples is None:
+        return None
+
+    raise ValueError(f"Invalid subsample_samples: {subsample_samples}")
 
 
 def _generate_class_permutations(
@@ -614,11 +638,9 @@ def _subsample_features_constant_and_balanced(
     return subsample_feature_indices
 
 
-def generate_classification_ensemble_configs(  # noqa: PLR0913
+def generate_classification_ensemble_configs(
     *,
     num_estimators: int,
-    subsample_samples: int | float | list[np.ndarray] | None,
-    max_index: int,
     add_fingerprint_feature: bool,
     polynomial_features: Literal["no", "all"] | int,
     feature_shift_decoder: Literal["shuffle", "rotate"] | None,
@@ -633,11 +655,6 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
 
     Args:
         num_estimators: Number of ensemble configurations to generate.
-        subsample_samples: Method to subsample rows. If int, subsample that many
-            samples. If float, subsample that fraction of samples. If a
-            list of lists of indices, subsample the indices for each estimator.
-            If `None`, no subsampling is done.
-        max_index: Maximum index to generate for.
         add_fingerprint_feature: Whether to add fingerprint features.
         polynomial_features: Maximum number of polynomial features to add, if any.
         feature_shift_decoder: How shift features
@@ -651,7 +668,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     Returns:
         List of ensemble configurations.
     """
-    static_seed, rng = infer_random_state(random_state)
+    _, rng = infer_random_state(random_state)
     start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
     featshifts = np.arange(start, start + num_estimators)
     featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore[arg-type]
@@ -661,15 +678,6 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
         class_shift_method=class_shift_method,
         n_classes=n_classes,
         rng=rng,
-    )
-
-    subsample_indices: list[None] | list[np.ndarray] = (
-        _get_subsample_indices_for_estimators(
-            subsample_samples=subsample_samples,
-            num_estimators=num_estimators,
-            max_index=max_index,
-            static_seed=static_seed,
-        )
     )
 
     balance_count = num_estimators // len(preprocessor_configs)
@@ -688,31 +696,26 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
             feature_shift_decoder=feature_shift_decoder,
-            subsample_ix=subsample_ix,
             _model_index=model_index,
             outlier_removal_std=outlier_removal_std,
         )
         for (
             featshift,
             preprocesses_config,
-            subsample_ix,
             class_perm,
             model_index,
         ) in zip(
             featshifts,
             configs_,
-            subsample_indices,
             class_permutations,
             model_indices,
         )
     ]
 
 
-def generate_regression_ensemble_configs(  # noqa: PLR0913
+def generate_regression_ensemble_configs(
     *,
     num_estimators: int,
-    subsample_samples: int | float | list[np.ndarray] | None,
-    max_index: int,
     add_fingerprint_feature: bool,
     polynomial_features: Literal["no", "all"] | int,
     feature_shift_decoder: Literal["shuffle", "rotate"] | None,
@@ -726,11 +729,6 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
 
     Args:
         num_estimators: Number of ensemble configurations to generate.
-        subsample_samples: Method to subsample rows. If int, subsample that many
-            samples. If float, subsample that fraction of samples. If a
-            list of lists of indices, subsample the indices for each estimator.
-            If `None`, no subsampling is done.
-        max_index: Maximum index to generate for.
         add_fingerprint_feature: Whether to add fingerprint features.
         polynomial_features: Maximum number of polynomial features to add, if any.
         feature_shift_decoder: How shift features
@@ -743,19 +741,10 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
     Returns:
         List of ensemble configurations.
     """
-    static_seed, rng = infer_random_state(random_state)
+    _, rng = infer_random_state(random_state)
     start = rng.integers(0, MAXIMUM_FEATURE_SHIFT)
     featshifts = np.arange(start, start + num_estimators)
     featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore[arg-type]
-
-    subsample_indices: list[None] | list[np.ndarray] = (
-        _get_subsample_indices_for_estimators(
-            subsample_samples=subsample_samples,
-            num_estimators=num_estimators,
-            max_index=max_index,
-            static_seed=static_seed,
-        )
-    )
 
     combos = list(product(preprocessor_configs, target_transforms))
     balance_count = num_estimators // len(combos)
@@ -773,17 +762,15 @@ def generate_regression_ensemble_configs(  # noqa: PLR0913
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
             feature_shift_decoder=feature_shift_decoder,
-            subsample_ix=subsample_ix,
             target_transform=target_transform,
             outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
         )
-        for featshift, subsample_ix, (
+        for featshift, (
             preprocess_config,
             target_transform,
         ), model_index in zip(
             featshifts,
-            subsample_indices,
             configs_,
             model_indices,
         )

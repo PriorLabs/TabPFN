@@ -1,68 +1,68 @@
-# 📊 Telemetry
+# Telemetry
 
-This project includes lightweight, anonymous telemetry to help us improve TabPFN.  
-We've designed this with two goals in mind:
-
-1. ✅ Be **fully GDPR-compliant** (no personal data, no sensitive data, no surprises)  
-2. ✅ Be **OSS-friendly and transparent** about what we track and why  
-
-If you'd rather not send telemetry, you can always opt out (see **Opting out**).
+This project includes lightweight, anonymous telemetry to help us improve TabPFN. If you'd rather not send telemetry, you can always opt out (see **Opting out**).
 
 ---
 
-## 🔍 What we collect
+## What we collect
 
-We only gather **very high-level usage signals** — enough to guide development, never enough to identify you or your data.  
+We only gather **very high-level usage signals** — enough to guide development, never enough to identify you or your data.
 
 Here's the full list:
 
 ### Events
-- `ping` – sent when models initialize, used to check liveness  
-- `fit_called` – sent when you call `fit`  
+- `ping` – periodic liveness heartbeat (daily / weekly / monthly cadence)
+- `session` – sent when you initialize a TabPFN estimator (`TabPFNClassifier`, `TabPFNRegressor`)
+- `model_load` – sent when TabPFN attempts to load model weights (reports `success` / `failed`)
+- `dataset` – sent when a dataset is passed to `fit` or `predict` (no dataset content; shape only)
+- `fit_called` – sent when you call `fit`
 - `predict_called` – sent when you call `predict`
-- `session` - sent whenever a user initializes a TabPFN estimator.
+- `extension_entry` – sent when a TabPFN extension entry point (e.g. from `tabpfn-extensions`, `tabpfn-time-series`) is invoked
 
 ### Metadata (all events)
-- `python_version` – version of Python you're running
+- `python_version` – Python version you're running
 - `tabpfn_version` – TabPFN package version
+- `numpy_version` – local NumPy version
+- `pandas_version` – local pandas version
+- `gpu_type` – type of GPU TabPFN is running on
+- `platform_os` – operating system
+- `runtime_kernel` – runtime kernel (e.g. CPython)
+- `runtime_environment` – runtime environment (e.g. notebook / script / CI)
 - `timestamp` – time of the event
-- `numpy_vesion` - local Numpy version
-- `pandas_version` - local Pandas version
-- `gpu_type` - type of GPU TabPFN is running on.
-- `install_date` - `year-month-day` when TabPFN was used for the first time
-- `install_id` - unique, random and anonymous installation ID.
+- `install_date` – `year-month-day` when TabPFN was used for the first time
+- `install_id` – unique, random and anonymous installation ID
 
-### Extra metadata (`fit` / `predict` only)
-- `task` – whether the call was for **classification** or **regression**  
-- `num_rows` – *rounded* number of rows in your dataset  
-- `num_columns` – *rounded* number of columns in your dataset  
-- `duration_ms` – time it took to complete the call  
+### Extra metadata (per-event)
+- `fit_called` / `predict_called`: `task` (classification or regression), `num_rows` (*rounded*), `num_columns` (*rounded*), `duration_ms`
+- `model_load`: `model_name` (HuggingFace repo id), `status`
+- `dataset`: `task`, `role` (train / test), `num_rows` (*rounded*), `num_columns` (*rounded*)
+- `extension_entry`: `extension_name`
 
 ---
 
-## 🛡️ How we protect your privacy
+## How we protect your privacy
 
-- **No inputs, no outputs, no code** ever leave your machine.  
-- **No personal data** is collected.  
-- Dataset shapes are **rounded into ranges** (e.g. `(953, 17)` → `(1000, 20)`) so exact dimensionalities can't be linked back to you.  
-- The data is strictly anonymous — it cannot be tied to individuals, projects, or datasets.  
+- **No inputs, no outputs, no code** ever leave your machine.
+- **No personal data** is collected.
+- Dataset shapes are **rounded into ranges** (e.g. `(953, 17)` → `(1000, 20)`) so exact dimensionalities can't be linked back to you.
+- The data is strictly anonymous — it cannot be tied to individuals, projects, or datasets.
 
-This approach lets us understand dataset *patterns* (e.g. "most users run with ~1k features") while ensuring no one's data is exposed.  
-
----
-
-## 🤔 Why collect telemetry?
-
-Open-source projects don't get much feedback unless people file issues. Telemetry helps us:  
-- See which parts of TabPFN are most used (fit vs predict, classification vs regression)  
-- Detect performance bottlenecks and stability issues  
-- Prioritize improvements that benefit the most users  
-
-This information goes directly into **making TabPFN better** for the community.  
+This approach lets us understand dataset *patterns* (e.g. "most users run with ~1k features") while ensuring no one's data is exposed.
 
 ---
 
-## 🚫 Opting out
+## Why collect telemetry?
+
+Open-source projects don't get much feedback unless people file issues. Telemetry helps us:
+- See which parts of TabPFN are most used (fit vs predict, classification vs regression)
+- Detect performance bottlenecks and stability issues
+- Prioritize improvements that benefit the most users
+
+This information goes directly into **making TabPFN better** for the community.
+
+---
+
+## Opting out
 
 Don't want to send telemetry? No problem — just set the environment variable:
 
