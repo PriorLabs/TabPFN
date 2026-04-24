@@ -170,34 +170,17 @@ class TorchTruncatedSVD:
         components = fitted_cache["components"]
         orig_dtype = x.dtype
         compute_dtype = components.dtype
-
         chunk_size = self._get_transform_chunk_size(x, components)
-        n_samples = x.shape[0]
 
-        if n_samples <= chunk_size:
-            result = self._transform_chunk(x, components, compute_dtype)
-        else:
-            chunks = []
-            for start in range(0, n_samples, chunk_size):
-                chunk = x[start : start + chunk_size]
-                chunks.append(self._transform_chunk(chunk, components, compute_dtype))
-            result = torch.cat(chunks, dim=0)
+        def _per_row(row: torch.Tensor) -> torch.Tensor:
+            x_c = row.to(compute_dtype)
+            nan_mask = torch.isnan(x_c)
+            x_filled = torch.where(nan_mask, torch.zeros_like(x_c), x_c)
+            out = x_filled @ components.T
+            return torch.where(nan_mask.any(), float("nan"), out)
 
+        result = torch.vmap(_per_row, chunk_size=chunk_size)(x)
         return result.to(orig_dtype) if orig_dtype != compute_dtype else result
-
-    def _transform_chunk(
-        self,
-        x: torch.Tensor,
-        components: torch.Tensor,
-        compute_dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """Transform a single chunk, preserving NaN rows."""
-        x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
-        nan_mask = torch.isnan(x_compute)
-        x_filled = torch.where(nan_mask, 0.0, x_compute)
-        result = x_filled @ components.T
-        any_nan_per_row = nan_mask.any(dim=-1, keepdim=True)
-        return torch.where(any_nan_per_row, float("nan"), result)
 
     def _get_transform_chunk_size(
         self, x: torch.Tensor, components: torch.Tensor
@@ -321,56 +304,26 @@ class TorchSafeStandardScaler:
         std = fitted_cache["std"]
         orig_dtype = x.dtype
         compute_dtype = std.dtype
-
         chunk_size = self._get_transform_chunk_size(x)
-        n_samples = x.shape[0]
-
-        if n_samples <= chunk_size:
-            result = self._transform_chunk(x, fitted_cache, compute_dtype)
-        else:
-            chunks = []
-            for start in range(0, n_samples, chunk_size):
-                chunk = x[start : start + chunk_size]
-                chunks.append(self._transform_chunk(chunk, fitted_cache, compute_dtype))
-            result = torch.cat(chunks, dim=0)
-
-        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
-
-    def _transform_chunk(
-        self,
-        x: torch.Tensor,
-        fitted_cache: dict[str, torch.Tensor],
-        compute_dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """Transform a single chunk."""
-        std = fitted_cache["std"]
-        x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
-
-        # Replace inf with nan before scaling
-        x_safe = torch.where(
-            torch.isinf(x_compute),
-            torch.tensor(float("nan"), device=x.device, dtype=compute_dtype),
-            x_compute,
+        col_means = (
+            fitted_cache["mean"].to(device=x.device, dtype=compute_dtype)
+            if "mean" in fitted_cache
+            else None
         )
 
-        # Impute NaN with column means (matching CPU make_scaler_safe which
-        # wraps the scaler with SimpleImputer(strategy="mean") pre/post).
-        if "mean" in fitted_cache:
-            nan_mask = torch.isnan(x_safe)
-            if nan_mask.any():
-                col_means = fitted_cache["mean"].to(
-                    device=x_safe.device, dtype=x_safe.dtype
-                )
-                x_safe = torch.where(nan_mask, col_means.unsqueeze(0), x_safe)
+        def _per_row(row: torch.Tensor) -> torch.Tensor:
+            x_c = row.to(compute_dtype)
+            x_safe = torch.where(torch.isinf(x_c), float("nan"), x_c)
+            # Impute NaN with column means (matching CPU make_scaler_safe).
+            if col_means is not None:
+                nan_mask = torch.isnan(x_safe)
+                x_safe = torch.where(nan_mask, col_means, x_safe)
+            x_scaled = x_safe / (std + torch.finfo(compute_dtype).eps)
+            x_scaled = torch.clip(x_scaled, min=-100, max=100)
+            return torch.where(torch.isfinite(x_scaled), x_scaled, 0)
 
-        x_scaled = x_safe / (std + torch.finfo(std.dtype).eps)
-
-        # Clip very large values
-        x_scaled = torch.clip(x_scaled, min=-100, max=100)
-
-        # Replace any inf that might have been created with nan, then impute
-        # remaining non-finite values (matching CPU post-imputation safety net)
-        return torch.where(torch.isfinite(x_scaled), x_scaled, 0.0)
+        result = torch.vmap(_per_row, chunk_size=chunk_size)(x)
+        return result.to(orig_dtype) if orig_dtype != compute_dtype else result
 
     def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.
