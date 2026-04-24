@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 import typing
 import warnings
@@ -580,6 +581,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             stacklevel=2,
         )
         self.znorm_space_bardist_ = value
+
+    def get_inference_config(self) -> InferenceConfig:
+        """Load the model if needed and return the active inference config.
+
+        Loads the model checkpoint without requiring fit data so the config can be
+        inspected before calling `fit()`. Any ``inference_config`` override
+        passed to the constructor is considered.
+
+        Returns:
+            A deep copy of the active inference config.
+        """
+        if not hasattr(self, "inference_config_"):
+            self._initialize_model_variables()
+        return copy.deepcopy(self.inference_config_)
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
