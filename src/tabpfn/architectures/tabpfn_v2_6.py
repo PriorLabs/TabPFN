@@ -313,14 +313,29 @@ def _batched_scaled_dot_product_attention(
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
+    # MPS's scaled_dot_product_attention silently returns wrong values when given
+    # non-contiguous inputs (the permute above and, for multi-query attention, the
+    # expand below both produce non-contiguous tensors). PyTorch bug:
+    # https://github.com/pytorch/pytorch/issues/181133
+    # We apply .contiguous() to the per-chunk slices rather than the full tensors,
+    # to avoid doubling peak memory.
+    on_mps = q_BHSD.device.type == "mps"
+
     with sdpa_kernel(backends=backends):
         outputs = []
         for i in range(num_iterations):
+            q_chunk = q_BHSD[i * sub_batch : (i + 1) * sub_batch]
+            k_chunk = keys[i * sub_batch : (i + 1) * sub_batch]
+            v_chunk = values[i * sub_batch : (i + 1) * sub_batch]
+            if on_mps:
+                q_chunk = q_chunk.contiguous()
+                k_chunk = k_chunk.contiguous()
+                v_chunk = v_chunk.contiguous()
             outputs.append(
                 torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
-                    keys[i * sub_batch : (i + 1) * sub_batch],
-                    values[i * sub_batch : (i + 1) * sub_batch],
+                    q_chunk,
+                    k_chunk,
+                    v_chunk,
                     attn_mask=None,
                     **enable_gqa,
                 )

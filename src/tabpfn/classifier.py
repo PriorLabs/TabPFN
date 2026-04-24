@@ -614,11 +614,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
-            max_index=len(X),
             preprocessor_configs=preprocessor_configs,
             class_shift_method=None,
             n_classes=self.n_classes_,
@@ -681,11 +679,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
-            max_index=len(X),
             preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
             n_classes=self.n_classes_,
@@ -782,6 +778,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
             constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
         )
 
         self.executor_ = create_inference_engine(
@@ -908,6 +905,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
             constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(

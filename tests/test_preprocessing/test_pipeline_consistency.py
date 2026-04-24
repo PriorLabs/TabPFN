@@ -109,7 +109,6 @@ def _create_ensemble_config(
         polynomial_features=polynomial_features,
         feature_shift_count=feature_shift_count,
         feature_shift_decoder=feature_shift_decoder,
-        subsample_ix=None,
         outlier_removal_std=None,
         _model_index=0,
     )
