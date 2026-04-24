@@ -1676,6 +1676,7 @@ class TabPFNV3(Architecture):
         task_type: str | None = None,
         kv_cache: TabPFNV3Cache | None = None,
         return_kv_cache: bool = False,
+        x_is_test_only: bool = False,
         # TODO: test_targets_MB needed because model_loading has a condition
         # on its presence. Clean this up.
         test_targets_MB: torch.Tensor | None = None,
@@ -1686,8 +1687,12 @@ class TabPFNV3(Architecture):
     ):
         """Main forward pass for TabPFN v3.
 
-        This function always assumes the full dataset to be passed, even
-        in the case of a KV cache.
+        When a KV cache is provided, ``x_is_test_only=True`` lets the
+        caller pass only the test rows (shape ``(num_test, 1, D)``) instead
+        of padding with train-row placeholders. ``y`` still carries the
+        train labels — the decoder reads ``y[:num_train]`` for the
+        many-class head. Outside the cache path, ``x`` is always the full
+        dataset and this flag is ignored.
         """
         # Suppress RMSNorm dtype mismatch warning when running in mixed
         # precision (fp16 input, fp32 weights). Harmless until we move
@@ -1719,10 +1724,16 @@ class TabPFNV3(Architecture):
                 kv_cache=kv_cache,
                 only_return_standard_out=only_return_standard_out,
                 save_peak_memory_factor=performance_options.save_peak_memory_factor,
+                x_is_test_only=x_is_test_only,
             )
             if return_kv_cache:
                 return output, kv_cache
             return output
+        if x_is_test_only:
+            raise ValueError(
+                "x_is_test_only=True requires kv_cache to be provided; "
+                "the non-cache forward needs the full train+test tensor."
+            )
 
         if performance_options.use_chunkwise_inference:
             output, cache = _forward_memory_efficient_chunkwise_inference(
@@ -1888,17 +1899,21 @@ class TabPFNV3(Architecture):
         kv_cache: TabPFNV3Cache,
         only_return_standard_out: bool = True,
         save_peak_memory_factor: int | None = None,
+        x_is_test_only: bool = False,
     ) -> torch.Tensor | dict[str, torch.Tensor]:
         """Fast inference path using a pre-built KV cache.
 
         Only test rows are processed through stages 0-2 (using cached scaler
         stats and inducing hidden states) and through the ICL transformer
-        (using cached K/V). Even though train rows are not touched at all,
-        this function still assumes the full dataset to be passed.
+        (using cached K/V). When ``x_is_test_only`` is True, ``x`` already
+        contains just the test rows and no slicing is needed; otherwise
+        ``x`` is the full train+test tensor and we slice off the train
+        half (which is never read). ``y`` remains full-length either way
+        because the many-class decoder reads ``y[:num_train]``.
         """
         x_RiBC = x
         num_train = y.shape[0]
-        x_test_RBC = x_RiBC[num_train:]
+        x_test_RBC = x_RiBC if x_is_test_only else x_RiBC[num_train:]
 
         # ---- Stages 0-2 on test rows only ----
         x_test_BRiCE = self._embed_feature_groups(
