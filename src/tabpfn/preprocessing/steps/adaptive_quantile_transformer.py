@@ -60,10 +60,22 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
     greater than the number of available samples in the input data (X).
     This situation can arises because we first initialize the transformer
     based on total samples and then subsample.
+
+    There are two extrapolation modes:
+    1. extrapolate_ratio NOT None and extrapolate_upsample is None:
+       In this mode, during transform, inputs outside the training data range
+       are linearly extrapolated beyond [0, 1], clipped at specified ratio.
+       This makes sense for uniform quantile transform.
+    2. extrapolate_ratio NOT None and extrapolate_upsample is NOT None:
+        In this mode, during fit, extra samples are added beyond the min and max
+        of the training data to enable extrapolation during transform.
+        This makes sense for normal quantile transform.
     """
 
     def __init__(
         self,
+        extrapolate_ratio: float | None = None,
+        extrapolate_upsample: float | None = None,
         *,
         n_quantiles: int = 1_000,
         subsample: int = _DEFAULT_SUBSAMPLE,
@@ -73,6 +85,8 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         self._user_n_quantiles = n_quantiles
         # Initialize parent with this, but it will be adapted in fit
         super().__init__(n_quantiles=n_quantiles, subsample=subsample, **kwargs)
+        self.extrapolate_ratio = extrapolate_ratio
+        self.extrapolate_upsample = extrapolate_upsample
 
     @override
     def fit(
@@ -80,6 +94,28 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         X: np.ndarray,
         y: np.ndarray | None = None,
     ) -> AdaptiveQuantileTransformer:
+        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+            self.x_min = np.min(X, axis=0, keepdims=True)
+            self.x_max = np.max(X, axis=0, keepdims=True)
+
+            if self.extrapolate_upsample is not None:
+                x_min = self.x_min
+                x_max = self.x_max
+                x_range = x_max - x_min
+                add_samples = int(X.shape[0] * self.extrapolate_upsample) + 1
+                step = (
+                    np.linspace(1 / add_samples, 1, num=add_samples).reshape(-1, 1)
+                    * x_range
+                )
+                X = np.concatenate(
+                    [
+                        X,
+                        x_min - self.extrapolate_ratio * step,
+                        x_max + self.extrapolate_ratio * step,
+                    ],
+                    axis=0,
+                )
+
         n_samples = X.shape[0]
 
         self.n_quantiles = compute_effective_n_quantiles(
@@ -97,6 +133,31 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
             )
 
         return super().fit(X, y)
+
+    @override
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        out = super().transform(X)
+
+        if (
+            self.extrapolate_ratio is not None
+            and X.shape[0] > 0
+            and self.extrapolate_upsample is None
+        ):
+            min_idcs = self.x_min > X
+            max_idcs = self.x_max < X
+            x_range = self.x_max - self.x_min
+            norm_min = (X - self.x_min) / x_range
+            norm_max = ((X - self.x_max) / x_range) + 1
+            if np.any(min_idcs):
+                out[min_idcs] = np.clip(
+                    norm_min[min_idcs], -self.extrapolate_ratio, 0
+                )
+            if np.any(max_idcs):
+                out[max_idcs] = np.clip(
+                    norm_max[max_idcs], 0, 1 + self.extrapolate_ratio
+                )
+
+        return out
 
 
 __all__ = [

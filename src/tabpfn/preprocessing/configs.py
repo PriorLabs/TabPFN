@@ -57,6 +57,8 @@ class PreprocessorConfig:
         "safepower_box",
         "quantile_uni_coarse",  # quantile transformations with few quantiles up to many
         "quantile_norm_coarse",
+        "quantile_uni_extrapolate",
+        "quantile_uni_extrapolate_default",
         "quantile_uni",
         "quantile_norm",
         "quantile_uni_fine",
