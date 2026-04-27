@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import copy
 import functools
 import inspect
 import json
@@ -943,7 +944,9 @@ def load_model(
         # checkpoint.
         model.load_state_dict(full_state)
         model.eval()
-        inference_config = InferenceConfig(**(checkpoint["inference_config"]))
+        inference_config = InferenceConfig(
+            **_rename_old_inference_config_keys(checkpoint["inference_config"])
+        )
         empty_criterion = None
         return model, empty_criterion, model_config, inference_config
 
@@ -979,7 +982,7 @@ def _get_inference_config_from_checkpoint(
     #   v2.5: "architecture_name" present, but "inference_config" not present
     #  >v2.5: "inference_config" present, so don't need to guess a default config
     if inference_config := checkpoint.get("inference_config"):
-        return InferenceConfig(**inference_config)
+        return InferenceConfig(**_rename_old_inference_config_keys(inference_config))
 
     if "architecture_name" not in checkpoint:
         model_version = ModelVersion.V2
@@ -992,6 +995,16 @@ def _get_inference_config_from_checkpoint(
         task_type = "multiclass"
 
     return InferenceConfig.get_default(task_type, model_version)
+
+
+def _rename_old_inference_config_keys(inference_config: dict) -> dict:
+    """Rename keys in the inference config to the new names."""
+    inference_config = copy.deepcopy(inference_config)
+    if "CONSTANT_FEATURE_COUNT" in inference_config:
+        inference_config["FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT"] = (
+            inference_config.pop("CONSTANT_FEATURE_COUNT")
+        )
+    return inference_config
 
 
 def save_tabpfn_model(
