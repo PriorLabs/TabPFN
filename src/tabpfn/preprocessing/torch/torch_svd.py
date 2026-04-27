@@ -304,7 +304,9 @@ class TorchSafeStandardScaler:
         std = fitted_cache["std"]
         orig_dtype = x.dtype
         compute_dtype = std.dtype
-        chunk_size = self._get_transform_chunk_size(x)
+        chunk_size = self._get_transform_chunk_size(
+            x, compute_element_size=max(x.element_size(), std.element_size())
+        )
         col_means = (
             fitted_cache["mean"].to(device=x.device, dtype=compute_dtype)
             if "mean" in fitted_cache
@@ -325,15 +327,16 @@ class TorchSafeStandardScaler:
         result = torch.vmap(_per_row, chunk_size=chunk_size)(x)
         return result.to(orig_dtype) if orig_dtype != compute_dtype else result
 
-    def _get_transform_chunk_size(self, x: torch.Tensor) -> int:
+    def _get_transform_chunk_size(
+        self, x: torch.Tensor, compute_element_size: int
+    ) -> int:
         """Compute a row-chunk size that keeps intermediate memory bounded.
 
         Transform creates ~5x N*F intermediates (dtype cast, isinf check,
         nan_mask, imputed, scaled, clipped, finite-check).  Target ~2 GB.
         """
         n_features = x.shape[-1] if x.ndim > 1 else 1
-        element_size = x.element_size()
-        bytes_per_row = n_features * element_size * 5
+        bytes_per_row = n_features * compute_element_size * 5
         target_bytes = 2 * 1024**3  # 2 GB
         return max(1_000, target_bytes // max(bytes_per_row, 1))
 

@@ -317,6 +317,28 @@ class TestChunkedSVDEquivalence:
         torch.testing.assert_close(proj_lowrank, proj_exact, rtol=0.05, atol=1.0)
 
 
+class TestChunkedTorchSafeStandardScalerEquivalence:
+    """Tests that chunked transform paths produce identical results to unchunked."""
+
+    def test__transform__row_chunks_match_unchunked(self, monkeypatch):
+        """Row-chunked scaler transform must give identical results to unchunked."""
+        torch.manual_seed(42)
+        x = torch.randn(100, 15, dtype=torch.float32)
+        x[5] = float("nan")
+        x[10, 3] = float("inf")
+
+        scaler = TorchSafeStandardScaler()
+        cache = scaler.fit(x)
+        result_full = scaler.transform(x, cache)
+
+        monkeypatch.setattr(
+            TorchSafeStandardScaler, "_get_transform_chunk_size", lambda _, _x, _e: 9
+        )
+        result_chunked = scaler.transform(x, cache)
+
+        assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
+
+
 class TestAddSVDFeaturesStep:
     """Tests for AddSVDFeaturesStep pipeline step."""
 
