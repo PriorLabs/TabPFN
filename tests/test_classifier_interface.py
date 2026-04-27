@@ -65,6 +65,16 @@ model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_
 fit_modes = ["low_memory", "fit_preprocessors"]
 
 
+def test__show_progress_bar__is_configurable() -> None:
+    model = TabPFNClassifier(show_progress_bar=True)
+    assert model.show_progress_bar is True
+    assert model.get_params()["show_progress_bar"] is True
+
+    default_model = TabPFNClassifier()
+    assert default_model.show_progress_bar is False
+    assert default_model.get_params()["show_progress_bar"] is False
+
+
 @pytest.mark.parametrize(
     ("device", "n_estimators", "fit_mode", "inference_precision"),
     mark_mps_configs_as_slow(

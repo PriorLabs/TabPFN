@@ -37,6 +37,7 @@ from sklearn.base import (
     check_is_fitted,
 )
 from tabpfn_common_utils.telemetry import track_model_call
+from tqdm.auto import tqdm
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -230,6 +231,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = "fit_preprocessors",
+        show_progress_bar: bool = False,
         memory_saving_mode: MemorySavingMode = "auto",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
@@ -436,6 +438,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 If true, preprocessing attempts to be end-to-end differentiable.
                 Less relevant for standard regression fine-tuning compared to
                 prompt-tuning.
+
+            show_progress_bar:
+                Whether to show a progress bar during inference. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -454,6 +459,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = fit_mode
+        self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
@@ -967,8 +973,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
-            for borders_t, output in self._iter_forward_executor(
-                X, use_inference_mode=True
+            for borders_t, output in tqdm(
+                self._iter_forward_executor(X, use_inference_mode=True),
+                total=self.n_estimators,
+                desc="TabPFN inference",
+                unit="estimator",
+                disable=not getattr(self, "show_progress_bar", False),
             ):
                 transformed = translate_probs_across_borders(
                     output,
@@ -1164,8 +1174,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         outputs: list[torch.Tensor] = []
         borders: list[np.ndarray] = []
 
-        for border, output in self._iter_forward_executor(
-            X, use_inference_mode=use_inference_mode
+        for border, output in tqdm(
+            self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
+            total=self.n_estimators,
+            desc="TabPFN inference",
+            unit="estimator",
+            disable=not getattr(self, "show_progress_bar", False),
         ):
             borders.append(border)
             outputs.append(output)
