@@ -382,6 +382,50 @@ class TestTorchQuantileTransformerStepInPipeline:
         assert result.x[non_nan].max() <= 1.0
 
 
+class TestChunkedQuantileTransformerEquivalence:
+    """Tests that chunked computation produces identical results to unchunked."""
+
+    def test__fit__column_chunks_match_unchunked(self, monkeypatch):
+        """Column-chunked nanquantile fit must match unchunked for 2D and 3D input."""
+        torch.manual_seed(42)
+
+        for shape in [(80, 17), (60, 3, 7)]:
+            x = torch.randn(*shape)
+
+            # Unchunked reference: chunk_cols larger than any real n_features
+            monkeypatch.setattr(
+                TorchQuantileTransformer, "_get_fit_chunk_cols", lambda _, _x: 10**9
+            )
+            cache_unchunked = TorchQuantileTransformer(n_quantiles=30).fit(x)
+
+            # Force chunk_cols=4 so the chunked else-branch is exercised
+            monkeypatch.setattr(
+                TorchQuantileTransformer, "_get_fit_chunk_cols", lambda _, _x: 4
+            )
+            cache_chunked = TorchQuantileTransformer(n_quantiles=30).fit(x)
+
+            assert torch.allclose(
+                cache_chunked["quantiles"], cache_unchunked["quantiles"], atol=1e-6
+            )
+
+    def test__transform__row_chunks_match_unchunked(self, monkeypatch):
+        """Row-chunked transform must give identical results to the unchunked path."""
+        torch.manual_seed(42)
+        x = torch.randn(100, 12, dtype=torch.float32)
+        x[3, 2] = float("nan")
+        qt = TorchQuantileTransformer(n_quantiles=50)
+        cache = qt.fit(x)
+
+        result_full = qt.transform(x, cache)
+
+        monkeypatch.setattr(
+            TorchQuantileTransformer, "_get_transform_chunk_size", lambda _, _x: 7
+        )
+        result_chunked = qt.transform(x, cache)
+
+        assert torch.allclose(result_full, result_chunked, atol=1e-6, equal_nan=True)
+
+
 class TestTorchQuantileTransformerCategoricalBoundary:
     """Boundary-value equivalence for discrete/categorical data.
 
