@@ -332,7 +332,9 @@ class TestChunkedTorchSafeStandardScalerEquivalence:
         result_full = scaler.transform(x, cache)
 
         monkeypatch.setattr(
-            TorchSafeStandardScaler, "_get_transform_chunk_size", lambda _, _x, _e: 9
+            TorchSafeStandardScaler,
+            "_get_transform_chunk_size",
+            lambda _, _x, compute_element_size: 9,  # noqa: ARG005
         )
         result_chunked = scaler.transform(x, cache)
 
