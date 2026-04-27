@@ -146,9 +146,10 @@ class InferenceConfig:
         - "balanced": Round-robin sampling from a shared shuffled pool so each feature
           appears approximately equally across estimators.
         - "constant_and_balanced": Always include the first N features (see
-          CONSTANT_FEATURE_COUNT), then use balanced subsampling for the rest.
+          FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
+          the rest.
     """
-    CONSTANT_FEATURE_COUNT: int = 50
+    FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
@@ -277,7 +278,7 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
         FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
+        FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
@@ -302,7 +303,7 @@ def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> Inferenc
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
         FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
+        FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,

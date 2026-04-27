@@ -841,7 +841,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
-            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
         )
 
