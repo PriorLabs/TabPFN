@@ -62,7 +62,7 @@ class TorchQuantileTransformer:
             0, 1, n_quantiles_effective, device=x.device, dtype=compute_dtype
         )
 
-        x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
+        x_compute = x.to(compute_dtype)
         quantiles = self._nanquantile_chunked(x_compute, references)
 
         # Ensure monotonicity (handle floating point issues)
@@ -97,9 +97,8 @@ class TorchQuantileTransformer:
         else:
             chunks = []
             for col_start in range(0, n_features, chunk_cols):
-                col_end = min(col_start + chunk_cols, n_features)
                 q_chunk = torch.nanquantile(
-                    x_flat[:, col_start:col_end], references, dim=0
+                    x_flat[:, col_start : col_start + chunk_cols], references, dim=0
                 )
                 chunks.append(q_chunk)
             quantiles = torch.cat(chunks, dim=-1)
@@ -153,7 +152,7 @@ class TorchQuantileTransformer:
         # Compute in the cache dtype, then cast back.
         orig_dtype = x.dtype
         compute_dtype = quantiles.dtype
-        x_compute = x.to(compute_dtype) if x.dtype != compute_dtype else x
+        x_compute = x.to(compute_dtype)
 
         chunk_size = self._get_transform_chunk_size(x_compute)
         n_samples = x_compute.shape[0]
