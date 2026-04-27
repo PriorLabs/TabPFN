@@ -12,6 +12,8 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
+    _subsample_features_importance_based,
+    compute_feature_importance_order,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
 
@@ -503,3 +505,223 @@ def test__end_to_end__balanced_feature_subsampling():
         f"Under-represented feature: min count {counts.min()}, "
         f"expected ~{expected_mean:.1f}"
     )
+
+
+# --- Feature importance subsampling tests ---
+
+
+def test__subsample_features_importance_based__top_k_always_present():
+    """Top-K features must appear in every estimator's selection."""
+    rng = np.random.default_rng(0)
+    n_features = 20
+    importance_order = rng.permutation(n_features)
+    top_k = 5
+    subsample_sizes = [10, 10, 10]
+
+    result = _subsample_features_importance_based(
+        subsample_sizes=subsample_sizes,
+        n_total_features=n_features,
+        importance_feature_order=importance_order,
+        top_k_count=top_k,
+        rng=rng,
+    )
+
+    top5 = set(importance_order[:top_k])
+    for indices in result:
+        assert indices is not None
+        assert top5.issubset(set(indices))
+        assert len(indices) == 10
+        assert list(indices) == sorted(indices), "Indices must be sorted"
+
+
+def test__subsample_features_importance_based__no_subsampling_when_budget_ge_total():
+    """Returns None when budget covers all features."""
+    rng = np.random.default_rng(0)
+    n_features = 10
+    importance_order = np.arange(n_features)
+    result = _subsample_features_importance_based(
+        subsample_sizes=[10, 10],
+        n_total_features=n_features,
+        importance_feature_order=importance_order,
+        top_k_count=5,
+        rng=rng,
+    )
+    assert all(r is None for r in result)
+
+
+def test__subsample_features_importance_based__budget_less_than_top_k():
+    """When budget < top_k, only the most important features are selected."""
+    rng = np.random.default_rng(0)
+    n_features = 20
+    importance_order = np.arange(n_features)  # feature 0 is most important
+    result = _subsample_features_importance_based(
+        subsample_sizes=[3],
+        n_total_features=n_features,
+        importance_feature_order=importance_order,
+        top_k_count=10,
+        rng=rng,
+    )
+    assert result[0] is not None
+    assert len(result[0]) == 3
+    assert set(result[0]) == {0, 1, 2}
+
+
+def test__get_subsample_feature_indices__feature_importance_method():
+    """FEATURE_IMPORTANCE method routes correctly and includes top-K."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
+
+    rng = np.random.default_rng(42)
+    n_features = 50
+    top_k = 5
+    importance_order = rng.permutation(n_features)
+
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline, pipeline],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=n_features),
+        max_features_per_estimator=[20, 20, 20],
+        rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.FEATURE_IMPORTANCE,
+        importance_feature_order=importance_order,
+        importance_top_k_count=top_k,
+    )
+
+    top_k_set = set(importance_order[:top_k])
+    for indices in result:
+        assert indices is not None
+        assert len(indices) == 20
+        assert top_k_set.issubset(set(indices))
+        assert list(indices) == sorted(indices)
+
+
+def test__get_subsample_feature_indices__feature_importance_missing_order_raises():
+    """FEATURE_IMPORTANCE without importance_feature_order raises ValueError."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
+
+    with pytest.raises(ValueError, match="importance_feature_order"):
+        _get_subsample_feature_indices(
+            pipelines=[pipeline],
+            n_samples=100,
+            feature_schema=_get_schema(n_features=50),
+            max_features_per_estimator=[20],
+            rng=np.random.default_rng(0),
+            feature_subsampling_method=FeatureSubsamplingMethod.FEATURE_IMPORTANCE,
+        )
+
+
+def test__compute_feature_importance_order__classification():
+    """compute_feature_importance_order returns a valid feature ranking."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 100, 10
+    X = rng.standard_normal((n_samples, n_features))
+    # Make feature 0 highly predictive
+    y = (X[:, 0] > 0).astype(int)
+
+    order = compute_feature_importance_order(
+        X=X, y=y, task_type="classifier", n_folds=2, rng=rng
+    )
+
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features)), "All feature indices must appear"
+    # Feature 0 should rank first (most important)
+    assert order[0] == 0
+
+
+def test__compute_feature_importance_order__regression():
+    """compute_feature_importance_order works for regression tasks."""
+    rng = np.random.default_rng(1)
+    n_samples, n_features = 100, 8
+    X = rng.standard_normal((n_samples, n_features))
+    y = X[:, 2] * 3.0 + rng.standard_normal(n_samples) * 0.1
+
+    order = compute_feature_importance_order(
+        X=X, y=y, task_type="regressor", n_folds=2, rng=rng
+    )
+
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features))
+    assert order[0] == 2
+
+
+def test__compute_feature_importance_order__subsamples_large_datasets():
+    """max_samples caps the number of rows used for fitting."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 200, 5
+    X = rng.standard_normal((n_samples, n_features))
+    y = rng.integers(0, 2, n_samples)
+
+    order = compute_feature_importance_order(
+        X=X, y=y, task_type="classifier", n_folds=1, max_samples=50, rng=rng
+    )
+    assert order.shape == (n_features,)
+    assert set(order) == set(range(n_features))
+
+
+def test__end_to_end__feature_importance_subsampling():
+    """End-to-end: TabPFNEnsemblePreprocessor with feature_importance subsampling."""
+    rng = np.random.default_rng(7)
+    n_train, n_features = 60, 30
+    n_estimators = 4
+    max_features = 15
+    top_k = 5
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=feature_schema,
+        random_state=0,
+        n_preprocessing_jobs=1,
+        feature_subsampling_method=FeatureSubsamplingMethod.FEATURE_IMPORTANCE,
+        importance_top_k_count=top_k,
+        importance_n_folds=2,
+        X_train=X_train,
+        y_train=y_train,
+        task_type="classifier",
+    )
+
+    members = preprocessor.fit_transform_ensemble_members(X_train, y_train)
+    assert len(members) == n_estimators
+
+    # All members must share the same top-K features (importance is computed once).
+    top_k_indices = [
+        m.feature_indices for m in members if m.feature_indices is not None
+    ]
+    assert len(top_k_indices) == n_estimators
+    common = set(top_k_indices[0])
+    for idx in top_k_indices[1:]:
+        common &= set(idx)
+    assert len(common) >= top_k, (
+        f"Expected at least {top_k} features shared across all estimators, "
+        f"got {len(common)}"
+    )
+    for member in members:
+        assert member.feature_indices is not None
+        assert len(member.feature_indices) <= max_features

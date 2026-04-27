@@ -19,6 +19,7 @@ class FeatureSubsamplingMethod(str, Enum):
     BALANCED = "balanced"
     RANDOM = "random"
     CONSTANT_AND_BALANCED = "constant_and_balanced"
+    FEATURE_IMPORTANCE = "feature_importance"
 
 
 @dataclass(frozen=True, eq=True)

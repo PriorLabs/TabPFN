@@ -138,7 +138,7 @@ class InferenceConfig:
     flag is set."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
-        "balanced", "random", "constant_and_balanced"
+        "balanced", "random", "constant_and_balanced", "feature_importance"
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -148,11 +148,32 @@ class InferenceConfig:
         - "constant_and_balanced": Always include the first N features (see
           FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
           the rest.
+        - "feature_importance": Fit an ExtraTrees model to rank features by importance,
+          always include the top-K most important features (see
+          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), and randomly fill the remaining
+          budget from the rest.
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
+
+    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int = 50
+    """Number of top important features always included per estimator when
+    FEATURE_SUBSAMPLING_METHOD is 'feature_importance'. The remaining budget up to
+    max_features_per_estimator is filled randomly from the remaining features."""
+
+    FEATURE_SUBSAMPLING_IMPORTANCE_MAX_SAMPLES: int = 50_000
+    """Maximum number of training samples used to fit the ExtraTrees model for feature
+    importance computation. When n_samples exceeds this value, a random subsample is
+    drawn before fitting. Only used when FEATURE_SUBSAMPLING_METHOD is
+    'feature_importance'."""
+
+    FEATURE_SUBSAMPLING_IMPORTANCE_N_FOLDS: int = 3
+    """Number of cross-validation folds used when computing ExtraTrees feature
+    importance. Averaging across folds gives more robust importance estimates. Set to 1
+    to use a single fit on all data. Only used when FEATURE_SUBSAMPLING_METHOD is
+    'feature_importance'."""
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
