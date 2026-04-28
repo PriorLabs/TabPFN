@@ -1,7 +1,8 @@
 name: Nightly notebook install check
 
 # Reproduces each example notebook's pip-install sequence in a fresh venv
-# and asserts `tabpfn` resolves to PyPI's latest.
+# across the Python versions we expect users to install on, and asserts
+# `tabpfn` resolves to PyPI's latest.
 #
 # Runs daily on a cron and on manual dispatch. Failures open or comment
 # on a tracking issue rather than emailing — scheduled-run failures
@@ -18,9 +19,13 @@ permissions:
 
 jobs:
   check:
-    name: Verify notebooks resolve latest tabpfn
+    name: Verify notebooks resolve latest tabpfn (Py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -28,7 +33,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
@@ -50,8 +55,14 @@ jobs:
       - name: Open or update tracking issue on failure
         if: failure()
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
         with:
           script: |
+            // Multiple matrix cells may file/comment concurrently. The
+            // worst case is a couple of duplicate issues filed on the
+            // same nightly when both happen to win the race against an
+            // empty issue list — acceptable, the maintainer closes one.
             const title = "Nightly: notebook install check failed";
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
@@ -63,7 +74,9 @@ jobs:
               `${context.serverUrl}/${context.repo.owner}/` +
               `${context.repo.repo}/actions/runs/${context.runId}`;
             const body =
-              `Run: ${runUrl}\n\nSee logs for the failing notebook and details.`;
+              `Run: ${runUrl}\n` +
+              `Python: ${process.env.PYTHON_VERSION}\n\n` +
+              `See logs for the failing notebook and details.`;
             const existing = issues.find(i => i.title === title);
             if (existing) {
               await github.rest.issues.createComment({
