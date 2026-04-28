@@ -29,8 +29,6 @@ Here's the full list:
 - `runtime_kernel` – runtime kernel (e.g. CPython)
 - `runtime_environment` – runtime environment (e.g. notebook / script / CI)
 - `timestamp` – time of the event
-- `install_date` – `year-month-day` when TabPFN was used for the first time
-- `install_id` – unique, random and anonymous installation ID
 
 ### Extra metadata (per-event)
 - `fit_called` / `predict_called`: `task` (classification or regression), `num_rows` (*rounded*), `num_columns` (*rounded*), `duration_ms`
