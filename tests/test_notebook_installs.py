@@ -19,8 +19,6 @@ import re
 import shlex
 import shutil
 import subprocess
-import time
-import urllib.error
 from pathlib import Path
 from typing import cast
 from urllib.request import Request, urlopen
@@ -36,15 +34,6 @@ if not os.environ.get("RUN_NOTEBOOK_INSTALL_CHECK"):
 NOTEBOOK_DIR = Path(__file__).parents[1] / "examples" / "notebooks"
 NOTEBOOKS = sorted(NOTEBOOK_DIR.glob("*.ipynb"))
 PIP_RE = re.compile(r"^\s*[!%](?:uv\s+)?pip\s+install\s+(.+?)\s*$")
-NETWORKY = (
-    "connection",
-    "timeout",
-    "503",
-    "504",
-    "failed to fetch",
-    "network",
-    "temporary failure",
-)
 
 
 def _extract_install_lines(notebook_path: Path) -> list[str]:
@@ -63,25 +52,19 @@ def _extract_install_lines(notebook_path: Path) -> list[str]:
 
 
 @functools.lru_cache(maxsize=1)
-def _latest_tabpfn_version(retries: int = 3, backoff: float = 5.0) -> str:
-    """Fetch latest tabpfn version from PyPI, retrying on transient failures.
+def _latest_tabpfn_version() -> str:
+    """Fetch latest tabpfn version from PyPI.
 
-    Cached: latest version is constant within a test session, so we hit PyPI
-    once regardless of how many notebooks we check.
+    Cached so we only hit PyPI once per session regardless of notebook count.
+    Network failures crash the test loudly — the workflow surfaces them as
+    nightly-failure issues for the maintainer to investigate or rerun.
     """
-    for attempt in range(retries):
-        try:
-            req = Request(
-                "https://pypi.org/pypi/tabpfn/json",
-                headers={"User-Agent": "tabpfn-notebook-check/1.0"},
-            )
-            with urlopen(req, timeout=15) as r:  # noqa: S310
-                return cast("str", json.load(r)["info"]["version"])
-        except (urllib.error.URLError, TimeoutError) as e:
-            if attempt == retries - 1:
-                pytest.skip(f"PyPI metadata fetch failed (network): {e}")
-            time.sleep(backoff)
-    raise RuntimeError("unreachable")
+    req = Request(
+        "https://pypi.org/pypi/tabpfn/json",
+        headers={"User-Agent": "tabpfn-notebook-check/1.0"},
+    )
+    with urlopen(req, timeout=15) as r:  # noqa: S310
+        return cast("str", json.load(r)["info"]["version"])
 
 
 @pytest.mark.parametrize("notebook", NOTEBOOKS, ids=lambda p: p.name)
@@ -103,7 +86,6 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
     subprocess.run(  # noqa: S603
         ["uv", "venv", "--python", "3.12", str(venv)],  # noqa: S607
         check=True,
-        capture_output=True,
         env=base_env,
     )
     bin_dir = "Scripts" if os.name == "nt" else "bin"
@@ -116,20 +98,12 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
     }
 
     for line in install_lines:
-        result = subprocess.run(  # noqa: S603
+        subprocess.run(  # noqa: S603
             ["uv", "pip", "install", *shlex.split(line)],  # noqa: S607
             env=env,
-            capture_output=True,
-            text=True,
+            check=True,
             timeout=600,
-            check=False,
         )
-        if result.returncode != 0:
-            stderr = result.stderr.lower()
-            tail = result.stderr.strip()[-500:]
-            if any(s in stderr for s in NETWORKY):
-                pytest.skip(f"network error during '{line}': {tail[-200:]}")
-            pytest.fail(f"install failed: {line}\n--- stderr ---\n{tail}")
 
     show = subprocess.run(
         ["uv", "pip", "show", "tabpfn"],  # noqa: S607
