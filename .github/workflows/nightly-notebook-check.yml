@@ -1,9 +1,7 @@
 name: Nightly notebook install check
 
 # Reproduces each example notebook's pip-install sequence in a fresh venv
-# and asserts `tabpfn` resolves to PyPI's latest. Catches transitive caps
-# (e.g. a stale `tabpfn-extensions[all]` pinning tabpfn below the latest
-# release) before they reach Colab users.
+# and asserts `tabpfn` resolves to PyPI's latest.
 #
 # Runs daily on a cron and on manual dispatch. Failures open or comment
 # on a tracking issue rather than emailing — scheduled-run failures
@@ -64,16 +62,8 @@ jobs:
             const runUrl =
               `${context.serverUrl}/${context.repo.owner}/` +
               `${context.repo.repo}/actions/runs/${context.runId}`;
-            const body = [
-              `Run: ${runUrl}`,
-              ``,
-              `Most likely cause: a transitive dependency in one of the example`,
-              `notebooks is capping \`tabpfn\` below the latest PyPI release.`,
-              `Common offender: \`tabpfn-extensions[all]\` shipping with a`,
-              `\`tabpfn<N\` pin that's now stale.`,
-              ``,
-              `Run logs show which notebook failed and the resolved version.`,
-            ].join("\n");
+            const body =
+              `Run: ${runUrl}\n\nSee logs for the failing notebook and details.`;
             const existing = issues.find(i => i.title === title);
             if (existing) {
               await github.rest.issues.createComment({

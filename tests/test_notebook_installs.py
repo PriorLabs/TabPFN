@@ -2,8 +2,7 @@
 
 Reproduces the install sequence from each `examples/notebooks/*.ipynb` in a
 fresh venv and asserts that `tabpfn` resolves to the version currently
-published as latest on PyPI. Catches transitive caps (e.g. a stale
-`tabpfn-extensions[all]` pinning `tabpfn<7`) before users hit them.
+published as latest on PyPI.
 
 Skipped by default. Set `RUN_NOTEBOOK_INSTALL_CHECK=1` to enable.
 Intended to run from `.github/workflows/nightly-notebook-check.yml`, not
@@ -120,7 +119,5 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
 
     latest = _latest_tabpfn_version()
     assert installed == latest, (
-        f"{notebook.name}: sequential install resolves tabpfn=={installed}, "
-        f"but PyPI latest is {latest}. Likely cause: a transitive cap (e.g. "
-        f"tabpfn-extensions or another notebook dep) is holding tabpfn back."
+        f"{notebook.name}: installed tabpfn=={installed}, PyPI latest is {latest}."
     )
