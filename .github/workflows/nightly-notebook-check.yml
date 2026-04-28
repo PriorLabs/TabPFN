@@ -11,7 +11,7 @@ name: Nightly notebook install check
 
 on:
   schedule:
-    - cron: "17 7 * * *"   # 07:17 UTC daily; off-peak for PyPI
+    - cron: 17 7 * * *   # 07:17 UTC daily; off-peak for PyPI
   workflow_dispatch:
 
 permissions:

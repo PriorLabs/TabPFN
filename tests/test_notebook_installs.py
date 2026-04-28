@@ -9,6 +9,7 @@ Skipped by default. Set `RUN_NOTEBOOK_INSTALL_CHECK=1` to enable.
 Intended to run from `.github/workflows/nightly-notebook-check.yml`, not
 from the regular PR test matrix.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,6 +21,7 @@ import subprocess
 import time
 import urllib.error
 from pathlib import Path
+from typing import cast
 from urllib.request import Request, urlopen
 
 import pytest
@@ -67,8 +69,8 @@ def _latest_tabpfn_version(retries: int = 3, backoff: float = 5.0) -> str:
                 "https://pypi.org/pypi/tabpfn/json",
                 headers={"User-Agent": "tabpfn-notebook-check/1.0"},
             )
-            with urlopen(req, timeout=15) as r:
-                return json.load(r)["info"]["version"]
+            with urlopen(req, timeout=15) as r:  # noqa: S310
+                return cast("str", json.load(r)["info"]["version"])
         except (urllib.error.URLError, TimeoutError) as e:
             if attempt == retries - 1:
                 pytest.skip(f"PyPI metadata fetch failed (network): {e}")
@@ -92,8 +94,8 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
     base_env = {**os.environ, "UV_NO_CONFIG": "1"}
 
     venv = tmp_path / "venv"
-    subprocess.run(
-        ["uv", "venv", "--python", "3.12", str(venv)],
+    subprocess.run(  # noqa: S603
+        ["uv", "venv", "--python", "3.12", str(venv)],  # noqa: S607
         check=True,
         capture_output=True,
         env=base_env,
@@ -105,25 +107,23 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
     }
 
     for line in install_lines:
-        result = subprocess.run(
-            ["uv", "pip", "install", *shlex.split(line)],
+        result = subprocess.run(  # noqa: S603
+            ["uv", "pip", "install", *shlex.split(line)],  # noqa: S607
             env=env,
             capture_output=True,
             text=True,
             timeout=600,
+            check=False,
         )
         if result.returncode != 0:
             stderr = result.stderr.lower()
+            tail = result.stderr.strip()[-500:]
             if any(s in stderr for s in NETWORKY):
-                pytest.skip(
-                    f"network error during '{line}': {result.stderr.strip()[-200:]}"
-                )
-            pytest.fail(
-                f"install failed: {line}\n--- stderr ---\n{result.stderr.strip()[-500:]}"
-            )
+                pytest.skip(f"network error during '{line}': {tail[-200:]}")
+            pytest.fail(f"install failed: {line}\n--- stderr ---\n{tail}")
 
     show = subprocess.run(
-        ["uv", "pip", "show", "tabpfn"],
+        ["uv", "pip", "show", "tabpfn"],  # noqa: S607
         env=env,
         capture_output=True,
         text=True,
