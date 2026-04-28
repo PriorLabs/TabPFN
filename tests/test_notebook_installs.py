@@ -12,6 +12,7 @@ from the regular PR test matrix.
 
 from __future__ import annotations
 
+import functools
 import json
 import os
 import re
@@ -61,8 +62,13 @@ def _extract_install_lines(notebook_path: Path) -> list[str]:
     return lines
 
 
+@functools.lru_cache(maxsize=1)
 def _latest_tabpfn_version(retries: int = 3, backoff: float = 5.0) -> str:
-    """Fetch latest tabpfn version from PyPI, retrying on transient failures."""
+    """Fetch latest tabpfn version from PyPI, retrying on transient failures.
+
+    Cached: latest version is constant within a test session, so we hit PyPI
+    once regardless of how many notebooks we check.
+    """
     for attempt in range(retries):
         try:
             req = Request(
@@ -100,10 +106,13 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
         capture_output=True,
         env=base_env,
     )
+    bin_dir = "Scripts" if os.name == "nt" else "bin"
     env = {
         **base_env,
         "VIRTUAL_ENV": str(venv),
-        "PATH": f"{venv}/bin:{os.environ.get('PATH', '')}",
+        "PATH": os.pathsep.join(
+            filter(None, [str(venv / bin_dir), os.environ.get("PATH")]),
+        ),
     }
 
     for line in install_lines:
