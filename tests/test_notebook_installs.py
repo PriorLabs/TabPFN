@@ -72,8 +72,6 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
         pytest.skip("uv not on PATH")
 
     install_lines = _extract_install_lines(notebook)
-    if not any("tabpfn" in line for line in install_lines):
-        pytest.skip(f"{notebook.name} does not install tabpfn")
 
     # Don't inherit [tool.uv] settings from any pyproject.toml above us
     # (e.g. TabPFN's `exclude-newer`). We're simulating a fresh Colab user
@@ -83,7 +81,7 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
 
     venv = tmp_path / "venv"
     subprocess.run(  # noqa: S603
-        ["uv", "venv", "--python", "3.12", str(venv)],  # noqa: S607
+        ["uv", "venv", str(venv)],  # noqa: S607
         check=True,
         env=base_env,
     )
