@@ -12,14 +12,6 @@ on:
   schedule:
     - cron: 17 7 * * *   # 07:17 UTC daily; off-peak for PyPI
   workflow_dispatch:
-  # TEMPORARY: remove before merging. Lets the PR validate the workflow
-  # end-to-end on a GH-hosted runner. `paths:` keeps it from firing on
-  # unrelated PRs after merge if forgotten.
-  pull_request:
-    paths:
-      - .github/workflows/nightly-notebook-check.yml
-      - tests/test_notebook_installs.py
-      - examples/notebooks/**
 
 permissions:
   contents: read
