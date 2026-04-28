@@ -13,6 +13,7 @@ from tabpfn.preprocessing.steps import (
     AddFingerprintFeaturesStep,
     AddSVDFeaturesStep,
     DifferentiableZNormStep,
+    DuplicateImportantFeaturesStep,
     EncodeCategoricalFeaturesStep,
     NanHandlingPolynomialFeaturesStep,
     RemoveConstantFeaturesStep,
@@ -47,6 +48,7 @@ def create_preprocessing_pipeline(
     *,
     random_state: int | np.random.Generator | None,
     enable_gpu_preprocessing: bool = False,
+    duplicate_local_indices: list[int] | None = None,
 ) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline.
 
@@ -56,6 +58,10 @@ def create_preprocessing_pipeline(
         enable_gpu_preprocessing: When True, the quantile transform (if GPU-
             eligible), SVD, and shuffle steps are omitted from the CPU pipeline
             because they will run on GPU instead.
+        duplicate_local_indices: Local column indices (in the post-subsample input
+            space of this pipeline) whose values should be appended as duplicate
+            columns at the very end of the pipeline. When ``None`` or empty, no
+            duplication is performed.
     """
     steps: list[PreprocessingStep | StepWithModalities] = []
 
@@ -70,6 +76,13 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
+
+    # Insert duplicate step early so its appended columns flow through every
+    # subsequent transform identically to their originals. ``local_indices``
+    # reference positions in the post-subsample input (the values that flow
+    # into RemoveConstantFeaturesStep next).
+    if duplicate_local_indices:
+        steps.append(DuplicateImportantFeaturesStep(duplicate_local_indices))
 
     steps.append(RemoveConstantFeaturesStep())
 
@@ -141,4 +154,5 @@ def create_preprocessing_pipeline(
                 random_state=random_state,
             ),
         )
+
     return PreprocessingPipeline(steps)

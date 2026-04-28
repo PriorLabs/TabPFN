@@ -10,6 +10,9 @@ from .add_svd_features_step import (
 from .differentiable_z_norm_step import (
     DifferentiableZNormStep,
 )
+from .duplicate_important_features_step import (
+    DuplicateImportantFeaturesStep,
+)
 from .encode_categorical_features_step import (
     EncodeCategoricalFeaturesStep,
 )
@@ -36,6 +39,7 @@ __all__ = [
     "AddFingerprintFeaturesStep",
     "AddSVDFeaturesStep",
     "DifferentiableZNormStep",
+    "DuplicateImportantFeaturesStep",
     "EncodeCategoricalFeaturesStep",
     "KDITransformerWithNaN",
     "NanHandlingPolynomialFeaturesStep",

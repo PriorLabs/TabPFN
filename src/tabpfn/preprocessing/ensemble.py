@@ -93,6 +93,7 @@ class TabPFNEnsemblePreprocessor:
         importance_top_k_count: int = 50,
         importance_n_folds: int = 3,
         importance_max_samples: int = 50_000,
+        feature_importance_duplicate_top_k: int = 0,
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
@@ -126,13 +127,22 @@ class TabPFNEnsemblePreprocessor:
             importance_max_samples: Cap on training samples used to fit ExtraTrees.
                 When n_samples exceeds this, a random subsample is drawn first.
                 Only used when feature_subsampling_method is "feature_importance".
+            feature_importance_duplicate_top_k: When > 0, append K duplicate copies
+                of the top-K most important features to each estimator's input
+                (augmentation, not subsampling). Forces inclusion of the top-K
+                originals in every estimator's subsample so duplicates always
+                have a source column. Triggers ExtraTrees fitting like the
+                "feature_importance" subsampling method.
             X_train: Training features used to compute feature importance. Required
-                when feature_subsampling_method is "feature_importance".
+                when feature_subsampling_method is "feature_importance" or
+                feature_importance_duplicate_top_k > 0.
             y_train: Training targets used to compute feature importance. Required
-                when feature_subsampling_method is "feature_importance".
+                when feature_subsampling_method is "feature_importance" or
+                feature_importance_duplicate_top_k > 0.
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used.
-                Only used when feature_subsampling_method is "feature_importance".
+                Used when feature_subsampling_method is "feature_importance" or
+                feature_importance_duplicate_top_k > 0.
         """
         super().__init__()
         self.configs = configs
@@ -155,6 +165,8 @@ class TabPFNEnsemblePreprocessor:
         self.pipeline_seeds = rng_pipelines.integers(
             0, np.iinfo(np.int32).max, len(self.configs)
         )
+        # Initial build without the duplicate step; we may rebuild with
+        # per-pipeline duplicate_local_indices once subsampling is computed.
         self.pipelines = [
             create_preprocessing_pipeline(
                 config,
@@ -165,11 +177,16 @@ class TabPFNEnsemblePreprocessor:
         ]
 
         importance_feature_order: npt.NDArray[np.intp] | None = None
-        if feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE:
+        need_importance = (
+            feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE
+            or feature_importance_duplicate_top_k > 0
+        )
+        if need_importance:
             if X_train is None or y_train is None:
                 raise ValueError(
                     "X_train and y_train must be provided when using the "
-                    "'feature_importance' subsampling method."
+                    "'feature_importance' subsampling method or when "
+                    "feature_importance_duplicate_top_k > 0."
                 )
             importance_feature_order = compute_feature_importance_order(
                 X=X_train,
@@ -194,6 +211,54 @@ class TabPFNEnsemblePreprocessor:
             importance_feature_order=importance_feature_order,
             importance_top_k_count=importance_top_k_count,
         )
+
+        if feature_importance_duplicate_top_k > 0:
+            assert importance_feature_order is not None
+            self.subsample_feature_indices, duplicate_local_indices_list = (
+                _force_include_and_compute_duplicate_indices(
+                    subsample_feature_indices=self.subsample_feature_indices,
+                    importance_feature_order=importance_feature_order,
+                    top_k=feature_importance_duplicate_top_k,
+                    n_total_features=self.feature_schema.num_columns,
+                )
+            )
+            # Warn once when augmentation pushes any pipeline past its
+            # max_features_per_estimator budget.
+            for max_feats, indices, dup_local in zip(
+                max_features_per_estimator,
+                self.subsample_feature_indices,
+                duplicate_local_indices_list,
+            ):
+                input_size = (
+                    len(indices)
+                    if indices is not None
+                    else self.feature_schema.num_columns
+                )
+                if input_size + len(dup_local) > max_feats:
+                    warnings.warn(
+                        f"FEATURE_IMPORTANCE_DUPLICATE_TOP_K augmentation pushes "
+                        f"the per-estimator feature count to "
+                        f"{input_size + len(dup_local)}, exceeding "
+                        f"max_features_per_estimator={max_feats}. The model may "
+                        f"behave outside its pretraining distribution.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                    break
+            # Rebuild pipelines with per-pipeline duplicate_local_indices.
+            self.pipelines = [
+                create_preprocessing_pipeline(
+                    config,
+                    random_state=int(seed),
+                    enable_gpu_preprocessing=enable_gpu_preprocessing,
+                    duplicate_local_indices=dup_local,
+                )
+                for config, seed, dup_local in zip(
+                    self.configs,
+                    self.pipeline_seeds,
+                    duplicate_local_indices_list,
+                )
+            ]
 
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
@@ -698,6 +763,75 @@ def _subsample_features_constant_and_balanced(
         subsample_feature_indices.append(np.sort(all_indices))
 
     return subsample_feature_indices
+
+
+def _force_include_and_compute_duplicate_indices(
+    subsample_feature_indices: list[np.ndarray | None],
+    importance_feature_order: npt.NDArray[np.intp],
+    top_k: int,
+    n_total_features: int,
+) -> tuple[list[np.ndarray | None], list[list[int]]]:
+    """Force-include top-K importance originals in each subsample and report the
+    local positions for the duplicate step.
+
+    For each estimator's existing ``feature_indices``:
+        - If indices is None (no subsampling), the top-K originals are already
+          present in the full feature set; local positions equal the original
+          indices.
+        - Otherwise, indices is rewritten to contain all top-K originals.
+          Non-top-K slots are dropped to make room. When the subsample budget
+          is smaller than K, only the most important top-K originals fit and
+          all of them get duplicated.
+
+    Returns:
+        ``(new_subsample_feature_indices, duplicate_local_indices_per_pipeline)``.
+        Each entry of the second list is a sorted list of local positions
+        (in the corresponding ``new_subsample_feature_indices``) to duplicate.
+    """
+    k_eff = min(top_k, n_total_features)
+    top_k_orig = importance_feature_order[:k_eff].astype(np.int64)
+    top_k_set = set(int(i) for i in top_k_orig)
+
+    new_subsample_feature_indices: list[np.ndarray | None] = []
+    duplicate_local_indices_list: list[list[int]] = []
+
+    for indices in subsample_feature_indices:
+        if indices is None:
+            # Full feature set; top-K originals are already present.
+            new_subsample_feature_indices.append(None)
+            duplicate_local_indices_list.append(sorted(int(i) for i in top_k_orig))
+            continue
+
+        if len(indices) <= k_eff:
+            # Subsample budget is smaller than K; take the most important
+            # top-K originals that fit and duplicate all of them.
+            kept = np.sort(top_k_orig[: len(indices)])
+            new_subsample_feature_indices.append(kept)
+            position_of = {int(orig): pos for pos, orig in enumerate(kept.tolist())}
+            duplicate_local_indices_list.append(sorted(position_of.values()))
+            continue
+
+        present = [i for i in indices.tolist() if i in top_k_set]
+        missing = [int(i) for i in top_k_orig.tolist() if int(i) not in indices]
+        if missing:
+            non_top_k = [int(i) for i in indices.tolist() if int(i) not in top_k_set]
+            keep_count = len(non_top_k) - len(missing)
+            kept_non_top_k = non_top_k[:keep_count]
+            new_indices = np.sort(
+                np.array(present + missing + kept_non_top_k, dtype=indices.dtype)
+            )
+        else:
+            new_indices = indices
+
+        new_subsample_feature_indices.append(new_indices)
+        position_of = {
+            int(orig): pos for pos, orig in enumerate(new_indices.tolist())
+        }
+        duplicate_local_indices_list.append(
+            sorted(position_of[int(i)] for i in top_k_orig)
+        )
+
+    return new_subsample_feature_indices, duplicate_local_indices_list
 
 
 def _subsample_features_importance_based(

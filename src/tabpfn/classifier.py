@@ -796,6 +796,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
             importance_n_folds=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_N_FOLDS,
             importance_max_samples=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_MAX_SAMPLES,
+            feature_importance_duplicate_top_k=self.inference_config_.FEATURE_IMPORTANCE_DUPLICATE_TOP_K,
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,

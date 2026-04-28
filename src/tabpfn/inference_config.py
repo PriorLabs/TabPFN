@@ -175,6 +175,26 @@ class InferenceConfig:
     to use a single fit on all data. Only used when FEATURE_SUBSAMPLING_METHOD is
     'feature_importance'."""
 
+    FEATURE_IMPORTANCE_DUPLICATE_TOP_K: int = 0
+    """When > 0, append duplicate copies of the top-K most important features as
+    additional columns to each estimator's input. This is *augmentation*, not
+    subsampling — the model receives ``subsample_size + K`` columns. The intent is
+    to increase the proportion of important features in the per-feature
+    transformer's grouped input so each contiguous feature group is more likely to
+    contain a top-K signal column.
+
+    Duplicates are inserted early in the pipeline and carried through all
+    subsequent transforms identically to their originals; with the default
+    ``FEATURE_SHIFT_METHOD="shuffle"`` they end up scattered through the model
+    input rather than concentrated at the tail. The benefit ("more important
+    columns per random group") still holds.
+
+    When this is > 0, the top-K originals are also force-included in every
+    estimator's subsample regardless of FEATURE_SUBSAMPLING_METHOD, so duplicates
+    always have a source column to copy from. Reuses
+    FEATURE_SUBSAMPLING_IMPORTANCE_MAX_SAMPLES and
+    FEATURE_SUBSAMPLING_IMPORTANCE_N_FOLDS to fit the ExtraTrees ranker."""
+
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
     regression. This can be understood as scaling the target variable to better predict
