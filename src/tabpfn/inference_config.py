@@ -158,22 +158,11 @@ class InferenceConfig:
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
 
-    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int = 50
+    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int | float = 100
     """Number of top important features always included per estimator when
     FEATURE_SUBSAMPLING_METHOD is 'feature_importance'. The remaining budget up to
-    max_features_per_estimator is filled randomly from the remaining features."""
-
-    FEATURE_SUBSAMPLING_IMPORTANCE_MAX_SAMPLES: int = 50_000
-    """Maximum number of training samples used to fit the ExtraTrees model for feature
-    importance computation. When n_samples exceeds this value, a random subsample is
-    drawn before fitting. Only used when FEATURE_SUBSAMPLING_METHOD is
-    'feature_importance'."""
-
-    FEATURE_SUBSAMPLING_IMPORTANCE_N_FOLDS: int = 3
-    """Number of cross-validation folds used when computing ExtraTrees feature
-    importance. Averaging across folds gives more robust importance estimates. Set to 1
-    to use a single fit on all data. Only used when FEATURE_SUBSAMPLING_METHOD is
-    'feature_importance'."""
+    max_features_per_estimator is filled randomly from the remaining features.
+    If a float in (0, 1], resolved as ceil(value * n_total_features)."""
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for

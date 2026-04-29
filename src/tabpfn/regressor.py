@@ -844,8 +844,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
-            importance_n_folds=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_N_FOLDS,
-            importance_max_samples=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_MAX_SAMPLES,
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,

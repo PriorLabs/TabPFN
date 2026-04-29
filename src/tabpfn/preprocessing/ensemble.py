@@ -13,6 +13,8 @@ import numpy.typing as npt
 
 from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
+    FEATURE_IMPORTANCE_MAX_SAMPLES,
+    FEATURE_IMPORTANCE_N_FOLDS,
     MAXIMUM_FEATURE_SHIFT,
 )
 from tabpfn.preprocessing.configs import (
@@ -90,9 +92,7 @@ class TabPFNEnsemblePreprocessor:
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
-        importance_top_k_count: int = 50,
-        importance_n_folds: int = 3,
-        importance_max_samples: int = 50_000,
+        importance_top_k_count: int | float = 50,
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
@@ -120,12 +120,7 @@ class TabPFNEnsemblePreprocessor:
                 ``None``, no row subsampling is done.
             importance_top_k_count: Number of top-important features always included
                 per estimator when feature_subsampling_method is "feature_importance".
-            importance_n_folds: Number of cross-validation folds used when computing
-                ExtraTrees feature importance. Set to 1 to use a single fit.
-                Only used when feature_subsampling_method is "feature_importance".
-            importance_max_samples: Cap on training samples used to fit ExtraTrees.
-                When n_samples exceeds this, a random subsample is drawn first.
-                Only used when feature_subsampling_method is "feature_importance".
+                If a float in (0, 1], resolved as ceil(value * n_total_features).
             X_train: Training features used to compute feature importance. Required
                 when feature_subsampling_method is "feature_importance".
             y_train: Training targets used to compute feature importance. Required
@@ -164,8 +159,19 @@ class TabPFNEnsemblePreprocessor:
             for config, seed in zip(self.configs, self.pipeline_seeds)
         ]
 
-        importance_feature_order: npt.NDArray[np.intp] | None = None
-        if feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE:
+        n_total_features = feature_schema.num_columns
+        if isinstance(importance_top_k_count, float):
+            resolved_top_k = max(
+                1, int(np.ceil(importance_top_k_count * n_total_features))
+            )
+        else:
+            resolved_top_k = importance_top_k_count
+
+        importance_feature_order: np.ndarray | None = None
+        if (
+            feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE
+            and resolved_top_k < n_total_features
+        ):
             if X_train is None or y_train is None:
                 raise ValueError(
                     "X_train and y_train must be provided when using the "
@@ -175,8 +181,6 @@ class TabPFNEnsemblePreprocessor:
                 X=X_train,
                 y=y_train,
                 task_type=task_type,
-                n_folds=importance_n_folds,
-                max_samples=importance_max_samples,
                 rng=rng_features,
             )
 
@@ -192,7 +196,7 @@ class TabPFNEnsemblePreprocessor:
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
             importance_feature_order=importance_feature_order,
-            importance_top_k_count=importance_top_k_count,
+            importance_top_k_count=resolved_top_k,
         )
 
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
@@ -480,8 +484,8 @@ def _get_subsample_feature_indices(
     rng: np.random.Generator,
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
-    importance_feature_order: npt.NDArray[np.intp] | None = None,
-    importance_top_k_count: int = 50,
+    importance_feature_order: np.ndarray | None = None,
+    importance_top_k_count: int = 100,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator.
 
@@ -551,15 +555,10 @@ def _get_subsample_feature_indices(
             subsample_sizes, n_total_features, rng, constant_feature_count
         )
     if feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE:
-        if all(s >= n_total_features for s in subsample_sizes):
-            # No subsampling needed — skip importance requirement entirely.
-            return [None] * len(subsample_sizes)
         if importance_feature_order is None:
-            raise ValueError(
-                "importance_feature_order must be provided when using the "
-                "'feature_importance' subsampling method. Call "
-                "compute_feature_importance_order() and pass the result."
-            )
+            # top_k covers all features — importance ordering is irrelevant, fall back
+            # to balanced subsampling for variety across estimators.
+            return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
         return _subsample_features_importance_based(
             subsample_sizes,
             n_total_features,
@@ -703,8 +702,8 @@ def _subsample_features_constant_and_balanced(
 def _subsample_features_importance_based(
     subsample_sizes: list[int],
     n_total_features: int,
-    importance_feature_order: npt.NDArray[np.intp],
-    top_k_count: int,
+    importance_feature_order: np.ndarray,
+    top_k_count: int | float,
     rng: np.random.Generator,
 ) -> list[np.ndarray | None]:
     """Always include top-K important features; randomly sample the rest.
@@ -715,9 +714,18 @@ def _subsample_features_importance_based(
         importance_feature_order: Feature indices sorted most->least important.
             Produced by ``compute_feature_importance_order``.
         top_k_count: Number of top features always included per estimator.
+            If a float in (0, 1], resolved as ``ceil(top_k_count * n_total_features)``.
         rng: Random number generator.
     """
-    n_top = min(top_k_count, n_total_features)
+    if isinstance(top_k_count, float):
+        if not 0.0 < top_k_count <= 1.0:
+            raise ValueError(
+                f"top_k_count as float must be in (0, 1], got {top_k_count}"
+            )
+        n_top = max(1, int(np.ceil(top_k_count * n_total_features)))
+    else:
+        n_top = top_k_count
+    n_top = min(n_top, n_total_features)
     top_features = importance_feature_order[:n_top]
     remaining_features = importance_feature_order[n_top:]
 
@@ -744,11 +752,11 @@ def compute_feature_importance_order(
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
     *,
-    n_folds: int = 3,
-    max_samples: int = 50_000,
+    n_folds: int = FEATURE_IMPORTANCE_N_FOLDS,
+    max_samples: int = FEATURE_IMPORTANCE_MAX_SAMPLES,
     n_estimators: int = 50,
     rng: np.random.Generator,
-) -> npt.NDArray[np.intp]:
+) -> np.ndarray:
     """Rank features by ExtraTrees importance, most important first.
 
     Args:
