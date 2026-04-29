@@ -66,6 +66,14 @@ class _TimedIterator(Iterator[_T]):
         return self
 
 
+@dataclasses.dataclass
+class _PreparedEnsembleForward:
+    X_full: torch.Tensor
+    y_train: torch.Tensor
+    categorical_inds: list[int]
+    config: EnsembleConfig
+
+
 def _model_expectes_task_type_arg(model: Architecture) -> bool:
     """Check if the model's forward function expects a task_type argument.
 
@@ -611,7 +619,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     forward pass through the model which is currently done sequentially.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
@@ -624,6 +632,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         no_preprocessing: bool = False,
+        ensemble_batch_size: int | None = None,
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -642,6 +651,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
                 Used for differentiability.
+            ensemble_batch_size: Maximum number of compatible ensemble members to
+                batch together during single-device inference.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -652,6 +663,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
 
         self.inference_mode = inference_mode
         self.no_preprocessing = no_preprocessing
+        self.ensemble_batch_size = ensemble_batch_size
         self.X_train_shape_before_preprocessing = X_train.shape
 
         fit_preprocess_start = time.perf_counter()
@@ -675,7 +687,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         autocast: bool,
         task_type: str,
         only_return_standard_out: bool = True,
-    ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
+    ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig | list[EnsembleConfig]]]:
         devices = self.get_devices()
 
         if self.force_inference_dtype is not None:
@@ -692,6 +704,21 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             )
         else:
             save_peak_mem = False
+
+        if (
+            len(devices) == 1
+            and self.ensemble_batch_size is not None
+            and self.ensemble_batch_size > 1
+        ):
+            yield from self._iter_outputs_batched_single_device(
+                X,
+                autocast=autocast,
+                task_type=task_type,
+                only_return_standard_out=only_return_standard_out,
+                save_peak_mem=save_peak_mem,
+                device=devices[0],
+            )
+            return
 
         def _transform_X_test(
             ensemble_member: TabPFNEnsembleMember,
@@ -725,6 +752,123 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self._speed_metrics["predict_model_forward_seconds"] = (
             timed_outputs.elapsed_seconds
         )
+
+    def _iter_outputs_batched_single_device(  # noqa: C901
+        self,
+        X: np.ndarray | torch.Tensor,
+        *,
+        autocast: bool,
+        task_type: str,
+        only_return_standard_out: bool,
+        save_peak_mem: bool,
+        device: torch.device,
+    ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
+        forward_time = 0.0
+        pending_prepared: _PreparedEnsembleForward | None = None
+
+        def _transform_X_test(
+            ensemble_member: TabPFNEnsembleMember,
+        ) -> np.ndarray | torch.Tensor:
+            return X if self.no_preprocessing else ensemble_member.transform_X_test(X)
+
+        def _prepare_member(
+            ensemble_member: TabPFNEnsembleMember,
+        ) -> _PreparedEnsembleForward:
+            X_full, y_train = _prepare_model_inputs(
+                device,
+                self.force_inference_dtype,
+                ensemble_member.X_train,
+                _transform_X_test(ensemble_member),
+                ensemble_member.y_train,
+            )
+            X_full, feature_schema = _maybe_run_gpu_preprocessing(
+                X_full,
+                gpu_preprocessor=ensemble_member.gpu_preprocessor,
+                num_train_rows=ensemble_member.X_train.shape[0],
+                feature_schema=ensemble_member.feature_schema,
+            )
+            return _PreparedEnsembleForward(
+                X_full=X_full,
+                y_train=y_train,
+                categorical_inds=feature_schema.indices_for(FeatureModality.CATEGORICAL),
+                config=ensemble_member.config,
+            )
+
+        def _is_compatible_with_batch(
+            reference: _PreparedEnsembleForward,
+            candidate: _PreparedEnsembleForward,
+        ) -> bool:
+            return (
+                candidate.config._model_index == reference.config._model_index
+                and candidate.X_full.shape == reference.X_full.shape
+                and candidate.y_train.shape == reference.y_train.shape
+            )
+
+        ensemble_members_iter = iter(self.ensemble_members)
+
+        while True:
+            batch: list[_PreparedEnsembleForward] = []
+
+            if pending_prepared is not None:
+                batch.append(pending_prepared)
+                pending_prepared = None
+
+            while len(batch) < self.ensemble_batch_size:
+                try:
+                    ensemble_member = next(ensemble_members_iter)
+                except StopIteration:
+                    break
+
+                prepare_start = time.perf_counter()
+                prepared = _prepare_member(ensemble_member)
+                forward_time += time.perf_counter() - prepare_start
+                if not batch or _is_compatible_with_batch(batch[0], prepared):
+                    batch.append(prepared)
+                else:
+                    pending_prepared = prepared
+                    break
+
+            if not batch:
+                break
+
+            model_index = batch[0].config._model_index
+            model = self.model_caches[model_index].get(device)
+            X_full = torch.cat([prepared.X_full for prepared in batch], dim=1)
+            y_train = torch.stack([prepared.y_train for prepared in batch], dim=1)
+            batched_cat_ix = [prepared.categorical_inds for prepared in batch]
+
+            performance_options = model.get_default_performance_options()
+            performance_options = dataclasses.replace(
+                performance_options,
+                save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+                if save_peak_mem
+                else None,
+            )
+
+            kwargs = {}
+            if _model_expectes_task_type_arg(model):
+                kwargs["task_type"] = task_type
+
+            forward_start = time.perf_counter()
+            with (
+                get_autocast_context(device, enabled=autocast),
+                torch.inference_mode(self.inference_mode),
+            ):
+                output = model(
+                    X_full,
+                    y_train,
+                    only_return_standard_out=only_return_standard_out,
+                    categorical_inds=batched_cat_ix,
+                    performance_options=performance_options,
+                    **kwargs,
+                )
+            forward_time += time.perf_counter() - forward_start
+
+            yield _move_and_squeeze_output(output, device), [
+                prepared.config for prepared in batch
+            ]
+
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     def _call_model(  # noqa: PLR0913
         self,

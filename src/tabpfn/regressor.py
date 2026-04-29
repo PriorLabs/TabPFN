@@ -210,6 +210,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         *,
         n_estimators: int = 8,
+        ensemble_batch_size: int | None = None,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
@@ -254,6 +255,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 categorical. If `None`, the model will infer the categorical columns.
                 If provided, we might ignore some of the suggestion to better fit the
                 data seen during pre-training.
+
+            ensemble_batch_size:
+                Batch compatible ensemble members together during single-device
+                prediction. This reduces the number of forward passes needed for
+                `n_estimators > 1` in `fit_preprocessors` mode.
+
+                - If `None`, estimators are evaluated one-by-one.
+                - If an int, up to that many compatible ensemble members are evaluated
+                  in one forward pass on a single device.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -438,6 +448,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.ensemble_batch_size = ensemble_batch_size
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
@@ -842,6 +853,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            ensemble_batch_size=self.ensemble_batch_size,
             # TODO: Standard fit usually uses inference_mode=True, before it was enabled
         )
 
@@ -1075,14 +1087,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             if self.softmax_temperature != 1:
                 output = output / self.softmax_temperature  # noqa: PLW2901
 
-            # BSz.= 1 Scenario, the same as normal predict() function
-            # Handled by first if-statement
-            config_for_ensemble = config
-            if isinstance(config, list) and len(config) == 1:
-                single_config = config[0]
-                config_for_ensemble = single_config
+            config_list = config if isinstance(config, list) else [config]
+            output_batch = output.unsqueeze(1) if output.ndim == 2 else output
 
-            if isinstance(config_for_ensemble, RegressorEnsembleConfig):
+            if output_batch.ndim != 3 or output_batch.shape[1] != len(config_list):
+                raise ValueError(
+                    "Unexpected regression output/config batch shape combination."
+                )
+
+            for batch_index, config_for_ensemble in enumerate(config_list):
+                if not isinstance(config_for_ensemble, RegressorEnsembleConfig):
+                    raise ValueError("Unexpected config format for regression output.")
+
                 borders_t: np.ndarray
                 logit_cancel_mask: np.ndarray | None
                 descending_borders: bool
@@ -1111,15 +1127,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     if descending_borders:
                         borders_t = borders_t.flip(-1)  # type: ignore
 
+                batch_output = output_batch[:, batch_index]
                 if logit_cancel_mask is not None:
-                    output = output.clone()  # noqa: PLW2901
-                    output[..., logit_cancel_mask] = float("-inf")
-                yield borders_t, output
-            else:
-                raise ValueError(
-                    "Unexpected config format "
-                    "and Batch prediction is not supported yet!"
-                )
+                    batch_output = batch_output.clone()
+                    batch_output[..., logit_cancel_mask] = float("-inf")
+                yield borders_t, batch_output
 
     def forward(
         self,
