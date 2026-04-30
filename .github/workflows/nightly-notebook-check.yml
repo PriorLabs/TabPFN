@@ -78,7 +78,10 @@ jobs:
               if (lines.length > 0) failedLines = lines.join("\n");
             } catch (e) { /* output file missing — fall through to default */ }
 
-            const title = "Nightly: notebook install check failed";
+            // Per-version title so each Python version owns its own
+            // tracking issue and can be closed independently when fixed.
+            const title =
+              `Nightly: notebook install check failed (Python ${process.env.PYTHON_VERSION})`;
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
