@@ -857,7 +857,7 @@ def _compute_permutation_importance(
             model,
             X[val_idx],
             y[val_idx],
-            n_repeats=5,
+            n_repeats=3,
             random_state=int(rng.integers(0, 2**31)),
             n_jobs=-1,
         )
