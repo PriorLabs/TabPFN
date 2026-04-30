@@ -1,0 +1,115 @@
+name: Nightly notebook install check
+
+# Reproduces each example notebook's pip-install sequence in a fresh venv
+# across the Python versions we expect users to install on, and asserts
+# `tabpfn` resolves to PyPI's latest.
+#
+# Runs daily on a cron and on manual dispatch. Failures open or comment
+# on a tracking issue rather than emailing — scheduled-run failures
+# don't notify by default.
+
+on:
+  schedule:
+    - cron: 17 7 * * *   # 07:17 UTC daily; off-peak for PyPI
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    name: Verify notebooks resolve latest tabpfn (Py ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: examples/notebooks/*.ipynb
+
+      - name: Install pytest
+        run: uv pip install --system pytest
+
+      - name: Run notebook install check
+        shell: bash
+        env:
+          RUN_NOTEBOOK_INSTALL_CHECK: "1"
+        # `--noconftest` skips loading tests/conftest.py, which imports
+        # numpy/torch — we don't install them here because the test creates
+        # its own per-notebook venvs and doesn't need them on the runner.
+        # `tee` captures output to a file for the failure-issue body while
+        # still streaming live to the GH Actions log; pipefail preserves
+        # pytest's exit code through the pipe.
+        run: |
+          set -o pipefail
+          pytest --noconftest tests/test_notebook_installs.py -v 2>&1 \
+            | tee pytest_output.txt
+
+      - name: Open or update tracking issue on failure
+        if: failure()
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        env:
+          PYTHON_VERSION: ${{ matrix.python-version }}
+        with:
+          script: |
+            // Multiple matrix cells may file/comment concurrently. The
+            // worst case is a couple of duplicate issues filed on the
+            // same nightly when both happen to win the race against an
+            // empty issue list — acceptable, the maintainer closes one.
+            const fs = require("fs");
+            let failedLines = "(no FAILED lines parsed; see logs)";
+            try {
+              const text = fs.readFileSync("pytest_output.txt", "utf-8");
+              const lines = text.split("\n").filter(l => l.startsWith("FAILED "));
+              if (lines.length > 0) failedLines = lines.join("\n");
+            } catch (e) { /* output file missing — fall through to default */ }
+
+            // Per-version title so each Python version owns its own
+            // tracking issue and can be closed independently when fixed.
+            const title =
+              `Nightly: notebook install check failed (Python ${process.env.PYTHON_VERSION})`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: ["nightly-failure"],
+            });
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/` +
+              `${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `Run: ${runUrl}\n` +
+              `Python: ${process.env.PYTHON_VERSION}\n\n` +
+              `\`\`\`\n${failedLines}\n\`\`\`\n\n` +
+              `See logs for full output.`;
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["nightly-failure"],
+              });
+            }
