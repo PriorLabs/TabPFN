@@ -202,6 +202,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         *,
         n_estimators: int = 8,
+        ensemble_batch_size: int | None = None,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -249,6 +250,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 categorical. If `None`, the model will infer the categorical columns.
                 If provided, we might ignore some of the suggestion to better fit the
                 data seen during pre-training.
+
+            ensemble_batch_size:
+                Batch compatible ensemble members together during single-device
+                prediction. This reduces the number of forward passes needed for
+                `n_estimators > 1` in `fit_preprocessors` mode.
+
+                - If `None`, estimators are evaluated one-by-one.
+                - If an int, up to that many compatible ensemble members are evaluated
+                  in one forward pass on a single device.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -456,6 +466,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.ensemble_batch_size = ensemble_batch_size
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -807,6 +818,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            ensemble_batch_size=self.ensemble_batch_size,
             inference_mode=True,
         )
 

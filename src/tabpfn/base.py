@@ -286,8 +286,9 @@ def create_inference_engine(  # noqa: PLR0913
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
+    ensemble_batch_size: int | None = None,
     inference_mode: bool = True,
-) -> InferenceEngine:
+    ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
     Each execution mode will perform slightly different operations based on the mode
@@ -307,9 +308,14 @@ def create_inference_engine(  # noqa: PLR0913
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
         use_autocast_: Whether we use torch.autocast for inference.
+        ensemble_batch_size: Maximum number of compatible ensemble members to batch
+            together during single-device inference.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
     """
+    if ensemble_batch_size is not None and ensemble_batch_size < 1:
+        raise ValueError("ensemble_batch_size must be at least 1 or None.")
+
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
             X_train=X_train,
@@ -332,6 +338,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            ensemble_batch_size=ensemble_batch_size,
         )
     if fit_mode == "fit_with_cache":
         # Use explicit KV cache engine for models that support it (e.g. v3),
@@ -500,8 +507,20 @@ def get_embeddings(
     ):
         # Cast output to Any to allow dict-like access
         output_dict = typing.cast("dict[str, torch.Tensor]", output)
-        embed = output_dict[selected_data].squeeze(1)
+        embed = output_dict[selected_data]
+
+        if isinstance(config, list):
+            assert embed.ndim == 3
+            for batch_index, batch_config in enumerate(config):
+                assert isinstance(
+                    batch_config,
+                    (ClassifierEnsembleConfig, RegressorEnsembleConfig),
+                )
+                embeddings.append(embed[:, batch_index].cpu().numpy())
+            continue
+
         assert isinstance(config, (ClassifierEnsembleConfig, RegressorEnsembleConfig))
+        embed = embed.squeeze(1)
         assert embed.ndim == 2
         embeddings.append(embed.squeeze().cpu().numpy())
 

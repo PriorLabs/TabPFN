@@ -28,6 +28,7 @@ class _TestModel(Architecture):
         super().__init__()
         self.parameter = torch.nn.Parameter(torch.tensor(1.0))
         self.received_task_type: str | None = None
+        self.seen_batch_sizes: list[int] = []
 
     @overload
     def forward(
@@ -68,10 +69,12 @@ class _TestModel(Architecture):
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
         self.received_task_type = task_type
+        self.seen_batch_sizes.append(x.shape[1])
         n_train_test, _, _ = x.shape
-        n_train, _ = y.shape
+        n_train = y.shape[0]
         test_rows = n_train_test - n_train
-        return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+        train_summary = x[:n_train].mean(0, keepdim=True).sum(-1, keepdim=True)
+        return x[-test_rows:].sum(-1, keepdim=True) + train_summary
 
     @property
     def ninp(self) -> int:
@@ -111,9 +114,10 @@ class _TestModelLegacy(Architecture):
         assert isinstance(x, Tensor)
         assert isinstance(y, Tensor)
         n_train_test, _, _ = x.shape
-        n_train, _ = y.shape
+        n_train = y.shape[0]
         test_rows = n_train_test - n_train
-        return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+        train_summary = x[:n_train].mean(0, keepdim=True).sum(-1, keepdim=True)
+        return x[-test_rows:].sum(-1, keepdim=True) + train_summary
 
     @property
     def ninp(self) -> int:
@@ -232,6 +236,77 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
         assert not torch.allclose(
             outlier_removed_output[0], outlier_not_removed_output[0]
         )
+
+
+def test__cache_preprocessing__single_device_ensemble_batching() -> None:
+    rng = default_rng(seed=0)
+    n_train = 100
+    n_features = 4
+    n_classes = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
+
+    sequential_model = _TestModel()
+    batched_model = _TestModel()
+    ensemble_configs = _create_test_ensemble_configs(
+        n_configs=5,
+        n_classes=n_classes,
+        num_models=1,
+    )
+
+    def _make_engine(
+        model: _TestModel,
+        *,
+        ensemble_batch_size: int | None,
+    ) -> InferenceEngineCachePreprocessing:
+        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+            configs=ensemble_configs,
+            n_samples=X_train.shape[0],
+            feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+            random_state=default_rng(seed=0),
+            n_preprocessing_jobs=1,
+        )
+        return InferenceEngineCachePreprocessing(
+            X_train,
+            y_train,
+            ensemble_preprocessor=ensemble_preprocessor,
+            models=[model],
+            devices=[torch.device("cpu")],
+            dtype_byte_size=4,
+            force_inference_dtype=None,
+            save_peak_mem=True,
+            inference_mode=True,
+            ensemble_batch_size=ensemble_batch_size,
+        )
+
+    sequential_engine = _make_engine(sequential_model, ensemble_batch_size=None)
+    sequential_outputs = list(
+        sequential_engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
+
+    batched_engine = _make_engine(batched_model, ensemble_batch_size=2)
+    batched_outputs = list(
+        batched_engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
+
+    assert sequential_model.seen_batch_sizes == [1, 1, 1, 1, 1]
+    assert batched_model.seen_batch_sizes == [2, 2, 1]
+
+    flattened_batched_outputs: list[tuple[Tensor, EnsembleConfig]] = []
+    for output, configs in batched_outputs:
+        assert isinstance(output, Tensor)
+        assert isinstance(configs, list)
+        output_batch = output.unsqueeze(1) if output.ndim == 2 else output
+        assert output_batch.shape[1] == len(configs)
+        for batch_index, config in enumerate(configs):
+            flattened_batched_outputs.append((output_batch[:, batch_index], config))
+
+    assert len(sequential_outputs) == len(flattened_batched_outputs)
+    for batched_output, batched_config in flattened_batched_outputs:
+        sequential_output = _find_seq_output(batched_config, sequential_outputs)
+        assert isinstance(sequential_output, Tensor)
+        assert torch.allclose(sequential_output, batched_output)
 
 
 def test__on_demand__result_equal_in_serial_and_in_parallel() -> None:
