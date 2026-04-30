@@ -13,9 +13,10 @@ import numpy.typing as npt
 
 from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
-    FEATURE_IMPORTANCE_MAX_SAMPLES,
-    FEATURE_IMPORTANCE_N_FOLDS,
+    GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
     MAXIMUM_FEATURE_SHIFT,
+    PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS,
 )
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
@@ -167,20 +168,26 @@ class TabPFNEnsemblePreprocessor:
         else:
             resolved_top_k = importance_top_k_count
 
-        importance_feature_order: np.ndarray | None = None
-        if (
-            feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE
-            and resolved_top_k < n_total_features
-        ):
+        is_feature_importance_subsampling = (
+            feature_subsampling_method
+            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+            or feature_subsampling_method
+            is FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE
+        )
+
+        importance_feature_orders: list[np.ndarray] | None = None
+        if is_feature_importance_subsampling and resolved_top_k < n_total_features:
             if X_train is None or y_train is None:
                 raise ValueError(
-                    "X_train and y_train must be provided when using the "
-                    "'feature_importance' subsampling method."
+                    "X_train and y_train must be provided when using a "
+                    "feature_importance subsampling method."
                 )
-            importance_feature_order = compute_feature_importance_order(
+            importance_feature_orders = compute_feature_importance_order(
                 X=X_train,
                 y=y_train,
                 task_type=task_type,
+                method=feature_subsampling_method,
+                n_estimators=len(self.configs),
                 rng=rng_features,
             )
 
@@ -195,7 +202,7 @@ class TabPFNEnsemblePreprocessor:
             rng=rng_features,
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
-            importance_feature_order=importance_feature_order,
+            importance_feature_orders=importance_feature_orders,
             importance_top_k_count=resolved_top_k,
         )
 
@@ -484,7 +491,7 @@ def _get_subsample_feature_indices(
     rng: np.random.Generator,
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
-    importance_feature_order: np.ndarray | None = None,
+    importance_feature_orders: list[np.ndarray] | None = None,
     importance_top_k_count: int = 100,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator.
@@ -500,8 +507,8 @@ def _get_subsample_feature_indices(
             "balanced", "random", or "constant_and_balanced".
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
-        importance_feature_order: Feature indices sorted most->least important.
-            Produced by ``compute_feature_importance_order``.
+        importance_feature_orders: Per-estimator feature indices sorted most->least
+            important. Produced by ``compute_feature_importance_order``.
         importance_top_k_count: Number of top features always included per estimator.
             Only used when feature_subsampling_method is "feature_importance".
     """
@@ -554,15 +561,18 @@ def _get_subsample_feature_indices(
         return _subsample_features_constant_and_balanced(
             subsample_sizes, n_total_features, rng, constant_feature_count
         )
-    if feature_subsampling_method is FeatureSubsamplingMethod.FEATURE_IMPORTANCE:
-        if importance_feature_order is None:
+    if feature_subsampling_method in (
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+        FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE,
+    ):
+        if importance_feature_orders is None:
             # top_k covers all features — importance ordering is irrelevant, fall back
             # to balanced subsampling for variety across estimators.
             return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
         return _subsample_features_importance_based(
             subsample_sizes,
             n_total_features,
-            importance_feature_order,
+            importance_feature_orders,
             importance_top_k_count,
             rng,
         )
@@ -702,17 +712,20 @@ def _subsample_features_constant_and_balanced(
 def _subsample_features_importance_based(
     subsample_sizes: list[int],
     n_total_features: int,
-    importance_feature_order: np.ndarray,
+    importance_feature_orders: list[np.ndarray],
     top_k_count: int | float,
     rng: np.random.Generator,
 ) -> list[np.ndarray | None]:
     """Always include top-K important features; randomly sample the rest.
 
+    Each estimator uses its own importance ordering from ``importance_feature_orders``,
+    cycling through the list when there are more estimators than orderings.
+
     Args:
         subsample_sizes: Number of input features to select per estimator.
         n_total_features: Total number of features in the dataset.
-        importance_feature_order: Feature indices sorted most->least important.
-            Produced by ``compute_feature_importance_order``.
+        importance_feature_orders: Per-estimator feature indices sorted most->least
+            important. Produced by ``compute_feature_importance_order``.
         top_k_count: Number of top features always included per estimator.
             If a float in (0, 1], resolved as ``ceil(top_k_count * n_total_features)``.
         rng: Random number generator.
@@ -726,11 +739,13 @@ def _subsample_features_importance_based(
     else:
         n_top = top_k_count
     n_top = min(n_top, n_total_features)
-    top_features = importance_feature_order[:n_top]
-    remaining_features = importance_feature_order[n_top:]
 
+    n_orderings = len(importance_feature_orders)
     result: list[np.ndarray | None] = []
-    for size in subsample_sizes:
+    for i, size in enumerate(subsample_sizes):
+        importance_feature_order = importance_feature_orders[i % n_orderings]
+        top_features = importance_feature_order[:n_top]
+        remaining_features = importance_feature_order[n_top:]
         if size >= n_total_features:
             result.append(None)
             continue
@@ -747,54 +762,110 @@ def _subsample_features_importance_based(
     return result
 
 
-def compute_feature_importance_order(
-    X: np.ndarray,
-    y: np.ndarray,
+def _get_extra_trees_model_cls(
     task_type: Literal["classifier", "regressor"],
-    *,
-    n_folds: int = FEATURE_IMPORTANCE_N_FOLDS,
-    max_samples: int = FEATURE_IMPORTANCE_MAX_SAMPLES,
-    n_estimators: int = 50,
-    rng: np.random.Generator,
-) -> np.ndarray:
-    """Rank features by ExtraTrees importance, most important first.
-
-    Args:
-        X: Training features, shape (n_samples, n_features).
-        y: Training targets, shape (n_samples,).
-        task_type: ``"classifier"`` for classification or ``"regressor"`` for
-            regression (matches the ``estimator_type`` property of TabPFN estimators).
-        n_folds: Number of cross-validation folds. Averaging over folds gives more
-            robust importance estimates. Set to 1 to fit on all data without folding.
-        max_samples: Cap on training samples used to fit ExtraTrees. When
-            ``n_samples > max_samples`` a random subsample is drawn first.
-        n_estimators: Number of trees per ExtraTrees fit.
-        rng: Random number generator.
-
-    Returns:
-        Array of feature indices sorted by importance, most important first.
-    """
-    if len(X) > max_samples:
-        idx = rng.choice(len(X), max_samples, replace=False)
-        X, y = X[idx], y[idx]
-
+) -> type:
     if task_type == "classifier":
         from sklearn.ensemble import ExtraTreesClassifier  # noqa: PLC0415
 
-        model_cls = ExtraTreesClassifier
-    else:
-        from sklearn.ensemble import ExtraTreesRegressor  # noqa: PLC0415
+        return ExtraTreesClassifier
 
-        model_cls = ExtraTreesRegressor
+    from sklearn.ensemble import ExtraTreesRegressor  # noqa: PLC0415
 
-    importances: list[np.ndarray] = []
+    return ExtraTreesRegressor
 
-    if n_folds <= 1:
+
+def _compute_gini_importance(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_tree_estimators: int,
+    n_estimators: int,
+    max_samples: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Return one feature-importance ordering per TabPFN ensemble estimator.
+
+    When the dataset fits within ``max_samples`` a single ExtraTrees model is
+    trained on all data and its ordering is repeated for every estimator.
+
+    When the dataset is larger, ``n_subsamples = min(n_estimators,
+    n_samples // max_samples + 1)`` independent subsamples of size ``max_samples``
+    are drawn, each producing a different ordering.  The resulting orderings are
+    then cycled to fill the full list of length ``n_estimators``.
+    """
+    model_cls = _get_extra_trees_model_cls(task_type)
+    n_samples = len(X)
+
+    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
         seed = int(rng.integers(0, 2**31))
-        model = model_cls(n_estimators=n_estimators, random_state=seed, n_jobs=-1)
-        model.fit(X, y)
-        importances.append(model.feature_importances_)
-    else:
+        model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
+        model.fit(X_fit, y_fit)
+        return np.argsort(model.feature_importances_)[::-1].copy()
+
+    if n_samples <= max_samples:
+        ordering = _fit_ordering(X, y)
+        return [ordering] * n_estimators
+
+    from sklearn.model_selection import train_test_split  # noqa: PLC0415
+
+    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
+    stratify = y if task_type == "classifier" else None
+    orderings = []
+    for _ in range(n_subsamples):
+        idx, _ = train_test_split(
+            np.arange(n_samples),
+            train_size=max_samples,
+            stratify=stratify,
+            random_state=int(rng.integers(0, 2**31)),
+        )
+        orderings.append(_fit_ordering(X[idx], y[idx]))
+    return [orderings[i % n_subsamples] for i in range(n_estimators)]
+
+
+def _compute_permutation_importance(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_folds: int,
+    n_tree_estimators: int,
+    n_estimators: int,
+    max_samples: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Return one feature-importance ordering per fold, cycled to ``n_estimators``.
+
+    The number of folds is capped at ``n_estimators``.
+
+    When ``n_samples > max_samples`` standard k-fold is replaced by a custom
+    scheme: for each fold a fixed-size validation set of
+    ``max_samples // n_folds`` rows is sampled, and the remaining budget
+    (``max_samples - val_size``) is used for training.  This keeps the
+    validation set small and predictable regardless of dataset size.
+    """
+    from sklearn.inspection import permutation_importance  # noqa: PLC0415
+
+    model_cls = _get_extra_trees_model_cls(task_type)
+    n_folds = min(n_folds, n_estimators)
+    n_samples = len(X)
+
+    def _fit_fold(train_idx: np.ndarray, val_idx: np.ndarray) -> np.ndarray:
+        seed = int(rng.integers(0, 2**31))
+        model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
+        model.fit(X[train_idx], y[train_idx])
+        result = permutation_importance(
+            model,
+            X[val_idx],
+            y[val_idx],
+            n_repeats=5,
+            random_state=int(rng.integers(0, 2**31)),
+            n_jobs=-1,
+        )
+        return np.argsort(result.importances_mean)[::-1].copy()
+
+    orderings: list[np.ndarray] = []
+
+    if n_samples <= max_samples:
         if task_type == "classifier":
             from sklearn.model_selection import StratifiedKFold  # noqa: PLC0415
 
@@ -811,14 +882,116 @@ def compute_feature_importance_order(
                 shuffle=True,
                 random_state=int(rng.integers(0, 2**31)),
             )
-        for train_idx, _ in kf.split(X, y):  # type: ignore[union-attr]
-            seed = int(rng.integers(0, 2**31))
-            model = model_cls(n_estimators=n_estimators, random_state=seed, n_jobs=-1)
-            model.fit(X[train_idx], y[train_idx])
-            importances.append(model.feature_importances_)
+        for train_idx, val_idx in kf.split(X, y):  # type: ignore[union-attr]
+            orderings.append(_fit_fold(train_idx, val_idx))
+    else:
+        # Custom folds: fixed val_size drawn in a stratified manner (for
+        # classifiers), train fills the remaining budget with random rows.
+        from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
-    mean_imp: np.ndarray = np.mean(importances, axis=0)
-    return np.argsort(mean_imp)[::-1].copy()
+        val_size = max_samples // n_folds
+        train_size = max_samples - val_size
+        stratify = y if task_type == "classifier" else None
+        all_idx = np.arange(n_samples)
+        for _ in range(n_folds):
+            val_idx, remaining = train_test_split(
+                all_idx,
+                train_size=val_size,
+                stratify=stratify,
+                random_state=int(rng.integers(0, 2**31)),
+            )
+            n_train = min(train_size, len(remaining))
+            train_idx = rng.choice(remaining, n_train, replace=False)
+            orderings.append(_fit_fold(train_idx, val_idx))
+
+    return [orderings[i % n_folds] for i in range(n_estimators)]
+
+
+def compute_feature_importance_order(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    *,
+    method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+    n_estimators: int,
+    n_folds: int | None = None,
+    gini_max_samples: int = GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    permutation_max_samples: int = PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    n_tree_estimators: int = 50,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Rank features by importance, returning one ordering per TabPFN estimator.
+
+    The returned list always has length ``n_estimators``.  When fewer distinct
+    orderings are computed than there are estimators the list is filled by
+    cycling through the available orderings.
+
+    Args:
+        X: Training features, shape (n_samples, n_features).
+        y: Training targets, shape (n_samples,).
+        task_type: ``"classifier"`` or ``"regressor"`` (matches TabPFN estimator_type).
+        method: Feature-importance method to use.
+
+            ``GINI_FEATURE_IMPORTANCE``: fits an ExtraTrees ensemble on the data.
+            When ``n_samples <= gini_max_samples`` a single fit is performed and its
+            ordering is repeated for all estimators.  When the data is larger,
+            ``min(n_estimators, n_samples // gini_max_samples + 1)`` independent
+            subsamples of size ``gini_max_samples`` are drawn, giving a different
+            ordering per estimator (cycled when fewer subsamples than estimators).
+
+            ``PERMUTATION_FEATURE_IMPORTANCE``: uses permutation importance over
+            cross-validation folds.  The number of folds is
+            ``min(n_folds, n_estimators)``.  When ``n_samples >
+            permutation_max_samples`` a custom fold scheme is used: each fold draws
+            a fixed-size validation set of ``permutation_max_samples // n_folds``
+            rows and fills the rest of the budget with training data, keeping
+            validation cost constant regardless of dataset size.
+
+        n_estimators: Number of TabPFN ensemble estimators.  The returned list
+            has exactly this length.
+        n_folds: Number of cross-validation folds for
+            ``PERMUTATION_FEATURE_IMPORTANCE``.  Defaults to
+            ``PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS``, further capped at
+            ``n_estimators``.  Ignored for ``GINI_FEATURE_IMPORTANCE``.
+        gini_max_samples: Row budget per ExtraTrees fit (gini method).
+        permutation_max_samples: Total row budget for permutation-importance
+            folds.  Controls both the subsampling threshold and the per-fold
+            train/val split sizes.
+        n_tree_estimators: Number of trees in the ExtraTrees model used by both
+            methods.
+        rng: Random number generator.
+
+    Returns:
+        List of length ``n_estimators``, each element an array of feature indices
+        sorted from most to least important.
+    """
+    if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE:
+        return _compute_gini_importance(
+            X=X,
+            y=y,
+            task_type=task_type,
+            n_tree_estimators=n_tree_estimators,
+            n_estimators=n_estimators,
+            max_samples=gini_max_samples,
+            rng=rng,
+        )
+
+    if method == FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE:
+        resolved_folds = (
+            n_folds if n_folds is not None else PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS
+        )
+        return _compute_permutation_importance(
+            X=X,
+            y=y,
+            task_type=task_type,
+            n_folds=resolved_folds,
+            n_tree_estimators=n_tree_estimators,
+            n_estimators=n_estimators,
+            max_samples=permutation_max_samples,
+            rng=rng,
+        )
+
+    raise ValueError(f"Unsupported feature importance method: {method!r}")
 
 
 def generate_classification_ensemble_configs(

@@ -138,7 +138,11 @@ class InferenceConfig:
     flag is set."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
-        "balanced", "random", "constant_and_balanced", "feature_importance"
+        "balanced",
+        "random",
+        "constant_and_balanced",
+        "gini_feature_importance",
+        "permutation_feature_importance",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -148,10 +152,12 @@ class InferenceConfig:
         - "constant_and_balanced": Always include the first N features (see
           FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
           the rest.
-        - "feature_importance": Fit an ExtraTrees model to rank features by importance,
-          always include the top-K most important features (see
-          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), and randomly fill the remaining
-          budget from the rest.
+        - "gini_feature_importance": Fit an ExtraTrees model and rank features by Gini
+          impurity reduction. Always include the top-K most important features (see
+          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), randomly fill the rest.
+        - "permutation_feature_importance": Same as gini_feature_importance but ranks
+          features by permutation importance evaluated on held-out cross-validation
+          folds, which is more robust but significantly slower.
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
