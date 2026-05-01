@@ -65,6 +65,34 @@ model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_
 fit_modes = ["low_memory", "fit_preprocessors"]
 
 
+def test__show_progress_bar__is_configurable() -> None:
+    model = TabPFNClassifier(show_progress_bar=True)
+    assert model.show_progress_bar is True
+    assert model.get_params()["show_progress_bar"] is True
+
+    default_model = TabPFNClassifier()
+    assert default_model.show_progress_bar is False
+    assert default_model.get_params()["show_progress_bar"] is False
+
+
+def test__predict__show_progress_bar_true__tiny_dataset_does_not_crash() -> None:
+    model = TabPFNClassifier(n_estimators=1, show_progress_bar=True, random_state=42)
+    X, y = sklearn.datasets.make_classification(
+        n_samples=9,
+        n_features=3,
+        n_informative=3,
+        n_redundant=0,
+        n_classes=3,
+        random_state=0,
+    )
+
+    model.fit(X, y)
+
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
+
+
 @pytest.mark.parametrize(
     ("device", "n_estimators", "fit_mode", "inference_precision"),
     mark_mps_configs_as_slow(
