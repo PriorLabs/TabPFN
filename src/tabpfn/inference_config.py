@@ -143,6 +143,7 @@ class InferenceConfig:
         "constant_and_balanced",
         "gini_feature_importance",
         "permutation_feature_importance",
+        "gini_feature_importance_and_svd",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -158,6 +159,10 @@ class InferenceConfig:
         - "permutation_feature_importance": Same as gini_feature_importance but ranks
           features by permutation importance evaluated on held-out cross-validation
           folds, which is more robust but significantly slower.
+        - "gini_feature_importance_and_svd": Select top-K features by Gini impurity
+          importance and fill the remaining budget with TruncatedSVD projections of the
+          non-selected features. This compresses the less-important features into a
+          low-rank representation instead of discarding them entirely.
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the

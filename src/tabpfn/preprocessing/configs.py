@@ -9,6 +9,7 @@ from typing_extensions import override
 
 if TYPE_CHECKING:
     import numpy as np
+    import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
@@ -21,6 +22,7 @@ class FeatureSubsamplingMethod(str, Enum):
     CONSTANT_AND_BALANCED = "constant_and_balanced"
     GINI_FEATURE_IMPORTANCE = "gini_feature_importance"
     PERMUTATION_FEATURE_IMPORTANCE = "permutation_feature_importance"
+    GINI_FEATURE_IMPORTANCE_AND_SVD = "gini_feature_importance_and_svd"
 
 
 @dataclass(frozen=True, eq=True)
@@ -175,10 +177,30 @@ class RegressorEnsembleConfig(EnsembleConfig):
     target_transform: TransformerMixin | Pipeline | None
 
 
+@dataclass
+class SVDSupplement:
+    """Per-estimator SVD state for gini_feature_importance_and_svd.
+
+    Stores the top-K important feature indices and a fitted TorchTruncatedSVD
+    cache for the remaining features.  At inference time the pipeline input is
+    ``[X[:, top_k_indices] | SVD.transform(X[:, remaining_indices])]``.
+    """
+
+    top_k_indices: np.ndarray
+    """Shape [top_k] — feature indices selected by permutation importance."""
+    remaining_indices: np.ndarray
+    """Shape [n_remaining] — non-selected indices fed into SVD."""
+    n_svd_components: int
+    """Number of SVD dimensions used to fill the remaining budget."""
+    svd_cache: dict[str, torch.Tensor]
+    """Fitted TorchTruncatedSVD cache (keys: 'components', 'singular_values')."""
+
+
 __all__ = [
     "ClassifierEnsembleConfig",
     "EnsembleConfig",
     "FeatureSubsamplingMethod",
     "PreprocessorConfig",
     "RegressorEnsembleConfig",
+    "SVDSupplement",
 ]

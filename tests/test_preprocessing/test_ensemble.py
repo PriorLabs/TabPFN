@@ -4,18 +4,26 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import torch
 
 from tabpfn.preprocessing import generate_classification_ensemble_configs
-from tabpfn.preprocessing.configs import FeatureSubsamplingMethod, PreprocessorConfig
+from tabpfn.preprocessing.configs import (
+    FeatureSubsamplingMethod,
+    PreprocessorConfig,
+    SVDSupplement,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
+    _apply_svd_supplement,
+    _compute_svd_supplements,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
     _subsample_features_importance_based,
     compute_feature_importance_order,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
+from tabpfn.preprocessing.torch.torch_svd import TorchTruncatedSVD
 
 
 def _get_schema(n_features: int) -> FeatureSchema:
@@ -1012,3 +1020,148 @@ def test__compute_feature_importance_order__permutation_folds_yield_diverse_orde
     assert len(unique_orderings) > 1, (
         "Permutation importance across folds should produce diverse feature orderings"
     )
+
+
+# ── SVD supplement tests ──────────────────────────────────────────────────────
+
+
+def test__compute_svd_supplements__basic():
+    """_compute_svd_supplements returns one supplement per estimator."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 80, 20
+    n_estimators = 3
+    top_k = 5
+    budget = 12  # top_k (5) + n_svd (7)
+
+    X_train = rng.standard_normal((n_samples, n_features))
+    y_train = rng.integers(0, 2, n_samples)
+
+    orders = compute_feature_importance_order(
+        X=X_train,
+        y=y_train,
+        task_type="classifier",
+        n_estimators=n_estimators,
+        rng=rng,
+    )
+
+    supplements = _compute_svd_supplements(
+        X_train=X_train,
+        importance_feature_orders=orders,
+        top_k_count=top_k,
+        subsample_sizes=[budget] * n_estimators,
+    )
+
+    assert len(supplements) == n_estimators
+    for sup in supplements:
+        assert isinstance(sup, SVDSupplement)
+        assert len(sup.top_k_indices) == top_k
+        assert len(sup.remaining_indices) == n_features - top_k
+        assert sup.n_svd_components == budget - top_k
+        assert "components" in sup.svd_cache
+        assert sup.svd_cache["components"].shape == (
+            sup.n_svd_components,
+            len(sup.remaining_indices),
+        )
+
+
+def test__apply_svd_supplement__output_shape():
+    """_apply_svd_supplement returns array with top_k + n_svd columns."""
+    rng = np.random.default_rng(1)
+    n_samples, n_features = 50, 15
+    top_k, n_svd = 4, 6
+
+    X = rng.standard_normal((n_samples, n_features)).astype(np.float64)
+    top_k_indices = np.arange(top_k)
+    remaining_indices = np.arange(top_k, n_features)
+
+    X_rem_t = torch.from_numpy(X[:, remaining_indices].astype(np.float32))
+    svd_cache = TorchTruncatedSVD(n_components=n_svd).fit(X_rem_t)
+
+    sup = SVDSupplement(
+        top_k_indices=top_k_indices,
+        remaining_indices=remaining_indices,
+        n_svd_components=n_svd,
+        svd_cache=svd_cache,
+    )
+    result = _apply_svd_supplement(X, sup)
+
+    assert result.shape == (n_samples, top_k + n_svd)
+    assert result.dtype == X.dtype  # dtype preserved
+
+
+def test__apply_svd_supplement__no_svd_returns_top_k_only():
+    """When n_svd_components == 0, only top_k columns are returned."""
+    rng = np.random.default_rng(2)
+    n_samples, n_features = 30, 10
+    top_k = 4
+
+    X = rng.standard_normal((n_samples, n_features))
+    sup = SVDSupplement(
+        top_k_indices=np.arange(top_k),
+        remaining_indices=np.arange(top_k, n_features),
+        n_svd_components=0,
+        svd_cache={},
+    )
+    result = _apply_svd_supplement(X, sup)
+    assert result.shape == (n_samples, top_k)
+    np.testing.assert_array_equal(result, X[:, :top_k])
+
+
+def test__end_to_end__gini_importance_and_svd():
+    """End-to-end: TabPFNEnsemblePreprocessor with gini_feature_importance_and_svd."""
+    rng = np.random.default_rng(42)
+    n_train, n_features = 80, 30
+    n_estimators = 3
+    max_features = 15
+    top_k = 5
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=feature_schema,
+        random_state=0,
+        n_preprocessing_jobs=1,
+        feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD,
+        importance_top_k_count=top_k,
+        X_train=X_train,
+        y_train=y_train,
+        task_type="classifier",
+    )
+
+    assert preprocessor.svd_supplements is not None
+    assert len(preprocessor.svd_supplements) == n_estimators
+    assert preprocessor.subsample_feature_indices == [None] * n_estimators
+
+    members = preprocessor.fit_transform_ensemble_members(X_train, y_train)
+    assert len(members) == n_estimators
+
+    for _i, member in enumerate(members):
+        assert member.svd_supplement is not None
+        assert member.feature_indices is None
+        # Test data transformation uses the SVD supplement
+        X_test = rng.standard_normal((10, n_features))
+        X_transformed = member.transform_X_test(X_test)
+        assert X_transformed is not None

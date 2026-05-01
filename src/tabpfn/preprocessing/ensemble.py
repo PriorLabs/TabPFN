@@ -23,6 +23,7 @@ from tabpfn.preprocessing.configs import (
     EnsembleConfig,
     FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
+    SVDSupplement,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
@@ -59,12 +60,15 @@ class TabPFNEnsembleMember:
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
     feature_indices: np.ndarray | None = None
+    svd_supplement: SVDSupplement | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
         """Transform the test data."""
-        if self.feature_indices is not None:
+        if self.svd_supplement is not None:
+            X = _apply_svd_supplement(X, self.svd_supplement)
+        elif self.feature_indices is not None:
             X = X[..., self.feature_indices]
         return self.cpu_preprocessor.transform(X).X
 
@@ -173,6 +177,8 @@ class TabPFNEnsemblePreprocessor:
             is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
             or feature_subsampling_method
             is FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE
+            or feature_subsampling_method
+            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
         )
 
         importance_feature_orders: list[np.ndarray] | None = None
@@ -182,11 +188,18 @@ class TabPFNEnsemblePreprocessor:
                     "X_train and y_train must be provided when using a "
                     "feature_importance subsampling method."
                 )
+            # SVD variant reuses gini importance for the ranking step.
+            method_for_importance = (
+                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+                if feature_subsampling_method
+                is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
+                else feature_subsampling_method
+            )
             importance_feature_orders = compute_feature_importance_order(
                 X=X_train,
                 y=y_train,
                 task_type=task_type,
-                method=feature_subsampling_method,
+                method=method_for_importance,
                 n_estimators=len(self.configs),
                 rng=rng_features,
             )
@@ -194,17 +207,43 @@ class TabPFNEnsemblePreprocessor:
         max_features_per_estimator = [
             c.preprocess_config.max_features_per_estimator for c in self.configs
         ]
-        self.subsample_feature_indices = _get_subsample_feature_indices(
-            pipelines=self.pipelines,
-            n_samples=n_samples,
-            feature_schema=self.feature_schema,
-            max_features_per_estimator=max_features_per_estimator,
-            rng=rng_features,
-            feature_subsampling_method=feature_subsampling_method,
-            constant_feature_count=constant_feature_count,
-            importance_feature_orders=importance_feature_orders,
-            importance_top_k_count=resolved_top_k,
-        )
+
+        self.svd_supplements: list[SVDSupplement] | None = None
+        if (
+            feature_subsampling_method
+            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
+        ):
+            if importance_feature_orders is not None and X_train is not None:
+                svd_subsample_sizes = [
+                    _find_max_input_features(
+                        pipeline=pipeline,
+                        n_samples=n_samples,
+                        feature_schema=self.feature_schema,
+                        max_features_per_estimator=max_feats,
+                    )
+                    for pipeline, max_feats in zip(
+                        self.pipelines, max_features_per_estimator
+                    )
+                ]
+                self.svd_supplements = _compute_svd_supplements(
+                    X_train=X_train,
+                    importance_feature_orders=importance_feature_orders,
+                    top_k_count=resolved_top_k,
+                    subsample_sizes=svd_subsample_sizes,
+                )
+            self.subsample_feature_indices = [None] * len(self.configs)
+        else:
+            self.subsample_feature_indices = _get_subsample_feature_indices(
+                pipelines=self.pipelines,
+                n_samples=n_samples,
+                feature_schema=self.feature_schema,
+                max_features_per_estimator=max_features_per_estimator,
+                rng=rng_features,
+                feature_subsampling_method=feature_subsampling_method,
+                constant_feature_count=constant_feature_count,
+                importance_feature_orders=importance_feature_orders,
+                importance_top_k_count=resolved_top_k,
+            )
 
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
@@ -230,6 +269,7 @@ class TabPFNEnsemblePreprocessor:
             pipelines=self.pipelines,
             subsample_feature_indices=self.subsample_feature_indices,
             subsample_row_indices=self.subsample_row_indices,
+            svd_supplements=self.svd_supplements,
         )
 
         if not self.enable_gpu_preprocessing:
@@ -275,6 +315,11 @@ class TabPFNEnsemblePreprocessor:
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
                 feature_indices=self.subsample_feature_indices[config_index],
+                svd_supplement=(
+                    self.svd_supplements[config_index]
+                    if self.svd_supplements is not None
+                    else None
+                ),
             )
 
     def fit_transform_ensemble_members(
@@ -905,6 +950,92 @@ def _compute_permutation_importance(
             orderings.append(_fit_fold(train_idx, val_idx))
 
     return [orderings[i % n_folds] for i in range(n_estimators)]
+
+
+def _apply_svd_supplement(
+    X: np.ndarray,
+    sup: SVDSupplement,
+) -> np.ndarray:
+    """Return ``[X[:, top_k] | SVD.transform(X[:, remaining])]``.
+
+    Converts to float32 for the SVD step, then casts the result back to the
+    original dtype of *X*.
+    """
+    import torch  # noqa: PLC0415
+
+    from tabpfn.preprocessing.torch.torch_svd import TorchTruncatedSVD  # noqa: PLC0415
+
+    X_top = X[:, sup.top_k_indices]
+    if sup.n_svd_components == 0 or not sup.svd_cache:
+        return X_top
+    X_rem = torch.from_numpy(X[:, sup.remaining_indices].astype(np.float32))
+    X_svd = (
+        TorchTruncatedSVD(n_components=sup.n_svd_components)
+        .transform(X_rem, sup.svd_cache)
+        .numpy()
+    )
+    return np.concatenate([X_top, X_svd], axis=1).astype(X.dtype)
+
+
+def _compute_svd_supplements(
+    X_train: np.ndarray,
+    importance_feature_orders: list[np.ndarray],
+    top_k_count: int | float,
+    subsample_sizes: list[int],
+) -> list[SVDSupplement]:
+    """Return one SVDSupplement per estimator for permutation_importance_and_svd.
+
+    For each estimator the top-K features (by permutation importance) are kept
+    directly; the remaining budget is filled with TruncatedSVD projections of
+    the non-selected features.
+
+    Args:
+        X_train: Training data, shape ``(n_samples, n_features)``.
+        importance_feature_orders: Per-estimator feature rankings (most → least
+            important), as returned by ``compute_feature_importance_order``.
+        top_k_count: Number of top features to keep verbatim.  Float resolved
+            as ``ceil(value * n_total_features)``.
+        subsample_sizes: Per-estimator input budget (number of columns the
+            downstream pipeline can accept).  Controls ``n_svd_components``.
+        rng: Random number generator (unused currently; reserved for future
+            stochastic SVD variants).
+    """
+    import torch  # noqa: PLC0415
+
+    from tabpfn.preprocessing.torch.torch_svd import TorchTruncatedSVD  # noqa: PLC0415
+
+    n_total = X_train.shape[1]
+    if isinstance(top_k_count, float):
+        n_top = max(1, int(np.ceil(top_k_count * n_total)))
+    else:
+        n_top = int(top_k_count)
+    n_top = min(n_top, n_total)
+
+    n_orderings = len(importance_feature_orders)
+    supplements: list[SVDSupplement] = []
+
+    for i, budget in enumerate(subsample_sizes):
+        order = importance_feature_orders[i % n_orderings]
+        top_k_idx = order[:n_top].copy()
+        remaining_idx = order[n_top:].copy()
+        n_svd = max(0, min(budget - n_top, len(remaining_idx)))
+
+        if n_svd == 0 or len(remaining_idx) == 0:
+            svd_cache: dict = {}
+        else:
+            X_rem = torch.from_numpy(X_train[:, remaining_idx].astype(np.float32))
+            svd_cache = TorchTruncatedSVD(n_components=n_svd).fit(X_rem)
+
+        supplements.append(
+            SVDSupplement(
+                top_k_indices=top_k_idx,
+                remaining_indices=remaining_idx,
+                n_svd_components=n_svd,
+                svd_cache=svd_cache,
+            )
+        )
+
+    return supplements
 
 
 def compute_feature_importance_order(
