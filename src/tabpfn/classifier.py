@@ -31,6 +31,7 @@ import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from tabpfn_common_utils.telemetry import track_model_call
+from tqdm.auto import tqdm
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -230,6 +231,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         differentiable_input: bool = False,
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
+        show_progress_bar: bool = False,
     ) -> None:
         """Construct a TabPFN classifier.
 
@@ -453,6 +455,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 `eval_metric`. See
                 [tabpfn.inference_tuning.ClassifierTuningConfig][] for details
                 and options.
+
+            show_progress_bar:
+                Whether to show a progress bar during inference. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -467,6 +472,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode = fit_mode
+        self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
@@ -1442,10 +1448,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
-        for output, config in self.executor_.iter_outputs(
-            X,
-            autocast=self.use_autocast_,
-            task_type="multiclass",
+        for output, config in tqdm(
+            self.executor_.iter_outputs(
+                X,
+                autocast=self.use_autocast_,
+                task_type="multiclass",
+            ),
+            total=self.n_estimators,
+            desc="TabPFN inference",
+            unit="estimator",
+            disable=not self.show_progress_bar,
         ):
             original_ndim = output.ndim
 

@@ -18,6 +18,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
+import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
@@ -38,6 +39,55 @@ devices = get_pytest_devices()
 
 model_sources = [ModelSource.get_regressor_v2(), ModelSource.get_regressor_v2_5()]
 fit_modes = ["low_memory", "fit_preprocessors"]
+
+
+def test__show_progress_bar__is_configurable() -> None:
+    model = TabPFNRegressor(show_progress_bar=True)
+    assert model.show_progress_bar is True
+    assert model.get_params()["show_progress_bar"] is True
+
+    default_model = TabPFNRegressor()
+    assert default_model.show_progress_bar is False
+    assert default_model.get_params()["show_progress_bar"] is False
+
+
+def test__predict__show_progress_bar_true__tiny_dataset_does_not_crash() -> None:
+    model = TabPFNRegressor(n_estimators=1, show_progress_bar=True, random_state=42)
+    X, y = sklearn.datasets.make_regression(
+        n_samples=9,
+        n_features=3,
+        random_state=0,
+        coef=False,
+    )
+
+    model.fit(X, y)
+
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
+
+
+def test__forward__passes_progress_bar_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    model = TabPFNRegressor(n_estimators=1, show_progress_bar=True, random_state=42)
+    X, y = sklearn.datasets.make_regression(
+        n_samples=9, n_features=3, random_state=0, coef=False
+    )
+    model.fit(X, y)
+
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_tqdm(iterable, **kwargs) -> typing.Iterable[object]:
+        captured_kwargs.update(kwargs)
+        return iterable
+
+    monkeypatch.setattr(regressor_module, "tqdm", fake_tqdm)
+
+    averaged_logits, outputs, borders = model.forward(X, use_inference_mode=True)
+
+    assert averaged_logits is not None
+    assert outputs
+    assert borders
+    assert captured_kwargs["disable"] is False
 
 
 @pytest.fixture(scope="module")
