@@ -779,6 +779,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            y_train=y,
         )
 
         self.executor_ = create_inference_engine(
@@ -906,6 +907,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            y_train=y,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(

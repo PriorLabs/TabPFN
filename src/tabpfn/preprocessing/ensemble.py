@@ -77,7 +77,7 @@ class TabPFNEnsemblePreprocessor:
        (e.g. sample/feature subsampling) per ensemble member.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         *,
         configs: list[ClassifierEnsembleConfig] | list[RegressorEnsembleConfig],
@@ -90,6 +90,7 @@ class TabPFNEnsemblePreprocessor:
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
+        y_train: np.ndarray | None = None,
     ) -> None:
         """Init.
 
@@ -112,6 +113,10 @@ class TabPFNEnsemblePreprocessor:
                 subsample that many samples. If float, subsample that fraction of
                 samples. If a list of index arrays, use those indices directly. If
                 ``None``, no row subsampling is done.
+            y_train: Class labels for stratified row subsampling. When provided,
+                each estimator's subsample preserves the original class proportions
+                (classification). Ignored when ``subsample_samples`` is a list or
+                ``None``.
         """
         super().__init__()
         self.configs = configs
@@ -161,6 +166,7 @@ class TabPFNEnsemblePreprocessor:
             num_estimators=len(self.configs),
             n_samples=n_samples,
             rng=rng_rows,
+            y=y_train,
         )
 
     def fit_transform_ensemble_members_iterator(
@@ -278,11 +284,80 @@ def _subsample_rows_balanced(
     return result
 
 
+def _compute_stratified_class_counts(
+    class_sizes: np.ndarray,
+    subsample_size: int,
+) -> np.ndarray:
+    """Compute per-class target sample counts that sum to exactly ``subsample_size``.
+
+    Allocates proportionally to class frequency. Rounding errors are corrected by
+    giving leftover slots to the classes with the largest fractional remainders.
+    """
+    class_fracs = class_sizes / class_sizes.sum()
+    raw = class_fracs * subsample_size
+    counts = np.floor(raw).astype(int)
+    leftover = subsample_size - counts.sum()
+    if leftover > 0:
+        top = np.argpartition(raw - counts, -leftover)[-leftover:]
+        counts[top] += 1
+    return counts
+
+
+def _subsample_rows_stratified(
+    subsample_size: int,
+    y: np.ndarray,
+    num_estimators: int,
+    rng: np.random.Generator,
+) -> list[npt.NDArray[np.int64]] | None:
+    """Stratified row subsampling that preserves class proportions.
+
+    Each estimator draws a subsample of size ``subsample_size`` where the number
+    of rows per class matches the original class distribution. Within each class,
+    a balanced round-robin pool ensures every row appears approximately the same
+    number of times across estimators. Pool refills allow oversampling of classes
+    with fewer rows than the per-class target.
+    """
+    n_rows = len(y)
+    if subsample_size >= n_rows:
+        return None
+
+    classes, inverse = np.unique(y, return_inverse=True)
+    n_classes = len(classes)
+    class_sizes = np.bincount(inverse, minlength=n_classes)
+
+    class_indices: list[np.ndarray] = [
+        np.where(inverse == c)[0] for c in range(n_classes)
+    ]
+
+    target_counts = _compute_stratified_class_counts(
+        class_sizes=class_sizes,
+        subsample_size=subsample_size,
+    )
+
+    pools: list[list[int]] = [[] for _ in range(n_classes)]
+    result: list[npt.NDArray[np.int64]] = []
+
+    for _ in range(num_estimators):
+        estimator_indices: list[np.ndarray] = []
+        for c in range(n_classes):
+            count = int(target_counts[c])
+            if count == 0:
+                continue
+            slots, pools[c] = _draw_balanced_from_pool(
+                pools[c], count, len(class_indices[c]), rng
+            )
+            estimator_indices.append(class_indices[c][np.array(slots)])
+        result.append(np.sort(np.concatenate(estimator_indices).astype(np.int64)))
+
+    return result
+
+
 def _get_subsample_indices_for_estimators(  # noqa: C901
     subsample_samples: int | float | list[np.ndarray] | None,
     num_estimators: int,
     n_samples: int,
     rng: np.random.Generator,
+    y: np.ndarray | None = None,
 ) -> list[np.ndarray] | None:
     """Get the indices of the rows to subsample for each estimator.
 
@@ -294,6 +369,8 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         num_estimators: Number of estimators to generate subsample indices for.
         n_samples: Total number of rows. Only used if subsample_samples is int/float.
         rng: Random number generator.
+        y: Class labels. When provided, stratified subsampling is used to preserve
+            class proportions. Only applies when subsample_samples is int or float.
 
     Returns:
         List of row-index arrays (one per estimator), or ``None`` entries when no
@@ -303,6 +380,13 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         if subsample_samples < 1:
             raise ValueError(f"{subsample_samples=} must be >= 1 if int")
         size = min(subsample_samples, n_samples)
+        if y is not None:
+            return _subsample_rows_stratified(
+                subsample_size=size,
+                y=y,
+                num_estimators=num_estimators,
+                rng=rng,
+            )
         return _subsample_rows_balanced(
             subsample_size=size,
             n_rows=n_samples,
@@ -314,6 +398,13 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         if not (0 < subsample_samples < 1):
             raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
         size = int(subsample_samples * n_samples) + 1
+        if y is not None:
+            return _subsample_rows_stratified(
+                subsample_size=size,
+                y=y,
+                num_estimators=num_estimators,
+                rng=rng,
+            )
         return _subsample_rows_balanced(
             subsample_size=size,
             n_rows=n_samples,
