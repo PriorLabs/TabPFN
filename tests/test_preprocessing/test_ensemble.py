@@ -992,11 +992,15 @@ def test__compute_feature_importance_order__gini_large_dataset_yields_diverse_or
     )
 
 
-def test__compute_feature_importance_order__permutation_folds_yield_diverse_orderings():
-    """Permutation method across multiple folds produces diverse per-estimator orderings."""  # noqa: E501
+def test__compute_feature_importance_order__permutation_large_dataset_yields_diverse_orderings():  # noqa: E501
+    """With data > permutation_max_samples, independent subsamples produce diverse orderings."""  # noqa: E501
     rng = np.random.default_rng(7)
-    n_samples, n_features = 300, 12
-    # Pure noise — no single feature dominates, so fold-level rankings vary
+    n_features = 12
+    # Use a small fake max_samples so the multi-subsample path is exercised cheaply.
+    fake_max_samples = 100
+    n_samples = fake_max_samples * 3
+
+    # Pure noise — no single feature dominates, so subsample rankings vary.
     X = rng.standard_normal((n_samples, n_features))
     y = rng.integers(0, 3, n_samples)
 
@@ -1007,6 +1011,7 @@ def test__compute_feature_importance_order__permutation_folds_yield_diverse_orde
         task_type="classifier",
         method=FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE,
         n_estimators=n_estimators,
+        permutation_max_samples=fake_max_samples,
         rng=rng,
     )
 
@@ -1015,10 +1020,10 @@ def test__compute_feature_importance_order__permutation_folds_yield_diverse_orde
         assert order.shape == (n_features,)
         assert set(order) == set(range(n_features))
 
-    # With multiple folds on noisy data, orderings should not all be identical
+    # Multiple independent subsamples on noisy data should produce diverse rankings.
     unique_orderings = {tuple(o) for o in orders}
     assert len(unique_orderings) > 1, (
-        "Permutation importance across folds should produce diverse feature orderings"
+        "Independent subsamples on noise should produce diverse feature orderings"
     )
 
 

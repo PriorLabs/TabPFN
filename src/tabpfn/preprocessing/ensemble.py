@@ -19,7 +19,7 @@ from tabpfn.constants import (
     MAXIMUM_FEATURE_SHIFT,
     MUTUAL_INFORMATION_MAX_SAMPLES,
     PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS,
+    PERMUTATION_FEATURE_IMPORTANCE_VAL_FRACTION,
 )
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
@@ -896,84 +896,78 @@ def _compute_permutation_importance(
     X: np.ndarray,
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
-    n_folds: int,
     n_tree_estimators: int,
     n_estimators: int,
     max_samples: int,
+    val_fraction: float,
     rng: np.random.Generator,
 ) -> list[np.ndarray]:
-    """Return one feature-importance ordering per fold, cycled to ``n_estimators``.
+    """Return one feature-importance ordering per TabPFN ensemble estimator.
 
-    The number of folds is capped at ``n_estimators``.
+    Mirrors ``_compute_gini_importance``: a single ExtraTrees model is trained
+    and its permutation importance on a held-out validation split is used to
+    rank features.
 
-    When ``n_samples > max_samples`` standard k-fold is replaced by a custom
-    scheme: for each fold a fixed-size validation set of
-    ``max_samples // n_folds`` rows is sampled, and the remaining budget
-    (``max_samples - val_size``) is used for training.  This keeps the
-    validation set small and predictable regardless of dataset size.
+    When the dataset fits within ``max_samples`` a single fit is performed on
+    ``(1 - val_fraction)`` of the data and its ordering is repeated for every
+    estimator.
+
+    When the dataset is larger, ``n_subsamples = min(n_estimators,
+    n_samples // max_samples + 1)`` independent subsamples of size
+    ``max_samples`` are drawn, each producing a different ordering.  The
+    resulting orderings are then cycled to fill the full list of length
+    ``n_estimators``.
     """
     from sklearn.inspection import permutation_importance  # noqa: PLC0415
+    from sklearn.model_selection import train_test_split  # noqa: PLC0415
 
     model_cls = _get_extra_trees_model_cls(task_type)
-    n_folds = min(n_folds, n_estimators)
     n_samples = len(X)
+    stratify = y if task_type == "classifier" else None
 
-    def _fit_fold(train_idx: np.ndarray, val_idx: np.ndarray) -> np.ndarray:
+    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
+        strat = y_fit if task_type == "classifier" else None
+        try:
+            train_idx, val_idx = train_test_split(
+                np.arange(len(X_fit)),
+                test_size=val_fraction,
+                stratify=strat,
+                random_state=int(rng.integers(0, 2**31)),
+            )
+        except ValueError:
+            train_idx, val_idx = train_test_split(
+                np.arange(len(X_fit)),
+                test_size=val_fraction,
+                random_state=int(rng.integers(0, 2**31)),
+            )
         seed = int(rng.integers(0, 2**31))
         model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
-        model.fit(X[train_idx], y[train_idx])
+        model.fit(X_fit[train_idx], y_fit[train_idx])
         result = permutation_importance(
             model,
-            X[val_idx],
-            y[val_idx],
+            X_fit[val_idx],
+            y_fit[val_idx],
             n_repeats=3,
             random_state=int(rng.integers(0, 2**31)),
             n_jobs=-1,
         )
         return np.argsort(result.importances_mean)[::-1].copy()
 
-    orderings: list[np.ndarray] = []
-
     if n_samples <= max_samples:
-        if task_type == "classifier":
-            from sklearn.model_selection import StratifiedKFold  # noqa: PLC0415
+        ordering = _fit_ordering(X, y)
+        return [ordering] * n_estimators
 
-            kf: object = StratifiedKFold(
-                n_splits=n_folds,
-                shuffle=True,
-                random_state=int(rng.integers(0, 2**31)),
-            )
-        else:
-            from sklearn.model_selection import KFold  # noqa: PLC0415
-
-            kf = KFold(
-                n_splits=n_folds,
-                shuffle=True,
-                random_state=int(rng.integers(0, 2**31)),
-            )
-        for train_idx, val_idx in kf.split(X, y):  # type: ignore[union-attr]
-            orderings.append(_fit_fold(train_idx, val_idx))
-    else:
-        # Custom folds: fixed val_size drawn in a stratified manner (for
-        # classifiers), train fills the remaining budget with random rows.
-        from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-        val_size = max_samples // n_folds
-        train_size = max_samples - val_size
-        stratify = y if task_type == "classifier" else None
-        all_idx = np.arange(n_samples)
-        for _ in range(n_folds):
-            val_idx, remaining = train_test_split(
-                all_idx,
-                train_size=val_size,
-                stratify=stratify,
-                random_state=int(rng.integers(0, 2**31)),
-            )
-            n_train = min(train_size, len(remaining))
-            train_idx = rng.choice(remaining, n_train, replace=False)
-            orderings.append(_fit_fold(train_idx, val_idx))
-
-    return [orderings[i % n_folds] for i in range(n_estimators)]
+    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
+    orderings = []
+    for _ in range(n_subsamples):
+        idx, _ = train_test_split(
+            np.arange(n_samples),
+            train_size=max_samples,
+            stratify=stratify,
+            random_state=int(rng.integers(0, 2**31)),
+        )
+        orderings.append(_fit_ordering(X[idx], y[idx]))
+    return [orderings[i % n_subsamples] for i in range(n_estimators)]
 
 
 def _apply_svd_supplement(
@@ -1231,9 +1225,9 @@ def compute_feature_importance_order(  # noqa: PLR0913
     *,
     method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
     n_estimators: int,
-    n_folds: int | None = None,
     gini_max_samples: int = GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
     permutation_max_samples: int = PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    permutation_val_fraction: float = PERMUTATION_FEATURE_IMPORTANCE_VAL_FRACTION,
     mi_max_samples: int = MUTUAL_INFORMATION_MAX_SAMPLES,
     lgbm_max_samples: int = LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES,
     pruning_fraction: float = GINI_PRUNING_FRACTION,
@@ -1255,12 +1249,11 @@ def compute_feature_importance_order(  # noqa: PLR0913
         method: Feature-importance method to use.
         n_estimators: Number of TabPFN ensemble estimators.  The returned list
             has exactly this length.
-        n_folds: Number of cross-validation folds for
-            ``PERMUTATION_FEATURE_IMPORTANCE``.  Defaults to
-            ``PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS``, further capped at
-            ``n_estimators``.  Ignored for other methods.
         gini_max_samples: Row budget per ExtraTrees fit (gini method).
-        permutation_max_samples: Total row budget for permutation-importance folds.
+        permutation_max_samples: Row budget per permutation-importance fit.
+        permutation_val_fraction: Fraction of each subsample held out for
+            permutation evaluation; the rest is used to train the ExtraTrees
+            model.  Only used by ``PERMUTATION_FEATURE_IMPORTANCE``.
         mi_max_samples: Row budget per mutual-information fit.
         lgbm_max_samples: Row budget per LightGBM fit.
         pruning_fraction: Fraction of surplus features removed by SelectKBest
@@ -1289,17 +1282,14 @@ def compute_feature_importance_order(  # noqa: PLR0913
         )
 
     if method == FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE:
-        resolved_folds = (
-            n_folds if n_folds is not None else PERMUTATION_FEATURE_IMPORTANCE_N_FOLDS
-        )
         return _compute_permutation_importance(
             X=X,
             y=y,
             task_type=task_type,
-            n_folds=resolved_folds,
             n_tree_estimators=n_tree_estimators,
             n_estimators=n_estimators,
             max_samples=permutation_max_samples,
+            val_fraction=permutation_val_fraction,
             rng=rng,
         )
 
