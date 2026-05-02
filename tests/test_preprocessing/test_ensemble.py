@@ -1274,3 +1274,46 @@ def test__compute_feature_importance_order__lightgbm():
     )
     assert len(orderings_cat) == 2
     assert len(orderings_cat[0]) == n_features
+
+
+@pytest.mark.parametrize(
+    ("method", "extra_kwargs"),
+    [
+        (FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE, {}),
+        (FeatureSubsamplingMethod.MUTUAL_INFORMATION, {}),
+        (
+            FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
+            {"budget_hint": 5},
+        ),
+        (FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM, {}),
+        (FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE, {}),
+    ],
+)
+def test__compute_feature_importance_order__handles_nan(method, extra_kwargs):
+    """All importance methods must tolerate NaN values in X."""
+    if method is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
+        pytest.importorskip("lightgbm")
+
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 150, 10
+    X = rng.standard_normal((n_samples, n_features))
+    y = (X[:, 0] > 0).astype(int)
+
+    # Inject NaN: ~10% of values, spread across all columns.
+    nan_mask = rng.random((n_samples, n_features)) < 0.1
+    X[nan_mask] = np.nan
+
+    orderings = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=method,
+        n_estimators=2,
+        rng=rng,
+        **extra_kwargs,
+    )
+
+    assert len(orderings) == 2
+    for order in orderings:
+        assert len(order) > 0
+        assert not np.isnan(order).any()

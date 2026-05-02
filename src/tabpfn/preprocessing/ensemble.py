@@ -844,6 +844,21 @@ def _get_extra_trees_model_cls(
     return ExtraTreesRegressor
 
 
+def _impute_nans(X: np.ndarray) -> np.ndarray:
+    """Replace NaN with per-column median (0 for all-NaN columns).
+
+    Returns *X* unchanged if no NaN values are present (no copy).
+    """
+    if not np.isnan(X).any():
+        return X
+    X = X.copy()
+    col_medians = np.nanmedian(X, axis=0)
+    col_medians = np.where(np.isnan(col_medians), 0.0, col_medians)
+    nan_rows, nan_cols = np.where(np.isnan(X))
+    X[nan_rows, nan_cols] = col_medians[nan_cols]
+    return X
+
+
 def _compute_gini_importance(
     X: np.ndarray,
     y: np.ndarray,
@@ -1270,6 +1285,10 @@ def compute_feature_importance_order(  # noqa: PLR0913
         List of length ``n_estimators``, each element an array of feature indices
         sorted from most to least important.
     """
+    # LightGBM handles NaN natively; all sklearn-based methods require finite input.
+    if method is not FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
+        X = _impute_nans(X)
+
     if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE:
         return _compute_gini_importance(
             X=X,
