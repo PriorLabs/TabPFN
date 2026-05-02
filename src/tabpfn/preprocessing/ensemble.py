@@ -633,6 +633,9 @@ def _get_subsample_feature_indices(
     if feature_subsampling_method in (
         FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
         FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE,
+        FeatureSubsamplingMethod.MUTUAL_INFORMATION,
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
     ):
         if importance_feature_orders is None:
             # top_k covers all features — importance ordering is irrelevant, fall back
