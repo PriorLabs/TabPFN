@@ -1165,3 +1165,107 @@ def test__end_to_end__gini_importance_and_svd():
         X_test = rng.standard_normal((10, n_features))
         X_transformed = member.transform_X_test(X_test)
         assert X_transformed is not None
+
+
+def test__compute_feature_importance_order__mutual_information():
+    """Mutual information ranks the most predictive feature first."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 200, 10
+    X = rng.standard_normal((n_samples, n_features))
+    # Feature 3 is the sole driver of y.
+    y = (X[:, 3] > 0).astype(int)
+
+    orderings = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.MUTUAL_INFORMATION,
+        n_estimators=3,
+        rng=rng,
+    )
+
+    assert len(orderings) == 3
+    for order in orderings:
+        assert len(order) == n_features
+        assert order[0] == 3  # feature 3 must rank first
+
+    # Works with categorical_feature_indices (no crash, correct shape).
+    orderings_cat = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.MUTUAL_INFORMATION,
+        n_estimators=2,
+        categorical_feature_indices=[0, 1],
+        rng=rng,
+    )
+    assert len(orderings_cat) == 2
+    assert len(orderings_cat[0]) == n_features
+
+
+def test__compute_feature_importance_order__gini_with_pruning():
+    """Gini-with-pruning returns valid original-column indices and ranks top feature first."""  # noqa: E501
+    rng = np.random.default_rng(1)
+    n_samples, n_features = 200, 30
+    X = rng.standard_normal((n_samples, n_features))
+    # Feature 7 strongly predicts y.
+    y = (X[:, 7] > 0).astype(int)
+
+    budget = 10  # forces n_surplus = 30 - 10 = 20, n_prune = 5
+
+    orderings = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
+        n_estimators=3,
+        budget_hint=budget,
+        rng=rng,
+    )
+
+    assert len(orderings) == 3
+    for order in orderings:
+        assert len(order) == n_features - int(0.25 * (n_features - budget))
+        # All returned indices must be valid original column positions.
+        assert order.min() >= 0
+        assert order.max() < n_features
+        assert len(set(order.tolist())) == len(order)  # no duplicates
+        assert order[0] == 7  # feature 7 must survive pruning and rank first
+
+
+def test__compute_feature_importance_order__lightgbm():
+    """LightGBM importance ranks the most predictive feature first."""
+    lgb = pytest.importorskip("lightgbm")
+    _ = lgb  # suppress unused import warning
+
+    rng = np.random.default_rng(2)
+    n_samples, n_features = 200, 10
+    X = rng.standard_normal((n_samples, n_features))
+    y = (X[:, 5] > 0).astype(int)
+
+    orderings = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
+        n_estimators=3,
+        rng=rng,
+    )
+
+    assert len(orderings) == 3
+    for order in orderings:
+        assert len(order) == n_features
+        assert order[0] == 5
+
+    # With categorical indices — no crash.
+    orderings_cat = compute_feature_importance_order(
+        X=np.abs(X),  # non-negative for LightGBM categorical handling
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
+        n_estimators=2,
+        categorical_feature_indices=[0, 1],
+        rng=rng,
+    )
+    assert len(orderings_cat) == 2
+    assert len(orderings_cat[0]) == n_features

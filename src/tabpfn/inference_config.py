@@ -144,6 +144,9 @@ class InferenceConfig:
         "gini_feature_importance",
         "permutation_feature_importance",
         "gini_feature_importance_and_svd",
+        "mutual_information",
+        "gini_feature_importance_with_pruning",
+        "gini_feature_importance_lightgbm",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -163,6 +166,16 @@ class InferenceConfig:
           importance and fill the remaining budget with TruncatedSVD projections of the
           non-selected features. This compresses the less-important features into a
           low-rank representation instead of discarding them entirely.
+        - "mutual_information": Rank features by mutual information with the target.
+          Respects categorical features via sklearn's discrete_features parameter.
+          Same large-dataset subsampling strategy as gini_feature_importance.
+        - "gini_feature_importance_with_pruning": Use SelectKBest (F-statistic) to
+          pre-prune 25% of the surplus features (those beyond the budget) before
+          running gini importance on the survivors. Faster than plain gini on very
+          high-dimensional data.
+        - "gini_feature_importance_lightgbm": Use LightGBM gain importance instead of
+          ExtraTrees. Passes categorical feature indices natively. Requires lightgbm
+          to be installed (pip install lightgbm).
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
