@@ -147,6 +147,7 @@ class InferenceConfig:
         "mutual_information",
         "gini_feature_importance_with_pruning",
         "gini_feature_importance_lightgbm",
+        "gini_feature_importance_lightgbm_with_pruning",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -176,6 +177,9 @@ class InferenceConfig:
         - "gini_feature_importance_lightgbm": Use LightGBM gain importance instead of
           ExtraTrees. Passes categorical feature indices natively. Requires lightgbm
           to be installed (pip install lightgbm).
+        - "gini_feature_importance_lightgbm_with_pruning": Same as
+          gini_feature_importance_lightgbm but with SelectKBest pre-pruning of 25%
+          of surplus features before running LightGBM. Requires lightgbm.
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the

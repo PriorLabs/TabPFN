@@ -191,6 +191,8 @@ class TabPFNEnsemblePreprocessor:
             is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING
             or feature_subsampling_method
             is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM
+            or feature_subsampling_method
+            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING
         )
 
         importance_feature_orders: list[np.ndarray] | None = None
@@ -213,9 +215,9 @@ class TabPFNEnsemblePreprocessor:
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
             budget_hint: int | None = None
-            if (
-                feature_subsampling_method
-                is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING
+            if feature_subsampling_method in (
+                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
+                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
             ):
                 budget_hint = min(
                     _find_max_input_features(p, n_samples, self.feature_schema, mf)
@@ -636,6 +638,7 @@ def _get_subsample_feature_indices(
         FeatureSubsamplingMethod.MUTUAL_INFORMATION,
         FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
         FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
     ):
         if importance_feature_orders is None:
             # top_k covers all features — importance ordering is irrelevant, fall back
@@ -1130,22 +1133,23 @@ def _compute_mutual_information_importance(
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
 
 
-def _compute_gini_importance_with_pruning(
+def _prune_features(
     X: np.ndarray,
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
-    n_tree_estimators: int,
-    n_estimators: int,
     max_samples: int,
     budget_hint: int,
     pruning_fraction: float,
     rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Pre-prune low-scoring features with SelectKBest, then run gini on survivors.
+) -> tuple[np.ndarray, np.ndarray]:
+    """SelectKBest pre-pruning step shared by gini and LightGBM pruning methods.
 
-    ``pruning_fraction`` of the surplus features (``n_features - budget_hint``)
-    are removed using F-statistic scoring before ExtraTrees importance is
-    computed.  Returned indices reference the *original* column positions.
+    Removes ``pruning_fraction * max(0, n_features - budget_hint)`` of the
+    lowest-scoring features using the F-statistic.
+
+    Returns:
+        ``(X_pruned, kept_indices)`` where ``kept_indices`` maps pruned-space
+        column positions back to original column positions.
     """
     from sklearn.feature_selection import (  # noqa: PLC0415
         SelectKBest,
@@ -1159,21 +1163,78 @@ def _compute_gini_importance_with_pruning(
 
     if n_prune > 0:
         score_func = f_classif if task_type == "classifier" else f_regression
-        # Subsample rows for the quick pre-filter to keep it fast.
         n_rows = min(len(X), max_samples)
         row_idx = rng.choice(len(X), n_rows, replace=False)
         selector = SelectKBest(score_func, k=n_features - n_prune)
         selector.fit(X[row_idx], y[row_idx])
         kept_indices: np.ndarray = np.where(selector.get_support())[0]
-        X_pruned = X[:, kept_indices]
-    else:
-        kept_indices = np.arange(n_features)
-        X_pruned = X
+        return X[:, kept_indices], kept_indices
 
+    return X, np.arange(n_features)
+
+
+def _compute_gini_importance_with_pruning(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_tree_estimators: int,
+    n_estimators: int,
+    max_samples: int,
+    budget_hint: int,
+    pruning_fraction: float,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Pre-prune low-scoring features with SelectKBest, then run gini on survivors.
+
+    Returned indices reference the *original* column positions.
+    """
+    X_pruned, kept_indices = _prune_features(
+        X, y, task_type, max_samples, budget_hint, pruning_fraction, rng
+    )
     orderings_pruned = _compute_gini_importance(
         X_pruned, y, task_type, n_tree_estimators, n_estimators, max_samples, rng
     )
-    # Remap pruned-space indices back to original column positions.
+    return [kept_indices[order] for order in orderings_pruned]
+
+
+def _compute_lightgbm_importance_with_pruning(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_tree_estimators: int,
+    n_estimators: int,
+    max_samples: int,
+    budget_hint: int,
+    pruning_fraction: float,
+    categorical_feature_indices: list[int] | None,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Pre-prune low-scoring features with SelectKBest, then run LightGBM on survivors.
+
+    Returned indices reference the *original* column positions.
+    """
+    X_pruned, kept_indices = _prune_features(
+        X, y, task_type, max_samples, budget_hint, pruning_fraction, rng
+    )
+    # Remap categorical indices to pruned-space positions.
+    if categorical_feature_indices:
+        kept_set = set(kept_indices.tolist())
+        old_to_new = {old: new for new, old in enumerate(kept_indices.tolist())}
+        remapped_cat = [
+            old_to_new[i] for i in categorical_feature_indices if i in kept_set
+        ]
+    else:
+        remapped_cat = None
+    orderings_pruned = _compute_lightgbm_importance(
+        X_pruned,
+        y,
+        task_type,
+        n_tree_estimators,
+        n_estimators,
+        max_samples,
+        remapped_cat,
+        rng,
+    )
     return [kept_indices[order] for order in orderings_pruned]
 
 
@@ -1288,7 +1349,8 @@ def compute_feature_importance_order(  # noqa: PLR0913
         List of length ``n_estimators``, each element an array of feature indices
         sorted from most to least important.
     """
-    # LightGBM handles NaN natively; all sklearn-based methods require finite input.
+    # LightGBM handles NaN natively, but the SelectKBest pruning step does not.
+    # Impute for all methods except plain LightGBM (no pruning).
     if method is not FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
         X = _impute_nans(X)
 
@@ -1351,6 +1413,25 @@ def compute_feature_importance_order(  # noqa: PLR0913
             n_tree_estimators=n_tree_estimators,
             n_estimators=n_estimators,
             max_samples=lgbm_max_samples,
+            categorical_feature_indices=categorical_feature_indices,
+            rng=rng,
+        )
+
+    if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING:
+        if budget_hint is None:
+            raise ValueError(
+                "budget_hint is required for "
+                "GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING"
+            )
+        return _compute_lightgbm_importance_with_pruning(
+            X=X,
+            y=y,
+            task_type=task_type,
+            n_tree_estimators=n_tree_estimators,
+            n_estimators=n_estimators,
+            max_samples=lgbm_max_samples,
+            budget_hint=budget_hint,
+            pruning_fraction=pruning_fraction,
             categorical_feature_indices=categorical_feature_indices,
             rng=rng,
         )

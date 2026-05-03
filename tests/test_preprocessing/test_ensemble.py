@@ -1276,6 +1276,52 @@ def test__compute_feature_importance_order__lightgbm():
     assert len(orderings_cat[0]) == n_features
 
 
+def test__compute_feature_importance_order__lightgbm_with_pruning():
+    """LightGBM+pruning ranks the predictive feature first with valid original indices."""  # noqa: E501
+    lgb = pytest.importorskip("lightgbm")
+    _ = lgb
+
+    rng = np.random.default_rng(3)
+    n_samples, n_features = 200, 30
+    X = rng.standard_normal((n_samples, n_features))
+    y = (X[:, 7] > 0).astype(int)
+
+    budget = 10  # n_surplus = 30 - 10 = 20, n_prune = int(0.25 * 20) = 5
+    expected_len = n_features - int(0.25 * (n_features - budget))
+
+    orderings = compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
+        n_estimators=3,
+        budget_hint=budget,
+        rng=rng,
+    )
+
+    assert len(orderings) == 3
+    for order in orderings:
+        assert len(order) == expected_len
+        assert order.min() >= 0
+        assert order.max() < n_features
+        assert len(set(order.tolist())) == len(order)  # no duplicates
+        assert order[0] == 7
+
+    # With categorical indices passed — no crash.
+    orderings_cat = compute_feature_importance_order(
+        X=np.abs(X),
+        y=y,
+        task_type="classifier",
+        method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
+        n_estimators=2,
+        budget_hint=budget,
+        categorical_feature_indices=[0, 1],
+        rng=rng,
+    )
+    assert len(orderings_cat) == 2
+    assert len(orderings_cat[0]) == expected_len
+
+
 @pytest.mark.parametrize(
     ("method", "extra_kwargs"),
     [
@@ -1286,12 +1332,19 @@ def test__compute_feature_importance_order__lightgbm():
             {"budget_hint": 5},
         ),
         (FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM, {}),
+        (
+            FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
+            {"budget_hint": 5},
+        ),
         (FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE, {}),
     ],
 )
 def test__compute_feature_importance_order__handles_nan(method, extra_kwargs):
     """All importance methods must tolerate NaN values in X."""
-    if method is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
+    if method in (
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
+        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
+    ):
         pytest.importorskip("lightgbm")
 
     rng = np.random.default_rng(42)

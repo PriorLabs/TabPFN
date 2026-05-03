@@ -26,6 +26,9 @@ class FeatureSubsamplingMethod(str, Enum):
     MUTUAL_INFORMATION = "mutual_information"
     GINI_FEATURE_IMPORTANCE_WITH_PRUNING = "gini_feature_importance_with_pruning"
     GINI_FEATURE_IMPORTANCE_LIGHTGBM = "gini_feature_importance_lightgbm"
+    GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING = (
+        "gini_feature_importance_lightgbm_with_pruning"
+    )
 
 
 @dataclass(frozen=True, eq=True)
