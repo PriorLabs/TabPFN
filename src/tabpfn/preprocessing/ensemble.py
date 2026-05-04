@@ -831,7 +831,7 @@ def _collect_importance_orderings(
             np.arange(n_samples),
             train_size=max_samples,
             stratify=stratify,
-            random_state=int(rng.integers(0, 2**31)),
+            random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
         )
         orderings.append(fit_ordering_fn(X[idx], y[idx]))
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
@@ -850,7 +850,7 @@ def _compute_gini_importance(
     model_cls = _get_extra_trees_model_cls(task_type)
 
     def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
-        seed = int(rng.integers(0, 2**31))
+        seed = int(rng.integers(0, np.iinfo(np.int32).max))
         model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
         model.fit(X_fit, y_fit)
         return np.argsort(model.feature_importances_)[::-1].copy()
@@ -878,7 +878,7 @@ def _compute_lightgbm_importance(
     cat_feature: list[int] | str = categorical_feature_indices or "auto"
 
     def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
-        seed = int(rng.integers(0, 2**31))
+        seed = int(rng.integers(0, np.iinfo(np.int32).max))
         model = model_cls(
             importance_type="gain",
             n_estimators=n_tree_estimators,
