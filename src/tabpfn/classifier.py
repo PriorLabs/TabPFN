@@ -40,7 +40,6 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
-    resolve_model_routing,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -587,17 +586,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(
-        self, auto_version_override: ModelVersion | None = None
-    ) -> int:
+    def _initialize_model_variables(self) -> int:
         """Initializes the model and configurations.
 
         Returns:
             The determined byte_size.
         """
-        return initialize_model_variables_helper(
-            self, self.estimator_type, auto_version_override=auto_version_override
-        )
+        return initialize_model_variables_helper(self, self.estimator_type)
 
     def _initialize_for_differentiable_input(
         self,
@@ -778,14 +773,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ] = "fit_preprocessors"
 
         static_seed, _ = infer_random_state(self.random_state)
-        auto_version = resolve_model_routing(
-            model_path=self.model_path,
-            fit_mode=self.fit_mode,
-            X=X,
-            estimator_class_name=type(self).__name__,
-        )
-
-        byte_size = self._initialize_model_variables(auto_version_override=auto_version)
+        byte_size = self._initialize_model_variables()
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(
             X=X, y=y, random_state=static_seed
         )

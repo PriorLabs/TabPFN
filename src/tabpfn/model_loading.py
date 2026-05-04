@@ -218,17 +218,6 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def route_model_version(n_samples: int, n_features: int) -> ModelVersion:  # noqa: ARG001
-    """Select the model version based on dataset shape.
-
-    V3 routing is disabled until the model weights are publicly deployed.
-    Once V3 is available, this will route to V3 for datasets with fewer than
-    ``MODEL_ROUTING_V3_MAX_FEATURES`` features or more than
-    ``MODEL_ROUTING_V3_MIN_SAMPLES`` samples, and to V2.6 otherwise.
-    """
-    return ModelVersion.V2_6
-
-
 def _try_huggingface_downloads(
     base_path: Path,
     source: ModelSource,
