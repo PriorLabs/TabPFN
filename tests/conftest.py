@@ -14,7 +14,6 @@ import numpy as np
 import pytest
 import torch
 
-from tabpfn.constants import ModelVersion
 from tabpfn.model_loading import ModelSource, get_cache_dir
 
 
@@ -40,21 +39,6 @@ def _is_v3_classifier_in_cache() -> bool:
 def _is_v3_regressor_in_cache() -> bool:
     cache_dir = get_cache_dir()
     return (cache_dir / ModelSource.get_regressor_v3().default_filename).exists()
-
-
-# TODO: Remove this fixture when V3 is fully supported
-@pytest.fixture(autouse=True)
-def fallback_routing_when_v3_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Patch model routing to V2.6 when V3 is not yet downloaded.
-
-    This lets existing tests run as they did before V3 was added.
-    Tests that explicitly require V3 should use ``skip_if_v3_unavailable``.
-    """
-    if not _is_v3_classifier_in_cache():
-        monkeypatch.setattr(
-            "tabpfn.base.route_model_version",
-            lambda n_samples, n_features: ModelVersion.V2_6,  # noqa: ARG005
-        )
 
 
 @pytest.fixture

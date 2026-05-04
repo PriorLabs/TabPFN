@@ -37,7 +37,7 @@ class ModelVersion(str, Enum):
     V3 = "v3"
 
 
-MODEL_ROUTING_V3_MAX_FEATURES = 250  # TODO: Finalize this value
+MODEL_ROUTING_V3_MAX_FEATURES = 2_000  # Essentially disables routing for now.
 MODEL_ROUTING_V3_MIN_SAMPLES = 100_000
 
 NA_PLACEHOLDER = "__MISSING__"

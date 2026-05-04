@@ -33,8 +33,6 @@ from torch import nn
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.constants import (
-    MODEL_ROUTING_V3_MAX_FEATURES,
-    MODEL_ROUTING_V3_MIN_SAMPLES,
     ModelVersion,
 )
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
@@ -220,16 +218,14 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
     )
 
 
-def route_model_version(n_samples: int, n_features: int) -> ModelVersion:
+def route_model_version(n_samples: int, n_features: int) -> ModelVersion:  # noqa: ARG001
     """Select the model version based on dataset shape.
 
-    Routes to V3 for small-feature or large-sample datasets, and V2.6 otherwise.
+    V3 routing is disabled until the model weights are publicly deployed.
+    Once V3 is available, this will route to V3 for datasets with fewer than
+    ``MODEL_ROUTING_V3_MAX_FEATURES`` features or more than
+    ``MODEL_ROUTING_V3_MIN_SAMPLES`` samples, and to V2.6 otherwise.
     """
-    if (
-        n_features < MODEL_ROUTING_V3_MAX_FEATURES
-        or n_samples > MODEL_ROUTING_V3_MIN_SAMPLES
-    ):
-        return ModelVersion.V3
     return ModelVersion.V2_6
 
 
@@ -512,7 +508,7 @@ def _download_model(
     _HF_REPOS = {
         ModelVersion.V2_5: "tabpfn_2_5",
         ModelVersion.V2_6: "tabpfn_2_6",
-        ModelVersion.V3: "TabPFN-v3",
+        ModelVersion.V3: "tabpfn_3",
     }
     if version in _HF_REPOS:
         try:
