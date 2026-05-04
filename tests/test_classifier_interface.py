@@ -34,6 +34,7 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
+from .conftest import _is_v3_classifier_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -533,6 +534,8 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
+    if model_version == ModelVersion.V3 and not _is_v3_classifier_in_cache():
+        pytest.skip("V3 classifier model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
@@ -1268,6 +1271,17 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2.6-" in estimator.model_path
+
+
+def test__create_default_for_version__v3__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "classifier" in estimator.model_path
+    assert "-v3-" in estimator.model_path
 
 
 def test__create_default_for_version__passes_through_overrides() -> None:

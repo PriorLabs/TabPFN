@@ -34,7 +34,11 @@ class ModelVersion(str, Enum):
     V2 = "v2"
     V2_5 = "v2.5"
     V2_6 = "v2.6"
+    V3 = "v3"
 
+
+MODEL_ROUTING_V3_MAX_FEATURES = 250  # TODO: Finalize this value
+MODEL_ROUTING_V3_MIN_SAMPLES = 100_000
 
 NA_PLACEHOLDER = "__MISSING__"
 

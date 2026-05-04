@@ -14,6 +14,9 @@ import numpy as np
 import pytest
 import torch
 
+from tabpfn.constants import ModelVersion
+from tabpfn.model_loading import ModelSource, get_cache_dir
+
 
 def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
     """Configure pytest with global settings."""
@@ -27,3 +30,42 @@ def set_global_seed() -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)  # noqa: NPY002
     random.seed(seed)
+
+
+def _is_v3_classifier_in_cache() -> bool:
+    cache_dir = get_cache_dir()
+    return (cache_dir / ModelSource.get_classifier_v3().default_filename).exists()
+
+
+def _is_v3_regressor_in_cache() -> bool:
+    cache_dir = get_cache_dir()
+    return (cache_dir / ModelSource.get_regressor_v3().default_filename).exists()
+
+
+# TODO: Remove this fixture when V3 is fully supported
+@pytest.fixture(autouse=True)
+def fallback_routing_when_v3_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch model routing to V2.6 when V3 is not yet downloaded.
+
+    This lets existing tests run as they did before V3 was added.
+    Tests that explicitly require V3 should use ``skip_if_v3_unavailable``.
+    """
+    if not _is_v3_classifier_in_cache():
+        monkeypatch.setattr(
+            "tabpfn.base.route_model_version",
+            lambda n_samples, n_features: ModelVersion.V2_6,  # noqa: ARG005
+        )
+
+
+@pytest.fixture
+def skip_if_v3_classifier_unavailable() -> None:
+    """Skip the test when the V3 classifier model is not in the local cache."""
+    if not _is_v3_classifier_in_cache():
+        pytest.skip("V3 classifier model not in cache; skipping V3-specific test.")
+
+
+@pytest.fixture
+def skip_if_v3_regressor_unavailable() -> None:
+    """Skip the test when the V3 regressor model is not in the local cache."""
+    if not _is_v3_regressor_in_cache():
+        pytest.skip("V3 regressor model not in cache; skipping V3-specific test.")

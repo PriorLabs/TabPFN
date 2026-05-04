@@ -21,7 +21,10 @@ from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
     DEFAULT_DTYPE_BYTE_SIZE,
+    MODEL_ROUTING_V3_MAX_FEATURES,
+    MODEL_ROUTING_V3_MIN_SAMPLES,
     ModelPath,
+    ModelVersion,
     XType,
 )
 from tabpfn.errors import TabPFNValidationError
@@ -33,7 +36,11 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
-from tabpfn.model_loading import load_model_criterion_config, resolve_model_version
+from tabpfn.model_loading import (
+    load_model_criterion_config,
+    resolve_model_version,
+    route_model_version,
+)
 from tabpfn.preprocessing.clean import fix_dtypes
 from tabpfn.utils import (
     DevicesSpecification,
@@ -99,6 +106,7 @@ def initialize_tabpfn_model(
     | list[ClassifierModelSpecs],
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    auto_version_override: ModelVersion | None = None,
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
@@ -115,6 +123,8 @@ def initialize_tabpfn_model(
 
         which: Which TabPFN model to load.
         fit_mode: Determines caching behavior.
+        auto_version_override: When set, overrides the default model version for
+            "auto" routing.
 
     Returns:
         a list of models,
@@ -179,7 +189,10 @@ def initialize_tabpfn_model(
         if isinstance(model_path, str) and model_path == "auto":
             model_path = None  # type: ignore
 
-        version = resolve_model_version(model_path)  # type: ignore
+        if model_path is None and auto_version_override is not None:
+            version = auto_version_override
+        else:
+            version = resolve_model_version(model_path)  # type: ignore
         download_if_not_exists = True
 
         if which == "classifier":
@@ -379,9 +392,53 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
+def resolve_model_routing(
+    model_path: str | pathlib.Path,
+    fit_mode: str,
+    X: XType,
+    estimator_class_name: str,
+) -> ModelVersion | None:
+    """Determine the auto-routed model version and validate fit_with_cache.
+
+    Returns the routed ``ModelVersion`` when ``model_path == "auto"`` and ``X``
+    has at least two dimensions, otherwise ``None``.
+
+    Raises ``ValueError`` when ``fit_mode == "fit_with_cache"`` and the effective
+    model version is V2.6.
+    """
+    auto_version: ModelVersion | None = None
+    if model_path == "auto" and hasattr(X, "shape") and len(X.shape) >= 2:
+        auto_version = route_model_version(
+            n_samples=int(X.shape[0]), n_features=int(X.shape[1])
+        )
+
+    if fit_mode == "fit_with_cache":
+        _effective_version = (
+            auto_version if model_path == "auto" else resolve_model_version(model_path)  # type: ignore
+        )
+        if _effective_version == ModelVersion.V2_6:
+            if model_path == "auto":
+                raise ValueError(
+                    "fit_with_cache is not supported for TabPFN v2.6 yet. "
+                    f"Your data was automatically routed to v2.6 "
+                    f"(>={MODEL_ROUTING_V3_MAX_FEATURES} features and "
+                    f"<={MODEL_ROUTING_V3_MIN_SAMPLES:,} samples). "
+                    "TabPFN v3 supports fit_with_cache and is used for datasets "
+                    f"with <{MODEL_ROUTING_V3_MAX_FEATURES} features or "
+                    f">{MODEL_ROUTING_V3_MIN_SAMPLES:,} samples. "
+                    "To use fit_with_cache explicitly, switch to v3 via: "
+                    f"{estimator_class_name}.create_default_for_version("
+                    "ModelVersion.V3, fit_mode='fit_with_cache')"
+                )
+            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
+
+    return auto_version
+
+
 def initialize_model_variables_helper(
     calling_instance: TabPFNRegressor | TabPFNClassifier,
     model_type: Literal["regressor", "classifier"],
+    auto_version_override: ModelVersion | None = None,
 ) -> int:
     """Set attributes on the given model to prepare it for inference.
 
@@ -396,6 +453,7 @@ def initialize_model_variables_helper(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
             fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
+            auto_version_override=auto_version_override,
         )
     )
     calling_instance.models_ = models

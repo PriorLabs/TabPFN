@@ -40,6 +40,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    resolve_model_routing,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -521,6 +522,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
+        elif version == ModelVersion.V3:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_classifier_v3().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 
@@ -578,13 +587,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tags.estimator_type = self.estimator_type
         return tags
 
-    def _initialize_model_variables(self) -> int:
+    def _initialize_model_variables(
+        self, auto_version_override: ModelVersion | None = None
+    ) -> int:
         """Initializes the model and configurations.
 
         Returns:
             The determined byte_size.
         """
-        return initialize_model_variables_helper(self, self.estimator_type)
+        return initialize_model_variables_helper(
+            self, self.estimator_type, auto_version_override=auto_version_override
+        )
 
     def _initialize_for_differentiable_input(
         self,
@@ -764,13 +777,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
-        if self.fit_mode == "fit_with_cache" and (
-            self.model_path == "auto" or "v2.6" in str(self.model_path)
-        ):
-            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
-
         static_seed, _ = infer_random_state(self.random_state)
-        byte_size = self._initialize_model_variables()
+        auto_version = resolve_model_routing(
+            model_path=self.model_path,
+            fit_mode=self.fit_mode,
+            X=X,
+            estimator_class_name=type(self).__name__,
+        )
+
+        byte_size = self._initialize_model_variables(auto_version_override=auto_version)
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(
             X=X, y=y, random_state=static_seed
         )

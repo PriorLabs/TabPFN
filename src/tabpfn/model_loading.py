@@ -32,7 +32,11 @@ from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.constants import ModelVersion
+from tabpfn.constants import (
+    MODEL_ROUTING_V3_MAX_FEATURES,
+    MODEL_ROUTING_V3_MIN_SAMPLES,
+    ModelVersion,
+)
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import InferenceConfig
@@ -55,6 +59,7 @@ FALLBACK_S3_BASE_URL = "https://storage.googleapis.com/tabpfn-v2-model-files/051
 # Special string used to identify model paths.
 V_2_5_IDENTIFIER = "v2.5"
 V_2_6_IDENTIFIER = "v2.6"
+V_3_IDENTIFIER = "v3"
 
 
 class ModelType(str, Enum):  # noqa: D101
@@ -165,8 +170,30 @@ class ModelSource:  # noqa: D101
             filenames=filenames,
         )
 
+    @classmethod
+    def get_classifier_v3(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v3-classifier-v3_default.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/TabPFN-v3-clf",
+            default_filename="tabpfn-v3-classifier-v3_default.ckpt",
+            filenames=filenames,
+        )
 
-def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:
+    @classmethod
+    def get_regressor_v3(cls) -> ModelSource:  # noqa: D102
+        filenames = [
+            "tabpfn-v3-regressor-v3_default.ckpt",
+        ]
+        return cls(
+            repo_id="Prior-Labs/TabPFN-v3-reg",
+            default_filename="tabpfn-v3-regressor-v3_default.ckpt",
+            filenames=filenames,
+        )
+
+
+def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSource:  # noqa: PLR0911
     if version == ModelVersion.V2:
         if model_type == ModelType.CLASSIFIER:
             return ModelSource.get_classifier_v2()
@@ -182,10 +209,28 @@ def _get_model_source(version: ModelVersion, model_type: ModelType) -> ModelSour
             return ModelSource.get_classifier_v2_6()
         if model_type == ModelType.REGRESSOR:
             return ModelSource.get_regressor_v2_6()
+    elif version == ModelVersion.V3:
+        if model_type == ModelType.CLASSIFIER:
+            return ModelSource.get_classifier_v3()
+        if model_type == ModelType.REGRESSOR:
+            return ModelSource.get_regressor_v3()
 
     raise ValueError(
         f"Unsupported version/model combination: {version.value}/{model_type.value}",
     )
+
+
+def route_model_version(n_samples: int, n_features: int) -> ModelVersion:
+    """Select the model version based on dataset shape.
+
+    Routes to V3 for small-feature or large-sample datasets, and V2.6 otherwise.
+    """
+    if (
+        n_features < MODEL_ROUTING_V3_MAX_FEATURES
+        or n_samples > MODEL_ROUTING_V3_MIN_SAMPLES
+    ):
+        return ModelVersion.V3
+    return ModelVersion.V2_6
 
 
 def _try_huggingface_downloads(
@@ -346,6 +391,8 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V2_5, ModelSource.get_regressor_v2_5(), "regressor"),
         (ModelVersion.V2_6, ModelSource.get_classifier_v2_6(), "classifier"),
         (ModelVersion.V2_6, ModelSource.get_regressor_v2_6(), "regressor"),
+        (ModelVersion.V3, ModelSource.get_classifier_v3(), "classifier"),
+        (ModelVersion.V3, ModelSource.get_regressor_v3(), "regressor"),
     ]:
         for ckpt_name in model_source.filenames:
             path = to / ckpt_name
@@ -465,6 +512,7 @@ def _download_model(
     _HF_REPOS = {
         ModelVersion.V2_5: "tabpfn_2_5",
         ModelVersion.V2_6: "tabpfn_2_6",
+        ModelVersion.V3: "TabPFN-v3",
     }
     if version in _HF_REPOS:
         try:
@@ -537,7 +585,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5", "v2.6"],
+    version: Literal["v2", "v2.5", "v2.6", "v3"],
     which: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -554,7 +602,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
-    version: Literal["v2", "v2.5", "v2.6"],
+    version: Literal["v2", "v2.5", "v2.6", "v3"],
     which: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -571,7 +619,7 @@ def load_model_criterion_config(  # noqa: PLR0912
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -778,10 +826,13 @@ def log_model_init_params(
 def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
     if model_path is None:
         return settings.tabpfn.model_version
-    if V_2_6_IDENTIFIER in Path(model_path).name:
+    name = Path(model_path).name
+    if V_2_6_IDENTIFIER in name:
         return ModelVersion.V2_6
-    if V_2_5_IDENTIFIER in Path(model_path).name:
+    if V_2_5_IDENTIFIER in name:
         return ModelVersion.V2_5
+    if V_3_IDENTIFIER in name:
+        return ModelVersion.V3
     return ModelVersion.V2
 
 
@@ -802,7 +853,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
 ) -> tuple[
     list[Path],
     list[Path],
