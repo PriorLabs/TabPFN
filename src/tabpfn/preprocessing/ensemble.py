@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -178,7 +178,10 @@ class TabPFNEnsemblePreprocessor:
         )
 
         importance_feature_orders: list[np.ndarray] | None = None
-        if is_feature_importance_subsampling and resolved_top_k < n_total_features:
+        needs_subsampling = any(
+            s < n_total_features for s in max_features_per_estimator
+        )
+        if is_feature_importance_subsampling and needs_subsampling:
             if X_train is None or y_train is None:
                 raise ValueError(
                     "X_train and y_train must be provided when using a "
@@ -769,6 +772,18 @@ def _get_extra_trees_model_cls(
     return ExtraTreesRegressor
 
 
+def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> type:
+    try:
+        import lightgbm as lgb  # noqa: PLC0415
+    except ImportError as e:
+        raise ImportError(
+            "lightgbm is required for GINI_FEATURE_IMPORTANCE_LIGHTGBM. "
+            "Install with: pip install lightgbm"
+        ) from e
+
+    return lgb.LGBMClassifier if task_type == "classifier" else lgb.LGBMRegressor
+
+
 def _impute_nans(X: np.ndarray) -> np.ndarray:
     """Replace NaN with per-column median (0 for all-NaN columns).
 
@@ -784,36 +799,26 @@ def _impute_nans(X: np.ndarray) -> np.ndarray:
     return X
 
 
-def _compute_gini_importance(
+def _collect_importance_orderings(
     X: np.ndarray,
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
-    n_tree_estimators: int,
     n_estimators: int,
     max_samples: int,
+    fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
     rng: np.random.Generator,
 ) -> list[np.ndarray]:
-    """Return one feature-importance ordering per TabPFN ensemble estimator.
+    """Run ``fit_ordering_fn`` and return one ordering per estimator.
 
-    When the dataset fits within ``max_samples`` a single ExtraTrees model is
-    trained on all data and its ordering is repeated for every estimator.
-
-    When the dataset is larger, ``n_subsamples = min(n_estimators,
-    n_samples // max_samples + 1)`` independent subsamples of size ``max_samples``
-    are drawn, each producing a different ordering.  The resulting orderings are
-    then cycled to fill the full list of length ``n_estimators``.
+    For datasets that fit within ``max_samples`` a single call is made and its
+    result is repeated.  For larger datasets ``n_subsamples`` independent
+    subsamples of size ``max_samples`` are drawn and cycled to fill
+    ``n_estimators``.
     """
-    model_cls = _get_extra_trees_model_cls(task_type)
     n_samples = len(X)
 
-    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
-        seed = int(rng.integers(0, 2**31))
-        model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
-        model.fit(X_fit, y_fit)
-        return np.argsort(model.feature_importances_)[::-1].copy()
-
     if n_samples <= max_samples:
-        ordering = _fit_ordering(X, y)
+        ordering = fit_ordering_fn(X, y)
         return [ordering] * n_estimators
 
     from sklearn.model_selection import train_test_split  # noqa: PLC0415
@@ -828,8 +833,31 @@ def _compute_gini_importance(
             stratify=stratify,
             random_state=int(rng.integers(0, 2**31)),
         )
-        orderings.append(_fit_ordering(X[idx], y[idx]))
+        orderings.append(fit_ordering_fn(X[idx], y[idx]))
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
+
+
+def _compute_gini_importance(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_tree_estimators: int,
+    n_estimators: int,
+    max_samples: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Return one Gini feature-importance ordering per TabPFN ensemble estimator."""
+    model_cls = _get_extra_trees_model_cls(task_type)
+
+    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
+        seed = int(rng.integers(0, 2**31))
+        model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
+        model.fit(X_fit, y_fit)
+        return np.argsort(model.feature_importances_)[::-1].copy()
+
+    return _collect_importance_orderings(
+        X, y, task_type, n_estimators, max_samples, _fit_ordering, rng
+    )
 
 
 def _compute_lightgbm_importance(
@@ -844,20 +872,10 @@ def _compute_lightgbm_importance(
 ) -> list[np.ndarray]:
     """Return one LightGBM gain-importance ordering per estimator.
 
-    Requires ``lightgbm`` to be installed.  For large datasets uses the same
-    multiple-subsamples strategy as gini.
+    Requires ``lightgbm`` to be installed.
     """
-    try:
-        import lightgbm as lgb  # noqa: PLC0415
-    except ImportError as e:
-        raise ImportError(
-            "lightgbm is required for GINI_FEATURE_IMPORTANCE_LIGHTGBM. "
-            "Install with: pip install lightgbm"
-        ) from e
-
-    model_cls = lgb.LGBMClassifier if task_type == "classifier" else lgb.LGBMRegressor
+    model_cls = _get_lightgbm_model_cls(task_type)
     cat_feature: list[int] | str = categorical_feature_indices or "auto"
-    n_samples = len(X)
 
     def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
         seed = int(rng.integers(0, 2**31))
@@ -871,24 +889,9 @@ def _compute_lightgbm_importance(
         model.fit(X_fit, y_fit, categorical_feature=cat_feature)
         return np.argsort(model.feature_importances_)[::-1].copy()
 
-    if n_samples <= max_samples:
-        ordering = _fit_ordering(X, y)
-        return [ordering] * n_estimators
-
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
-    stratify = y if task_type == "classifier" else None
-    orderings = []
-    for _ in range(n_subsamples):
-        idx, _ = train_test_split(
-            np.arange(n_samples),
-            train_size=max_samples,
-            stratify=stratify,
-            random_state=int(rng.integers(0, 2**31)),
-        )
-        orderings.append(_fit_ordering(X[idx], y[idx]))
-    return [orderings[i % n_subsamples] for i in range(n_estimators)]
+    return _collect_importance_orderings(
+        X, y, task_type, n_estimators, max_samples, _fit_ordering, rng
+    )
 
 
 def compute_feature_importance_order(

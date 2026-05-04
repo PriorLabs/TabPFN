@@ -170,9 +170,8 @@ class InferenceConfig:
     max_features_per_estimator is filled randomly from the remaining features.
         - If an int, that many features are always included.
         - If a float in (0, 1], resolved as ceil(value * n_total_features).
-        - If "auto", uses top-k=150 only when n_features > 200 and n_samples > 100_000;
-          otherwise importance ordering is computed but all features are kept
-          (equivalent to balanced subsampling with importance-ranked selection).
+        - If "auto", uses top-k=150 when n_features > 200 and n_samples > 100_000;
+          otherwise no importance filtering is done.
     """
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")

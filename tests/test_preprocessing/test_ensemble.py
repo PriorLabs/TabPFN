@@ -683,14 +683,14 @@ def test__compute_feature_importance_order__subsamples_large_datasets():
         assert set(order) == set(range(n_features))
 
 
-def test__end_to_end__feature_importance_skipped_when_top_k_covers_all():
-    """No importance computation when top_k >= n_total_features."""
+def test__end_to_end__feature_importance_skipped_when_no_subsampling_needed():
+    """No importance computation when every estimator sees all features."""
     from unittest.mock import patch  # noqa: PLC0415
 
     rng = np.random.default_rng(8)
     n_train, n_features = 40, 10
     n_estimators = 2
-    max_features = 8
+    max_features = n_features  # budget == total → no subsampling needed
 
     X_train = rng.standard_normal((n_train, n_features))
     y_train = rng.integers(0, 2, n_train)
@@ -725,7 +725,7 @@ def test__end_to_end__feature_importance_skipped_when_top_k_covers_all():
             random_state=0,
             n_preprocessing_jobs=1,
             feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
-            importance_top_k_count=n_features,  # covers all features → skip
+            importance_top_k_count=n_features,
             X_train=X_train,
             y_train=y_train,
             task_type="classifier",
