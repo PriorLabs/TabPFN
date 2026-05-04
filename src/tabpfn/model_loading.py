@@ -32,9 +32,7 @@ from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.constants import (
-    ModelVersion,
-)
+from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
 from tabpfn.inference_config import InferenceConfig
