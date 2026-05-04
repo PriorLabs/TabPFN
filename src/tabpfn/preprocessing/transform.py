@@ -20,7 +20,7 @@ from tabpfn.preprocessing.ensemble import (
 if TYPE_CHECKING:
     import numpy as np
 
-    from tabpfn.preprocessing.configs import EnsembleConfig, SVDSupplement
+    from tabpfn.preprocessing.configs import EnsembleConfig
     from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 
@@ -35,7 +35,6 @@ def _fit_preprocessing_one(
     pipeline: PreprocessingPipeline,
     feature_indices: np.ndarray | None = None,
     row_indices: np.ndarray | None = None,
-    svd_supplement: SVDSupplement | None = None,
 ) -> tuple[
     int,
     EnsembleConfig,
@@ -56,9 +55,6 @@ def _fit_preprocessing_one(
         feature_indices: Indices of features to select. If not provided, all features
             are used.
         row_indices: Indices of rows to select. If not provided, all rows are used.
-        svd_supplement: When set, replaces raw feature slicing with the
-            importance-and-SVD transform.  Mutually exclusive with
-            ``feature_indices``.
 
     Returns:
         Tuple containing the config index, ensemble configuration, the fitted
@@ -68,15 +64,7 @@ def _fit_preprocessing_one(
     if row_indices is not None:
         X_train = X_train[row_indices]
         y_train = y_train[row_indices]
-    if svd_supplement is not None:
-        from tabpfn.preprocessing.datamodel import FeatureModality  # noqa: PLC0415
-        from tabpfn.preprocessing.ensemble import _apply_svd_supplement  # noqa: PLC0415
-
-        X_train = _apply_svd_supplement(X_train, svd_supplement)
-        feature_schema = feature_schema.slice_for_indices(
-            sorted(svd_supplement.top_k_indices.tolist())
-        ).append_columns(FeatureModality.NUMERICAL, svd_supplement.n_svd_components)
-    elif feature_indices is not None:
+    if feature_indices is not None:
         X_train = X_train[..., feature_indices]
         feature_schema = feature_schema.slice_for_indices(feature_indices.tolist())
     if not isinstance(X_train, torch.Tensor):
@@ -133,7 +121,6 @@ def fit_preprocessing(
     pipelines: Sequence[PreprocessingPipeline],
     subsample_feature_indices: list[np.ndarray | None] | None = None,
     subsample_row_indices: list[np.ndarray] | None = None,
-    svd_supplements: list[SVDSupplement] | None = None,
 ) -> Iterator[
     tuple[
         int,
@@ -173,9 +160,6 @@ def fit_preprocessing(
             no features are subsampled.
         subsample_row_indices: Indices of rows to subsample per estimator. If not
             provided, no row subsampling is done.
-        svd_supplements: Per-estimator SVDSupplement objects for the
-            ``gini_feature_importance_and_svd`` method.  When provided,
-            replaces ``subsample_feature_indices`` for each estimator.
 
     Returns:
         Iterator of tuples containing the config index, ensemble configuration, the
@@ -204,11 +188,6 @@ def fit_preprocessing(
             f"elements, but configs has {len(configs)} elements"
         )
 
-    if svd_supplements is None:
-        svd_supplements_list: list[SVDSupplement | None] = [None] * len(configs)
-    else:
-        svd_supplements_list = list(svd_supplements)  # type: ignore[assignment]
-
     if SUPPORTS_RETURN_AS:
         return_as = PARALLEL_MODE_TO_RETURN_AS[parallel_mode]
         executor = joblib.Parallel(
@@ -229,15 +208,13 @@ def fit_preprocessing(
             pipeline=pipeline,
             feature_indices=feat_idx,
             row_indices=row_idx,
-            svd_supplement=svd_sup,
         )
-        for config_index, (config, pipeline, feat_idx, row_idx, svd_sup) in enumerate(
+        for config_index, (config, pipeline, feat_idx, row_idx) in enumerate(
             zip(
                 configs,
                 pipelines,
                 subsample_feature_indices,
                 subsample_row_indices,
-                svd_supplements_list,
             )  # type: ignore[arg-type]
         )
     )

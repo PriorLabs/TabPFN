@@ -14,19 +14,14 @@ import numpy.typing as npt
 from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
     GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    GINI_PRUNING_FRACTION,
     LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES,
     MAXIMUM_FEATURE_SHIFT,
-    MUTUAL_INFORMATION_MAX_SAMPLES,
-    PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    PERMUTATION_FEATURE_IMPORTANCE_VAL_FRACTION,
 )
 from tabpfn.preprocessing.configs import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
     FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
-    SVDSupplement,
 )
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
@@ -63,15 +58,12 @@ class TabPFNEnsembleMember:
     y_train: np.ndarray | torch.Tensor
     feature_schema: FeatureSchema
     feature_indices: np.ndarray | None = None
-    svd_supplement: SVDSupplement | None = None
 
     def transform_X_test(
         self, X: np.ndarray | torch.Tensor
     ) -> np.ndarray | torch.Tensor:
         """Transform the test data."""
-        if self.svd_supplement is not None:
-            X = _apply_svd_supplement(X, self.svd_supplement)
-        elif self.feature_indices is not None:
+        if self.feature_indices is not None:
             X = X[..., self.feature_indices]
         return self.cpu_preprocessor.transform(X).X
 
@@ -179,20 +171,9 @@ class TabPFNEnsemblePreprocessor:
             c.preprocess_config.max_features_per_estimator for c in self.configs
         ]
 
-        is_feature_importance_subsampling = (
-            feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
-            or feature_subsampling_method
-            is FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE
-            or feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
-            or feature_subsampling_method is FeatureSubsamplingMethod.MUTUAL_INFORMATION
-            or feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING
-            or feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM
-            or feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING
+        is_feature_importance_subsampling = feature_subsampling_method in (
+            FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+            FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
         )
 
         importance_feature_orders: list[np.ndarray] | None = None
@@ -202,74 +183,32 @@ class TabPFNEnsemblePreprocessor:
                     "X_train and y_train must be provided when using a "
                     "feature_importance subsampling method."
                 )
-            # SVD variant reuses gini importance for the ranking step.
-            method_for_importance = (
-                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
-                if feature_subsampling_method
-                is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
-                else feature_subsampling_method
-            )
             from tabpfn.preprocessing.datamodel import FeatureModality  # noqa: PLC0415
 
             cat_indices = (
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
-            budget_hint: int | None = None
-            if feature_subsampling_method in (
-                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
-                FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
-            ):
-                budget_hint = min(
-                    _find_max_input_features(p, n_samples, self.feature_schema, mf)
-                    for p, mf in zip(self.pipelines, max_features_per_estimator)
-                )
             importance_feature_orders = compute_feature_importance_order(
                 X=X_train,
                 y=y_train,
                 task_type=task_type,
-                method=method_for_importance,
+                method=feature_subsampling_method,
                 n_estimators=len(self.configs),
                 categorical_feature_indices=cat_indices,
-                budget_hint=budget_hint,
                 rng=rng_features,
             )
 
-        self.svd_supplements: list[SVDSupplement] | None = None
-        if (
-            feature_subsampling_method
-            is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_AND_SVD
-        ):
-            if importance_feature_orders is not None and X_train is not None:
-                svd_subsample_sizes = [
-                    _find_max_input_features(
-                        pipeline=pipeline,
-                        n_samples=n_samples,
-                        feature_schema=self.feature_schema,
-                        max_features_per_estimator=max_feats,
-                    )
-                    for pipeline, max_feats in zip(
-                        self.pipelines, max_features_per_estimator
-                    )
-                ]
-                self.svd_supplements = _compute_svd_supplements(
-                    X_train=X_train,
-                    importance_feature_orders=importance_feature_orders,
-                    top_k_count=resolved_top_k,
-                    subsample_sizes=svd_subsample_sizes,
-                )
-            self.subsample_feature_indices = [None] * len(self.configs)
-        else:
-            self.subsample_feature_indices = _get_subsample_feature_indices(
-                pipelines=self.pipelines,
-                n_samples=n_samples,
-                feature_schema=self.feature_schema,
-                max_features_per_estimator=max_features_per_estimator,
-                rng=rng_features,
-                feature_subsampling_method=feature_subsampling_method,
-                constant_feature_count=constant_feature_count,
-                importance_feature_orders=importance_feature_orders,
-                importance_top_k_count=resolved_top_k,
-            )
+        self.subsample_feature_indices = _get_subsample_feature_indices(
+            pipelines=self.pipelines,
+            n_samples=n_samples,
+            feature_schema=self.feature_schema,
+            max_features_per_estimator=max_features_per_estimator,
+            rng=rng_features,
+            feature_subsampling_method=feature_subsampling_method,
+            constant_feature_count=constant_feature_count,
+            importance_feature_orders=importance_feature_orders,
+            importance_top_k_count=resolved_top_k,
+        )
 
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
             subsample_samples=subsample_samples,
@@ -295,7 +234,6 @@ class TabPFNEnsemblePreprocessor:
             pipelines=self.pipelines,
             subsample_feature_indices=self.subsample_feature_indices,
             subsample_row_indices=self.subsample_row_indices,
-            svd_supplements=self.svd_supplements,
         )
 
         if not self.enable_gpu_preprocessing:
@@ -341,11 +279,6 @@ class TabPFNEnsemblePreprocessor:
                 y_train=y_train_preprocessed,
                 feature_schema=feature_schema_preprocessed,
                 feature_indices=self.subsample_feature_indices[config_index],
-                svd_supplement=(
-                    self.svd_supplements[config_index]
-                    if self.svd_supplements is not None
-                    else None
-                ),
             )
 
     def fit_transform_ensemble_members(
@@ -634,11 +567,7 @@ def _get_subsample_feature_indices(
         )
     if feature_subsampling_method in (
         FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
-        FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE,
-        FeatureSubsamplingMethod.MUTUAL_INFORMATION,
-        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING,
         FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM,
-        FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING,
     ):
         if importance_feature_orders is None:
             # top_k covers all features — importance ordering is irrelevant, fall back
@@ -913,331 +842,6 @@ def _compute_gini_importance(
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
 
 
-def _compute_permutation_importance(
-    X: np.ndarray,
-    y: np.ndarray,
-    task_type: Literal["classifier", "regressor"],
-    n_tree_estimators: int,
-    n_estimators: int,
-    max_samples: int,
-    val_fraction: float,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Return one feature-importance ordering per TabPFN ensemble estimator.
-
-    Mirrors ``_compute_gini_importance``: a single ExtraTrees model is trained
-    and its permutation importance on a held-out validation split is used to
-    rank features.
-
-    When the dataset fits within ``max_samples`` a single fit is performed on
-    ``(1 - val_fraction)`` of the data and its ordering is repeated for every
-    estimator.
-
-    When the dataset is larger, ``n_subsamples = min(n_estimators,
-    n_samples // max_samples + 1)`` independent subsamples of size
-    ``max_samples`` are drawn, each producing a different ordering.  The
-    resulting orderings are then cycled to fill the full list of length
-    ``n_estimators``.
-    """
-    from sklearn.inspection import permutation_importance  # noqa: PLC0415
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-    model_cls = _get_extra_trees_model_cls(task_type)
-    n_samples = len(X)
-    stratify = y if task_type == "classifier" else None
-
-    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
-        strat = y_fit if task_type == "classifier" else None
-        try:
-            train_idx, val_idx = train_test_split(
-                np.arange(len(X_fit)),
-                test_size=val_fraction,
-                stratify=strat,
-                random_state=int(rng.integers(0, 2**31)),
-            )
-        except ValueError:
-            train_idx, val_idx = train_test_split(
-                np.arange(len(X_fit)),
-                test_size=val_fraction,
-                random_state=int(rng.integers(0, 2**31)),
-            )
-        seed = int(rng.integers(0, 2**31))
-        model = model_cls(n_estimators=n_tree_estimators, random_state=seed, n_jobs=-1)
-        model.fit(X_fit[train_idx], y_fit[train_idx])
-        result = permutation_importance(
-            model,
-            X_fit[val_idx],
-            y_fit[val_idx],
-            n_repeats=3,
-            random_state=int(rng.integers(0, 2**31)),
-            n_jobs=-1,
-        )
-        return np.argsort(result.importances_mean)[::-1].copy()
-
-    if n_samples <= max_samples:
-        ordering = _fit_ordering(X, y)
-        return [ordering] * n_estimators
-
-    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
-    orderings = []
-    for _ in range(n_subsamples):
-        idx, _ = train_test_split(
-            np.arange(n_samples),
-            train_size=max_samples,
-            stratify=stratify,
-            random_state=int(rng.integers(0, 2**31)),
-        )
-        orderings.append(_fit_ordering(X[idx], y[idx]))
-    return [orderings[i % n_subsamples] for i in range(n_estimators)]
-
-
-def _apply_svd_supplement(
-    X: np.ndarray,
-    sup: SVDSupplement,
-) -> np.ndarray:
-    """Return ``[X[:, top_k] | SVD.transform(X[:, remaining])]``.
-
-    Converts to float32 for the SVD step, then casts the result back to the
-    original dtype of *X*.
-    """
-    import torch  # noqa: PLC0415
-
-    from tabpfn.preprocessing.torch.torch_svd import TorchTruncatedSVD  # noqa: PLC0415
-
-    X_top = X[:, sup.top_k_indices]
-    if sup.n_svd_components == 0 or not sup.svd_cache:
-        return X_top
-    X_rem = torch.from_numpy(X[:, sup.remaining_indices].astype(np.float32))
-    X_svd = (
-        TorchTruncatedSVD(n_components=sup.n_svd_components)
-        .transform(X_rem, sup.svd_cache)
-        .numpy()
-    )
-    return np.concatenate([X_top, X_svd], axis=1).astype(X.dtype)
-
-
-def _compute_svd_supplements(
-    X_train: np.ndarray,
-    importance_feature_orders: list[np.ndarray],
-    top_k_count: int | float,
-    subsample_sizes: list[int],
-) -> list[SVDSupplement]:
-    """Return one SVDSupplement per estimator for permutation_importance_and_svd.
-
-    For each estimator the top-K features (by permutation importance) are kept
-    directly; the remaining budget is filled with TruncatedSVD projections of
-    the non-selected features.
-
-    Args:
-        X_train: Training data, shape ``(n_samples, n_features)``.
-        importance_feature_orders: Per-estimator feature rankings (most → least
-            important), as returned by ``compute_feature_importance_order``.
-        top_k_count: Number of top features to keep verbatim.  Float resolved
-            as ``ceil(value * n_total_features)``.
-        subsample_sizes: Per-estimator input budget (number of columns the
-            downstream pipeline can accept).  Controls ``n_svd_components``.
-        rng: Random number generator (unused currently; reserved for future
-            stochastic SVD variants).
-    """
-    import torch  # noqa: PLC0415
-
-    from tabpfn.preprocessing.torch.torch_svd import TorchTruncatedSVD  # noqa: PLC0415
-
-    n_total = X_train.shape[1]
-    if isinstance(top_k_count, float):
-        n_top = max(1, int(np.ceil(top_k_count * n_total)))
-    else:
-        n_top = int(top_k_count)
-    n_top = min(n_top, n_total)
-
-    n_orderings = len(importance_feature_orders)
-    supplements: list[SVDSupplement] = []
-
-    for i, budget in enumerate(subsample_sizes):
-        order = importance_feature_orders[i % n_orderings]
-        top_k_idx = order[:n_top].copy()
-        remaining_idx = order[n_top:].copy()
-        n_svd = max(0, min(budget - n_top, len(remaining_idx)))
-
-        if n_svd == 0 or len(remaining_idx) == 0:
-            svd_cache: dict = {}
-        else:
-            X_rem = torch.from_numpy(X_train[:, remaining_idx].astype(np.float32))
-            svd_cache = TorchTruncatedSVD(n_components=n_svd).fit(X_rem)
-
-        supplements.append(
-            SVDSupplement(
-                top_k_indices=top_k_idx,
-                remaining_indices=remaining_idx,
-                n_svd_components=n_svd,
-                svd_cache=svd_cache,
-            )
-        )
-
-    return supplements
-
-
-def _compute_mutual_information_importance(
-    X: np.ndarray,
-    y: np.ndarray,
-    task_type: Literal["classifier", "regressor"],
-    n_estimators: int,
-    max_samples: int,
-    categorical_feature_indices: list[int] | None,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Return one MI-based feature ordering per estimator.
-
-    Uses sklearn's mutual_info_classif / mutual_info_regression.  For datasets
-    larger than ``max_samples`` multiple independent subsamples are drawn,
-    giving diverse orderings across estimators (same strategy as gini).
-    """
-    if task_type == "classifier":
-        from sklearn.feature_selection import mutual_info_classif  # noqa: PLC0415
-
-        score_fn = mutual_info_classif
-    else:
-        from sklearn.feature_selection import mutual_info_regression  # noqa: PLC0415
-
-        score_fn = mutual_info_regression
-
-    discrete_features: list[int] | str = (
-        categorical_feature_indices if categorical_feature_indices else "auto"
-    )
-    n_samples = len(X)
-
-    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
-        seed = int(rng.integers(0, 2**31))
-        scores = score_fn(
-            X_fit, y_fit, discrete_features=discrete_features, random_state=seed
-        )
-        return np.argsort(scores)[::-1].copy()
-
-    if n_samples <= max_samples:
-        ordering = _fit_ordering(X, y)
-        return [ordering] * n_estimators
-
-    from sklearn.model_selection import train_test_split  # noqa: PLC0415
-
-    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
-    stratify = y if task_type == "classifier" else None
-    orderings = []
-    for _ in range(n_subsamples):
-        idx, _ = train_test_split(
-            np.arange(n_samples),
-            train_size=max_samples,
-            stratify=stratify,
-            random_state=int(rng.integers(0, 2**31)),
-        )
-        orderings.append(_fit_ordering(X[idx], y[idx]))
-    return [orderings[i % n_subsamples] for i in range(n_estimators)]
-
-
-def _prune_features(
-    X: np.ndarray,
-    y: np.ndarray,
-    task_type: Literal["classifier", "regressor"],
-    max_samples: int,
-    budget_hint: int,
-    pruning_fraction: float,
-    rng: np.random.Generator,
-) -> tuple[np.ndarray, np.ndarray]:
-    """SelectKBest pre-pruning step shared by gini and LightGBM pruning methods.
-
-    Removes ``pruning_fraction * max(0, n_features - budget_hint)`` of the
-    lowest-scoring features using the F-statistic.
-
-    Returns:
-        ``(X_pruned, kept_indices)`` where ``kept_indices`` maps pruned-space
-        column positions back to original column positions.
-    """
-    from sklearn.feature_selection import (  # noqa: PLC0415
-        SelectKBest,
-        f_classif,
-        f_regression,
-    )
-
-    n_features = X.shape[1]
-    n_surplus = max(0, n_features - budget_hint)
-    n_prune = int(pruning_fraction * n_surplus)
-
-    if n_prune > 0:
-        score_func = f_classif if task_type == "classifier" else f_regression
-        n_rows = min(len(X), max_samples)
-        row_idx = rng.choice(len(X), n_rows, replace=False)
-        selector = SelectKBest(score_func, k=n_features - n_prune)
-        selector.fit(X[row_idx], y[row_idx])
-        kept_indices: np.ndarray = np.where(selector.get_support())[0]
-        return X[:, kept_indices], kept_indices
-
-    return X, np.arange(n_features)
-
-
-def _compute_gini_importance_with_pruning(
-    X: np.ndarray,
-    y: np.ndarray,
-    task_type: Literal["classifier", "regressor"],
-    n_tree_estimators: int,
-    n_estimators: int,
-    max_samples: int,
-    budget_hint: int,
-    pruning_fraction: float,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Pre-prune low-scoring features with SelectKBest, then run gini on survivors.
-
-    Returned indices reference the *original* column positions.
-    """
-    X_pruned, kept_indices = _prune_features(
-        X, y, task_type, max_samples, budget_hint, pruning_fraction, rng
-    )
-    orderings_pruned = _compute_gini_importance(
-        X_pruned, y, task_type, n_tree_estimators, n_estimators, max_samples, rng
-    )
-    return [kept_indices[order] for order in orderings_pruned]
-
-
-def _compute_lightgbm_importance_with_pruning(
-    X: np.ndarray,
-    y: np.ndarray,
-    task_type: Literal["classifier", "regressor"],
-    n_tree_estimators: int,
-    n_estimators: int,
-    max_samples: int,
-    budget_hint: int,
-    pruning_fraction: float,
-    categorical_feature_indices: list[int] | None,
-    rng: np.random.Generator,
-) -> list[np.ndarray]:
-    """Pre-prune low-scoring features with SelectKBest, then run LightGBM on survivors.
-
-    Returned indices reference the *original* column positions.
-    """
-    X_pruned, kept_indices = _prune_features(
-        X, y, task_type, max_samples, budget_hint, pruning_fraction, rng
-    )
-    # Remap categorical indices to pruned-space positions.
-    if categorical_feature_indices:
-        kept_set = set(kept_indices.tolist())
-        old_to_new = {old: new for new, old in enumerate(kept_indices.tolist())}
-        remapped_cat = [
-            old_to_new[i] for i in categorical_feature_indices if i in kept_set
-        ]
-    else:
-        remapped_cat = None
-    orderings_pruned = _compute_lightgbm_importance(
-        X_pruned,
-        y,
-        task_type,
-        n_tree_estimators,
-        n_estimators,
-        max_samples,
-        remapped_cat,
-        rng,
-    )
-    return [kept_indices[order] for order in orderings_pruned]
-
-
 def _compute_lightgbm_importance(
     X: np.ndarray,
     y: np.ndarray,
@@ -1297,7 +901,7 @@ def _compute_lightgbm_importance(
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
 
 
-def compute_feature_importance_order(  # noqa: PLR0913
+def compute_feature_importance_order(
     X: np.ndarray,
     y: np.ndarray,
     task_type: Literal["classifier", "regressor"],
@@ -1305,14 +909,9 @@ def compute_feature_importance_order(  # noqa: PLR0913
     method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
     n_estimators: int,
     gini_max_samples: int = GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    permutation_max_samples: int = PERMUTATION_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    permutation_val_fraction: float = PERMUTATION_FEATURE_IMPORTANCE_VAL_FRACTION,
-    mi_max_samples: int = MUTUAL_INFORMATION_MAX_SAMPLES,
     lgbm_max_samples: int = LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    pruning_fraction: float = GINI_PRUNING_FRACTION,
     n_tree_estimators: int = 50,
     categorical_feature_indices: list[int] | None = None,
-    budget_hint: int | None = None,
     rng: np.random.Generator,
 ) -> list[np.ndarray]:
     """Rank features by importance, returning one ordering per TabPFN estimator.
@@ -1329,28 +928,17 @@ def compute_feature_importance_order(  # noqa: PLR0913
         n_estimators: Number of TabPFN ensemble estimators.  The returned list
             has exactly this length.
         gini_max_samples: Row budget per ExtraTrees fit (gini method).
-        permutation_max_samples: Row budget per permutation-importance fit.
-        permutation_val_fraction: Fraction of each subsample held out for
-            permutation evaluation; the rest is used to train the ExtraTrees
-            model.  Only used by ``PERMUTATION_FEATURE_IMPORTANCE``.
-        mi_max_samples: Row budget per mutual-information fit.
         lgbm_max_samples: Row budget per LightGBM fit.
-        pruning_fraction: Fraction of surplus features removed by SelectKBest
-            before gini runs (only for ``GINI_FEATURE_IMPORTANCE_WITH_PRUNING``).
         n_tree_estimators: Number of trees in ExtraTrees / LightGBM models.
         categorical_feature_indices: Column indices of categorical features.
-            Used by ``MUTUAL_INFORMATION`` (discrete_features) and
-            ``GINI_FEATURE_IMPORTANCE_LIGHTGBM`` (categorical_feature).
-        budget_hint: Minimum per-estimator feature budget.  Required for
-            ``GINI_FEATURE_IMPORTANCE_WITH_PRUNING``; ignored otherwise.
+            Used by ``GINI_FEATURE_IMPORTANCE_LIGHTGBM`` (categorical_feature).
         rng: Random number generator.
 
     Returns:
         List of length ``n_estimators``, each element an array of feature indices
         sorted from most to least important.
     """
-    # LightGBM handles NaN natively, but the SelectKBest pruning step does not.
-    # Impute for all methods except plain LightGBM (no pruning).
+    # LightGBM handles NaN natively; sklearn ExtraTrees requires finite input.
     if method is not FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
         X = _impute_nans(X)
 
@@ -1365,46 +953,6 @@ def compute_feature_importance_order(  # noqa: PLR0913
             rng=rng,
         )
 
-    if method == FeatureSubsamplingMethod.PERMUTATION_FEATURE_IMPORTANCE:
-        return _compute_permutation_importance(
-            X=X,
-            y=y,
-            task_type=task_type,
-            n_tree_estimators=n_tree_estimators,
-            n_estimators=n_estimators,
-            max_samples=permutation_max_samples,
-            val_fraction=permutation_val_fraction,
-            rng=rng,
-        )
-
-    if method == FeatureSubsamplingMethod.MUTUAL_INFORMATION:
-        return _compute_mutual_information_importance(
-            X=X,
-            y=y,
-            task_type=task_type,
-            n_estimators=n_estimators,
-            max_samples=mi_max_samples,
-            categorical_feature_indices=categorical_feature_indices,
-            rng=rng,
-        )
-
-    if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_WITH_PRUNING:
-        if budget_hint is None:
-            raise ValueError(
-                "budget_hint is required for GINI_FEATURE_IMPORTANCE_WITH_PRUNING"
-            )
-        return _compute_gini_importance_with_pruning(
-            X=X,
-            y=y,
-            task_type=task_type,
-            n_tree_estimators=n_tree_estimators,
-            n_estimators=n_estimators,
-            max_samples=gini_max_samples,
-            budget_hint=budget_hint,
-            pruning_fraction=pruning_fraction,
-            rng=rng,
-        )
-
     if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
         return _compute_lightgbm_importance(
             X=X,
@@ -1413,25 +961,6 @@ def compute_feature_importance_order(  # noqa: PLR0913
             n_tree_estimators=n_tree_estimators,
             n_estimators=n_estimators,
             max_samples=lgbm_max_samples,
-            categorical_feature_indices=categorical_feature_indices,
-            rng=rng,
-        )
-
-    if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING:
-        if budget_hint is None:
-            raise ValueError(
-                "budget_hint is required for "
-                "GINI_FEATURE_IMPORTANCE_LIGHTGBM_WITH_PRUNING"
-            )
-        return _compute_lightgbm_importance_with_pruning(
-            X=X,
-            y=y,
-            task_type=task_type,
-            n_tree_estimators=n_tree_estimators,
-            n_estimators=n_estimators,
-            max_samples=lgbm_max_samples,
-            budget_hint=budget_hint,
-            pruning_fraction=pruning_fraction,
             categorical_feature_indices=categorical_feature_indices,
             rng=rng,
         )
