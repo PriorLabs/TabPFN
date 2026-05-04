@@ -793,6 +793,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+            X_train=X,
+            y_train=y,
+            task_type=self.estimator_type,
         )
 
         self.executor_ = create_inference_engine(

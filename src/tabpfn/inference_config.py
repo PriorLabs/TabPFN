@@ -138,7 +138,11 @@ class InferenceConfig:
     flag is set."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
-        "balanced", "random", "constant_and_balanced"
+        "balanced",
+        "random",
+        "constant_and_balanced",
+        "gini_feature_importance",
+        "gini_feature_importance_lightgbm",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -148,11 +152,27 @@ class InferenceConfig:
         - "constant_and_balanced": Always include the first N features (see
           FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
           the rest.
+        - "gini_feature_importance": Fit an ExtraTrees model and rank features by Gini
+          impurity reduction. Always include the top-K most important features (see
+          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), randomly fill the rest.
+        - "gini_feature_importance_lightgbm": Use LightGBM gain importance instead of
+          ExtraTrees. Passes categorical feature indices natively. Requires lightgbm
+          to be installed (pip install lightgbm).
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
+
+    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int | float | Literal["auto"] = "auto"
+    """Number of top important features always included per estimator when
+    FEATURE_SUBSAMPLING_METHOD is an importance-based method. The remaining budget up to
+    max_features_per_estimator is filled randomly from the remaining features.
+        - If an int, that many features are always included.
+        - If a float in (0, 1], resolved as ceil(value * n_total_features).
+        - If "auto", uses top-k=150 when n_features > 200 and n_samples > 100_000;
+          otherwise no importance filtering is done.
+    """
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for

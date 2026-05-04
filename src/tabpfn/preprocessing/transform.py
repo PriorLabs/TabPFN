@@ -210,6 +210,11 @@ def fit_preprocessing(
             row_indices=row_idx,
         )
         for config_index, (config, pipeline, feat_idx, row_idx) in enumerate(
-            zip(configs, pipelines, subsample_feature_indices, subsample_row_indices)  # type: ignore[arg-type]
+            zip(
+                configs,
+                pipelines,
+                subsample_feature_indices,
+                subsample_row_indices,
+            )  # type: ignore[arg-type]
         )
     )

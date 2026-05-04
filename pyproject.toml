@@ -71,6 +71,7 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
+lightgbm = ["lightgbm>=3.0"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
@@ -369,6 +370,7 @@ module = [
   "joblib.*",
   "torch.*",
   "kditransform.*",
+  "lightgbm.*",
 ]
 ignore_missing_imports = true
 

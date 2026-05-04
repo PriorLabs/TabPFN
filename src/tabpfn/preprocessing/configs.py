@@ -19,6 +19,8 @@ class FeatureSubsamplingMethod(str, Enum):
     BALANCED = "balanced"
     RANDOM = "random"
     CONSTANT_AND_BALANCED = "constant_and_balanced"
+    GINI_FEATURE_IMPORTANCE = "gini_feature_importance"
+    GINI_FEATURE_IMPORTANCE_LIGHTGBM = "gini_feature_importance_lightgbm"
 
 
 @dataclass(frozen=True, eq=True)
