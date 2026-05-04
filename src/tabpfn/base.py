@@ -407,14 +407,21 @@ def resolve_model_routing(
     model version is V2.6.
     """
     auto_version: ModelVersion | None = None
-    if model_path == "auto" and hasattr(X, "shape") and len(X.shape) >= 2:
-        auto_version = route_model_version(
-            n_samples=int(X.shape[0]), n_features=int(X.shape[1])
-        )
+    if model_path == "auto":
+        if hasattr(X, "shape") and len(X.shape) >= 2:
+            auto_version = route_model_version(
+                n_samples=int(X.shape[0]), n_features=int(X.shape[1])
+            )
+        elif isinstance(X, list) and len(X) > 0 and isinstance(X[0], (list, tuple)):
+            auto_version = route_model_version(n_samples=len(X), n_features=len(X[0]))
 
     if fit_mode == "fit_with_cache":
+        # When model_path=="auto" and routing didn't apply (X has no usable shape),
+        # fall back to the settings default so validation is never bypassed.
         _effective_version = (
-            auto_version if model_path == "auto" else resolve_model_version(model_path)  # type: ignore
+            auto_version or resolve_model_version(None)
+            if model_path == "auto"
+            else resolve_model_version(model_path)  # type: ignore
         )
         if _effective_version == ModelVersion.V2_6:
             if model_path == "auto":
