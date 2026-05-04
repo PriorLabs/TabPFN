@@ -1188,9 +1188,7 @@ def load_fitted_tabpfn_model(
 
 def _resolve_architecture_name(config: ArchitectureConfig) -> str:
     """Resolve the architecture name from the config."""
-    name = getattr(config, "name", None)
-    if name is None:
-        return "base"
+    name = getattr(config, "name", "")
     if "2.6" in name:
         return "tabpfn_v2_6"
     if "2.5" in name:
