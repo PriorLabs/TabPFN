@@ -23,6 +23,7 @@ from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
@@ -92,7 +93,7 @@ class TabPFNEnsemblePreprocessor:
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
-        importance_top_k_count: int | float = 50,
+        importance_top_k_count: int | float | Literal["auto"] = "auto",
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
@@ -119,8 +120,10 @@ class TabPFNEnsemblePreprocessor:
                 samples. If a list of index arrays, use those indices directly. If
                 ``None``, no row subsampling is done.
             importance_top_k_count: Number of top-important features always included
-                per estimator when feature_subsampling_method is "feature_importance".
-                If a float in (0, 1], resolved as ceil(value * n_total_features).
+                per estimator when feature_subsampling_method is an importance-based
+                method. If float in (0, 1], resolved as ceil(value * n_total_features).
+                If "auto", uses 150 when n_features > 200 and n_samples > 100_000,
+                otherwise keeps all features (no importance filtering).
             X_train: Training features used to compute feature importance. Required
                 when feature_subsampling_method is "feature_importance".
             y_train: Training targets used to compute feature importance. Required
@@ -160,12 +163,11 @@ class TabPFNEnsemblePreprocessor:
         ]
 
         n_total_features = feature_schema.num_columns
-        if isinstance(importance_top_k_count, float):
-            resolved_top_k = max(
-                1, int(np.ceil(importance_top_k_count * n_total_features))
-            )
-        else:
-            resolved_top_k = importance_top_k_count
+        resolved_top_k = _resolve_importance_top_k(
+            importance_top_k_count=importance_top_k_count,
+            n_total_features=n_total_features,
+            n_samples=n_samples,
+        )
 
         max_features_per_estimator = [
             c.preprocess_config.max_features_per_estimator for c in self.configs
@@ -183,8 +185,6 @@ class TabPFNEnsemblePreprocessor:
                     "X_train and y_train must be provided when using a "
                     "feature_importance subsampling method."
                 )
-            from tabpfn.preprocessing.datamodel import FeatureModality  # noqa: PLC0415
-
             cat_indices = (
                 self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
             )
@@ -496,7 +496,7 @@ def _get_subsample_feature_indices(
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
     importance_feature_orders: list[np.ndarray] | None = None,
-    importance_top_k_count: int = 100,
+    importance_top_k_count: int = 150,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator.
 
@@ -717,7 +717,7 @@ def _subsample_features_importance_based(
     subsample_sizes: list[int],
     n_total_features: int,
     importance_feature_orders: list[np.ndarray],
-    top_k_count: int | float,
+    top_k_count: int,
     rng: np.random.Generator,
 ) -> list[np.ndarray | None]:
     """Always include top-K important features; randomly sample the rest.
@@ -731,18 +731,9 @@ def _subsample_features_importance_based(
         importance_feature_orders: Per-estimator feature indices sorted most->least
             important. Produced by ``compute_feature_importance_order``.
         top_k_count: Number of top features always included per estimator.
-            If a float in (0, 1], resolved as ``ceil(top_k_count * n_total_features)``.
         rng: Random number generator.
     """
-    if isinstance(top_k_count, float):
-        if not 0.0 < top_k_count <= 1.0:
-            raise ValueError(
-                f"top_k_count as float must be in (0, 1], got {top_k_count}"
-            )
-        n_top = max(1, int(np.ceil(top_k_count * n_total_features)))
-    else:
-        n_top = top_k_count
-    n_top = min(n_top, n_total_features)
+    n_top = min(top_k_count, n_total_features)
 
     n_orderings = len(importance_feature_orders)
     result: list[np.ndarray | None] = []
@@ -1105,3 +1096,31 @@ def generate_regression_ensemble_configs(
             model_indices,
         )
     ]
+
+
+_AUTO_TOP_K_VALUE = 150
+_AUTO_TOP_K_MIN_FEATURES = 200
+_AUTO_TOP_K_MIN_SAMPLES = 100_000
+
+
+def _resolve_importance_top_k(
+    importance_top_k_count: int | float | Literal["auto"],
+    n_total_features: int,
+    n_samples: int,
+) -> int:
+    """Resolve importance_top_k_count to a concrete integer.
+
+    - "auto": 150 when n_features > 200 and n_samples > 100_000, else n_total_features.
+    - float in (0, 1]: ceil(value * n_total_features).
+    - int: used as-is.
+    """
+    if importance_top_k_count == "auto":
+        if (
+            n_total_features > _AUTO_TOP_K_MIN_FEATURES
+            and n_samples > _AUTO_TOP_K_MIN_SAMPLES
+        ):
+            return _AUTO_TOP_K_VALUE
+        return n_total_features
+    if isinstance(importance_top_k_count, float):
+        return max(1, int(np.ceil(importance_top_k_count * n_total_features)))
+    return importance_top_k_count

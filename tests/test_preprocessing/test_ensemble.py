@@ -552,38 +552,6 @@ def test__subsample_features_importance_based__no_subsampling_when_budget_ge_tot
     assert all(r is None for r in result)
 
 
-def test__subsample_features_importance_based__top_k_float():
-    """Float top_k_count is resolved relative to n_total_features."""
-    rng = np.random.default_rng(0)
-    n_features = 20
-    importance_order = np.arange(n_features)  # feature 0 most important
-    # 0.5 * 20 = 10 top features
-    result = _subsample_features_importance_based(
-        subsample_sizes=[15],
-        n_total_features=n_features,
-        importance_feature_orders=[importance_order],
-        top_k_count=0.5,
-        rng=rng,
-    )
-    assert result[0] is not None
-    # Top 10 features (indices 0-9) must all be present
-    assert set(range(10)).issubset(set(result[0]))
-    assert len(result[0]) == 15
-
-
-def test__subsample_features_importance_based__top_k_float_invalid():
-    """Float top_k_count outside (0, 1] raises ValueError."""
-    rng = np.random.default_rng(0)
-    with pytest.raises(ValueError, match="must be in"):
-        _subsample_features_importance_based(
-            subsample_sizes=[5],
-            n_total_features=10,
-            importance_feature_orders=[np.arange(10)],
-            top_k_count=1.5,
-            rng=rng,
-        )
-
-
 def test__subsample_features_importance_based__budget_less_than_top_k():
     """When budget < top_k, only the most important features are selected."""
     rng = np.random.default_rng(0)
@@ -856,10 +824,11 @@ def test__subsample_features_importance_based__different_orderings_yield_differe
 
 def test__compute_feature_importance_order__gini_large_dataset_yields_diverse_orderings():  # noqa: E501
     """With data > gini_max_samples, independent subsamples produce diverse orderings."""  # noqa: E501
-    from tabpfn.constants import GINI_FEATURE_IMPORTANCE_MAX_SAMPLES  # noqa: PLC0415
-
     rng = np.random.default_rng(42)
-    n_samples = GINI_FEATURE_IMPORTANCE_MAX_SAMPLES + 100
+    small_max_samples = 500
+    n_samples = (
+        small_max_samples * 6
+    )  # clearly larger → multiple independent subsamples
     n_features = 10
     # Pure noise so each subsample fit produces a different ranking
     X = rng.standard_normal((n_samples, n_features))
@@ -871,7 +840,7 @@ def test__compute_feature_importance_order__gini_large_dataset_yields_diverse_or
         y=y,
         task_type="classifier",
         n_estimators=n_estimators,
-        gini_max_samples=GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
+        gini_max_samples=small_max_samples,
         rng=rng,
     )
 

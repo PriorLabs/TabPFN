@@ -164,11 +164,16 @@ class InferenceConfig:
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
 
-    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int | float = 100
+    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int | float | Literal["auto"] = "auto"
     """Number of top important features always included per estimator when
-    FEATURE_SUBSAMPLING_METHOD is 'feature_importance'. The remaining budget up to
+    FEATURE_SUBSAMPLING_METHOD is an importance-based method. The remaining budget up to
     max_features_per_estimator is filled randomly from the remaining features.
-    If a float in (0, 1], resolved as ceil(value * n_total_features)."""
+        - If an int, that many features are always included.
+        - If a float in (0, 1], resolved as ceil(value * n_total_features).
+        - If "auto", uses top-k=150 only when n_features > 200 and n_samples > 100_000;
+          otherwise importance ordering is computed but all features are kept
+          (equivalent to balanced subsampling with importance-ranked selection).
+    """
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
