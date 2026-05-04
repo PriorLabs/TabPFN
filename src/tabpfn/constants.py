@@ -58,8 +58,7 @@ ENSEMBLE_CONFIGURATION_MAX_STEP = 2
 MAXIMUM_FEATURE_SHIFT = 1_000
 CLASS_SHUFFLE_OVERESTIMATE_FACTOR = 3
 
-GINI_FEATURE_IMPORTANCE_MAX_SAMPLES = 100_000
-LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES = 100_000
+FEATURE_IMPORTANCE_MAX_SAMPLES = 100_000
 
 # 1) Figure out whether this Joblib version supports "generator_unordered".
 # For example, assume "generator_unordered" is officially supported in joblib >= 1.4.0

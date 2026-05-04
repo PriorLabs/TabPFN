@@ -674,7 +674,7 @@ def test__compute_feature_importance_order__subsamples_large_datasets():
         y=y,
         task_type="classifier",
         n_estimators=n_estimators,
-        gini_max_samples=50,
+        max_samples=50,
         rng=rng,
     )
     assert len(orders) == n_estimators
@@ -823,7 +823,7 @@ def test__subsample_features_importance_based__different_orderings_yield_differe
 
 
 def test__compute_feature_importance_order__gini_large_dataset_yields_diverse_orderings():  # noqa: E501
-    """With data > gini_max_samples, independent subsamples produce diverse orderings."""  # noqa: E501
+    """With data > max_samples, independent subsamples produce diverse orderings."""
     rng = np.random.default_rng(42)
     small_max_samples = 500
     n_samples = (
@@ -840,7 +840,7 @@ def test__compute_feature_importance_order__gini_large_dataset_yields_diverse_or
         y=y,
         task_type="classifier",
         n_estimators=n_estimators,
-        gini_max_samples=small_max_samples,
+        max_samples=small_max_samples,
         rng=rng,
     )
 

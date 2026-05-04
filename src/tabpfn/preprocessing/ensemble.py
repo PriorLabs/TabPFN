@@ -13,8 +13,7 @@ import numpy.typing as npt
 
 from tabpfn.constants import (
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
-    GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    FEATURE_IMPORTANCE_MAX_SAMPLES,
     MAXIMUM_FEATURE_SHIFT,
 )
 from tabpfn.preprocessing.configs import (
@@ -899,8 +898,7 @@ def compute_feature_importance_order(
     *,
     method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
     n_estimators: int,
-    gini_max_samples: int = GINI_FEATURE_IMPORTANCE_MAX_SAMPLES,
-    lgbm_max_samples: int = LIGHTGBM_FEATURE_IMPORTANCE_MAX_SAMPLES,
+    max_samples: int = FEATURE_IMPORTANCE_MAX_SAMPLES,
     n_tree_estimators: int = 50,
     categorical_feature_indices: list[int] | None = None,
     rng: np.random.Generator,
@@ -918,8 +916,7 @@ def compute_feature_importance_order(
         method: Feature-importance method to use.
         n_estimators: Number of TabPFN ensemble estimators.  The returned list
             has exactly this length.
-        gini_max_samples: Row budget per ExtraTrees fit (gini method).
-        lgbm_max_samples: Row budget per LightGBM fit.
+        max_samples: Row budget per importance model fit.
         n_tree_estimators: Number of trees in ExtraTrees / LightGBM models.
         categorical_feature_indices: Column indices of categorical features.
             Used by ``GINI_FEATURE_IMPORTANCE_LIGHTGBM`` (categorical_feature).
@@ -929,18 +926,15 @@ def compute_feature_importance_order(
         List of length ``n_estimators``, each element an array of feature indices
         sorted from most to least important.
     """
-    # LightGBM handles NaN natively; sklearn ExtraTrees requires finite input.
-    if method is not FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE_LIGHTGBM:
-        X = _impute_nans(X)
-
     if method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE:
+        X = _impute_nans(X)
         return _compute_gini_importance(
             X=X,
             y=y,
             task_type=task_type,
             n_tree_estimators=n_tree_estimators,
             n_estimators=n_estimators,
-            max_samples=gini_max_samples,
+            max_samples=max_samples,
             rng=rng,
         )
 
@@ -951,7 +945,7 @@ def compute_feature_importance_order(
             task_type=task_type,
             n_tree_estimators=n_tree_estimators,
             n_estimators=n_estimators,
-            max_samples=lgbm_max_samples,
+            max_samples=max_samples,
             categorical_feature_indices=categorical_feature_indices,
             rng=rng,
         )
