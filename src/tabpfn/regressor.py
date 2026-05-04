@@ -48,7 +48,10 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     initialize_telemetry,
 )
-from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
+from tabpfn.constants import (
+    REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
+    ModelVersion,
+)
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
@@ -502,6 +505,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             options = {
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v2_6().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V3:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
