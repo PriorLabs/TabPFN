@@ -944,6 +944,58 @@ def test__end_to_end__feature_importance_skipped_when_no_subsampling_needed():
         mock_compute.assert_not_called()
 
 
+def test__end_to_end__feature_importance_skipped_when_top_k_equals_all_features():
+    """No importance computation when resolved top_k >= n_total_features (all features
+    are 'important'), even if subsampling is needed.
+    """
+    from unittest.mock import patch  # noqa: PLC0415
+
+    rng = np.random.default_rng(9)
+    n_train, n_features = 40, 10
+    n_estimators = 2
+    max_features = n_features - 1  # subsampling IS needed
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    with patch(
+        "tabpfn.preprocessing.ensemble._compute_feature_importance_order"
+    ) as mock_compute:
+        TabPFNEnsemblePreprocessor(
+            configs=configs,
+            n_samples=n_train,
+            feature_schema=feature_schema,
+            random_state=0,
+            n_preprocessing_jobs=1,
+            feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+            importance_top_k_count=n_features,  # top_k == n_features → skip LightGBM
+            X_train=X_train,
+            y_train=y_train,
+            task_type="classifier",
+        )
+        mock_compute.assert_not_called()
+
+
 def test__end_to_end__feature_importance_subsampling():
     """End-to-end: TabPFNEnsemblePreprocessor with feature_importance subsampling."""
     rng = np.random.default_rng(7)

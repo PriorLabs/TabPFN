@@ -191,7 +191,11 @@ class TabPFNEnsemblePreprocessor:
             == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
         )
 
-        if is_feature_importance_subsampling and needs_subsampling:
+        if (
+            is_feature_importance_subsampling
+            and needs_subsampling
+            and resolved_top_k < n_total_features
+        ):
             if X_train is None or y_train is None:
                 raise ValueError(
                     "X_train and y_train must be provided when using a "
