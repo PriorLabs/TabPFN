@@ -234,8 +234,7 @@ class TorchPreprocessingPipeline:
     ) -> None:
         if self.keep_fitted_cache:
             # Store on CPU so the cache is decoupled from the device the
-            # pipeline ran on. _move_cache_to_device moves it back to x.device
-            # on each call, which keeps multi-GPU and MPS paths correct.
+            # pipeline ran on.
             cache = result.fitted_cache
             if cache is not None:
                 cache = _move_cache_to_device(cache, torch.device("cpu"))
@@ -276,8 +275,7 @@ def _move_cache_to_device(
     cache: dict[str, torch.Tensor], device: torch.device
 ) -> dict[str, torch.Tensor]:
     return {
-        k: v.to(device) if isinstance(v, torch.Tensor) else v
-        for k, v in cache.items()
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
     }
 
 
