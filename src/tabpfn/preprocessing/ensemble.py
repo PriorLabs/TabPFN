@@ -8,7 +8,6 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
-import lightgbm
 import numpy as np
 import numpy.typing as npt
 
@@ -779,6 +778,11 @@ def _subsample_features_importance_based(
 
 
 def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> type:
+    # Lazy import: libomp (required by LightGBM on macOS) may not be present.
+    # This path only runs for large datasets (>100k samples), which aren't
+    # typically used on macOS anyway.
+    import lightgbm  # noqa: PLC0415
+
     return (
         lightgbm.LGBMClassifier if task_type == "classifier" else lightgbm.LGBMRegressor
     )
