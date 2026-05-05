@@ -193,6 +193,7 @@ jobs:
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - name: Checkout TabPFN at current ref
