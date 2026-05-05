@@ -57,6 +57,7 @@ jobs:
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
@@ -193,6 +194,7 @@ jobs:
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - name: Checkout TabPFN at current ref
@@ -270,6 +272,8 @@ jobs:
     env:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
+
 
     steps:
       - uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98 # v4.3.1
