@@ -390,9 +390,8 @@ def download_all_models(to: Path) -> None:
                 which=cast("Literal['classifier', 'regressor']", model_type),
                 model_name=ckpt_name,
             )
-            if result != 'ok':
+            if result != "ok":
                 logger.warning(f"Errors downloading model {model_version}: {result}")
-
 
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
