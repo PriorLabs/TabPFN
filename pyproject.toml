@@ -23,6 +23,7 @@ dependencies = [
   "joblib>=1.2.0",
   "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
   "filelock>=3.11.0",
+  "lightgbm>=3.0",
 ]
 requires-python = ">=3.9"
 authors = [
@@ -71,7 +72,6 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
-lightgbm = ["lightgbm>=3.0"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"

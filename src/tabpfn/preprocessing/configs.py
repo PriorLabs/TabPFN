@@ -20,7 +20,7 @@ class FeatureSubsamplingMethod(str, Enum):
     RANDOM = "random"
     CONSTANT_AND_BALANCED = "constant_and_balanced"
     GINI_FEATURE_IMPORTANCE = "gini_feature_importance"
-    GINI_FEATURE_IMPORTANCE_LIGHTGBM = "gini_feature_importance_lightgbm"
+    AUTO = "auto"
 
 
 @dataclass(frozen=True, eq=True)

@@ -172,7 +172,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v3-classifier-v3_default.ckpt",
         ]
         return cls(
-            repo_id="Prior-Labs/TabPFN-v3-clf",
+            repo_id="Prior-Labs/tabpfn_3",
             default_filename="tabpfn-v3-classifier-v3_default.ckpt",
             filenames=filenames,
         )
@@ -183,7 +183,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v3-regressor-v3_default.ckpt",
         ]
         return cls(
-            repo_id="Prior-Labs/TabPFN-v3-reg",
+            repo_id="Prior-Labs/tabpfn_3",
             default_filename="tabpfn-v3-regressor-v3_default.ckpt",
             filenames=filenames,
         )

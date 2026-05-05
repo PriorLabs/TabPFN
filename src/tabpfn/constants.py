@@ -61,6 +61,10 @@ CLASS_SHUFFLE_OVERESTIMATE_FACTOR = 3
 
 FEATURE_IMPORTANCE_MAX_SAMPLES = 100_000
 
+AUTO_FEATURE_SUBSAMPLING_TOP_K = 150
+AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES = 200
+AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES = 100_000
+
 # 1) Figure out whether this Joblib version supports "generator_unordered".
 # For example, assume "generator_unordered" is officially supported in joblib >= 1.4.0
 SUPPORTS_GENERATOR_UNORDERED = version.parse(joblib.__version__) >= version.parse(

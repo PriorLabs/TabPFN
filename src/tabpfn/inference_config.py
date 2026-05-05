@@ -142,7 +142,7 @@ class InferenceConfig:
         "random",
         "constant_and_balanced",
         "gini_feature_importance",
-        "gini_feature_importance_lightgbm",
+        "auto",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -152,12 +152,14 @@ class InferenceConfig:
         - "constant_and_balanced": Always include the first N features (see
           FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
           the rest.
-        - "gini_feature_importance": Fit an ExtraTrees model and rank features by Gini
-          impurity reduction. Always include the top-K most important features (see
+        - "gini_feature_importance": Use LightGBM gain importance to rank features.
+          Always include the top-K most important features (see
           FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), randomly fill the rest.
-        - "gini_feature_importance_lightgbm": Use LightGBM gain importance instead of
-          ExtraTrees. Passes categorical feature indices natively. Requires lightgbm
-          to be installed (pip install lightgbm).
+        - "auto": Automatically selects the method based on dataset size and whether
+          feature subsampling is needed. Uses "gini_feature_importance" when
+          n_samples > AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES(=100_000) and
+          subsampling is required (importance scoring is more accurate on larger
+          datasets), otherwise falls back to "balanced".
     """
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
@@ -170,7 +172,8 @@ class InferenceConfig:
     max_features_per_estimator is filled randomly from the remaining features.
         - If an int, that many features are always included.
         - If a float in (0, 1], resolved as ceil(value * n_total_features).
-        - If "auto", uses top-k=150 when n_features > 200 and n_samples > 100_000;
+        - If "auto", uses top-k=AUTO_FEATURE_SUBSAMPLING_TOP_K(=150) when
+          n_features > AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES(=200);
           otherwise no importance filtering is done.
     """
 
