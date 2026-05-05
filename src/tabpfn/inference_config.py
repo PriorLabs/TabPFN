@@ -154,7 +154,8 @@ class InferenceConfig:
           the rest.
         - "gini_feature_importance": Use LightGBM gain importance to rank features.
           Always include the top-K most important features (see
-          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), randomly fill the rest.
+          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), fill the rest via balanced
+          round-robin sampling from the remaining features.
         - "auto": Automatically selects the method based on dataset size and whether
           feature subsampling is needed. Uses "gini_feature_importance" when
           n_samples > AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES(=100_000) and
