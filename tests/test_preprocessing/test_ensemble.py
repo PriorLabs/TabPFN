@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -21,6 +22,11 @@ from tabpfn.preprocessing.ensemble import (
     _subsample_features_importance_based,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
+
+skip_on_macos = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="LightGBM requires libomp which is not available on macOS CI",
+)
 
 
 def _get_schema(n_features: int) -> FeatureSchema:
@@ -832,6 +838,7 @@ def test__resolve_feature_subsampling_method__auto_no_subsampling_needed():
     assert result is FeatureSubsamplingMethod.BALANCED
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__classification():
     """_compute_feature_importance_order returns one valid feature ranking per tree."""
     rng = np.random.default_rng(0)
@@ -853,6 +860,7 @@ def test___compute_feature_importance_order__classification():
     assert sum(order[0] == 0 for order in orders) > len(orders) // 2
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__regression():
     """_compute_feature_importance_order works for regression tasks."""
     rng = np.random.default_rng(1)
@@ -872,6 +880,7 @@ def test___compute_feature_importance_order__regression():
     assert sum(order[0] == 2 for order in orders) > len(orders) // 2
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__subsamples_large_datasets():
     """max_samples caps the number of rows used for fitting."""
     rng = np.random.default_rng(0)
@@ -996,6 +1005,7 @@ def test__end_to_end__feature_importance_skipped_when_top_k_equals_all_features(
         mock_compute.assert_not_called()
 
 
+@skip_on_macos
 def test__end_to_end__feature_importance_subsampling():
     """End-to-end: TabPFNEnsemblePreprocessor with feature_importance subsampling."""
     rng = np.random.default_rng(7)
@@ -1085,6 +1095,7 @@ def test__subsample_features_importance_based__different_orderings_yield_differe
     )
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__gini_large_dataset_yields_diverse_orderings():  # noqa: E501
     """With data > max_samples, independent subsamples produce diverse orderings."""
     rng = np.random.default_rng(42)
@@ -1120,6 +1131,7 @@ def test___compute_feature_importance_order__gini_large_dataset_yields_diverse_o
     )
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__lightgbm():
     """LightGBM importance ranks the most predictive feature first."""
     rng = np.random.default_rng(2)
@@ -1153,6 +1165,7 @@ def test___compute_feature_importance_order__lightgbm():
     assert len(orderings_cat[0]) == n_features
 
 
+@skip_on_macos
 def test___compute_feature_importance_order__handles_nan():
     """Importance method must tolerate NaN values in X."""
     rng = np.random.default_rng(42)
