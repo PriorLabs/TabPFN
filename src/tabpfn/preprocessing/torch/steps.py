@@ -18,6 +18,7 @@ from tabpfn.preprocessing.steps.add_svd_features_step import get_svd_n_component
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStep,
     TorchPreprocessingStepResult,
+    _move_cache_to_device,
 )
 from tabpfn.preprocessing.torch.torch_quantile_transformer import (
     TorchQuantileTransformer,
@@ -146,6 +147,8 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
 
         if fitted_cache is None:
             fitted_cache = self._qt.fit(target_x[:num_train_rows])
+        else:
+            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
 
         transformed = self._qt.transform(target_x, fitted_cache=fitted_cache)
 
