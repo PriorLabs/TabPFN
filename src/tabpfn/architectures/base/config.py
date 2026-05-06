@@ -53,7 +53,7 @@ class ModelConfig(ArchitectureConfig):
     nan_handling_enabled: Literal[True] = True
     nan_handling_y_encoder: Literal[True] = True
     nhid_factor: int = 4
-    """Hidden dimension in the MLP layers is ninp * nhid_factor."""
+    """Hidden dimension in the MLP layers is emsize * nhid_factor."""
     nlayers: int = 12
     """Number of layers in the encoder, each consisting of
     a multi-head attention and an MLP layer."""
