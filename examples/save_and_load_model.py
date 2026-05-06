@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-# Copyright (c) Prior Labs GmbH 2025.
+# Copyright (c) Prior Labs GmbH 2026.
 from pathlib import Path
 
 from sklearn.datasets import load_diabetes

@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 """TabPFN with KV cache vs. without on binary classification (synthetic).
 
 `fit_mode="fit_with_cache"` builds a key-value (KV) cache *during* `fit`.

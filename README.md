@@ -515,4 +515,4 @@ export TABPFN_DISABLE_TELEMETRY=1
 ```
 ---
 
-Built with ❤️ by [Prior Labs](https://priorlabs.ai) - Copyright (c) 2025 Prior Labs GmbH
+Built with ❤️ by [Prior Labs](https://priorlabs.ai) - Copyright (c) 2026 Prior Labs GmbH

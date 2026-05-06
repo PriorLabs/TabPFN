@@ -1,6 +1,6 @@
 """Various constants used throughout the library."""
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 # TODO(eddiebergman): Should probably put these where they belong but
 # for the time being, this just helps with typing and not the possible

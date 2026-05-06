@@ -26,29 +26,7 @@ dependencies = [
   "lightgbm>=3.0",
 ]
 requires-python = ">=3.9"
-authors = [
-  { name = "Noah Hollmann" },
-  { name = "Samuel Müller" },
-  { name = "Lennart Purucker" },
-  { name = "Arjun Krishnakumar" },
-  { name = "Max Körfer" },
-  { name = "Shi Bin Hoo" },
-  { name = "Robin Tibor Schirrmeister" },
-  { name = "Frank Hutter" },
-  # Huge thanks to code refactoring contributor Eddie
-  { name = "Eddie Bergman" },
-  # Prior Labs Contributors
-  { name = "Leo Grinsztajn" },
-  { name = "Felix Jabloski" },
-  { name = "Klemens Flöge" },
-  { name = "Oscar Key" },
-  { name = "Felix Birkel" },
-  { name = "Philipp Jund" },
-  { name = "Brendan Roof" },
-  { name = "Dominik Safaric" },
-  { name = "Benjamin Jaeger" },
-  { name = "Alan Arazi" }
-]
+authors = [{ name = "Prior Labs", email = "opensource@priorlabs.ai" }]
 
 readme = "README.md"
 description = "TabPFN: Foundation model for tabular data"
