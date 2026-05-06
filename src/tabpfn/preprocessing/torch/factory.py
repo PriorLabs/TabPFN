@@ -74,11 +74,8 @@ def create_gpu_preprocessing_pipeline(
             )
 
         # SVD features
-        svd_on_gpu = (
-            pconfig.global_transformer_name is not None
-            and pconfig.global_transformer_name != "None"
-            and not pconfig.differentiable
-        )
+        # TODO: We disable SVD on GPU for now because we've seen memory issues.
+        svd_on_gpu = False
         if svd_on_gpu and pconfig.global_transformer_name is not None:
             steps.append(
                 (
