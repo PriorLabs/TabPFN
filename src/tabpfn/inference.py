@@ -547,6 +547,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         *,
         autocast: bool,
         task_type: str,
+        performance_options: PerformanceOptions | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
@@ -564,6 +565,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             kwargs = {}
             if _model_expectes_task_type_arg(model):
                 kwargs["task_type"] = task_type
+            if performance_options is not None:
+                kwargs["performance_options"] = performance_options
             forward_start = time.perf_counter()
             with (
                 get_autocast_context(device, enabled=autocast),

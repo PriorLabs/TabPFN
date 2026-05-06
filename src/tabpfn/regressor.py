@@ -95,7 +95,11 @@ if TYPE_CHECKING:
     from torch.types import _dtype
 
     from tabpfn.architectures.base.memory import MemorySavingMode
-    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.architectures.interface import (
+        Architecture,
+        ArchitectureConfig,
+        PerformanceOptions,
+    )
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
@@ -1072,6 +1076,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
+        performance_options: PerformanceOptions | None = None,
     ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
@@ -1108,8 +1113,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # only these two modes support this option
             self.executor_.use_torch_inference_mode(use_inference=use_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
+        iter_kwargs: dict[str, Any] = {}
+        if is_batched_for_grads and performance_options is not None:
+            iter_kwargs["performance_options"] = performance_options
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_, task_type="regression"
+            X, autocast=self.use_autocast_, task_type="regression", **iter_kwargs
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
@@ -1166,6 +1174,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
+        performance_options: PerformanceOptions | None = None,
     ) -> tuple[torch.Tensor | None, list[torch.Tensor], list[np.ndarray]]:
         """Forward pass for TabPFNRegressor Inference Engine.
         Used in fine-tuning and prediction. Called directly
@@ -1179,6 +1188,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             use_inference_mode: Flag for inference mode., default at False since
             it is called within predict. During FineTuning forward() is called
             directly by user, so default should be False here.
+            performance_options: Optional runtime performance overrides for
+                inference execution.
 
         Returns:
             A tuple containing:
@@ -1190,7 +1201,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         borders: list[np.ndarray] = []
 
         for border, output in tqdm(
-            self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
+            self._iter_forward_executor(
+                X,
+                use_inference_mode=use_inference_mode,
+                performance_options=performance_options,
+            ),
             total=self.n_estimators,
             desc="TabPFN inference",
             unit="estimator",

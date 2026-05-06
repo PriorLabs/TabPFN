@@ -31,6 +31,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm.auto import tqdm
 
+from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.finetuning._torch_compat import GradScaler, autocast, sdpa_kernel_context
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
@@ -340,7 +341,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         return config
 
     def _training_forward(self, *args: Any, **kwargs: Any) -> Any:
-        """Forward pass that routes through DDP wrapper during training if active."""
+        """Forward pass that routes through DDP wrapper during training if active.
+
+        Injects ``performance_options`` derived from
+        ``self.use_activation_checkpointing`` so v3 (and v2.5/v2.6) honor
+        gradient checkpointing during fine-tuning. Architectures silently ignore
+        unsupported fields, so this is safe across versions.
+        """
+        if self.use_activation_checkpointing and "performance_options" not in kwargs:
+            kwargs["performance_options"] = PerformanceOptions(
+                force_recompute_layer=True,
+            )
         if self._ddp_module_ is not None:
             return self._ddp_module_(*args, **kwargs)
         return self.finetuned_estimator_.forward(*args, **kwargs)
@@ -668,9 +679,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)
-
-        if self.use_activation_checkpointing:
-            self.finetuned_estimator_.model_.recompute_layer = True  # type: ignore
 
         # --- DDP model wrapping ---
         model_for_optimization = self.finetuned_estimator_.model_

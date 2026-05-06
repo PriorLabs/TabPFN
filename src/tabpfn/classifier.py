@@ -103,7 +103,11 @@ if TYPE_CHECKING:
     from torch.types import _dtype
 
     from tabpfn.architectures.base.memory import MemorySavingMode
-    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.architectures.interface import (
+        Architecture,
+        ArchitectureConfig,
+        PerformanceOptions,
+    )
     from tabpfn.inference_config import InferenceConfig
 
     try:
@@ -1391,6 +1395,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         use_inference_mode: bool = False,
         return_logits: bool = False,
         return_raw_logits: bool = False,
+        performance_options: PerformanceOptions | None = None,
     ) -> torch.Tensor:
         """Forward pass returning predicted probabilities or logits
         for TabPFNClassifier Inference Engine. Used in
@@ -1409,6 +1414,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Otherwise, probabilities are returned.
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
+            performance_options: Optional runtime performance overrides for
+                inference execution.
 
         Returns:
             The predicted probabilities or logits of the classes as a torch.Tensor.
@@ -1460,11 +1467,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
+        iter_kwargs: dict[str, Any] = {}
+        if is_batched_for_grads and performance_options is not None:
+            iter_kwargs["performance_options"] = performance_options
         for output, config in tqdm(
             self.executor_.iter_outputs(
                 X,
                 autocast=self.use_autocast_,
                 task_type="multiclass",
+                **iter_kwargs,
             ),
             total=self.n_estimators,
             desc="TabPFN inference",
