@@ -39,6 +39,13 @@ cd TabPFN
 uv sync
 ```
 
+#### Platform and hardware notes
+
+- **Python**: TabPFN supports Python 3.9 through 3.13.
+- **Operating systems**: Linux, macOS, and Windows are covered by the test matrix. GPU usage depends on your local PyTorch, CUDA, and driver setup.
+- **CPU-only install**: `pip install tabpfn` works without a GPU, but CPU inference is intended for small datasets. If you need a CPU-only PyTorch wheel, install PyTorch from the [official selector](https://pytorch.org/get-started/locally/) before installing TabPFN.
+- **GPU install**: Install a PyTorch build that matches your CUDA version from the [official selector](https://pytorch.org/get-started/locally/), then install TabPFN with `pip install tabpfn`.
+
 ### Basic Usage
 
 To use our default TabPFN-2.6 model, trained purely on synthetic data:
