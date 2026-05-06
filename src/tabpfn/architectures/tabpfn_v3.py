@@ -1471,7 +1471,11 @@ class ColumnAggregator(nn.Module):
         for block in self.blocks[:-1]:
             if force_recompute_layer:
                 x = torch.utils.checkpoint.checkpoint(  # type: ignore
-                    block, x, self.rope, save_peak_memory_factor
+                    block,
+                    x,
+                    self.rope,
+                    save_peak_memory_factor,
+                    use_reentrant=False,
                 )
             else:
                 x = block(
@@ -1484,7 +1488,11 @@ class ColumnAggregator(nn.Module):
         cls_part = x_full[..., : self.num_cls_tokens, :]
         if force_recompute_layer:
             cls_out = torch.utils.checkpoint.checkpoint(  # type: ignore
-                last_block.forward_cross, cls_part, x_full, self.rope
+                last_block.forward_cross,
+                cls_part,
+                x_full,
+                self.rope,
+                use_reentrant=False,
             )
         else:
             cls_out = last_block.forward_cross(cls_part, x_full, self.rope)

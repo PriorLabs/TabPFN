@@ -341,17 +341,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         return config
 
     def _training_forward(self, *args: Any, **kwargs: Any) -> Any:
-        """Forward pass that routes through DDP wrapper during training if active.
-
-        Injects ``performance_options`` derived from
-        ``self.use_activation_checkpointing`` so v3 (and v2.5/v2.6) honor
-        gradient checkpointing during fine-tuning. Architectures silently ignore
-        unsupported fields, so this is safe across versions.
-        """
-        if self.use_activation_checkpointing and "performance_options" not in kwargs:
-            kwargs["performance_options"] = PerformanceOptions(
-                force_recompute_layer=True,
-            )
+        """Forward pass that routes through DDP wrapper during training if active."""
         if self._ddp_module_ is not None:
             return self._ddp_module_(*args, **kwargs)
         return self.finetuned_estimator_.forward(*args, **kwargs)
@@ -680,6 +670,16 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)
 
+        # Performance options forwarded to the underlying architecture on every
+        # training forward pass. Chunkwise inference is incompatible with
+        # backprop, so we always disable it here. Activation checkpointing is
+        # driven by the wrapper-level toggle and applies uniformly across
+        # architecture versions through ``PerformanceOptions``.
+        finetuning_performance_options = PerformanceOptions(
+            force_recompute_layer=self.use_activation_checkpointing,
+            use_chunkwise_inference=False,
+        )
+
         # --- DDP model wrapping ---
         model_for_optimization = self.finetuned_estimator_.model_
         self._ddp_module_ = None
@@ -862,6 +862,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     batch.y_context,
                     batch.cat_indices,
                     batch.configs,
+                    performance_options=finetuning_performance_options,
                 )
 
                 if using_ddp:

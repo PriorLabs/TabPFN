@@ -12,7 +12,7 @@ from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, ClassVar, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -489,7 +489,15 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
     on several datasets at once.
     """
 
-    def __init__(
+    # Default performance options for this engine. It is used exclusively in
+    # fine-tuning, where chunkwise inference is incompatible with backprop and
+    # activation checkpointing is needed to fit large contexts in memory.
+    _DEFAULT_FT_PERFORMANCE_OPTIONS: ClassVar[PerformanceOptions] = PerformanceOptions(
+        force_recompute_layer=True,
+        use_chunkwise_inference=False,
+    )
+
+    def __init__(  # noqa: PLR0913
         self,
         X_trains: list[torch.Tensor],
         y_trains: list[torch.Tensor],
@@ -502,6 +510,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
+        performance_options: PerformanceOptions | None = None,
     ) -> None:
         """Initialize the batched inference engine without preprocessing.
 
@@ -517,6 +526,11 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            performance_options: Performance and memory options forwarded to
+                the model on each forward call. If ``None``, uses
+                :attr:`_DEFAULT_FT_PERFORMANCE_OPTIONS`, which disables
+                chunkwise inference and enables activation checkpointing --
+                the right defaults for fine-tuning.
         """
         for ensemble_config in ensemble_configs:
             if len(ensemble_config) > 1:
@@ -537,6 +551,11 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         self.feature_schema_list = feature_schema
         self.ensemble_configs = ensemble_configs
         self.inference_mode = inference_mode
+        self.performance_options = (
+            performance_options
+            if performance_options is not None
+            else self._DEFAULT_FT_PERFORMANCE_OPTIONS
+        )
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
@@ -547,7 +566,6 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         *,
         autocast: bool,
         task_type: str,
-        performance_options: PerformanceOptions | None = None,
     ) -> Iterator[tuple[torch.Tensor | dict, list[EnsembleConfig]]]:
         device = _get_current_device(self.models[0])
         batch_size = len(self.X_trains)
@@ -565,8 +583,6 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             kwargs = {}
             if _model_expectes_task_type_arg(model):
                 kwargs["task_type"] = task_type
-            if performance_options is not None:
-                kwargs["performance_options"] = performance_options
             forward_start = time.perf_counter()
             with (
                 get_autocast_context(device, enabled=autocast),
@@ -582,6 +598,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
+                    performance_options=self.performance_options,
                     **kwargs,
                 )
             forward_time += time.perf_counter() - forward_start

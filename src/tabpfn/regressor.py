@@ -728,6 +728,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         configs: list[list[EnsembleConfig]],  # Should be RegressorEnsembleConfig
         *,
         no_refit: bool = True,
+        performance_options: PerformanceOptions | None = None,
     ) -> TabPFNRegressor:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
@@ -743,6 +744,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             configs: Ensemble configurations obtained from the preprocessed Dataset
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
+            performance_options: Performance and memory options forwarded to the
+                model on each forward call inside the resulting executor. If
+                ``None``, the executor falls back to its FT-appropriate defaults
+                (no chunkwise inference, activation checkpointing enabled).
         """
         if self.fit_mode != "batched":
             logging.warning(
@@ -775,6 +780,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             force_inference_dtype=self.forced_inference_dtype_,
             save_peak_mem=self.memory_saving_mode,
             inference_mode=True,
+            performance_options=performance_options,
         )
 
         return self
@@ -1076,7 +1082,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
-        performance_options: PerformanceOptions | None = None,
     ) -> Iterator[tuple[np.ndarray, torch.Tensor]]:
         # Scenario 1: Standard inference path
         is_standard_inference = use_inference_mode and not isinstance(
@@ -1113,11 +1118,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # only these two modes support this option
             self.executor_.use_torch_inference_mode(use_inference=use_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
-        iter_kwargs: dict[str, Any] = {}
-        if is_batched_for_grads and performance_options is not None:
-            iter_kwargs["performance_options"] = performance_options
         for output, config in self.executor_.iter_outputs(
-            X, autocast=self.use_autocast_, task_type="regression", **iter_kwargs
+            X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
             if self.softmax_temperature != 1:
@@ -1174,7 +1176,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X: list[torch.Tensor] | XType,
         *,
         use_inference_mode: bool = False,
-        performance_options: PerformanceOptions | None = None,
     ) -> tuple[torch.Tensor | None, list[torch.Tensor], list[np.ndarray]]:
         """Forward pass for TabPFNRegressor Inference Engine.
         Used in fine-tuning and prediction. Called directly
@@ -1188,14 +1189,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             use_inference_mode: Flag for inference mode., default at False since
             it is called within predict. During FineTuning forward() is called
             directly by user, so default should be False here.
-            performance_options: Optional runtime performance overrides for
-                the model forward pass (e.g. activation checkpointing,
-                chunked inference). Only applied on the batched
-                fine-tuning path (when ``use_inference_mode=False`` and
-                the executor is :class:`InferenceEngineBatchedNoPreprocessing`).
-                Silently ignored on the standard inference path
-                (``use_inference_mode=True``), where the inference engines
-                construct their own performance options internally.
 
         Returns:
             A tuple containing:
@@ -1210,7 +1203,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self._iter_forward_executor(
                 X,
                 use_inference_mode=use_inference_mode,
-                performance_options=performance_options,
             ),
             total=self.n_estimators,
             desc="TabPFN inference",
