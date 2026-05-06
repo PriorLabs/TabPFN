@@ -1189,7 +1189,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             it is called within predict. During FineTuning forward() is called
             directly by user, so default should be False here.
             performance_options: Optional runtime performance overrides for
-                inference execution.
+                the model forward pass (e.g. activation checkpointing,
+                chunked inference). Only applied on the batched
+                fine-tuning path (when ``use_inference_mode=False`` and
+                the executor is :class:`InferenceEngineBatchedNoPreprocessing`).
+                Silently ignored on the standard inference path
+                (``use_inference_mode=True``), where the inference engines
+                construct their own performance options internally.
 
         Returns:
             A tuple containing:

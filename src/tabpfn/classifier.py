@@ -1415,7 +1415,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             return_raw_logits: If True, returns the raw logits, without
                 averaging estimators or temperature scaling.
             performance_options: Optional runtime performance overrides for
-                inference execution.
+                the model forward pass (e.g. activation checkpointing,
+                chunked inference). Only applied on the batched
+                fine-tuning path (when ``use_inference_mode=False`` and
+                the executor is :class:`InferenceEngineBatchedNoPreprocessing`).
+                Silently ignored on the standard inference path
+                (``use_inference_mode=True``), where the inference engines
+                construct their own performance options internally.
 
         Returns:
             The predicted probabilities or logits of the classes as a torch.Tensor.
