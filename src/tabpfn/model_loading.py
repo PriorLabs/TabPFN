@@ -1102,6 +1102,7 @@ def save_tabpfn_model(
             "state_dict": state_dict,
             "config": asdict(config),
             "architecture_name": architecture_name,
+            "inference_config": asdict(model.inference_config_),
         }
 
         if additional_fields is not None:
