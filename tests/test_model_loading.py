@@ -113,6 +113,11 @@ class DummyArchitecture(Architecture):
     ) -> Tensor | dict[str, Tensor]:
         raise NotImplementedError()
 
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        raise NotImplementedError()
+
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
 def test__load_model__architecture_name_in_checkpoint__loads_specified_architecture(
