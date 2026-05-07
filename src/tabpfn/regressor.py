@@ -674,7 +674,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y, dtype=torch.float32
         )
         y_mean = y_float.mean()
-        y_std = y_float.std() + 1e-20
+        # Match the standard fit path's np.std (population std, ddof=0).
+        # torch.std defaults to correction=1 (sample std), which differs from
+        # numpy and returns NaN for N=1; clamp keeps the divisor non-zero.
+        y_std = torch.clamp(y_float.std(correction=0), min=1e-20)
+        # Constant targets would collapse the bardist borders to a single
+        # point; the differentiable path has no analogue of fit()'s
+        # is_constant_target_ short-circuit, so reject up front.
+        if y_std.detach().item() <= 1e-12:
+            raise ValueError(
+                "Constant or near-constant target (std≈0) is not supported "
+                "by fit_with_differentiable_input; there is no signal to "
+                "predict differentiably. Use fit() for constant-target data."
+            )
+        # Detach when storing as Python floats — raw_space_bardist_ is a
+        # frozen lookup table and must not hold a y-grad graph. Users who
+        # need fully differentiable target scaling should z-normalise y
+        # themselves before calling fit_with_differentiable_input so the
+        # mean/std are constants here.
         self.y_train_mean_ = y_mean.detach().item()
         self.y_train_std_ = y_std.detach().item()
         y_normalized = (y_float - y_mean) / y_std
@@ -712,7 +729,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "Categorical features are not supported for differentiable input."
             )
         n_features = X.shape[1]
-        features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
+        # One Feature instance per column — list multiplication would share
+        # the same dataclass and any later in-place update would leak across
+        # columns.
+        features = [
+            Feature(name=None, modality=FeatureModality.NUMERICAL)
+            for _ in range(n_features)
+        ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         self.n_features_in_ = n_features
 
@@ -938,12 +961,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # targets. The model load and ensemble configs stay cached.
             X, y = self._refresh_targets_for_differentiable_input(X, y)
 
+        # Force sequential preprocessing: with differentiable input, X carries
+        # an autograd graph that does not survive joblib's process-boundary
+        # pickling. Sequential execution preserves the graph in-process.
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
             n_samples=X.shape[0],
             feature_schema=self.inferred_feature_schema_,
             random_state=static_seed,
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
+            n_preprocessing_jobs=1,
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),

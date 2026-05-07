@@ -1070,6 +1070,79 @@ def test__fit_with_differentiable_input__categorical_features_rejected() -> None
         reg.fit_with_differentiable_input(X, y)
 
 
+def test__fit_with_differentiable_input__constant_target_rejected() -> None:
+    """A constant-target y has no signal to predict differentiably and would
+    collapse the bardist borders; reject with a clear error."""
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X = torch.randn(5, 4)
+    y = torch.full((5,), 3.14)
+    with pytest.raises(ValueError, match="Constant or near-constant target"):
+        reg.fit_with_differentiable_input(X, y)
+
+
+def test__fit_with_differentiable_input__single_sample_y_does_not_nan() -> None:
+    """torch.std defaults to sample std (correction=1) which returns NaN for
+    N=1. Our path uses correction=0 (population std) so std is well defined
+    even for a single sample (it just collapses to 0, which then trips the
+    constant-target guard — what we want). Verify the failure mode is the
+    explicit ValueError, not a downstream NaN."""
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X = torch.randn(1, 4)
+    y = torch.tensor([2.0])
+    with pytest.raises(ValueError, match="Constant or near-constant target"):
+        reg.fit_with_differentiable_input(X, y)
+
+
+def test__fit_with_differentiable_input__std_matches_population_definition() -> None:
+    """The differentiable path's y_train_std_ should match np.std (population
+    std, ddof=0), not torch's default sample std (correction=1), so it lines
+    up with the standard fit() path."""
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X = torch.randn(20, 4)
+    y_np = np.random.default_rng(0).standard_normal(20).astype(np.float32)
+    y = torch.from_numpy(y_np)
+    reg.fit_with_differentiable_input(X, y)
+    expected = float(np.std(y_np))  # ddof=0
+    assert abs(reg.y_train_std_ - expected) < 1e-5, (
+        f"y_train_std_ should equal np.std(y) (population std); "
+        f"got {reg.y_train_std_}, expected {expected}"
+    )
+
+
+def test__fit_with_differentiable_input__feature_schema_columns_are_independent() -> None:
+    """Each column's Feature must be a distinct instance — list multiplication
+    `[Feature(...)] * n` would alias all columns to one mutable dataclass."""
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X = torch.randn(10, 4)
+    y = torch.randn(10)
+    reg.fit_with_differentiable_input(X, y)
+    feats = reg.inferred_feature_schema_.features
+    assert len(feats) == 4
+    # Distinct instances, not aliases.
+    ids = {id(f) for f in feats}
+    assert len(ids) == 4, "feature columns share the same Feature instance"
+
+
 def test__fit_with_differentiable_input__second_call_refreshes_target_stats() -> None:
     """A second call with different y must update y_train_mean_/std_ and the
     raw_space_bardist_; only the model load and ensemble configs are cached."""
