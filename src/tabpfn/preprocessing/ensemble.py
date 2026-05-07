@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module for generating ensemble configurations."""
 
 from __future__ import annotations

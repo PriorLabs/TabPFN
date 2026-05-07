@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Browser-based license acceptance for TabPFN.
 
 Opens a browser to the PriorLabs login page so the user can accept the

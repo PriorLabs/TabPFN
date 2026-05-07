@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Test saving and loading of a fitted TabPFN classifier/regressor."""
 
 from __future__ import annotations

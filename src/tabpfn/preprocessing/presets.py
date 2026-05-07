@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Predefined preprocessor configurations for different model versions.
 
 This module provides factory functions that return preprocessor configurations

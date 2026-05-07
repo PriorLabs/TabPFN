@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """A TabPFN classifier that finetunes the underlying model for a single task.
 
 This module provides the FinetunedTabPFNClassifier class, which wraps TabPFN

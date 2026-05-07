@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """DEPRECATED: Please import tabpfn.architectures.encoders instead."""
 
 from __future__ import annotations

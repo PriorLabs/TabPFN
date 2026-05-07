@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for validation.ensure_compatible_fit_inputs function."""
 
 from __future__ import annotations

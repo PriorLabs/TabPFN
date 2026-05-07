@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """TabPFN Example Usage.
 
 Toy script to check that the TabPFN is working.

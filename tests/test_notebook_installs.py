@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Verify each example notebook resolves `tabpfn` to the latest PyPI release.
 
 Reproduces the install sequence from each `examples/notebooks/*.ipynb` in a

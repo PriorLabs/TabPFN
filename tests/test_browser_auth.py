@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the browser-based license acceptance module."""
 
 from __future__ import annotations

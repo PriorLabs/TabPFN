@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Adds SVD features to the data."""
 
 from __future__ import annotations

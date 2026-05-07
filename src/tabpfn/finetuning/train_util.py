@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Some utility functions for training."""
 
 from __future__ import annotations

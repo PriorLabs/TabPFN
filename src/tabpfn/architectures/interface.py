@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Defines the interface for modules containing architectures."""
 
 from __future__ import annotations

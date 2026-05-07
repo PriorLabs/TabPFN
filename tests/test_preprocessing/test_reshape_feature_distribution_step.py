@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for ReshapeFeatureDistributionsStep, focusing on feature modality handling."""
 
 from __future__ import annotations

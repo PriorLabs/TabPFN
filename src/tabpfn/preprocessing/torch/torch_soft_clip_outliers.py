@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Torch implementation of outlier clipping with NaN handling."""
 
 from __future__ import annotations

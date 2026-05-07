@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to handle NaN and infinite values in the input."""
 
 from __future__ import annotations

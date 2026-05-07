@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Contains references to the base architecture, for backwards compatability.
 
 DEPRECATED: import tabpfn.architectures.base instead

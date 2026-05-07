@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for TabPFN classifier finetuning functionality.
 
 This module contains tests for:

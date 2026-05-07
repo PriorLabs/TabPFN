@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Pytest configuration for TabPFN tests.
 
 This module sets up global test configuration, including disabling telemetry

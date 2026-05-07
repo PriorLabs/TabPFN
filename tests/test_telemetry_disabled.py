@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Test to verify that telemetry is disabled during test execution."""
 
 from __future__ import annotations

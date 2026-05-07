@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Check for the enable_gqa parameter of PyTorch scaled_dot_product_attention."""
 
 from __future__ import annotations

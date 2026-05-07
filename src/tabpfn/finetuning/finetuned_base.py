@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Abstract base class for fine-tuning TabPFN models.
 
 This module provides the FinetunedTabPFNBase class, which contains shared

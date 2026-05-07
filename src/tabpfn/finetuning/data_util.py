@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Utilities for data preparation used in fine-tuning wrappers."""
 
 from __future__ import annotations

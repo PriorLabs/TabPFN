@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Single-dataset fine-tuning wrappers for TabPFN models."""
 
 from tabpfn.finetuning.data_util import ClassifierBatch, RegressorBatch

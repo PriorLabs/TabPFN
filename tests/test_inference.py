@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Test the inference engines."""
 
 from __future__ import annotations
