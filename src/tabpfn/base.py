@@ -17,6 +17,8 @@ from sklearn.base import (
 )
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
+from tabpfn.architectures.interface import PerformanceOptions
+
 # --- TabPFN imports ---
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
@@ -366,6 +368,11 @@ def create_inference_engine(  # noqa: PLR0913
             autocast=use_autocast_,
         )
     if fit_mode == "batched":
+        # Finetuning constructs InferenceEngineBatchedNoPreprocessing directly via
+        # fit_from_preprocessed with explicit PerformanceOptions; this branch is
+        # only reachable from the standard fit() path (currently guarded by a
+        # fit_mode auto-switch in classifier/regressor), so default options are
+        # appropriate here.
         return InferenceEngineBatchedNoPreprocessing(
             X_trains=X_train,  # pyright: ignore[reportArgumentType]
             y_trains=y_train,  # pyright: ignore[reportArgumentType]
@@ -377,6 +384,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            performance_options=PerformanceOptions(),
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")

@@ -842,8 +842,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         cat_ix: list[list[list[int]]],
         configs: list[list[EnsembleConfig]],
         *,
+        performance_options: PerformanceOptions,
         no_refit: bool = True,
-        performance_options: PerformanceOptions | None = None,
     ) -> TabPFNClassifier:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
         dataloader inside a training loop a Dataset provided by
@@ -857,12 +857,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_preprocessed: The target variable obtained from the preprocessed Dataset
             cat_ix: categorical indices obtained from the preprocessed Dataset
             configs: Ensemble configurations obtained from the preprocessed Dataset
+            performance_options: Performance and memory options forwarded to the
+                model on each forward call inside the resulting executor.
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
-            performance_options: Performance and memory options forwarded to the
-                model on each forward call inside the resulting executor. If
-                ``None``, the executor falls back to its FT-appropriate defaults
-                (no chunkwise inference, activation checkpointing enabled).
         """
         if self.fit_mode != "batched":
             logging.warning(

@@ -670,11 +670,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)
 
-        # Performance options forwarded to the underlying architecture on every
-        # training forward pass. Chunkwise inference is incompatible with
-        # backprop, so we always disable it here. Activation checkpointing is
-        # driven by the wrapper-level toggle and applies uniformly across
-        # architecture versions through ``PerformanceOptions``.
         finetuning_performance_options = PerformanceOptions(
             force_recompute_layer=self.use_activation_checkpointing,
             use_chunkwise_inference=False,
