@@ -1642,7 +1642,6 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.emsize = config.embed_dim
-        self.num_cls_tokens = config.feat_agg_num_cls_tokens
         self.inference_row_chunk_size = config.inference_row_chunk_size
         self.inference_col_chunk_size = config.inference_col_chunk_size
 
@@ -2028,7 +2027,7 @@ class TabPFNV3(Architecture):
         (chunked path, where it is always computed as an intermediate).
         """
         num_train = y.shape[0]
-        if performance_options.use_chunkwise_inference:
+        if performance_options.use_chunkwise_inference and not self.training:
             row_chunk_size = self.inference_row_chunk_size
             col_chunk_size = self.inference_col_chunk_size
         else:

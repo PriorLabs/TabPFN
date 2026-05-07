@@ -568,9 +568,12 @@ class TabPFNV2p5(Architecture):
             self.input_size // 4, self.input_size
         )
         self._do_encoder_nan_check = True
-        # TODO(Phil): This is here to not fail the memory computation. We should make
-        # this a proper API.
         self.emsize = config.emsize
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.emsize
 
     def _get_feature_group_embedder(self, config: TabPFNV2p5Config) -> nn.Module:
         """Get the feature group embedder."""
