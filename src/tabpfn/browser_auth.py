@@ -138,21 +138,39 @@ def verify_token(token: str, api_url: str) -> bool | None:
 # ---------------------------------------------------------------------------
 
 
-def _get_license_name(hf_repo_id: str) -> str | None:
+def _get_license_name(hf_repo_id: str) -> str:
     """Fetch the license_name from the HuggingFace API for a Prior-Labs repo.
 
-    Returns the license_name string (e.g. ``"tabpfn-2.6-license-v1.0"``)
-    or ``None`` if the request fails.
+    Uses the user's cached HuggingFace token (``HF_TOKEN`` env var or
+    ``huggingface-cli login``) so gated repos resolve correctly. Raises
+    :class:`TabPFNLicenseError` if the user has no HF access to the repo,
+    the request fails, or the model card has no ``license_name``.
     """
+    from huggingface_hub import get_token  # noqa: PLC0415
+
     url = f"https://huggingface.co/api/models/Prior-Labs/{hf_repo_id}"
+    headers = {}
+    token = get_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers)  # noqa: S310
     try:
-        req = urllib.request.Request(url)  # noqa: S310
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read())
-            return data.get("cardData", {}).get("license_name")
-    except Exception:  # noqa: BLE001
-        logger.debug("Could not fetch license_name for %s", hf_repo_id, exc_info=True)
-        return None
+    except Exception as exc:  # noqa: BLE001
+        raise TabPFNLicenseError(
+            f"Could not fetch license metadata for Prior-Labs/{hf_repo_id} from HuggingFace.\n"
+            f"If the repo is gated, accept access at "
+            f"https://huggingface.co/Prior-Labs/{hf_repo_id} and run "
+            f"`huggingface-cli login` (or set HF_TOKEN)."
+        ) from exc
+    license_name = data.get("cardData", {}).get("license_name")
+    if not license_name:
+        raise TabPFNLicenseError(
+            f"HuggingFace model card for Prior-Labs/{hf_repo_id} is missing "
+            f"cardData.license_name."
+        )
+    return license_name
 
 
 # ---------------------------------------------------------------------------
@@ -553,8 +571,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
     gui_url = settings.tabpfn.auth_gui_url
     api_url = settings.tabpfn.auth_api_url
 
-    # Resolve the canonical license version string from HF; fall back to repo ID.
-    license_version = _get_license_name(hf_repo_id) or hf_repo_id
+    license_version = _get_license_name(hf_repo_id)
 
     token = get_cached_token()
     if token is not None:
