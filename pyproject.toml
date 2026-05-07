@@ -240,11 +240,7 @@ exclude = [
 # All files must carry a Prior Labs copyright header. Convention is:
 #   #  Copyright (c) Prior Labs GmbH <YEAR>.
 # The year is the year the file was first authored — it is not auto-rewritten
-#
-# Ruff's CPY001 works in two stages: `notice-rgx` matches a prefix, and `author`
-# must then immediately follow that match (after trimming whitespace). So the
-# regex anchors on `Copyright (c)` and the author config enforces that
-# "Prior Labs GmbH" comes next. The year then naturally follows.
+
 notice-rgx = '(?i)Copyright \(c\)'
 author = "Prior Labs GmbH"
 
