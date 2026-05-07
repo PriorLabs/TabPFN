@@ -247,3 +247,11 @@ class Architecture(nn.Module, ABC):
             force_recompute_layer=False,
             use_chunkwise_inference=False,
         )
+
+    @property
+    def embedding_dim(self) -> int:
+        """Returns the dimension of the embeddings.
+
+        This is the size of the embeddings that can be used for further processing.
+        """
+        return self.emsize

@@ -828,7 +828,7 @@ def test_get_embeddings(
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == model.models_[0].input_size
+    assert embeddings.shape[2] == model.models_[0].embedding_dim
 
 
 def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):

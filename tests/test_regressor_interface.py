@@ -584,7 +584,7 @@ def test_get_embeddings(
 
     # Need to access the model through the executor
     model_instance = next(iter(model.executor_.model_caches[0]._models.values()))
-    hidden_size = model_instance.ninp
+    hidden_size = model_instance.embedding_dim
 
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
