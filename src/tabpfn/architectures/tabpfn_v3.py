@@ -1,4 +1,4 @@
-# ruff: noqa: PLR0912, C901
+# ruff: noqa: PLR0912, C901,
 """TabPFN v3 architecture.
 
 
@@ -19,6 +19,8 @@ Cl: number of CLS tokens
 D: head dimension
 H: num heads
 S: sequence length
+
+Copyright (c) Prior Labs GmbH 2026.
 """
 
 from __future__ import annotations
