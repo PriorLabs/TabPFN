@@ -355,9 +355,19 @@ def _compute_stratified_class_counts(
 
     Allocates proportionally to class frequency. Rounding errors are corrected by
     giving leftover slots to the classes with the largest fractional remainders.
+
+    Args:
+        class_sizes: 1-D integer array of per-class row counts.
+        subsample_size: Total number of rows to allocate across classes.
+
+    Returns:
+        1-D integer array of length ``len(class_sizes)`` where each entry is the
+        number of rows to draw from the corresponding class.  Entries sum to
+        exactly ``subsample_size``.
     """
-    assert class_sizes.sum() > 0
-    class_fracs = class_sizes / class_sizes.sum()
+    total_class_sizes = class_sizes.sum()
+    assert total_class_sizes > 0
+    class_fracs = class_sizes / total_class_sizes
     raw = class_fracs * subsample_size
     counts = np.floor(raw).astype(int)
     leftover = subsample_size - counts.sum()
