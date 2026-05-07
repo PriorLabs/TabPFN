@@ -160,7 +160,7 @@ def _get_license_name(hf_repo_id: str) -> str:
     except Exception as exc:  # noqa: BLE001
         raise TabPFNLicenseError(
             f"Could not fetch license metadata for Prior-Labs/{hf_repo_id} from HuggingFace.\n"
-            f"If the repo is gated, accept access at "
+            f"If the repo is gated and you are in our beta testing program, accept access at "
             f"https://huggingface.co/Prior-Labs/{hf_repo_id} and run "
             f"`huggingface-cli login` (or set HF_TOKEN)."
         ) from exc
