@@ -4,11 +4,13 @@ You can find more information on benchmarking TabPFN in our documentation: https
 """
 
 import time
+
 import pandas as pd
-from sklearn.datasets import fetch_openml
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
 import xgboost as xgb
+from sklearn.datasets import fetch_openml
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+
 from tabpfn import TabPFNClassifier
 
 # 1. Data
@@ -39,12 +41,12 @@ results.append({
 })
 
 # 4. XGBoost sensible defaults
-xgb_params = dict(
-    learning_rate=0.05, max_depth=6, min_child_weight=1,
-    subsample=0.9, colsample_bytree=0.9, reg_lambda=1.0,
-    tree_method="hist", eval_metric="auc",
-    objective="binary:logistic", seed=42,
-)
+xgb_params = {
+    "learning_rate": 0.05, "max_depth": 6, "min_child_weight": 1,
+    "subsample": 0.9, "colsample_bytree": 0.9, "reg_lambda": 1.0,
+    "tree_method": "hist", "eval_metric": "auc",
+    "objective": "binary:logistic", "seed": 42,
+}
 dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
 dtest  = xgb.DMatrix(X_test,  label=y_test,  enable_categorical=True)
 t0 = time.perf_counter()
