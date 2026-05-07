@@ -647,23 +647,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         return initialize_model_variables_helper(self, self.estimator_type)
 
-    def _initialize_for_differentiable_input(
-        self,
-        X: torch.Tensor,
-        y: torch.Tensor,
-        rng: np.random.Generator,
-    ) -> tuple[list[RegressorEnsembleConfig], torch.Tensor, torch.Tensor]:
-        """Initialize the model for differentiable input.
+    def _refresh_targets_for_differentiable_input(
+        self, X: torch.Tensor, y: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Per-fit-call data-dependent setup for the differentiable path.
 
-        Mirrors the classifier-side helper so that gradients can flow from a
-        loss back to upstream torch modules feeding ``X`` (and optionally
-        ``y``). Skips the standard numpy preprocessing path and uses a
-        differentiable identity preprocessor.
-
-        Returns the ensemble configs together with ``X`` and the
-        z-normalised ``y``. The standardisation parameters are stored on
-        ``self`` so ``raw_space_bardist_`` reflects the caller's target
-        scale.
+        Validates input shape, z-normalises ``y`` as a torch op (preserves
+        grads), updates the standardisation stats, and rebuilds
+        ``raw_space_bardist_`` in the caller's current target scale. Run on
+        every ``fit_with_differentiable_input`` call so the regressor's
+        target stats always match the data being fit; the model load and
+        ensemble configs are cached in ``_initialize_for_differentiable_input``
+        and run only on the first call.
         """
         validate_dataset_size(
             X=X,
@@ -673,7 +668,40 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             devices=self.devices_,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
+        self.n_train_samples_ = int(X.shape[0])
 
+        y_float = y.float() if isinstance(y, torch.Tensor) else torch.as_tensor(
+            y, dtype=torch.float32
+        )
+        y_mean = y_float.mean()
+        y_std = y_float.std() + 1e-20
+        self.y_train_mean_ = y_mean.detach().item()
+        self.y_train_std_ = y_std.detach().item()
+        y_normalized = (y_float - y_mean) / y_std
+
+        # raw_space_bardist_ is a constant lookup in the caller's target
+        # scale; detach so the buffer does not hold onto y's grad graph.
+        borders = self.znorm_space_bardist_.borders.detach()
+        self.raw_space_bardist_ = FullSupportBarDistribution(
+            borders * self.y_train_std_ + self.y_train_mean_,
+        ).float()
+        return X, y_normalized
+
+    def _initialize_for_differentiable_input(
+        self,
+        X: torch.Tensor,
+        y: torch.Tensor,
+        rng: np.random.Generator,
+    ) -> tuple[list[RegressorEnsembleConfig], torch.Tensor, torch.Tensor]:
+        """First-call setup for the differentiable path.
+
+        Mirrors the classifier-side helper so that gradients can flow from a
+        loss back to upstream torch modules feeding ``X`` (and optionally
+        ``y``). Skips the standard numpy preprocessing path and uses a
+        differentiable identity preprocessor. Subsequent calls reuse the
+        feature schema and ensemble configs but re-run target normalization
+        via ``_refresh_targets_for_differentiable_input``.
+        """
         # Minimal preprocessing for prompt tuning: no categorical features,
         # all-numerical schema, identity preprocessor that preserves grads.
         if (
@@ -687,24 +715,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         self.n_features_in_ = n_features
-        self.n_train_samples_ = int(X.shape[0])
 
-        # z-normalise y as a torch op so that gradients flow if y has them.
-        y_float = y.float() if isinstance(y, torch.Tensor) else torch.as_tensor(
-            y, dtype=torch.float32
-        )
-        y_mean = y_float.mean()
-        y_std = y_float.std() + 1e-20
-        self.y_train_mean_ = y_mean.detach().item()
-        self.y_train_std_ = y_std.detach().item()
-        y_normalized = (y_float - y_mean) / y_std
-
-        # raw_space_bardist_ is a constant lookup in caller's target scale; we
-        # detach so the buffer does not accidentally hold onto y's grad graph.
-        borders = self.znorm_space_bardist_.borders.detach()
-        self.raw_space_bardist_ = FullSupportBarDistribution(
-            borders * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+        X, y_normalized = self._refresh_targets_for_differentiable_input(X, y)
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
         # Polynomial features go through sklearn StandardScaler on numpy and
@@ -921,6 +933,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
+            # Re-validate and re-normalise y for the new fit data so that
+            # raw_space_bardist_ and y_train_mean_/std_ track the current
+            # targets. The model load and ensemble configs stay cached.
+            X, y = self._refresh_targets_for_differentiable_input(X, y)
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,

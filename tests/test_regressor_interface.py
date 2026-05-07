@@ -1068,3 +1068,36 @@ def test__fit_with_differentiable_input__categorical_features_rejected() -> None
     y = torch.randn(20)
     with pytest.raises(ValueError, match="Categorical features"):
         reg.fit_with_differentiable_input(X, y)
+
+
+def test__fit_with_differentiable_input__second_call_refreshes_target_stats() -> None:
+    """A second call with different y must update y_train_mean_/std_ and the
+    raw_space_bardist_; only the model load and ensemble configs are cached."""
+    torch.manual_seed(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X1 = torch.randn(20, 4)
+    y1 = torch.randn(20) * 10.0 + 100.0  # mean ~100, std ~10
+    reg.fit_with_differentiable_input(X1, y1)
+    mean1, std1 = reg.y_train_mean_, reg.y_train_std_
+    bardist_borders1 = reg.raw_space_bardist_.borders.clone()
+
+    X2 = torch.randn(20, 4)
+    y2 = torch.randn(20) * 0.5 - 5.0  # mean ~-5, std ~0.5
+    reg.fit_with_differentiable_input(X2, y2)
+    mean2, std2 = reg.y_train_mean_, reg.y_train_std_
+
+    assert abs(mean2 - mean1) > 1.0, (
+        f"y_train_mean_ should reflect new y; got {mean1} -> {mean2}"
+    )
+    assert abs(std2 - std1) > 1.0, (
+        f"y_train_std_ should reflect new y; got {std1} -> {std2}"
+    )
+    # raw_space_bardist_ borders are derived from y stats; they must move.
+    assert not torch.allclose(reg.raw_space_bardist_.borders, bardist_borders1), (
+        "raw_space_bardist_ must be rebuilt to the new target scale"
+    )
