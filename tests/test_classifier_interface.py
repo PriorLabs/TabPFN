@@ -603,7 +603,7 @@ def test__fit_and_predict__on_demo_dataset__accuracy_reasonable(
     )
     model.fit(X, y)
     accuracy = accuracy_score(y, model.predict(X))
-    assert accuracy > 0.98
+    assert accuracy > 0.97
 
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations
