@@ -83,4 +83,4 @@ results.append({
     "Notes": f"5-fold CV with early stopping, best_rounds={best_rounds}",
 })
 
-print(pd.DataFrame(results).to_markdown(index=False))
+print(pd.DataFrame(results).to_string(index=False))
