@@ -1641,7 +1641,6 @@ class TabPFNV3(Architecture):
         self.standard_scaler = TorchStandardScaler()
         self._nan_safe_output = True
         self.emsize = config.embed_dim
-        self.num_cls_tokens = config.feat_agg_num_cls_tokens
         self.inference_row_chunk_size = config.inference_row_chunk_size
         self.inference_col_chunk_size = config.inference_col_chunk_size
 

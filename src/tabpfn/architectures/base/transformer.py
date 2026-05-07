@@ -277,6 +277,11 @@ class PerFeatureTransformer(Architecture):
         state.setdefault("feature_positional_embedding", None)
         super().__setstate__(state)
 
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.emsize
+
     @overload
     def forward(
         self,

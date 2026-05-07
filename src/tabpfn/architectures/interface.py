@@ -249,9 +249,9 @@ class Architecture(nn.Module, ABC):
         )
 
     @property
+    @abstractmethod
     def embedding_dim(self) -> int:
         """Returns the dimension of the embeddings.
 
         This is the size of the embeddings that can be used for further processing.
         """
-        return self.emsize

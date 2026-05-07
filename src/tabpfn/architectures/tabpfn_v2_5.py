@@ -572,6 +572,11 @@ class TabPFNV2p5(Architecture):
         # this a proper API.
         self.emsize = config.emsize
 
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.emsize
+
     def _get_feature_group_embedder(self, config: TabPFNV2p5Config) -> nn.Module:
         """Get the feature group embedder."""
         encoding_size = config.features_per_group * ENCODING_SIZE_MULTIPLIER
