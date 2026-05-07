@@ -1,21 +1,28 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 """Example of benchmarking TabPFN against XGBoost on the "German Credit Data" dataset from OpenML.
-You can find more information on benchmarking TabPFN in our documentation: https://docs.priorlabs.ai/benchmarking
+
+This script compares TabPFN (default) against two XGBoost configurations on a binary
+classification task with 1000 samples, reporting ROC-AUC, fit time, and predict time.
+
+You can find more information on benchmarking TabPFN in our documentation:
+https://docs.priorlabs.ai/benchmarking
+
+Note: XGBoost is not a dependency of TabPFN. Install it separately if needed:
+    pip install xgboost
 """
 
 import time
 
-import openml
 import pandas as pd
 import xgboost as xgb
+from sklearn.datasets import fetch_openml
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
 
 # 1. Data — German-Credit-Data-Creditability (OpenML did=46562, 1000 samples, binary classification)
-ds = openml.datasets.get_dataset(46562, download_data=True, download_qualities=False)
-X, y, _, _ = ds.get_data(target=ds.default_target_attribute, dataset_format="dataframe")
+X, y = fetch_openml(data_id=46562, as_frame=True, return_X_y=True)
 
 # 2. Split
 X_train, X_test, y_train, y_test = train_test_split(
@@ -24,7 +31,7 @@ X_train, X_test, y_train, y_test = train_test_split(
 
 results = []
 
-# 3. TabPFN default
+# 3. TabPFN (default)
 tabpfn = TabPFNClassifier(device="auto")
 t0 = time.perf_counter()
 tabpfn.fit(X_train, y_train)
@@ -34,7 +41,7 @@ proba_tabpfn = tabpfn.predict_proba(X_test)[:, 1]
 predict_tabpfn = time.perf_counter() - t0
 results.append(
     {
-        "Model": "TabPFN (default)",
+        "Model": "TabPFN v2.6 (default)",
         "ROC-AUC": f"{roc_auc_score(y_test, proba_tabpfn):.4f}",
         "Fit time": f"{fit_tabpfn:.2f}s",
         "Predict time": f"{predict_tabpfn:.2f}s",
@@ -69,7 +76,7 @@ results.append(
         "ROC-AUC": f"{roc_auc_score(y_test, proba_xgb):.4f}",
         "Fit time": f"{fit_xgb:.2f}s",
         "Predict time": f"{predict_xgb:.2f}s",
-        "Notes": "n_estimators=1000",
+        "Notes": "n_estimators=100",
     }
 )
 
