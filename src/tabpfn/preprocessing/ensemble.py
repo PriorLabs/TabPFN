@@ -9,7 +9,6 @@ from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 import numpy as np
-import numpy.typing as npt
 
 from tabpfn.constants import (
     AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES,
@@ -230,7 +229,7 @@ class TabPFNEnsemblePreprocessor:
             num_estimators=len(self.configs),
             n_samples=n_samples,
             rng=rng_rows,
-            y=y_train,
+            y_for_stratification=y_train if task_type == "classifier" else None,
         )
 
     def fit_transform_ensemble_members_iterator(
@@ -325,7 +324,7 @@ def _subsample_rows_balanced(
     n_rows: int,
     num_estimators: int,
     rng: np.random.Generator,
-) -> list[npt.NDArray[np.int64]] | None:
+) -> list[np.ndarray] | None:
     """Balanced round-robin row subsampling from a shared shuffled pool.
 
     Rows are globally shuffled once so consecutive pool positions correspond to
@@ -337,7 +336,7 @@ def _subsample_rows_balanced(
         return None
 
     shuffled_order = rng.permutation(n_rows)
-    result: list[npt.NDArray[np.int64] | None] = []
+    result: list[np.ndarray | None] = []
     pool: list[int] = []
 
     for _ in range(num_estimators):
@@ -357,6 +356,7 @@ def _compute_stratified_class_counts(
     Allocates proportionally to class frequency. Rounding errors are corrected by
     giving leftover slots to the classes with the largest fractional remainders.
     """
+    assert class_sizes.sum() > 0
     class_fracs = class_sizes / class_sizes.sum()
     raw = class_fracs * subsample_size
     counts = np.floor(raw).astype(int)
@@ -372,7 +372,7 @@ def _subsample_rows_stratified(
     y: np.ndarray,
     num_estimators: int,
     rng: np.random.Generator,
-) -> list[npt.NDArray[np.int64]] | None:
+) -> list[np.ndarray] | None:
     """Stratified row subsampling that preserves class proportions.
 
     Each estimator draws a subsample of size ``subsample_size`` where the number
@@ -380,6 +380,16 @@ def _subsample_rows_stratified(
     a balanced round-robin pool ensures every row appears approximately the same
     number of times across estimators. Pool refills allow oversampling of classes
     with fewer rows than the per-class target.
+
+    Args:
+        subsample_size: Number of rows to subsample for each estimator.
+        y: Class labels.
+        num_estimators: Number of estimators to generate subsample indices for.
+        rng: Random number generator.
+
+    Returns:
+        List of row-index arrays (one per estimator), or ``None`` entries when no
+        subsampling is needed.
     """
     n_rows = len(y)
     if subsample_size >= n_rows:
@@ -399,7 +409,7 @@ def _subsample_rows_stratified(
     )
 
     pools: list[list[int]] = [[] for _ in range(n_classes)]
-    result: list[npt.NDArray[np.int64]] = []
+    result: list[np.ndarray] = []
 
     for _ in range(num_estimators):
         estimator_indices: list[np.ndarray] = []
@@ -411,7 +421,8 @@ def _subsample_rows_stratified(
                 pools[c], count, len(class_indices[c]), rng
             )
             estimator_indices.append(class_indices[c][np.array(slots)])
-        result.append(np.sort(np.concatenate(estimator_indices).astype(np.int64)))
+        if estimator_indices:
+            result.append(np.sort(np.concatenate(estimator_indices).astype(np.int64)))
 
     return result
 
@@ -421,7 +432,7 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
     num_estimators: int,
     n_samples: int,
     rng: np.random.Generator,
-    y: np.ndarray | None = None,
+    y_for_stratification: np.ndarray | None = None,
 ) -> list[np.ndarray] | None:
     """Get the indices of the rows to subsample for each estimator.
 
@@ -433,39 +444,27 @@ def _get_subsample_indices_for_estimators(  # noqa: C901
         num_estimators: Number of estimators to generate subsample indices for.
         n_samples: Total number of rows. Only used if subsample_samples is int/float.
         rng: Random number generator.
-        y: Class labels. When provided, stratified subsampling is used to preserve
-            class proportions. Only applies when subsample_samples is int or float.
+        y_for_stratification: Class labels. When provided, stratified subsampling is
+            used to preserve class proportions. Only applies when subsample_samples is
+            int or float.
 
     Returns:
         List of row-index arrays (one per estimator), or ``None`` entries when no
         subsampling is needed.
     """
-    if isinstance(subsample_samples, int):
-        if subsample_samples < 1:
-            raise ValueError(f"{subsample_samples=} must be >= 1 if int")
-        size = min(subsample_samples, n_samples)
-        if y is not None:
+    if isinstance(subsample_samples, (int, float)):
+        if isinstance(subsample_samples, int):
+            if subsample_samples < 1:
+                raise ValueError(f"{subsample_samples=} must be >= 1 if int")
+            size = min(subsample_samples, n_samples)
+        else:
+            if not (0 < subsample_samples < 1):
+                raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
+            size = int(subsample_samples * n_samples) + 1
+        if y_for_stratification is not None:
             return _subsample_rows_stratified(
                 subsample_size=size,
-                y=y,
-                num_estimators=num_estimators,
-                rng=rng,
-            )
-        return _subsample_rows_balanced(
-            subsample_size=size,
-            n_rows=n_samples,
-            num_estimators=num_estimators,
-            rng=rng,
-        )
-
-    if isinstance(subsample_samples, float):
-        if not (0 < subsample_samples < 1):
-            raise ValueError(f"{subsample_samples=} must be in (0, 1) if float")
-        size = int(subsample_samples * n_samples) + 1
-        if y is not None:
-            return _subsample_rows_stratified(
-                subsample_size=size,
-                y=y,
+                y=y_for_stratification,
                 num_estimators=num_estimators,
                 rng=rng,
             )

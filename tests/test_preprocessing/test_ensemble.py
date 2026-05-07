@@ -605,7 +605,7 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=rng,
-        y=y,
+        y_for_stratification=y,
     )
 
     assert result is not None
@@ -623,12 +623,15 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
         num_estimators=num_estimators,
         n_samples=n_samples,
         rng=np.random.default_rng(4),
-        y=y,
+        y_for_stratification=y,
     )
     assert result_float is not None
     expected_size = int(0.4 * n_samples) + 1  # 41
     for indices in result_float:
         assert len(indices) == expected_size
+        counts = np.bincount(y[indices], minlength=2)
+        assert abs(counts[0] / expected_size - 0.8) <= 0.1
+        assert abs(counts[1] / expected_size - 0.2) <= 0.1
 
 
 # --- Feature importance subsampling tests ---

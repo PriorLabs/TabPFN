@@ -125,6 +125,7 @@ class InferenceConfig:
             If the length of the outer list is less than the number of estimators, the
             indices are repeated for the remaining estimators.
     """
+
     ENABLE_GPU_PREPROCESSING: bool = False
     """Move quantile transform, SVD feature generation, and feature shuffling to
     GPU / torch.  When ``True``, these operations run on the same device as
