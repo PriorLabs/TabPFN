@@ -353,8 +353,10 @@ def _compute_stratified_class_counts(
 ) -> np.ndarray:
     """Compute per-class target sample counts that sum to exactly ``subsample_size``.
 
-    Allocates proportionally to class frequency. Rounding errors are corrected by
-    giving leftover slots to the classes with the largest fractional remainders.
+    Every class is guaranteed at least one slot. One slot is reserved per class
+    upfront; the remaining slots are distributed proportionally with
+    largest-remainder rounding. Raises ``ValueError`` if
+    ``subsample_size < n_classes``.
 
     Args:
         class_sizes: 1-D integer array of per-class row counts.
@@ -365,14 +367,25 @@ def _compute_stratified_class_counts(
         number of rows to draw from the corresponding class.  Entries sum to
         exactly ``subsample_size``.
     """
-    total_class_sizes = class_sizes.sum()
-    assert total_class_sizes > 0
-    class_fracs = class_sizes / total_class_sizes
-    raw = class_fracs * subsample_size
-    counts = np.floor(raw).astype(int)
+    assert class_sizes.sum() > 0
+    n_classes = len(class_sizes)
+
+    if subsample_size < n_classes:
+        raise ValueError(
+            f"subsample_size ({subsample_size}) must be >= number of classes "
+            f"({n_classes}) so that every class can receive at least one sample."
+        )
+
+    # Reserve 1 slot per class, then distribute the remainder proportionally so
+    # that every class is always represented in every estimator subsample.
+    remaining = subsample_size - n_classes
+    class_fracs = class_sizes / class_sizes.sum()
+    raw = class_fracs * remaining
+    counts = np.floor(raw).astype(int) + 1
     leftover = subsample_size - counts.sum()
     if leftover > 0:
-        top = np.argpartition(raw - counts, -leftover)[-leftover:]
+        fracs = raw - np.floor(raw)
+        top = np.argpartition(fracs, -leftover)[-leftover:]
         counts[top] += 1
     return counts
 
@@ -385,10 +398,12 @@ def _subsample_rows_stratified(
 ) -> list[np.ndarray] | None:
     """Stratified row subsampling that preserves class proportions.
 
-    Each estimator draws a subsample of size ``subsample_size`` where the number
-    of rows per class matches the original class distribution. Within each class,
-    a balanced round-robin pool ensures every row appears approximately the same
-    number of times across estimators. Pool refills allow oversampling of classes
+    Each estimator draws a subsample of size ``subsample_size`` where every class
+    is represented by at least one row (provided ``subsample_size >= n_classes``).
+    Slot counts approximate the original class distribution via proportional
+    allocation with a guaranteed minimum of one per class. Within each class a
+    balanced round-robin pool ensures every row appears approximately the same
+    number of times across estimators; pool refills allow oversampling of classes
     with fewer rows than the per-class target.
 
     Args:

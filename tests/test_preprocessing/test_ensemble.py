@@ -566,6 +566,23 @@ def test__subsample_rows_stratified__maintains_class_proportions():
         np.testing.assert_allclose(fracs, original_fracs, atol=0.1)
 
 
+def test__subsample_rows_stratified__minority_class_always_included():
+    """Minority class must appear in every estimator even under extreme imbalance."""
+    rng = np.random.default_rng(42)
+    # Reviewer's example: 999 majority, 1 minority — proportional quota = 0
+    y = np.array([0] * 999 + [1] * 1)
+    result = _subsample_rows_stratified(
+        subsample_size=100,
+        y=y,
+        num_estimators=10,
+        rng=rng,
+    )
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 100
+        assert 1 in set(y[indices]), "minority class must appear in every estimator"
+
+
 def test__subsample_rows_stratified__balanced_coverage():
     """Each row appears approximately the same number of times across estimators."""
     rng = np.random.default_rng(2)
