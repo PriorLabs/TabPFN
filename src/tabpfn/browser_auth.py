@@ -23,7 +23,7 @@ import webbrowser
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from tabpfn.errors import TabPFNLicenseError
+from tabpfn.errors import TabPFNError, TabPFNHuggingFaceGatedRepoError, TabPFNLicenseError
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -158,17 +158,13 @@ def _get_license_name(hf_repo_id: str) -> str:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read())
     except Exception as exc:  # noqa: BLE001
-        raise TabPFNLicenseError(
-            f"Could not fetch license metadata for Prior-Labs/{hf_repo_id} from HuggingFace.\n"
-            f"If the repo is gated and you are in our beta testing program, accept access at "
-            f"https://huggingface.co/Prior-Labs/{hf_repo_id} and run "
-            f"`huggingface-cli login` (or set HF_TOKEN)."
-        ) from exc
+        raise TabPFNHuggingFaceGatedRepoError(f"Prior-Labs/{hf_repo_id}") from exc
     license_name = data.get("cardData", {}).get("license_name")
     if not license_name:
-        raise TabPFNLicenseError(
+        raise TabPFNError(
             f"HuggingFace model card for Prior-Labs/{hf_repo_id} is missing "
-            f"cardData.license_name."
+            f"cardData.license_name. This is a server-side misconfiguration of "
+            f"the model card; please report it to support@priorlabs.ai."
         )
     return license_name
 
