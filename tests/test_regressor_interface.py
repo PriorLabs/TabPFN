@@ -975,3 +975,96 @@ def test__create_default_for_version__passes_through_overrides() -> None:
 
     assert estimator.n_estimators == 16
     assert estimator.softmax_temperature == 0.9
+
+
+# ---------------------------------------------------------------------------
+# differentiable_input
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("device", devices)
+def test__fit_with_differentiable_input__grad_flows_to_upstream_module(
+    device: str,
+) -> None:
+    """End-to-end: a loss computed from forward(use_inference_mode=True) after
+    fit_with_differentiable_input must produce a non-zero, finite gradient on
+    an upstream torch module's weights.
+    """
+    torch.manual_seed(0)
+    D, N_train, N_test = 8, 30, 10
+    linear = nn.Linear(D, D).to(device)
+
+    X_train = linear(torch.randn(N_train, D, device=device))
+    X_test = linear(torch.randn(N_test, D, device=device))
+    y_train = torch.randn(N_train, device=device)
+    y_test = torch.randn(N_test, device=device)
+
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device=device,
+        differentiable_input=True,
+    )
+    reg.fit_with_differentiable_input(X_train, y_train)
+
+    averaged_logits, _outputs, borders = reg.forward(
+        X_test, use_inference_mode=True
+    )
+
+    # averaged_logits is [N_borders, N_samples] after the transpose in
+    # forward(); reduce to a scalar per sample via softmax over bin centers.
+    per_sample_logits = averaged_logits.transpose(0, 1)  # [N_test, N_borders]
+    border_t = torch.as_tensor(
+        borders[0],
+        device=per_sample_logits.device,
+        dtype=per_sample_logits.dtype,
+    )
+    n_logits = per_sample_logits.shape[-1]
+    if border_t.numel() == n_logits + 1:
+        bin_centers = (border_t[:-1] + border_t[1:]) / 2.0
+    else:
+        bin_centers = border_t
+    probs = torch.softmax(per_sample_logits.float(), dim=-1)
+    pred_z = (probs * bin_centers).sum(dim=-1)
+    pred = pred_z * float(reg.y_train_std_) + float(reg.y_train_mean_)
+
+    loss = torch.nn.functional.mse_loss(pred.float(), y_test.float())
+    assert loss.requires_grad
+    loss.backward()
+
+    grad = linear.weight.grad
+    assert grad is not None, "gradient did not reach upstream nn.Linear"
+    assert torch.isfinite(grad).all(), "gradient contained NaN/Inf"
+    assert grad.norm().item() > 0, "gradient norm is zero — graph was detached"
+
+
+def test__fit__differentiable_input_true__raises_helpful_error() -> None:
+    """Calling .fit() (instead of fit_with_differentiable_input) when
+    differentiable_input=True must raise a clear error pointing users to the
+    correct API rather than silently running a non-differentiable path.
+    """
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+    )
+    X = np.random.default_rng(0).standard_normal((20, 4)).astype(np.float32)
+    y = np.random.default_rng(0).standard_normal(20).astype(np.float32)
+    with pytest.raises(ValueError, match="fit_with_differentiable_input"):
+        reg.fit(X, y)
+
+
+def test__fit_with_differentiable_input__categorical_features_rejected() -> None:
+    """The differentiable path does not support categorical features."""
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        device="cpu",
+        differentiable_input=True,
+        categorical_features_indices=[0],
+    )
+    X = torch.randn(20, 4)
+    y = torch.randn(20)
+    with pytest.raises(ValueError, match="Categorical features"):
+        reg.fit_with_differentiable_input(X, y)
