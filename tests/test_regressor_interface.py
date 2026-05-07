@@ -13,6 +13,7 @@ import sklearn.datasets
 import torch
 from sklearn import config_context
 from sklearn.base import check_is_fitted
+from sklearn.metrics import r2_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.utils.estimator_checks import parametrize_with_checks
@@ -27,7 +28,7 @@ from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 
-from .conftest import _is_v3_regressor_in_cache
+from .conftest import is_v3_regressor_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -314,7 +315,7 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if model_version == ModelVersion.V3 and not _is_v3_regressor_in_cache():
+    if model_version == ModelVersion.V3 and not is_v3_regressor_in_cache():
         pytest.skip("V3 regressor model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
@@ -336,6 +337,22 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
     tabpfn = TabPFNRegressor.create_default_for_version(fit_mode="low_memory", **kwargs)
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X))
+
+
+@pytest.mark.parametrize("model_version", list(ModelVersion))
+def test__fit_and_predict__on_demo_dataset__r2_reasonable(
+    model_version: ModelVersion,
+) -> None:
+    if model_version == ModelVersion.V3 and not is_v3_regressor_in_cache():
+        pytest.skip("V3 regressor model not in cache.")
+
+    X, y = sklearn.datasets.make_friedman1(n_samples=200, noise=0.1, random_state=0)
+    model = TabPFNRegressor.create_default_for_version(
+        version=model_version, random_state=0
+    )
+    model.fit(X, y)
+    r2 = r2_score(y, model.predict(X))
+    assert r2 > 0.95
 
 
 def test_multiple_models_predict_different_results(

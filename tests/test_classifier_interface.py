@@ -34,7 +34,7 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .conftest import _is_v3_classifier_in_cache
+from .conftest import is_v3_classifier_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -562,7 +562,7 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if model_version == ModelVersion.V3 and not _is_v3_classifier_in_cache():
+    if model_version == ModelVersion.V3 and not is_v3_classifier_in_cache():
         pytest.skip("V3 classifier model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
@@ -588,6 +588,22 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+
+@pytest.mark.parametrize("model_version", list(ModelVersion))
+def test__fit_and_predict__on_demo_dataset__accuracy_reasonable(
+    model_version: ModelVersion,
+) -> None:
+    if model_version == ModelVersion.V3 and not is_v3_classifier_in_cache():
+        pytest.skip("V3 classifier model not in cache.")
+
+    X, y = sklearn.datasets.load_iris(return_X_y=True)
+    model = TabPFNClassifier.create_default_for_version(
+        version=model_version, random_state=0
+    )
+    model.fit(X, y)
+    accuracy = accuracy_score(y, model.predict(X))
+    assert accuracy > 0.98
 
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations
