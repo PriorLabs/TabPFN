@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 """Factory for creating torch preprocessing pipelines."""
 

@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 # TODO: Seems like there's a lot in this file that is over-parametrized for regular
 # usage. Could likely just remove it.

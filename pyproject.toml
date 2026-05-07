@@ -21,34 +21,13 @@ dependencies = [
   # Once Python 3.10 is the minimum version, this can be removed.
   "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
+  "tqdm>=4.66.0",
   "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
   "filelock>=3.11.0",
   "lightgbm>=3.0",
 ]
 requires-python = ">=3.9"
-authors = [
-  { name = "Noah Hollmann" },
-  { name = "Samuel Müller" },
-  { name = "Lennart Purucker" },
-  { name = "Arjun Krishnakumar" },
-  { name = "Max Körfer" },
-  { name = "Shi Bin Hoo" },
-  { name = "Robin Tibor Schirrmeister" },
-  { name = "Frank Hutter" },
-  # Huge thanks to code refactoring contributor Eddie
-  { name = "Eddie Bergman" },
-  # Prior Labs Contributors
-  { name = "Leo Grinsztajn" },
-  { name = "Felix Jabloski" },
-  { name = "Klemens Flöge" },
-  { name = "Oscar Key" },
-  { name = "Felix Birkel" },
-  { name = "Philipp Jund" },
-  { name = "Brendan Roof" },
-  { name = "Dominik Safaric" },
-  { name = "Benjamin Jaeger" },
-  { name = "Alan Arazi" }
-]
+authors = [{ name = "Prior Labs", email = "opensource@priorlabs.ai" }]
 
 readme = "README.md"
 description = "TabPFN: Foundation model for tabular data"

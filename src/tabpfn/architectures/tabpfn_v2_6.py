@@ -2,7 +2,7 @@
 
 Compared to v2.5, this uses RMSNorm instead of LayerNorm.
 
-Copyright (c) Prior Labs GmbH 2025.
+Copyright (c) Prior Labs GmbH 2026.
 """
 
 from __future__ import annotations

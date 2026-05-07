@@ -5,7 +5,7 @@ the MLP hidden layer size.
 
 Note that this version does not support a KV cache.
 
-Copyright (c) Prior Labs GmbH 2025.
+Copyright (c) Prior Labs GmbH 2026.
 """
 
 from __future__ import annotations

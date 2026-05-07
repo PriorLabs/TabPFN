@@ -1,6 +1,6 @@
 """Encoder step to remove empty (constant) features."""
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
