@@ -115,7 +115,12 @@ TEST_CASES = {
                 **DEFAULT_CONFIG,
             ),
         )
-        for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
+        for version in [
+            ModelVersion.V2,
+            ModelVersion.V2_5,
+            ModelVersion.V2_6,
+            ModelVersion.V3,
+        ]
     },
     **{
         f"regressor_tiny_dataset_{version.value}": _ConsistencyCase(
@@ -126,7 +131,12 @@ TEST_CASES = {
                 **DEFAULT_CONFIG,
             ),
         )
-        for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
+        for version in [
+            ModelVersion.V2,
+            ModelVersion.V2_5,
+            ModelVersion.V2_6,
+            ModelVersion.V3,
+        ]
     },
     "classifier_tiny_dataset_differentiable_input": _ConsistencyCase(
         data=lambda: _to_tensors(_get_tiny_classification_data()),

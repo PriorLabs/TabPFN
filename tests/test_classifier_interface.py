@@ -34,7 +34,6 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
-from .conftest import _is_v3_classifier_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -62,7 +61,11 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
     )
 
 
-model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_5()]
+model_sources = [
+    ModelSource.get_classifier_v2(),
+    ModelSource.get_classifier_v2_5(),
+    ModelSource.get_classifier_v3(),
+]
 fit_modes = ["low_memory", "fit_preprocessors"]
 
 
@@ -523,8 +526,9 @@ def test_balance_probabilities_alters_proba_output() -> None:
     )
 
 
-# Only v2 and 2.5 support the KV cache at the moment.
-@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V3]
+)
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
@@ -562,8 +566,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if model_version == ModelVersion.V3 and not _is_v3_classifier_in_cache():
-        pytest.skip("V3 classifier model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
