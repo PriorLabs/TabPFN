@@ -17,8 +17,6 @@ from sklearn.base import (
 )
 from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
-from tabpfn.architectures.interface import PerformanceOptions
-
 # --- TabPFN imports ---
 from tabpfn.constants import (
     AUTOCAST_DTYPE_BYTE_SIZE,
@@ -29,7 +27,6 @@ from tabpfn.constants import (
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference import (
     InferenceEngine,
-    InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCacheKV,
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
@@ -53,7 +50,6 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.inference_config import InferenceConfig
-    from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
@@ -283,7 +279,6 @@ def create_inference_engine(  # noqa: PLR0913
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
     X_train: np.ndarray,
     y_train: np.ndarray,
-    feature_schema: FeatureSchema,
     ensemble_preprocessor: TabPFNEnsemblePreprocessor,
     models: list[Architecture],
     devices_: Sequence[torch.device],
@@ -304,7 +299,6 @@ def create_inference_engine(  # noqa: PLR0913
         fit_mode: Determines how we prepare inference (pre-cache or not).
         X_train: Training features
         y_train: Training target
-        feature_schema: The feature schema.
         ensemble_preprocessor: The ensemble preprocessor to use.
         models: The loaded TabPFN models.
         devices_: The devices for inference.
@@ -368,23 +362,10 @@ def create_inference_engine(  # noqa: PLR0913
             autocast=use_autocast_,
         )
     if fit_mode == "batched":
-        # Finetuning constructs InferenceEngineBatchedNoPreprocessing directly via
-        # fit_from_preprocessed with explicit PerformanceOptions; this branch is
-        # only reachable from the standard fit() path (currently guarded by a
-        # fit_mode auto-switch in classifier/regressor), so default options are
-        # appropriate here.
-        return InferenceEngineBatchedNoPreprocessing(
-            X_trains=X_train,  # pyright: ignore[reportArgumentType]
-            y_trains=y_train,  # pyright: ignore[reportArgumentType]
-            feature_schema=feature_schema,  # pyright: ignore[reportArgumentType]
-            ensemble_configs=ensemble_preprocessor.configs,  # pyright: ignore[reportArgumentType]
-            models=models,
-            devices=devices_,
-            dtype_byte_size=byte_size,
-            force_inference_dtype=forced_inference_dtype_,
-            save_peak_mem=memory_saving_mode,
-            inference_mode=inference_mode,
-            performance_options=PerformanceOptions(),
+        raise ValueError(
+            "InferenceEngineBatchedNoPreprocessing should be initialized directly "
+            "(e.g. via TabPFN{Classifier,Regressor}.fit_from_preprocessed) rather "
+            "than through create_inference_engine."
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")

@@ -878,7 +878,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            feature_schema=self.inferred_feature_schema_,
             ensemble_preprocessor=ensemble_preprocessor,
             models=self.models_,
             devices_=self.devices_,
@@ -1198,10 +1197,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         borders: list[np.ndarray] = []
 
         for border, output in tqdm(
-            self._iter_forward_executor(
-                X,
-                use_inference_mode=use_inference_mode,
-            ),
+            self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
             total=self.n_estimators,
             desc="TabPFN inference",
             unit="estimator",
