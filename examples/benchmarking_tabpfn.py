@@ -32,41 +32,55 @@ fit_tabpfn = time.perf_counter() - t0
 t0 = time.perf_counter()
 proba_tabpfn = tabpfn.predict_proba(X_test)[:, 1]
 predict_tabpfn = time.perf_counter() - t0
-results.append({
-    "Model": "TabPFN (default)",
-    "ROC-AUC": f"{roc_auc_score(y_test, proba_tabpfn):.4f}",
-    "Fit time": f"{fit_tabpfn:.2f}s",
-    "Predict time": f"{predict_tabpfn:.2f}s",
-    "Notes": "none",
-})
+results.append(
+    {
+        "Model": "TabPFN (default)",
+        "ROC-AUC": f"{roc_auc_score(y_test, proba_tabpfn):.4f}",
+        "Fit time": f"{fit_tabpfn:.2f}s",
+        "Predict time": f"{predict_tabpfn:.2f}s",
+        "Notes": "none",
+    }
+)
 
 # 4. XGBoost sensible defaults
 xgb_params = {
-    "learning_rate": 0.05, "max_depth": 6, "min_child_weight": 1,
-    "subsample": 0.9, "colsample_bytree": 0.9, "reg_lambda": 1.0,
-    "tree_method": "hist", "eval_metric": "auc",
-    "objective": "binary:logistic", "seed": 42,
+    "learning_rate": 0.05,
+    "max_depth": 6,
+    "min_child_weight": 1,
+    "subsample": 0.9,
+    "colsample_bytree": 0.9,
+    "reg_lambda": 1.0,
+    "tree_method": "hist",
+    "eval_metric": "auc",
+    "objective": "binary:logistic",
+    "seed": 42,
 }
 dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
-dtest  = xgb.DMatrix(X_test,  label=y_test,  enable_categorical=True)
+dtest = xgb.DMatrix(X_test, label=y_test, enable_categorical=True)
 t0 = time.perf_counter()
 booster = xgb.train(xgb_params, dtrain, num_boost_round=1000)
 fit_xgb = time.perf_counter() - t0
 t0 = time.perf_counter()
 proba_xgb = booster.predict(dtest)
 predict_xgb = time.perf_counter() - t0
-results.append({
-    "Model": "XGBoost (sensible defaults)",
-    "ROC-AUC": f"{roc_auc_score(y_test, proba_xgb):.4f}",
-    "Fit time": f"{fit_xgb:.2f}s",
-    "Predict time": f"{predict_xgb:.2f}s",
-    "Notes": "n_estimators=1000",
-})
+results.append(
+    {
+        "Model": "XGBoost (sensible defaults)",
+        "ROC-AUC": f"{roc_auc_score(y_test, proba_xgb):.4f}",
+        "Fit time": f"{fit_xgb:.2f}s",
+        "Predict time": f"{predict_xgb:.2f}s",
+        "Notes": "n_estimators=1000",
+    }
+)
 
 # 5. XGBoost CV-tuned n_estimators (5-fold CV with early stopping)
 cv_result = xgb.cv(
-    xgb_params, dtrain, num_boost_round=1000,
-    nfold=5, early_stopping_rounds=20, seed=42,
+    xgb_params,
+    dtrain,
+    num_boost_round=1000,
+    nfold=5,
+    early_stopping_rounds=20,
+    seed=42,
 )
 best_rounds = len(cv_result)
 t0 = time.perf_counter()
@@ -75,12 +89,14 @@ fit_xgb_tuned = time.perf_counter() - t0
 t0 = time.perf_counter()
 proba_xgb_tuned = booster_tuned.predict(dtest)
 predict_xgb_tuned = time.perf_counter() - t0
-results.append({
-    "Model": "XGBoost (CV-tuned n_estimators)",
-    "ROC-AUC": f"{roc_auc_score(y_test, proba_xgb_tuned):.4f}",
-    "Fit time": f"{fit_xgb_tuned:.2f}s",
-    "Predict time": f"{predict_xgb_tuned:.2f}s",
-    "Notes": f"5-fold CV with early stopping, best_rounds={best_rounds}",
-})
+results.append(
+    {
+        "Model": "XGBoost (CV-tuned n_estimators)",
+        "ROC-AUC": f"{roc_auc_score(y_test, proba_xgb_tuned):.4f}",
+        "Fit time": f"{fit_xgb_tuned:.2f}s",
+        "Predict time": f"{predict_xgb_tuned:.2f}s",
+        "Notes": f"5-fold CV with early stopping, best_rounds={best_rounds}",
+    }
+)
 
 print(pd.DataFrame(results).to_string(index=False))
