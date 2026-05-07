@@ -569,7 +569,7 @@ def test__subsample_rows_stratified__maintains_class_proportions():
 def test__subsample_rows_stratified__minority_class_always_included():
     """Minority class must appear in every estimator even under extreme imbalance."""
     rng = np.random.default_rng(42)
-    # Reviewer's example: 999 majority, 1 minority — proportional quota = 0
+    # 999 majority, 1 minority — proportional quota = 0
     y = np.array([0] * 999 + [1] * 1)
     result = _subsample_rows_stratified(
         subsample_size=100,
