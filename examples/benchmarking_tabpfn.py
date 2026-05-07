@@ -1,21 +1,21 @@
 #  Copyright (c) Prior Labs GmbH 2026.
-"""Example of benchmarking TabPFN against XGBoost on the "credit-g" dataset from OpenML.
+"""Example of benchmarking TabPFN against XGBoost on the "German Credit Data" dataset from OpenML.
 You can find more information on benchmarking TabPFN in our documentation: https://docs.priorlabs.ai/benchmarking
 """
 
 import time
 
+import openml
 import pandas as pd
 import xgboost as xgb
-from sklearn.datasets import fetch_openml
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
 
-# 1. Data
-X, y = fetch_openml("credit-g", version=1, as_frame=True, return_X_y=True)
-y = (y == "good").astype(int)
+# 1. Data — German-Credit-Data-Creditability (OpenML did=46562, 1000 samples, binary classification)
+ds = openml.datasets.get_dataset(46562, download_data=True, download_qualities=False)
+X, y, _, _ = ds.get_data(target=ds.default_target_attribute, dataset_format="dataframe")
 
 # 2. Split
 X_train, X_test, y_train, y_test = train_test_split(
@@ -55,10 +55,10 @@ xgb_params = {
     "objective": "binary:logistic",
     "seed": 42,
 }
-dtrain = xgb.DMatrix(X_train, label=y_train, enable_categorical=True)
-dtest = xgb.DMatrix(X_test, label=y_test, enable_categorical=True)
+dtrain = xgb.DMatrix(X_train, label=y_train)
+dtest = xgb.DMatrix(X_test, label=y_test)
 t0 = time.perf_counter()
-booster = xgb.train(xgb_params, dtrain, num_boost_round=1000)
+booster = xgb.train(xgb_params, dtrain, num_boost_round=100)
 fit_xgb = time.perf_counter() - t0
 t0 = time.perf_counter()
 proba_xgb = booster.predict(dtest)
