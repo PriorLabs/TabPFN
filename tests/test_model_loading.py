@@ -5,6 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal, overload
 from typing_extensions import override
 from unittest.mock import patch
@@ -23,6 +24,8 @@ from tabpfn.architectures.interface import (
     ArchitectureConfig,
     ArchitectureModule,
 )
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
+from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
 
@@ -138,6 +141,26 @@ def test__load_model__architecture_name_in_checkpoint__loads_specified_architect
     loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
     assert isinstance(loaded_model, DummyArchitecture)
     assert isinstance(loaded_config, FakeConfig)
+
+
+def test__save_tabpfn_model__stores_v3_architecture_and_inference_config(
+    tmp_path: Path,
+) -> None:
+    config = TabPFNV3Config(max_num_classes=10, num_buckets=100)
+    inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+    estimator = SimpleNamespace(
+        models_=[torch.nn.Linear(1, 1)],
+        configs_=[config],
+        inference_config_=inference_config,
+    )
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+
+    model_loading.save_tabpfn_model(estimator, checkpoint_path)
+
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    assert checkpoint["architecture_name"] == "tabpfn_v3"
+    assert checkpoint["config"]["name"] == "TabPFN-v3"
+    assert checkpoint["inference_config"] == asdict(inference_config)
 
 
 def test__load_v2_checkpoint__returns_v2_preprocessings(

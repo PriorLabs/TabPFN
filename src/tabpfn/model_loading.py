@@ -1079,6 +1079,7 @@ def save_tabpfn_model(
         znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
 
     configs = model.configs_
+    inference_config = getattr(model, "inference_config_", None)
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 
     for ens_model, config, path in zip(
@@ -1102,6 +1103,8 @@ def save_tabpfn_model(
             "config": asdict(config),
             "architecture_name": architecture_name,
         }
+        if inference_config is not None:
+            checkpoint["inference_config"] = asdict(inference_config)
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)
@@ -1225,6 +1228,8 @@ def load_fitted_tabpfn_model(
 def _resolve_architecture_name(config: ArchitectureConfig) -> str:
     """Resolve the architecture name from the config."""
     name = getattr(config, "name", "")
+    if "v3" in name:
+        return "tabpfn_v3"
     if "2.6" in name:
         return "tabpfn_v2_6"
     if "2.5" in name:
