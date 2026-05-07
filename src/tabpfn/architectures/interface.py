@@ -251,7 +251,9 @@ class Architecture(nn.Module, ABC):
     @property
     @abstractmethod
     def embedding_dim(self) -> int:
-        """Returns the dimension of the embeddings.
+        """The row-level embedding dimension produced by this architecture.
 
-        This is the size of the embeddings that can be used for further processing.
+        This is the size of each per-row latent representation, which can be
+        used for downstream tasks such as clustering, feature analysis, search,
+        or meta-learning.
         """
