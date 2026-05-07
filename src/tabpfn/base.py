@@ -364,8 +364,7 @@ def create_inference_engine(  # noqa: PLR0913
     if fit_mode == "batched":
         raise ValueError(
             "InferenceEngineBatchedNoPreprocessing should be initialized directly "
-            "(e.g. via TabPFN{Classifier,Regressor}.fit_from_preprocessed) rather "
-            "than through create_inference_engine."
+            "rather than through create_inference_engine."
         )
 
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
