@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 """Example of using TabPFN for multiclass classification.
 
 This example demonstrates how to use TabPFNClassifier on a multiclass classification task

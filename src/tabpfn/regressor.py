@@ -13,10 +13,11 @@
     ```
 """
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
+import copy
 import logging
 import typing
 import warnings
@@ -36,6 +37,7 @@ from sklearn.base import (
     check_is_fitted,
 )
 from tabpfn_common_utils.telemetry import track_model_call
+from tqdm.auto import tqdm
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
@@ -47,7 +49,10 @@ from tabpfn.base import (
     initialize_model_variables_helper,
     initialize_telemetry,
 )
-from tabpfn.constants import REGRESSION_CONSTANT_TARGET_BORDER_EPSILON, ModelVersion
+from tabpfn.constants import (
+    REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
+    ModelVersion,
+)
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
@@ -235,6 +240,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
+        show_progress_bar: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -435,6 +441,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 If true, preprocessing attempts to be end-to-end differentiable.
                 Less relevant for standard regression fine-tuning compared to
                 prompt-tuning.
+
+            show_progress_bar:
+                Whether to show a progress bar during inference. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -453,6 +462,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             "fit_with_cache",
             "batched",
         ] = fit_mode
+        self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
@@ -501,6 +511,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             options = {
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v2_6().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
+        elif version == ModelVersion.V3:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
@@ -580,6 +598,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             stacklevel=2,
         )
         self.znorm_space_bardist_ = value
+
+    def get_inference_config(self) -> InferenceConfig:
+        """Load the model if needed and return the active inference config.
+
+        Loads the model checkpoint without requiring fit data so the config can be
+        inspected before calling `fit()`. Any ``inference_config`` override
+        passed to the constructor is considered.
+
+        Returns:
+            A deep copy of the active inference config.
+        """
+        if not hasattr(self, "inference_config_"):
+            self._initialize_model_variables()
+        return copy.deepcopy(self.inference_config_)
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
@@ -826,8 +858,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
-            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+            X_train=X,
+            y_train=y,
+            task_type=self.estimator_type,
         )
 
         self.executor_ = create_inference_engine(
@@ -952,8 +988,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
-            for borders_t, output in self._iter_forward_executor(
-                X, use_inference_mode=True
+            for borders_t, output in tqdm(
+                self._iter_forward_executor(X, use_inference_mode=True),
+                total=self.n_estimators,
+                desc="TabPFN inference",
+                unit="estimator",
+                disable=not self.show_progress_bar,
             ):
                 transformed = translate_probs_across_borders(
                     output,
@@ -1149,8 +1189,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         outputs: list[torch.Tensor] = []
         borders: list[np.ndarray] = []
 
-        for border, output in self._iter_forward_executor(
-            X, use_inference_mode=use_inference_mode
+        for border, output in tqdm(
+            self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
+            total=self.n_estimators,
+            desc="TabPFN inference",
+            unit="estimator",
+            disable=not self.show_progress_bar,
         ):
             borders.append(border)
             outputs.append(output)

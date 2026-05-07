@@ -34,6 +34,7 @@ from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
 
+from .conftest import _is_v3_classifier_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -63,6 +64,34 @@ def X_y() -> tuple[np.ndarray, np.ndarray]:
 
 model_sources = [ModelSource.get_classifier_v2(), ModelSource.get_classifier_v2_5()]
 fit_modes = ["low_memory", "fit_preprocessors"]
+
+
+def test__show_progress_bar__is_configurable() -> None:
+    model = TabPFNClassifier(show_progress_bar=True)
+    assert model.show_progress_bar is True
+    assert model.get_params()["show_progress_bar"] is True
+
+    default_model = TabPFNClassifier()
+    assert default_model.show_progress_bar is False
+    assert default_model.get_params()["show_progress_bar"] is False
+
+
+def test__predict__show_progress_bar_true__tiny_dataset_does_not_crash() -> None:
+    model = TabPFNClassifier(n_estimators=1, show_progress_bar=True, random_state=42)
+    X, y = sklearn.datasets.make_classification(
+        n_samples=9,
+        n_features=3,
+        n_informative=3,
+        n_redundant=0,
+        n_classes=3,
+        random_state=0,
+    )
+
+    model.fit(X, y)
+
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
 
 
 @pytest.mark.parametrize(
@@ -527,15 +556,14 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
 
 
-@pytest.mark.skip(
-    "fit_mode='low_memory' produces different results to 'fit_preprocessors'"
-)
 @pytest.mark.parametrize("model_version", list(ModelVersion))
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
+    if model_version == ModelVersion.V3 and not _is_v3_classifier_in_cache():
+        pytest.skip("V3 classifier model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
@@ -800,7 +828,7 @@ def test_get_embeddings(
     assert isinstance(embeddings, np.ndarray)
     assert embeddings.shape[0] == n_estimators
     assert embeddings.shape[1] == X.shape[0]
-    assert embeddings.shape[2] == model.models_[0].input_size
+    assert embeddings.shape[2] == model.models_[0].embedding_dim
 
 
 def test_pandas_output_config(X_y: tuple[np.ndarray, np.ndarray]):
@@ -1271,6 +1299,17 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
     assert "-v2.6-" in estimator.model_path
+
+
+def test__create_default_for_version__v3__uses_correct_defaults() -> None:
+    estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3)
+
+    assert isinstance(estimator, TabPFNClassifier)
+    assert estimator.n_estimators == 8
+    assert estimator.softmax_temperature == 0.9
+    assert isinstance(estimator.model_path, str)
+    assert "classifier" in estimator.model_path
+    assert "-v3-" in estimator.model_path
 
 
 def test__create_default_for_version__passes_through_overrides() -> None:

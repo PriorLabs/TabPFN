@@ -2,7 +2,7 @@
 
 Compared to v2.5, this uses RMSNorm instead of LayerNorm.
 
-Copyright (c) Prior Labs GmbH 2025.
+Copyright (c) Prior Labs GmbH 2026.
 """
 
 from __future__ import annotations
@@ -581,7 +581,12 @@ class TabPFNV2p6(Architecture):
         self._do_encoder_nan_check = True
         # TODO(Phil): This is here to not fail the memory computation. We should make
         # this a proper API.
-        self.ninp = config.emsize
+        self.emsize = config.emsize
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.emsize
 
     def _get_feature_group_embedder(self, config: TabPFNV2p6Config) -> nn.Module:
         """Get the feature group embedder."""

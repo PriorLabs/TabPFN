@@ -1,20 +1,33 @@
 from __future__ import annotations
 
+import sys
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
 from tabpfn.preprocessing import generate_classification_ensemble_configs
-from tabpfn.preprocessing.configs import FeatureSubsamplingMethod, PreprocessorConfig
+from tabpfn.preprocessing.configs import (
+    FeatureSubsamplingMethod,
+    PreprocessorConfig,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
+    _compute_feature_importance_order,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
+    _resolve_feature_subsampling_method,
+    _resolve_importance_top_k,
+    _subsample_features_importance_based,
     _subsample_rows_stratified,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
+
+skip_on_macos = pytest.mark.skipif(
+    sys.platform == "darwin",
+    reason="LightGBM requires libomp which is not available on macOS CI",
+)
 
 
 def _get_schema(n_features: int) -> FeatureSchema:
@@ -333,13 +346,16 @@ def test__get_subsample_feature_indices__constant_and_balanced_budget_less_than_
     np.testing.assert_array_equal(result[0], np.arange(30))
 
 
-def test__get_subsample_feature_indices__no_subsampling_all_methods():
-    """Test that all methods return None when no subsampling is needed."""
+def test__get_subsample_feature_indices__no_subsampling_all_concrete_methods():
+    """All concrete methods return None when budget covers all features."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
     pipeline.has_data_dependent_feature_expansion.return_value = False
 
-    for method in FeatureSubsamplingMethod:
+    concrete_methods = [
+        m for m in FeatureSubsamplingMethod if m is not FeatureSubsamplingMethod.AUTO
+    ]
+    for method in concrete_methods:
         rng = np.random.default_rng(42)
         result = _get_subsample_feature_indices(
             pipelines=[pipeline],
@@ -352,20 +368,36 @@ def test__get_subsample_feature_indices__no_subsampling_all_methods():
         assert result[0] is None, f"Expected None for method={method}"
 
 
-def test__get_subsample_feature_indices__invalid_method():
-    """Test that an invalid method raises ValueError."""
+def test__get_subsample_feature_indices__auto_raises_if_unresolved():
+    """AUTO passed directly to _get_subsample_feature_indices raises ValueError."""
     pipeline = MagicMock()
     pipeline.num_added_features.return_value = 0
     pipeline.has_data_dependent_feature_expansion.return_value = False
 
-    rng = np.random.default_rng(42)
-    with pytest.raises(ValueError, match="Unknown feature subsampling method"):
+    with pytest.raises(ValueError, match="Unsupported"):
         _get_subsample_feature_indices(
             pipelines=[pipeline],
             n_samples=100,
             feature_schema=_get_schema(n_features=100),
             max_features_per_estimator=[80],
-            rng=rng,
+            rng=np.random.default_rng(42),
+            feature_subsampling_method=FeatureSubsamplingMethod.AUTO,
+        )
+
+
+def test__get_subsample_feature_indices__invalid_method():
+    """Unknown string raises ValueError."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
+
+    with pytest.raises(ValueError, match="Unsupported"):
+        _get_subsample_feature_indices(
+            pipelines=[pipeline],
+            n_samples=100,
+            feature_schema=_get_schema(n_features=100),
+            max_features_per_estimator=[80],
+            rng=np.random.default_rng(42),
             feature_subsampling_method="nonexistent",  # type: ignore
         )
 
@@ -597,3 +629,657 @@ def test__get_subsample_indices_for_estimators__stratified_dispatch():
     expected_size = int(0.4 * n_samples) + 1  # 41
     for indices in result_float:
         assert len(indices) == expected_size
+
+
+# --- Feature importance subsampling tests ---
+
+
+def test__subsample_features_importance_based__top_k_always_present():
+    """Top-K features must appear in every estimator's selection."""
+    rng = np.random.default_rng(0)
+    n_features = 20
+    importance_order = rng.permutation(n_features)
+    top_k = 5
+    subsample_sizes = [10, 10, 10]
+
+    result = _subsample_features_importance_based(
+        subsample_sizes=subsample_sizes,
+        n_total_features=n_features,
+        importance_feature_orders=[importance_order],
+        top_k_count=top_k,
+        rng=rng,
+    )
+
+    top5 = set(importance_order[:top_k])
+    for indices in result:
+        assert indices is not None
+        assert top5.issubset(set(indices))
+        assert len(indices) == 10
+        assert list(indices) == sorted(indices), "Indices must be sorted"
+
+
+def test__subsample_features_importance_based__no_subsampling_when_budget_ge_total():
+    """Returns None when budget covers all features."""
+    rng = np.random.default_rng(0)
+    n_features = 10
+    importance_order = np.arange(n_features)
+    result = _subsample_features_importance_based(
+        subsample_sizes=[10, 10],
+        n_total_features=n_features,
+        importance_feature_orders=[importance_order],
+        top_k_count=5,
+        rng=rng,
+    )
+    assert all(r is None for r in result)
+
+
+def test__subsample_features_importance_based__budget_less_than_top_k():
+    """When budget < top_k, only the most important features are selected."""
+    rng = np.random.default_rng(0)
+    n_features = 20
+    importance_order = np.arange(n_features)  # feature 0 is most important
+    result = _subsample_features_importance_based(
+        subsample_sizes=[3],
+        n_total_features=n_features,
+        importance_feature_orders=[importance_order],
+        top_k_count=10,
+        rng=rng,
+    )
+    assert result[0] is not None
+    assert len(result[0]) == 3
+    assert set(result[0]) == {0, 1, 2}
+
+
+def test__subsample_features_importance_based__budget_equal_to_top_k():
+    """When budget == top_k, exactly the top-k features are returned."""
+    rng = np.random.default_rng(0)
+    n_features = 20
+    importance_order = np.arange(n_features)
+    top_k = 8
+    result = _subsample_features_importance_based(
+        subsample_sizes=[top_k],
+        n_total_features=n_features,
+        importance_feature_orders=[importance_order],
+        top_k_count=top_k,
+        rng=rng,
+    )
+    assert result[0] is not None
+    assert len(result[0]) == top_k
+    assert set(result[0]) == set(range(top_k))
+
+
+def test__subsample_features_importance_based__remaining_budget_balanced_across_estimators():  # noqa: E501
+    """Non-top-K slots are filled via balanced round-robin.
+
+    every remaining feature appears roughly equally across estimators sharing the same
+    ordering.
+    """
+    rng = np.random.default_rng(0)
+    n_features = 20
+    top_k = 5
+    budget = 10  # 5 top-K + 5 from remaining 15 features
+    n_estimators = 30  # enough passes that balance is visible
+
+    importance_order = np.arange(n_features)
+    remaining_features = set(range(top_k, n_features))  # 15 features
+
+    result = _subsample_features_importance_based(
+        subsample_sizes=[budget] * n_estimators,
+        n_total_features=n_features,
+        importance_feature_orders=[importance_order],
+        top_k_count=top_k,
+        rng=rng,
+    )
+
+    counts = dict.fromkeys(remaining_features, 0)
+    for indices in result:
+        assert indices is not None
+        assert len(indices) == budget
+        for idx in indices:
+            if idx in remaining_features:
+                counts[idx] += 1
+
+    # Each remaining feature should appear at least once across 30 estimators
+    # drawing 5 from 15 features (expected ~10 appearances each).
+    assert all(c > 0 for c in counts.values()), (
+        "Every non-top-K feature must appear at least once"
+    )
+    # Balanced: max count should be close to min count (within 2x)
+    assert max(counts.values()) <= 2 * min(counts.values()), (
+        "Balanced pool: feature counts should not differ by more than 2x"
+    )
+
+
+def test__subsample_features_importance_based__two_orderings_have_independent_pools():
+    """Estimators with different orderings draw from separate balanced pools."""
+    rng = np.random.default_rng(1)
+    n_features = 20
+    top_k = 4
+    budget = 10
+    n_estimators = 30  # 15 per ordering
+
+    # Two non-overlapping orderings
+    order_a = np.arange(n_features)  # top: 0-3, remaining: 4-19
+    order_b = np.arange(n_features)[::-1].copy()  # top: 19-16, remaining: 15-0
+
+    result = _subsample_features_importance_based(
+        subsample_sizes=[budget] * n_estimators,
+        n_total_features=n_features,
+        importance_feature_orders=[order_a, order_b],
+        top_k_count=top_k,
+        rng=rng,
+    )
+
+    counts_a = dict.fromkeys(range(top_k, n_features), 0)  # remaining for order_a
+    counts_b = dict.fromkeys(range(n_features - top_k), 0)  # remaining for order_b
+
+    for i, indices in enumerate(result):
+        assert indices is not None
+        assert len(indices) == budget
+        if i % 2 == 0:  # uses order_a
+            for idx in indices:
+                if idx in counts_a:
+                    counts_a[idx] += 1
+        else:  # uses order_b
+            for idx in indices:
+                if idx in counts_b:
+                    counts_b[idx] += 1
+
+    # Each pool should have covered all its remaining features
+    assert all(c > 0 for c in counts_a.values())
+    assert all(c > 0 for c in counts_b.values())
+
+
+def test__get_subsample_feature_indices__feature_importance_method():
+    """GINI_FEATURE_IMPORTANCE method routes correctly and includes top-K."""
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
+
+    rng = np.random.default_rng(42)
+    n_features = 50
+    top_k = 5
+    importance_order = rng.permutation(n_features)
+
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline, pipeline],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=n_features),
+        max_features_per_estimator=[20, 20, 20],
+        rng=rng,
+        feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+        importance_feature_orders=[importance_order],
+        importance_top_k_count=top_k,
+    )
+
+    top_k_set = set(importance_order[:top_k])
+    for indices in result:
+        assert indices is not None
+        assert len(indices) == 20
+        assert top_k_set.issubset(set(indices))
+        assert list(indices) == sorted(indices)
+
+
+def test__get_subsample_feature_indices__feature_importance_none_order_falls_back_to_balanced():  # noqa: E501
+    """GINI_FEATURE_IMPORTANCE with importance_feature_order=None falls back to balanced."""  # noqa: E501
+    pipeline = MagicMock()
+    pipeline.num_added_features.return_value = 0
+    pipeline.has_data_dependent_feature_expansion.return_value = False
+
+    result = _get_subsample_feature_indices(
+        pipelines=[pipeline, pipeline, pipeline],
+        n_samples=100,
+        feature_schema=_get_schema(n_features=50),
+        max_features_per_estimator=[20, 20, 20],
+        rng=np.random.default_rng(0),
+        feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+        importance_feature_orders=None,
+    )
+    # Should return valid index arrays (balanced fallback), not raise
+    assert len(result) == 3
+    for indices in result:
+        assert indices is not None
+        assert len(indices) == 20
+
+
+def test__resolve_importance_top_k__auto_above_threshold():
+    """Auto returns the configured top-k when n_features exceeds the threshold."""
+    result = _resolve_importance_top_k(
+        "auto", n_total_features=300, auto_top_k=50, auto_min_features=200
+    )
+    assert result == 50
+
+
+def test__resolve_importance_top_k__auto_below_threshold():
+    """Auto returns n_total_features when n_features is at or below the threshold."""
+    result = _resolve_importance_top_k(
+        "auto", n_total_features=100, auto_top_k=50, auto_min_features=200
+    )
+    assert result == 100
+
+
+def test__resolve_importance_top_k__auto_at_threshold():
+    """Auto returns n_total_features when n_features equals the threshold (not strictly above)."""  # noqa: E501
+    result = _resolve_importance_top_k(
+        "auto", n_total_features=200, auto_top_k=50, auto_min_features=200
+    )
+    assert result == 200
+
+
+def test__resolve_importance_top_k__int():
+    """Int value is returned as-is."""
+    assert _resolve_importance_top_k(42, n_total_features=100) == 42
+
+
+def test__resolve_importance_top_k__float():
+    """Float is resolved as ceil(value * n_total_features), minimum 1."""
+    assert _resolve_importance_top_k(0.3, n_total_features=10) == 3  # ceil(3.0)
+    assert _resolve_importance_top_k(0.25, n_total_features=10) == 3  # ceil(2.5)
+    assert (
+        _resolve_importance_top_k(0.01, n_total_features=10) == 1
+    )  # floor clamped to 1
+
+
+def test__resolve_feature_subsampling_method__non_auto_passthrough():
+    """Non-AUTO values are returned unchanged regardless of other arguments."""
+    for method in FeatureSubsamplingMethod:
+        if method is FeatureSubsamplingMethod.AUTO:
+            continue
+        assert (
+            _resolve_feature_subsampling_method(
+                method, needs_subsampling=True, n_samples=999_999
+            )
+            is method
+        )
+        assert (
+            _resolve_feature_subsampling_method(
+                method, needs_subsampling=False, n_samples=0
+            )
+            is method
+        )
+
+
+def test__resolve_feature_subsampling_method__auto_large_dataset_needs_subsampling():
+    """AUTO → GINI_FEATURE_IMPORTANCE when subsampling needed and n_samples large."""
+    result = _resolve_feature_subsampling_method(
+        FeatureSubsamplingMethod.AUTO,
+        needs_subsampling=True,
+        n_samples=200_000,
+        auto_min_samples=100_000,
+    )
+    assert result is FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+
+
+def test__resolve_feature_subsampling_method__auto_small_dataset():
+    """AUTO → BALANCED when n_samples is at or below the threshold."""
+    result = _resolve_feature_subsampling_method(
+        FeatureSubsamplingMethod.AUTO,
+        needs_subsampling=True,
+        n_samples=100_000,
+        auto_min_samples=100_000,
+    )
+    assert result is FeatureSubsamplingMethod.BALANCED
+
+
+def test__resolve_feature_subsampling_method__auto_no_subsampling_needed():
+    """AUTO → BALANCED when no feature subsampling is needed, regardless of n_samples."""  # noqa: E501
+    result = _resolve_feature_subsampling_method(
+        FeatureSubsamplingMethod.AUTO,
+        needs_subsampling=False,
+        n_samples=999_999,
+        auto_min_samples=100_000,
+    )
+    assert result is FeatureSubsamplingMethod.BALANCED
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__classification():
+    """_compute_feature_importance_order returns one valid feature ranking per tree."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 100, 10
+    X = rng.standard_normal((n_samples, n_features))
+    # Make feature 0 highly predictive
+    y = (X[:, 0] > 0).astype(int)
+
+    n_estimators = 4
+    orders = _compute_feature_importance_order(
+        X=X, y=y, task_type="classifier", n_estimators=n_estimators, rng=rng
+    )
+
+    assert len(orders) == n_estimators
+    for order in orders:
+        assert order.shape == (n_features,)
+        assert set(order) == set(range(n_features)), "All feature indices must appear"
+    # Feature 0 should rank first (most important) in the majority of orderings
+    assert sum(order[0] == 0 for order in orders) > len(orders) // 2
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__regression():
+    """_compute_feature_importance_order works for regression tasks."""
+    rng = np.random.default_rng(1)
+    n_samples, n_features = 100, 8
+    X = rng.standard_normal((n_samples, n_features))
+    y = X[:, 2] * 3.0 + rng.standard_normal(n_samples) * 0.1
+
+    n_estimators = 4
+    orders = _compute_feature_importance_order(
+        X=X, y=y, task_type="regressor", n_estimators=n_estimators, rng=rng
+    )
+
+    assert len(orders) == n_estimators
+    for order in orders:
+        assert order.shape == (n_features,)
+        assert set(order) == set(range(n_features))
+    assert sum(order[0] == 2 for order in orders) > len(orders) // 2
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__subsamples_large_datasets():
+    """max_samples caps the number of rows used for fitting."""
+    rng = np.random.default_rng(0)
+    n_samples, n_features = 200, 5
+    X = rng.standard_normal((n_samples, n_features))
+    y = rng.integers(0, 2, n_samples)
+
+    n_estimators = 4
+    orders = _compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        n_estimators=n_estimators,
+        max_samples=50,
+        rng=rng,
+    )
+    assert len(orders) == n_estimators
+    for order in orders:
+        assert order.shape == (n_features,)
+        assert set(order) == set(range(n_features))
+
+
+def test__end_to_end__feature_importance_skipped_when_no_subsampling_needed():
+    """No importance computation when every estimator sees all features."""
+    from unittest.mock import patch  # noqa: PLC0415
+
+    rng = np.random.default_rng(8)
+    n_train, n_features = 40, 10
+    n_estimators = 2
+    max_features = n_features  # budget == total → no subsampling needed
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    with patch(
+        "tabpfn.preprocessing.ensemble._compute_feature_importance_order"
+    ) as mock_compute:
+        TabPFNEnsemblePreprocessor(
+            configs=configs,
+            n_samples=n_train,
+            feature_schema=feature_schema,
+            random_state=0,
+            n_preprocessing_jobs=1,
+            feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+            importance_top_k_count=n_features,
+            X_train=X_train,
+            y_train=y_train,
+            task_type="classifier",
+        )
+        mock_compute.assert_not_called()
+
+
+def test__end_to_end__feature_importance_skipped_when_top_k_equals_all_features():
+    """No importance computation when resolved top_k >= n_total_features (all features
+    are 'important'), even if subsampling is needed.
+    """
+    from unittest.mock import patch  # noqa: PLC0415
+
+    rng = np.random.default_rng(9)
+    n_train, n_features = 40, 10
+    n_estimators = 2
+    max_features = n_features - 1  # subsampling IS needed
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    with patch(
+        "tabpfn.preprocessing.ensemble._compute_feature_importance_order"
+    ) as mock_compute:
+        TabPFNEnsemblePreprocessor(
+            configs=configs,
+            n_samples=n_train,
+            feature_schema=feature_schema,
+            random_state=0,
+            n_preprocessing_jobs=1,
+            feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+            importance_top_k_count=n_features,  # top_k == n_features → skip LightGBM
+            X_train=X_train,
+            y_train=y_train,
+            task_type="classifier",
+        )
+        mock_compute.assert_not_called()
+
+
+@skip_on_macos
+def test__end_to_end__feature_importance_subsampling():
+    """End-to-end: TabPFNEnsemblePreprocessor with feature_importance subsampling."""
+    rng = np.random.default_rng(7)
+    n_train, n_features = 60, 30
+    n_estimators = 4
+    max_features = 15
+    top_k = 5
+
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    feature_schema = FeatureSchema.from_only_categorical_indices([], n_features)
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=n_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=feature_schema,
+        random_state=0,
+        n_preprocessing_jobs=1,
+        feature_subsampling_method=FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE,
+        importance_top_k_count=top_k,
+        X_train=X_train,
+        y_train=y_train,
+        task_type="classifier",
+    )
+
+    members = preprocessor.fit_transform_ensemble_members(X_train, y_train)
+    assert len(members) == n_estimators
+
+    for member in members:
+        assert member.feature_indices is not None
+        assert len(member.feature_indices) <= max_features
+
+
+def test__subsample_features_importance_based__different_orderings_yield_different_indices():  # noqa: E501
+    """When multiple distinct orderings are given, different estimators get different top-K."""  # noqa: E501
+    rng = np.random.default_rng(0)
+    n_features = 20
+    top_k = 5
+    budget = 10
+
+    # Two opposite orderings: first says features 0-4 are top, second says 15-19 are top
+    order_a = np.arange(n_features)  # top features: 0,1,2,3,4
+    order_b = np.arange(n_features)[::-1].copy()  # top features: 19,18,17,16,15
+
+    result = _subsample_features_importance_based(
+        subsample_sizes=[budget, budget],
+        n_total_features=n_features,
+        importance_feature_orders=[order_a, order_b],
+        top_k_count=top_k,
+        rng=rng,
+    )
+
+    assert result[0] is not None
+    assert result[1] is not None
+    top_k_a = set(order_a[:top_k])  # {0,1,2,3,4}
+    top_k_b = set(order_b[:top_k])  # {15,16,17,18,19}
+    # Estimator 0 must include all of order_a's top-K
+    assert top_k_a.issubset(set(result[0]))
+    # Estimator 1 must include all of order_b's top-K
+    assert top_k_b.issubset(set(result[1]))
+    # The two selections must differ (no overlap in guaranteed-included features)
+    assert top_k_a.isdisjoint(top_k_b), (
+        "Top-K sets must be disjoint for opposite orderings"
+    )
+    assert set(result[0]) != set(result[1]), (
+        "Estimators should have different feature sets"
+    )
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__gini_large_dataset_yields_diverse_orderings():  # noqa: E501
+    """With data > max_samples, independent subsamples produce diverse orderings."""
+    rng = np.random.default_rng(42)
+    small_max_samples = 500
+    n_samples = (
+        small_max_samples * 6
+    )  # clearly larger → multiple independent subsamples
+    n_features = 10
+    # Pure noise so each subsample fit produces a different ranking
+    X = rng.standard_normal((n_samples, n_features))
+    y = rng.integers(0, 2, n_samples)
+
+    n_estimators = 6
+    orders = _compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        n_estimators=n_estimators,
+        max_samples=small_max_samples,
+        rng=rng,
+    )
+
+    assert len(orders) == n_estimators
+    for order in orders:
+        assert order.shape == (n_features,)
+        assert set(order) == set(range(n_features))
+
+    # With multiple independent subsamples on noisy data, not all orderings should
+    # be identical
+    unique_first_features = {order[0] for order in orders}
+    assert len(unique_first_features) > 1, (
+        "Independent subsamples on noise should produce diverse feature rankings"
+    )
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__lightgbm():
+    """LightGBM importance ranks the most predictive feature first."""
+    rng = np.random.default_rng(2)
+    n_samples, n_features = 200, 10
+    X = rng.standard_normal((n_samples, n_features))
+    y = (X[:, 5] > 0).astype(int)
+
+    orderings = _compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        n_estimators=3,
+        rng=rng,
+    )
+
+    assert len(orderings) == 3
+    for order in orderings:
+        assert len(order) == n_features
+        assert order[0] == 5
+
+    # With categorical indices — no crash.
+    orderings_cat = _compute_feature_importance_order(
+        X=np.abs(X),  # non-negative for LightGBM categorical handling
+        y=y,
+        task_type="classifier",
+        n_estimators=2,
+        categorical_feature_indices=[0, 1],
+        rng=rng,
+    )
+    assert len(orderings_cat) == 2
+    assert len(orderings_cat[0]) == n_features
+
+
+@skip_on_macos
+def test___compute_feature_importance_order__handles_nan():
+    """Importance method must tolerate NaN values in X."""
+    rng = np.random.default_rng(42)
+    n_samples, n_features = 150, 10
+    X = rng.standard_normal((n_samples, n_features))
+    y = (X[:, 0] > 0).astype(int)
+
+    # Inject NaN: ~10% of values, spread across all columns.
+    nan_mask = rng.random((n_samples, n_features)) < 0.1
+    X[nan_mask] = np.nan
+
+    orderings = _compute_feature_importance_order(
+        X=X,
+        y=y,
+        task_type="classifier",
+        n_estimators=2,
+        rng=rng,
+    )
+
+    assert len(orderings) == 2
+    for order in orderings:
+        assert len(order) > 0
+        assert not np.isnan(order).any()

@@ -74,7 +74,7 @@ class _TestModel(Architecture):
         return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
 
     @property
-    def ninp(self) -> int:
+    def embedding_dim(self) -> int:
         return 2
 
     @property
@@ -116,7 +116,7 @@ class _TestModelLegacy(Architecture):
         return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
 
     @property
-    def ninp(self) -> int:
+    def embedding_dim(self) -> int:
         return 2
 
     @property

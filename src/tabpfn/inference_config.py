@@ -1,6 +1,6 @@
 """Additional configuration options for inference."""
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
@@ -15,8 +15,6 @@ from tabpfn.preprocessing import (
     PreprocessorConfig,
     v2_5_classifier_preprocessor_configs,
     v2_5_regressor_preprocessor_configs,
-    v2_6_classifier_preprocessor_configs,
-    v2_6_regressor_preprocessor_configs,
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
@@ -139,7 +137,11 @@ class InferenceConfig:
     flag is set."""
 
     FEATURE_SUBSAMPLING_METHOD: Literal[
-        "balanced", "random", "constant_and_balanced"
+        "balanced",
+        "random",
+        "constant_and_balanced",
+        "gini_feature_importance",
+        "auto",
     ] = "balanced"
     """The method used to subsample features when the dataset has more features than
     max_features_per_estimator. The options are:
@@ -147,12 +149,33 @@ class InferenceConfig:
         - "balanced": Round-robin sampling from a shared shuffled pool so each feature
           appears approximately equally across estimators.
         - "constant_and_balanced": Always include the first N features (see
-          CONSTANT_FEATURE_COUNT), then use balanced subsampling for the rest.
+          FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT), then use balanced subsampling for
+          the rest.
+        - "gini_feature_importance": Use LightGBM gain importance to rank features.
+          Always include the top-K most important features (see
+          FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT), fill the rest via balanced
+          round-robin sampling from the remaining features.
+        - "auto": Automatically selects the method based on dataset size and whether
+          feature subsampling is needed. Uses "gini_feature_importance" when
+          n_samples > AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES(=100_000) and
+          subsampling is required (importance scoring is more accurate on larger
+          datasets), otherwise falls back to "balanced".
     """
-    CONSTANT_FEATURE_COUNT: int = 50
+    FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
     'constant_and_balanced' feature subsampling method. Only used when
     FEATURE_SUBSAMPLING_METHOD is 'constant_and_balanced'."""
+
+    FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT: int | float | Literal["auto"] = "auto"
+    """Number of top important features always included per estimator when
+    FEATURE_SUBSAMPLING_METHOD is an importance-based method. The remaining budget up to
+    max_features_per_estimator is filled randomly from the remaining features.
+        - If an int, that many features are always included.
+        - If a float in (0, 1], resolved as ceil(value * n_total_features).
+        - If "auto", uses top-k=AUTO_FEATURE_SUBSAMPLING_TOP_K(=150) when
+          n_features > AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES(=200);
+          otherwise no importance filtering is done.
+    """
 
     REGRESSION_Y_PREPROCESS_TRANSFORMS: tuple[str | None, ...] = (None, "safepower")
     """The preprocessing applied to the target variable before passing it to TabPFN for
@@ -259,18 +282,6 @@ class InferenceConfig:
                 return _get_v2_5_config(v2_5_classifier_preprocessor_configs())
             if task_type == "regression":
                 return _get_v2_5_config(v2_5_regressor_preprocessor_configs())
-        elif model_version == ModelVersion.V2_6:
-            if task_type == "multiclass":
-                return _get_v2_6_config(
-                    preprocessor_configs=v2_6_classifier_preprocessor_configs(),
-                    task_type=task_type,
-                )
-            if task_type == "regression":
-                return _get_v2_6_config(
-                    preprocessor_configs=v2_6_regressor_preprocessor_configs(),
-                    task_type=task_type,
-                )
-
         raise ValueError(
             f"No inference config is configured for {model_version=}. "
             "Please make sure you are using a correct model checkpoint that contains "
@@ -290,7 +301,7 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
         FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
+        FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
@@ -315,37 +326,9 @@ def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> Inferenc
         POLYNOMIAL_FEATURES="no",
         SUBSAMPLE_SAMPLES=None,
         FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
+        FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT=50,
         PREPROCESS_TRANSFORMS=preprocessor_configs,
         REGRESSION_Y_PREPROCESS_TRANSFORMS=(None, "safepower"),
-        USE_SKLEARN_16_DECIMAL_PRECISION=False,
-        MAX_NUMBER_OF_CLASSES=10,
-        MAX_NUMBER_OF_FEATURES=2000,
-        MAX_NUMBER_OF_SAMPLES=50_000,
-        FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM=True,
-        _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD=None,
-        _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD=12.0,
-    )
-
-
-def _get_v2_6_config(
-    preprocessor_configs: list[PreprocessorConfig],
-    task_type: TaskType,
-) -> InferenceConfig:
-    return InferenceConfig(
-        MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
-        MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
-        MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE=100,
-        OUTLIER_REMOVAL_STD=None,
-        FEATURE_SHIFT_METHOD="shuffle",
-        CLASS_SHIFT_METHOD="shuffle",
-        FINGERPRINT_FEATURE=True,
-        POLYNOMIAL_FEATURES="no" if task_type == "multiclass" else 10,
-        SUBSAMPLE_SAMPLES=None,
-        FEATURE_SUBSAMPLING_METHOD="random",
-        CONSTANT_FEATURE_COUNT=50,
-        PREPROCESS_TRANSFORMS=preprocessor_configs,
-        REGRESSION_Y_PREPROCESS_TRANSFORMS=("none",),
         USE_SKLEARN_16_DECIMAL_PRECISION=False,
         MAX_NUMBER_OF_CLASSES=10,
         MAX_NUMBER_OF_FEATURES=2000,

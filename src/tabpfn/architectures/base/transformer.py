@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
@@ -121,10 +121,10 @@ class PerFeatureTransformer(Architecture):
         Args:
             encoder:
                 Pass a nn.Module that takes in a batch of sequences of inputs and
-                returns something of the shape (seq_len, batch_size, ninp)
+                returns something of the shape (seq_len, batch_size, emsize)
             y_encoder:
                 A nn.Module that takes in a batch of sequences of outputs and
-                returns something of the shape (seq_len, batch_size, ninp)
+                returns something of the shape (seq_len, batch_size, emsize)
             activation: An activation function, "gelu" or "relu"
             min_num_layers_layer_dropout:
                 If this is set, it enables to drop the last
@@ -185,9 +185,9 @@ class PerFeatureTransformer(Architecture):
 
         self.encoder = encoder
         self.y_encoder = y_encoder
-        self.ninp = config.emsize
+        self.emsize = config.emsize
         self.nhid_factor = config.nhid_factor
-        nhid = self.ninp * self.nhid_factor
+        nhid = self.emsize * self.nhid_factor
         self.features_per_group = config.features_per_group
         self.cache_trainset_representation = cache_trainset_representation
         self.cached_embeddings: torch.Tensor | None = None
@@ -238,7 +238,7 @@ class PerFeatureTransformer(Architecture):
 
             self.global_att_embeddings_for_compression = nn.Embedding(
                 num_global_att_tokens_for_compression,
-                self.ninp,
+                self.emsize,
             )
 
             self.encoder_compression_layer = LayerStack.of_repeated_layer(
@@ -250,7 +250,7 @@ class PerFeatureTransformer(Architecture):
         self.decoder_dict = nn.ModuleDict(
             {
                 "standard": nn.Sequential(
-                    nn.Linear(self.ninp, nhid),
+                    nn.Linear(self.emsize, nhid),
                     nn.GELU(),
                     nn.Linear(nhid, n_out),
                 )
@@ -260,11 +260,11 @@ class PerFeatureTransformer(Architecture):
         self.feature_positional_embedding = config.feature_positional_embedding
         if self.feature_positional_embedding == "learned":
             self.feature_positional_embedding_embeddings = nn.Embedding(
-                1_000, self.ninp
+                1_000, self.emsize
             )
         elif self.feature_positional_embedding == "subspace":
             self.feature_positional_embedding_embeddings = nn.Linear(
-                self.ninp // 4, self.ninp
+                self.emsize // 4, self.emsize
             )
 
         self.dag_pos_enc_dim = config.dag_pos_enc_dim
@@ -276,6 +276,11 @@ class PerFeatureTransformer(Architecture):
         state.setdefault("features_per_group", 1)
         state.setdefault("feature_positional_embedding", None)
         super().__setstate__(state)
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return self.emsize
 
     @overload
     def forward(

@@ -14,7 +14,7 @@
     ```
 """
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
 from tabpfn_common_utils.telemetry import track_model_call
+from tqdm.auto import tqdm
 
 from tabpfn.base import (
     ClassifierModelSpecs,
@@ -230,6 +231,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         differentiable_input: bool = False,
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
+        show_progress_bar: bool = False,
     ) -> None:
         """Construct a TabPFN classifier.
 
@@ -453,6 +455,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 `eval_metric`. See
                 [tabpfn.inference_tuning.ClassifierTuningConfig][] for details
                 and options.
+
+            show_progress_bar:
+                Whether to show a progress bar during inference. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -467,6 +472,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             inference_precision
         )
         self.fit_mode = fit_mode
+        self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.random_state = random_state
         self.inference_config = inference_config
@@ -521,6 +527,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "n_estimators": 8,
                 "softmax_temperature": 0.9,
             }
+        elif version == ModelVersion.V3:
+            options = {
+                "model_path": prepend_cache_path(
+                    ModelSource.get_classifier_v3().default_filename
+                ),
+                "n_estimators": 8,
+                "softmax_temperature": 0.9,
+            }
         else:
             raise ValueError(f"Unknown version: {version}")
 
@@ -550,6 +564,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "Use `models_` instead."
             )
         return self.models_[0]
+
+    def get_inference_config(self) -> InferenceConfig:
+        """Load the model if needed and return the active inference config.
+
+        Loads the model checkpoint without requiring fit data so the config can be
+        inspected before calling `fit()`. Any ``inference_config`` override
+        passed to the constructor is considered.
+
+        Returns:
+            A deep copy of the active inference config.
+        """
+        if not hasattr(self, "inference_config_"):
+            self._initialize_model_variables()
+        return copy.deepcopy(self.inference_config_)
 
     # TODO: We can remove this from scikit-learn lower bound of 1.6
     def _more_tags(self) -> dict[str, Any]:
@@ -777,9 +805,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
-            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+            X_train=X,
             y_train=y,
+            task_type=self.estimator_type,
         )
 
         self.executor_ = create_inference_engine(
@@ -905,7 +936,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
-            constant_feature_count=self.inference_config_.CONSTANT_FEATURE_COUNT,
+            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             y_train=y,
         )
@@ -1430,10 +1461,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
-        for output, config in self.executor_.iter_outputs(
-            X,
-            autocast=self.use_autocast_,
-            task_type="multiclass",
+        for output, config in tqdm(
+            self.executor_.iter_outputs(
+                X,
+                autocast=self.use_autocast_,
+                task_type="multiclass",
+            ),
+            total=self.n_estimators,
+            desc="TabPFN inference",
+            unit="estimator",
+            disable=not self.show_progress_bar,
         ):
             original_ndim = output.ndim
 

@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 """Example of using TabPFN for binary classification with an eval_metric and tuning.
 
 This example demonstrates how to calibrate and tune the predictions

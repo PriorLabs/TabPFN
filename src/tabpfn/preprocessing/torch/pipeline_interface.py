@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 """Interfaces for torch preprocessing pipeline."""
 
@@ -190,11 +190,15 @@ class TorchPreprocessingPipeline:
             if not indices:
                 continue
 
+            fitted_cache = self.fitted_cache[i] if use_fitted_cache else None
+            if fitted_cache is not None:
+                fitted_cache = _move_cache_to_device(fitted_cache, x.device)
+
             result = step.fit_transform(
                 x,
                 column_indices=indices,
                 num_train_rows=num_train_rows,
-                fitted_cache=self.fitted_cache[i] if use_fitted_cache else None,
+                fitted_cache=fitted_cache,
             )
             x = result.x
 
@@ -229,7 +233,12 @@ class TorchPreprocessingPipeline:
         self, i: int, result: TorchPreprocessingStepResult
     ) -> None:
         if self.keep_fitted_cache:
-            self.fitted_cache[i] = result.fitted_cache
+            # Store on CPU so the cache is decoupled from the device the
+            # pipeline ran on.
+            cache = result.fitted_cache
+            if cache is not None:
+                cache = _move_cache_to_device(cache, torch.device("cpu"))
+            self.fitted_cache[i] = cache
 
     @override
     def __repr__(self) -> str:
@@ -260,6 +269,14 @@ class TorchPreprocessingPipeline:
                 f"Number of columns in input tensor ({num_columns}) does not match "
                 f"number of columns in schema ({feature_schema.num_columns})"
             )
+
+
+def _move_cache_to_device(
+    cache: dict[str, torch.Tensor], device: torch.device
+) -> dict[str, torch.Tensor]:
+    return {
+        k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
+    }
 
 
 @dataclasses.dataclass

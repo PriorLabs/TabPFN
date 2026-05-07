@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 import numpy as np
+import numpy.typing as npt
 
 from tabpfn.constants import (
+    AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES,
+    AUTO_FEATURE_SUBSAMPLING_TOP_K,
+    AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES,
     CLASS_SHUFFLE_OVERESTIMATE_FACTOR,
+    FEATURE_IMPORTANCE_MAX_SAMPLES,
     MAXIMUM_FEATURE_SHIFT,
 )
 from tabpfn.preprocessing.configs import (
@@ -20,6 +25,7 @@ from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     RegressorEnsembleConfig,
 )
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
 from tabpfn.preprocessing.torch import (
     FeatureSchema,
@@ -30,7 +36,6 @@ from tabpfn.preprocessing.transform import fit_preprocessing
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    import numpy.typing as npt
     import torch
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
@@ -90,7 +95,10 @@ class TabPFNEnsemblePreprocessor:
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
+        importance_top_k_count: int | float | Literal["auto"] = "auto",
+        X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
+        task_type: Literal["classifier", "regressor"] = "classifier",
     ) -> None:
         """Init.
 
@@ -106,17 +114,26 @@ class TabPFNEnsemblePreprocessor:
                 preprocessor objects.
             enable_gpu_preprocessing: Whether to move quantile/SVD/shuffle to GPU.
             feature_subsampling_method: Method for subsampling features. One of
-                "balanced", "random", or "constant_and_balanced".
+                "balanced", "random", "constant_and_balanced", or "feature_importance".
             constant_feature_count: Number of leading features to always include
                 when using the "constant_and_balanced" method.
             subsample_samples: Method to subsample rows per estimator. If int,
                 subsample that many samples. If float, subsample that fraction of
                 samples. If a list of index arrays, use those indices directly. If
                 ``None``, no row subsampling is done.
-            y_train: Class labels for stratified row subsampling. When provided,
-                each estimator's subsample preserves the original class proportions
-                (classification). Ignored when ``subsample_samples`` is a list or
-                ``None``.
+            importance_top_k_count: Number of top-important features always included
+                per estimator when feature_subsampling_method is an importance-based
+                method. If float in (0, 1], resolved as ceil(value * n_total_features).
+                If "auto", uses 150 when n_features > 200 and n_samples > 100_000,
+                otherwise keeps all features (no importance filtering).
+            X_train: Training features used to compute feature importance. Required
+                when feature_subsampling_method is "feature_importance".
+            y_train: Training targets used to compute feature importance or stratified
+                row subsampling. Required when feature_subsampling_method is
+                "feature_importance".
+            task_type: ``"classifier"`` or ``"regressor"``, controls whether
+                ExtraTreesClassifier or ExtraTreesRegressor is used.
+                Only used when feature_subsampling_method is "feature_importance".
         """
         super().__init__()
         self.configs = configs
@@ -148,9 +165,54 @@ class TabPFNEnsemblePreprocessor:
             for config, seed in zip(self.configs, self.pipeline_seeds)
         ]
 
+        n_total_features = feature_schema.num_columns
+        resolved_top_k = _resolve_importance_top_k(
+            importance_top_k_count=importance_top_k_count,
+            n_total_features=n_total_features,
+        )
+
         max_features_per_estimator = [
             c.preprocess_config.max_features_per_estimator for c in self.configs
         ]
+
+        importance_feature_orders: list[np.ndarray] | None = None
+        needs_subsampling = any(
+            s < n_total_features for s in max_features_per_estimator
+        )
+
+        feature_subsampling_method = _resolve_feature_subsampling_method(
+            method=feature_subsampling_method,
+            needs_subsampling=needs_subsampling,
+            n_samples=n_samples,
+        )
+
+        is_feature_importance_subsampling = (
+            feature_subsampling_method
+            == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+        )
+
+        if (
+            is_feature_importance_subsampling
+            and needs_subsampling
+            and resolved_top_k < n_total_features
+        ):
+            if X_train is None or y_train is None:
+                raise ValueError(
+                    "X_train and y_train must be provided when using a "
+                    "feature_importance subsampling method."
+                )
+            cat_indices = (
+                self.feature_schema.indices_for(FeatureModality.CATEGORICAL) or None
+            )
+            importance_feature_orders = _compute_feature_importance_order(
+                X=X_train,
+                y=y_train,
+                task_type=task_type,
+                n_estimators=len(self.configs),
+                categorical_feature_indices=cat_indices,
+                rng=rng_features,
+            )
+
         self.subsample_feature_indices = _get_subsample_feature_indices(
             pipelines=self.pipelines,
             n_samples=n_samples,
@@ -159,6 +221,8 @@ class TabPFNEnsemblePreprocessor:
             rng=rng_features,
             feature_subsampling_method=feature_subsampling_method,
             constant_feature_count=constant_feature_count,
+            importance_feature_orders=importance_feature_orders,
+            importance_top_k_count=resolved_top_k,
         )
 
         self.subsample_row_indices = _get_subsample_indices_for_estimators(
@@ -532,6 +596,8 @@ def _get_subsample_feature_indices(
     rng: np.random.Generator,
     feature_subsampling_method: FeatureSubsamplingMethod,
     constant_feature_count: int = 50,
+    importance_feature_orders: list[np.ndarray] | None = None,
+    importance_top_k_count: int = 150,
 ) -> list[np.ndarray | None]:
     """Get the indices of the features to subsample for each estimator.
 
@@ -546,6 +612,10 @@ def _get_subsample_feature_indices(
             "balanced", "random", or "constant_and_balanced".
         constant_feature_count: Number of leading features to always include
             when using the "constant_and_balanced" method.
+        importance_feature_orders: Per-estimator feature indices sorted most->least
+            important. Produced by ``_compute_feature_importance_order``.
+        importance_top_k_count: Number of top features always included per estimator.
+            Only used when feature_subsampling_method is "feature_importance".
     """
     if len(max_features_per_estimator) != len(pipelines):
         raise ValueError(
@@ -588,17 +658,31 @@ def _get_subsample_feature_indices(
             stacklevel=2,
         )
 
-    if feature_subsampling_method is FeatureSubsamplingMethod.BALANCED:
+    if feature_subsampling_method == FeatureSubsamplingMethod.BALANCED:
         return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
-    if feature_subsampling_method is FeatureSubsamplingMethod.RANDOM:
+    if feature_subsampling_method == FeatureSubsamplingMethod.RANDOM:
         return _subsample_features_random(subsample_sizes, n_total_features, rng)
-    if feature_subsampling_method is FeatureSubsamplingMethod.CONSTANT_AND_BALANCED:
+    if feature_subsampling_method == FeatureSubsamplingMethod.CONSTANT_AND_BALANCED:
         return _subsample_features_constant_and_balanced(
             subsample_sizes, n_total_features, rng, constant_feature_count
         )
+    if feature_subsampling_method == FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE:
+        if importance_feature_orders is None:
+            # top_k covers all features — importance ordering is irrelevant, fall back
+            # to balanced subsampling for variety across estimators.
+            return _subsample_features_balanced(subsample_sizes, n_total_features, rng)
+        return _subsample_features_importance_based(
+            subsample_sizes,
+            n_total_features,
+            importance_feature_orders,
+            importance_top_k_count,
+            rng,
+        )
 
     raise ValueError(
-        f"Unknown feature subsampling method: {feature_subsampling_method}"
+        f"Unsupported feature_subsampling_method={feature_subsampling_method!r}. "
+        "If using AUTO, it must be resolved to a concrete method before calling "
+        "_get_subsample_feature_indices."
     )
 
 
@@ -727,6 +811,159 @@ def _subsample_features_constant_and_balanced(
         subsample_feature_indices.append(np.sort(all_indices))
 
     return subsample_feature_indices
+
+
+def _subsample_features_importance_based(
+    subsample_sizes: list[int],
+    n_total_features: int,
+    importance_feature_orders: list[np.ndarray],
+    top_k_count: int,
+    rng: np.random.Generator,
+) -> list[np.ndarray | None]:
+    """Always include top-K important features; randomly sample the rest.
+
+    Each estimator uses its own importance ordering from ``importance_feature_orders``,
+    cycling through the list when there are more estimators than orderings.
+
+    Args:
+        subsample_sizes: Number of input features to select per estimator.
+        n_total_features: Total number of features in the dataset.
+        importance_feature_orders: Per-estimator feature indices sorted most->least
+            important. Produced by ``_compute_feature_importance_order``.
+        top_k_count: Number of top features always included per estimator.
+        rng: Random number generator.
+    """
+    n_top = min(top_k_count, n_total_features)
+
+    n_orderings = len(importance_feature_orders)
+    # One balanced pool per unique ordering so estimators sharing the same ordering
+    # cover its remaining features evenly across the ensemble.
+    pools: dict[int, list[int]] = {i: [] for i in range(n_orderings)}
+
+    result: list[np.ndarray | None] = []
+    for i, size in enumerate(subsample_sizes):
+        ordering_idx = i % n_orderings
+        importance_feature_order = importance_feature_orders[ordering_idx]
+        top_features = importance_feature_order[:n_top]
+        remaining_features = importance_feature_order[n_top:]
+        if size >= n_total_features:
+            result.append(None)
+            continue
+        if size <= n_top:
+            # Budget only fits a portion of the top features; take the most important.
+            result.append(np.sort(top_features[:size]))
+            continue
+        # Always include all top features, fill remaining budget via balanced pool.
+        remaining_budget = size - n_top
+        slots, pools[ordering_idx] = _draw_balanced_from_pool(
+            pools[ordering_idx], remaining_budget, len(remaining_features), rng
+        )
+        sampled = remaining_features[np.array(slots)]
+        result.append(np.sort(np.concatenate([top_features, sampled])))
+
+    return result
+
+
+def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> type:
+    # Lazy import: libomp (required by LightGBM on macOS) may not be present.
+    # This path only runs for large datasets (>100k samples), which aren't
+    # typically used on macOS anyway.
+    import lightgbm  # noqa: PLC0415
+
+    return (
+        lightgbm.LGBMClassifier if task_type == "classifier" else lightgbm.LGBMRegressor
+    )
+
+
+def _collect_importance_orderings(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    n_estimators: int,
+    max_samples: int,
+    fit_ordering_fn: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Run ``fit_ordering_fn`` and return one ordering per estimator.
+
+    For datasets that fit within ``max_samples`` a single call is made and its
+    result is repeated.  For larger datasets ``n_subsamples`` independent
+    subsamples of size ``max_samples`` are drawn and cycled to fill
+    ``n_estimators``.
+    """
+    n_samples = len(X)
+
+    if n_samples <= max_samples:
+        ordering = fit_ordering_fn(X, y)
+        return [ordering] * n_estimators
+
+    from sklearn.model_selection import train_test_split  # noqa: PLC0415
+
+    n_subsamples = min(n_estimators, n_samples // max_samples + 1)
+    stratify = y if task_type == "classifier" else None
+    orderings = []
+    for _ in range(n_subsamples):
+        idx, _ = train_test_split(
+            np.arange(n_samples),
+            train_size=max_samples,
+            stratify=stratify,
+            random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
+        )
+        orderings.append(fit_ordering_fn(X[idx], y[idx]))
+    return [orderings[i % n_subsamples] for i in range(n_estimators)]
+
+
+def _compute_feature_importance_order(
+    X: np.ndarray,
+    y: np.ndarray,
+    task_type: Literal["classifier", "regressor"],
+    *,
+    n_estimators: int,
+    max_samples: int = FEATURE_IMPORTANCE_MAX_SAMPLES,
+    n_tree_estimators: int = 50,
+    categorical_feature_indices: list[int] | None = None,
+    rng: np.random.Generator,
+) -> list[np.ndarray]:
+    """Rank features by LightGBM gain importance, returning one ordering per estimator.
+
+    The returned list always has length ``n_estimators``.  When fewer distinct
+    orderings are computed than there are estimators the list is filled by
+    cycling through the available orderings.
+
+    Args:
+        X: Training features, shape (n_samples, n_features).
+        y: Training targets, shape (n_samples,).
+        task_type: ``"classifier"`` or ``"regressor"`` (matches TabPFN estimator_type).
+        n_estimators: Number of TabPFN ensemble estimators.  The returned list
+            has exactly this length.
+        max_samples: Row budget per importance model fit.
+        n_tree_estimators: Number of trees in LightGBM models.
+        categorical_feature_indices: Column indices of categorical features
+            passed natively to LightGBM.
+        rng: Random number generator.
+
+    Returns:
+        List of length ``n_estimators``, each element an array of feature indices
+        sorted from most to least important.
+    """
+    model_cls = _get_lightgbm_model_cls(task_type)
+    cat_feature: list[int] | str = categorical_feature_indices or "auto"
+
+    def _fit_ordering(X_fit: np.ndarray, y_fit: np.ndarray) -> np.ndarray:
+        seed = int(rng.integers(0, np.iinfo(np.int32).max))
+        model = model_cls(
+            importance_type="gain",
+            n_estimators=n_tree_estimators,
+            n_jobs=-1,
+            random_state=seed,
+            verbose=-1,
+        )
+        model.fit(X_fit, y_fit, categorical_feature=cat_feature)
+        return np.argsort(model.feature_importances_)[::-1].copy()
+
+    return _collect_importance_orderings(
+        X, y, task_type, n_estimators, max_samples, _fit_ordering, rng
+    )
 
 
 def generate_classification_ensemble_configs(
@@ -866,3 +1103,45 @@ def generate_regression_ensemble_configs(
             model_indices,
         )
     ]
+
+
+def _resolve_importance_top_k(
+    importance_top_k_count: int | float | Literal["auto"],
+    n_total_features: int,
+    auto_top_k: int = AUTO_FEATURE_SUBSAMPLING_TOP_K,
+    auto_min_features: int = AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES,
+) -> int:
+    """Resolve importance_top_k_count to a concrete integer.
+
+    - "auto": auto_top_k when n_features > auto_min_features,
+      else n_total_features (no filtering).
+    - float in (0, 1]: ceil(value * n_total_features).
+    - int: used as-is.
+    """
+    if importance_top_k_count == "auto":
+        if n_total_features > auto_min_features:
+            return auto_top_k
+        return n_total_features
+    if isinstance(importance_top_k_count, float):
+        return max(1, int(np.ceil(importance_top_k_count * n_total_features)))
+    return importance_top_k_count
+
+
+def _resolve_feature_subsampling_method(
+    method: FeatureSubsamplingMethod,
+    *,
+    needs_subsampling: bool,
+    n_samples: int,
+    auto_min_samples: int = AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES,
+) -> FeatureSubsamplingMethod:
+    """Resolve AUTO to a concrete subsampling method.
+
+    Uses GINI_FEATURE_IMPORTANCE when subsampling is needed and the dataset is
+    large enough that importance scoring is reliable (n_samples > auto_min_samples).
+    Falls back to BALANCED otherwise. Non-AUTO values are returned unchanged.
+    """
+    if method is not FeatureSubsamplingMethod.AUTO:
+        return method
+    if needs_subsampling and n_samples > auto_min_samples:
+        return FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
+    return FeatureSubsamplingMethod.BALANCED

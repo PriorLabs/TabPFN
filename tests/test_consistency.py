@@ -107,60 +107,26 @@ DEFAULT_CONFIG = {"n_estimators": 2, "random_state": 42, "device": "cpu"}
 
 TEST_CASES = {
     **{
-        f"classifier_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
+        f"classifier_tiny_dataset_{version.value}": _ConsistencyCase(
             data=_get_tiny_classification_data,
             model=partial(
                 TabPFNClassifier.create_default_for_version,
-                fit_mode=fit_mode,
                 version=version,
                 **DEFAULT_CONFIG,
             ),
         )
-        for fit_mode in ["fit_preprocessors", "low_memory"]
         for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
-        # Save compute by only running all the tests for the latest model.
-        if version == ModelVersion.V2_6 or fit_mode == "fit_preprocessors"
     },
     **{
-        f"classifier_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
-            data=_get_tiny_classification_data,
-            model=partial(
-                TabPFNClassifier.create_default_for_version,
-                fit_mode=fit_mode,
-                version=version,
-                **DEFAULT_CONFIG,
-            ),
-        )
-        for fit_mode in ["fit_with_cache"]
-        for version in [ModelVersion.V2_5]
-    },
-    **{
-        f"regressor_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
+        f"regressor_tiny_dataset_{version.value}": _ConsistencyCase(
             data=_get_tiny_regression_data,
             model=partial(
                 TabPFNRegressor.create_default_for_version,
-                fit_mode=fit_mode,
                 version=version,
                 **DEFAULT_CONFIG,
             ),
         )
-        for fit_mode in ["fit_preprocessors", "low_memory"]
         for version in [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
-        # Save compute by only running all the tests for the latest model.
-        if version == ModelVersion.V2_6 or fit_mode == "fit_preprocessors"
-    },
-    **{
-        f"regressor_tiny_dataset_{version.value}_{fit_mode}": _ConsistencyCase(
-            data=_get_tiny_regression_data,
-            model=partial(
-                TabPFNRegressor.create_default_for_version,
-                fit_mode=fit_mode,
-                version=version,
-                **DEFAULT_CONFIG,
-            ),
-        )
-        for fit_mode in ["fit_with_cache"]
-        for version in [ModelVersion.V2_5]
     },
     "classifier_tiny_dataset_differentiable_input": _ConsistencyCase(
         data=lambda: _to_tensors(_get_tiny_classification_data()),

@@ -1,6 +1,6 @@
 """Various constants used throughout the library."""
 
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 
 # TODO(eddiebergman): Should probably put these where they belong but
 # for the time being, this just helps with typing and not the possible
@@ -34,6 +34,7 @@ class ModelVersion(str, Enum):
     V2 = "v2"
     V2_5 = "v2.5"
     V2_6 = "v2.6"
+    V3 = "v3"
 
 
 NA_PLACEHOLDER = "__MISSING__"
@@ -57,6 +58,12 @@ MEMORY_SAFETY_FACTOR = 5.0  # Taken as default from function
 ENSEMBLE_CONFIGURATION_MAX_STEP = 2
 MAXIMUM_FEATURE_SHIFT = 1_000
 CLASS_SHUFFLE_OVERESTIMATE_FACTOR = 3
+
+FEATURE_IMPORTANCE_MAX_SAMPLES = 100_000
+
+AUTO_FEATURE_SUBSAMPLING_TOP_K = 150
+AUTO_FEATURE_SUBSAMPLING_TOP_K_MIN_FEATURES = 200
+AUTO_FEATURE_SUBSAMPLING_IMPORTANCE_MIN_SAMPLES = 100_000
 
 # 1) Figure out whether this Joblib version supports "generator_unordered".
 # For example, assume "generator_unordered" is officially supported in joblib >= 1.4.0

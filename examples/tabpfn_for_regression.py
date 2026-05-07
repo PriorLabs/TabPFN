@@ -1,4 +1,4 @@
-#  Copyright (c) Prior Labs GmbH 2025.
+#  Copyright (c) Prior Labs GmbH 2026.
 """Example of using TabPFN for regression.
 
 This example demonstrates how to use TabPFNRegressor on a regression task

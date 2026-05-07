@@ -80,52 +80,10 @@ def v2_5_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
     ]
 
 
-def v2_6_classifier_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Get the preprocessor configuration for classification in v2.5 of the model."""
-    return [
-        PreprocessorConfig(
-            name="quantile_uni",
-            append_original=False,
-            categorical_name="numeric",
-            global_transformer_name=None,
-            max_features_per_estimator=680,
-        ),
-        PreprocessorConfig(
-            name="quantile_uni",
-            append_original=False,
-            categorical_name="ordinal_very_common_categories_shuffled",
-            global_transformer_name="svd_quarter_components",
-            max_features_per_estimator=500,
-        ),
-    ]
-
-
-def v2_6_regressor_preprocessor_configs() -> list[PreprocessorConfig]:
-    """Get the preprocessor configuration for regression in v2.5 of the model."""
-    return [
-        PreprocessorConfig(
-            name="quantile_uni",
-            append_original=False,
-            categorical_name="numeric",
-            global_transformer_name=None,
-            max_features_per_estimator=680,
-        ),
-        PreprocessorConfig(
-            name="quantile_uni",
-            append_original="auto",
-            categorical_name="ordinal_very_common_categories_shuffled",
-            global_transformer_name="svd_quarter_components",
-            max_features_per_estimator=500,
-        ),
-    ]
-
-
 __all__ = [
     "_V2_FEATURE_SUBSAMPLING_THRESHOLD",
     "v2_5_classifier_preprocessor_configs",
     "v2_5_regressor_preprocessor_configs",
-    "v2_6_classifier_preprocessor_configs",
-    "v2_6_regressor_preprocessor_configs",
     "v2_classifier_preprocessor_configs",
     "v2_regressor_preprocessor_configs",
 ]
