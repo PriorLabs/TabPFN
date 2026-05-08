@@ -1812,16 +1812,8 @@ class TabPFNV3(Architecture):
                 built_cache = kv_cache  # pass through unchanged
             else:
                 scaler_stats = self.standard_scaler.fit(x_RiBC[:num_train])
-                # Match train_embeddings dtype to the ICL cache K/V dtype so
-                # the cached tensor isn't kept at the (post-norm) higher
-                # precision when downstream consumers run in lower precision
-                # under autocast. .to(same_dtype) is a no-op when no cast is
-                # needed.
-                cache_dtype = (
-                    next(iter(icl_cache_out.kv.values())).key.dtype
-                    if icl_cache_out is not None and icl_cache_out.kv
-                    else train_emb.dtype
-                )
+                # Store train_embeddings at the ICL KV cache dtype.
+                cache_dtype = next(iter(icl_cache_out.kv.values())).key.dtype
                 built_cache = TabPFNV3Cache(
                     icl_cache=icl_cache_out,
                     train_embeddings=train_emb.detach().to(cache_dtype),
