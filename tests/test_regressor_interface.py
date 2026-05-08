@@ -1073,7 +1073,8 @@ def test__fit_with_differentiable_input__categorical_features_rejected() -> None
 
 def test__fit_with_differentiable_input__constant_target_rejected() -> None:
     """A constant-target y has no signal to predict differentiably and would
-    collapse the bardist borders; reject with a clear error."""
+    collapse the bardist borders; reject with a clear error.
+    """
     reg = TabPFNRegressor(
         n_estimators=1,
         ignore_pretraining_limits=True,
@@ -1091,7 +1092,8 @@ def test__fit_with_differentiable_input__single_sample_y_does_not_nan() -> None:
     N=1. Our path uses correction=0 (population std) so std is well defined
     even for a single sample (it just collapses to 0, which then trips the
     constant-target guard — what we want). Verify the failure mode is the
-    explicit ValueError, not a downstream NaN."""
+    explicit ValueError, not a downstream NaN.
+    """
     reg = TabPFNRegressor(
         n_estimators=1,
         ignore_pretraining_limits=True,
@@ -1107,7 +1109,8 @@ def test__fit_with_differentiable_input__single_sample_y_does_not_nan() -> None:
 def test__fit_with_differentiable_input__std_matches_population_definition() -> None:
     """The differentiable path's y_train_std_ should match np.std (population
     std, ddof=0), not torch's default sample std (correction=1), so it lines
-    up with the standard fit() path."""
+    up with the standard fit() path.
+    """
     reg = TabPFNRegressor(
         n_estimators=1,
         ignore_pretraining_limits=True,
@@ -1125,9 +1128,10 @@ def test__fit_with_differentiable_input__std_matches_population_definition() -> 
     )
 
 
-def test__fit_with_differentiable_input__feature_schema_columns_are_independent() -> None:
+def test__fit_with_differentiable_input__feature_schema_cols_independent() -> None:
     """Each column's Feature must be a distinct instance — list multiplication
-    `[Feature(...)] * n` would alias all columns to one mutable dataclass."""
+    `[Feature(...)] * n` would alias all columns to one mutable dataclass.
+    """
     reg = TabPFNRegressor(
         n_estimators=1,
         ignore_pretraining_limits=True,
@@ -1146,7 +1150,8 @@ def test__fit_with_differentiable_input__feature_schema_columns_are_independent(
 
 def test__fit_with_differentiable_input__second_call_refreshes_target_stats() -> None:
     """A second call with different y must update y_train_mean_/std_ and the
-    raw_space_bardist_; only the model load and ensemble configs are cached."""
+    raw_space_bardist_; only the model load and ensemble configs are cached.
+    """
     torch.manual_seed(0)
     reg = TabPFNRegressor(
         n_estimators=1,
