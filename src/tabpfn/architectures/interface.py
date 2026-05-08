@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 from abc import ABC, abstractmethod
 from dataclasses import asdict
+from enum import Enum
 from typing import Any, Literal, Protocol, overload
 from typing_extensions import override
 
@@ -52,6 +53,19 @@ def _get_unused_items(
             if len(subconfig_unused) > 0:
                 unused[k] = subconfig_unused
     return unused
+
+
+class AttentionBackend(str, Enum):
+    """Attention kernel selection for :attr:`PerformanceOptions.attention_backend`.
+
+    The class is a ``str``-mixin so members compare equal to their underlying
+    string value (``AttentionBackend.AUTO == "auto"``); callers may pass either
+    enum members or the bare strings.
+    """
+
+    AUTO = "auto"
+    SDPA = "sdpa"
+    FA3 = "fa3"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -106,6 +120,24 @@ class PerformanceOptions:
     result in longer inference time for the first forward pass, during which
     compile and autotune will be run. Tuning results are cached, so should
     persist across runs."""
+
+    attention_backend: AttentionBackend = AttentionBackend.AUTO
+    """Attention kernel selection.
+
+    - :attr:`AttentionBackend.AUTO` (default): prefer FlashAttention-3 when the
+      call is eligible (Hopper GPU, fp16/bf16, supported head_dim, FA3 package
+      importable); otherwise fall back to PyTorch SDPA with the standard
+      backend list.
+    - :attr:`AttentionBackend.SDPA`: always use PyTorch SDPA — same behaviour
+      as before this option existed.
+    - :attr:`AttentionBackend.FA3`: force FA3. Raises ``RuntimeError`` if FA3
+      is not eligible for a given call (e.g. wrong GPU class, head_dim, or
+      dtype). Use only when benchmarking FA3 specifically.
+
+    The enum is a ``str``-mixin, so the literal strings ``"auto"``, ``"sdpa"``
+    and ``"fa3"`` are also accepted. Architectures that don't support FA3
+    ignore this option silently.
+    """
 
 
 class ArchitectureModule(Protocol):

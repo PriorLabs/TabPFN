@@ -106,7 +106,8 @@ log_level = "DEBUG"
 xfail_strict = true
 addopts = "--durations=10 -vv"
 markers = [
-    "slow: slow tests that we run only on merge, rather than in PRs"
+    "slow: slow tests that we run only on merge, rather than in PRs",
+    "hopper: tests requiring a Hopper-class GPU (sm90+) and the flash_attn_interface package; skipped automatically elsewhere",
 ]
 
 # https://github.com/charliermarsh/ruff

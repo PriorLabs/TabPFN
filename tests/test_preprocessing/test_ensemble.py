@@ -23,6 +23,7 @@ from tabpfn.preprocessing.ensemble import (
     _resolve_feature_subsampling_method,
     _resolve_importance_top_k,
     _subsample_features_importance_based,
+    _subsample_rows_stratified,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
@@ -539,6 +540,119 @@ def test__end_to_end__balanced_feature_subsampling():
         f"Under-represented feature: min count {counts.min()}, "
         f"expected ~{expected_mean:.1f}"
     )
+
+
+def test__subsample_rows_stratified__maintains_class_proportions():
+    """Each estimator subsample should roughly preserve the original class fractions."""
+    rng = np.random.default_rng(0)
+    # 3 classes with proportions 0.6 / 0.3 / 0.1
+    y = np.array([0] * 600 + [1] * 300 + [2] * 100)
+    rng.shuffle(y)
+    subsample_size = 50
+    num_estimators = 10
+
+    result = _subsample_rows_stratified(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    original_fracs = np.array([0.6, 0.3, 0.1])
+    for indices in result:
+        assert len(indices) == subsample_size
+        y_sub = y[indices]
+        counts = np.bincount(y_sub, minlength=3)
+        fracs = counts / subsample_size
+        # Allow ±10 percentage points deviation.
+        np.testing.assert_allclose(fracs, original_fracs, atol=0.1)
+
+
+def test__subsample_rows_stratified__minority_class_always_included():
+    """Minority class must appear in every estimator even under extreme imbalance."""
+    rng = np.random.default_rng(42)
+    # 999 majority, 1 minority — proportional quota = 0
+    y = np.array([0] * 999 + [1] * 1)
+    result = _subsample_rows_stratified(
+        subsample_size=100,
+        y=y,
+        num_estimators=10,
+        rng=rng,
+    )
+    assert result is not None
+    for indices in result:
+        assert len(indices) == 100
+        assert 1 in set(y[indices]), "minority class must appear in every estimator"
+
+
+def test__subsample_rows_stratified__balanced_coverage():
+    """Each row appears approximately the same number of times across estimators."""
+    rng = np.random.default_rng(2)
+    # Balanced 2-class dataset.
+    n_per_class = 50
+    y = np.array([0] * n_per_class + [1] * n_per_class)
+    subsample_size = 20  # 10 per class
+    num_estimators = 10  # 10 * 10 = 100 draws per class, 100/50 = 2 per row
+
+    result = _subsample_rows_stratified(
+        subsample_size=subsample_size,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    n_rows = len(y)
+    counts = np.bincount(np.concatenate(result), minlength=n_rows)
+    # Each row should appear approximately 2 times; allow ±1 for pool boundary effects.
+    assert counts.min() >= 1
+    assert counts.max() <= 3
+
+
+def test__get_subsample_indices_for_estimators__stratified_dispatch():
+    """When y is provided, stratified sampling preserves class proportions."""
+    rng = np.random.default_rng(3)
+    y = np.array([0] * 80 + [1] * 20)
+    n_samples = len(y)
+    subsample_size = 40
+    num_estimators = 6
+
+    # int subsample_samples
+    result = _get_subsample_indices_for_estimators(
+        subsample_samples=subsample_size,
+        num_estimators=num_estimators,
+        n_samples=n_samples,
+        rng=rng,
+        y_for_stratification=y,
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    for indices in result:
+        assert len(indices) == subsample_size
+        counts = np.bincount(y[indices], minlength=2)
+        # Natural proportions: 80% class 0, 20% class 1. Allow ±10% tolerance.
+        assert abs(counts[0] / subsample_size - 0.8) <= 0.1
+        assert abs(counts[1] / subsample_size - 0.2) <= 0.1
+
+    # float subsample_samples
+    result_float = _get_subsample_indices_for_estimators(
+        subsample_samples=0.4,
+        num_estimators=num_estimators,
+        n_samples=n_samples,
+        rng=np.random.default_rng(4),
+        y_for_stratification=y,
+    )
+    assert result_float is not None
+    expected_size = int(0.4 * n_samples) + 1  # 41
+    for indices in result_float:
+        assert len(indices) == expected_size
+        counts = np.bincount(y[indices], minlength=2)
+        assert abs(counts[0] / expected_size - 0.8) <= 0.1
+        assert abs(counts[1] / expected_size - 0.2) <= 0.1
 
 
 # --- Feature importance subsampling tests ---
