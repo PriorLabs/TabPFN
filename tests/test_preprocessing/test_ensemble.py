@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import warnings
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -22,6 +23,7 @@ from tabpfn.preprocessing.ensemble import (
     _resolve_feature_subsampling_method,
     _resolve_importance_top_k,
     _subsample_features_importance_based,
+    scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.torch import FeatureSchema
 
@@ -838,6 +840,45 @@ def test__resolve_feature_subsampling_method__auto_no_subsampling_needed():
         auto_min_samples=100_000,
     )
     assert result is FeatureSubsamplingMethod.BALANCED
+
+
+def test_scale_n_estimators_for_feature_coverage__no_scaling_when_enough_capacity():
+    """At capacity (n_estimators * max_features == n_features): no scaling, no warning."""  # noqa: E501
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=8,
+            n_total_features=4000,  # exactly 8 * 500
+            preprocessor_configs=[cfg],
+        )
+    assert result == 8
+
+
+def test_scale_n_estimators_for_feature_coverage__scales_up_and_warns():
+    """Over capacity: scales to ceil(n_features / max_features) and warns."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with pytest.warns(UserWarning, match="Auto-scaling n_estimators"):
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=8,
+            n_total_features=5001,  # non-divisible: also exercises ceil rounding
+            preprocessor_configs=[cfg],
+        )
+    assert result == 11  # ceil(5001 / 500)
+
+
+def test_scale_n_estimators_for_feature_coverage__uses_min_max_features_across_configs():  # noqa: E501
+    """The smallest max_features_per_estimator across configs is the binding budget."""
+    small = PreprocessorConfig("none", max_features_per_estimator=500)
+    large = PreprocessorConfig("none", max_features_per_estimator=1_000_000)
+    with pytest.warns(UserWarning):  # noqa: PT030
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=2,
+            n_total_features=4000,
+            preprocessor_configs=[small, large],
+        )
+    # Bound by min budget (500): ceil(4000 / 500) = 8.
+    assert result == 8
 
 
 @skip_on_macos

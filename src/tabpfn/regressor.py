@@ -71,7 +71,10 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
-from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.ensemble import (
+    TabPFNEnsemblePreprocessor,
+    scale_n_estimators_for_feature_coverage,
+)
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -699,12 +702,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 preprocessor = None
             target_preprocessors.append(preprocessor)
 
+        preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
+        self.n_estimators_ = scale_n_estimators_for_feature_coverage(
+            n_estimators=self.n_estimators,
+            n_total_features=feature_schema.num_columns,
+            preprocessor_configs=preprocessor_configs,
+        )
         ensemble_configs = generate_regression_ensemble_configs(
-            num_estimators=self.n_estimators,
+            num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
-            preprocessor_configs=self.inference_config_.PREPROCESS_TRANSFORMS,
+            preprocessor_configs=preprocessor_configs,
             target_transforms=target_preprocessors,
             random_state=random_state,
             num_models=len(self.models_),
@@ -715,7 +724,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
 
-        assert len(ensemble_configs) == self.n_estimators
+        assert len(ensemble_configs) == self.n_estimators_
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
 
@@ -821,7 +830,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.znorm_space_bardist_ = znorm_space_bardist
         self.ensemble_configs_ = ensemble_configs
 
-        assert len(ensemble_configs) == self.n_estimators
+        assert len(ensemble_configs) == self.n_estimators_
 
         self.is_constant_target_ = np.unique(y).size == 1
         self.constant_value_ = y[0] if self.is_constant_target_ else None
@@ -997,7 +1006,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         with handle_oom_errors(self.devices_, X, model_type="regressor"):
             for borders_t, output in tqdm(
                 self._iter_forward_executor(X, use_inference_mode=True),
-                total=self.n_estimators,
+                total=self.n_estimators_,
                 desc="TabPFN inference",
                 unit="estimator",
                 disable=not self.show_progress_bar,
@@ -1198,7 +1207,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         for border, output in tqdm(
             self._iter_forward_executor(X, use_inference_mode=use_inference_mode),
-            total=self.n_estimators,
+            total=self.n_estimators_,
             desc="TabPFN inference",
             unit="estimator",
             disable=not self.show_progress_bar,

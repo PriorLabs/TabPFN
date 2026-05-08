@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import warnings
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
@@ -1060,3 +1061,38 @@ def _resolve_feature_subsampling_method(
     if needs_subsampling and n_samples > auto_min_samples:
         return FeatureSubsamplingMethod.GINI_FEATURE_IMPORTANCE
     return FeatureSubsamplingMethod.BALANCED
+
+
+def scale_n_estimators_for_feature_coverage(
+    *,
+    n_estimators: int,
+    n_total_features: int,
+    preprocessor_configs: Sequence[PreprocessorConfig],
+) -> int:
+    """Scale up n_estimators so every feature is included in at least one estimator.
+
+    With balanced feature subsampling each estimator sees at most
+    ``max_features_per_estimator`` features. If
+    ``n_estimators * max_features_per_estimator < n_total_features`` some features
+    are never sampled. Returns the smallest n_estimators that covers all features
+    (using the smallest ``max_features_per_estimator`` across the supplied configs,
+    which is the binding budget).
+    """
+    if not preprocessor_configs:
+        return n_estimators
+    min_max_features = min(c.max_features_per_estimator for c in preprocessor_configs)
+    if min_max_features <= 0:
+        return n_estimators
+    min_required = math.ceil(n_total_features / min_max_features)
+    if n_estimators >= min_required:
+        return n_estimators
+    warnings.warn(
+        f"Auto-scaling n_estimators from {n_estimators} to {min_required} so "
+        f"every feature is included in at least one ensemble member "
+        f"(n_total_features={n_total_features}, "
+        f"max_features_per_estimator={min_max_features}). "
+        f"Pass n_estimators explicitly to override.",
+        UserWarning,
+        stacklevel=2,
+    )
+    return min_required
