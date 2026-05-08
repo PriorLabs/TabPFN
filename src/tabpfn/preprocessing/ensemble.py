@@ -1202,7 +1202,7 @@ def scale_n_estimators_for_feature_coverage(
         f"every feature is included in at least one ensemble member "
         f"(n_total_features={n_total_features}, "
         f"max_features_per_estimator={min_max_features}). "
-        f"Pass n_estimators explicitly to override.",
+        f"Pass n_estimators >= {min_required} to silence this warning.",
         UserWarning,
         stacklevel=2,
     )

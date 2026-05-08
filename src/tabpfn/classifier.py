@@ -894,6 +894,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
+        self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
@@ -944,6 +945,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
+            self.n_estimators_ = len(ensemble_configs)
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,

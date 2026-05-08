@@ -776,6 +776,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
+        self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
