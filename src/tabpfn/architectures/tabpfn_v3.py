@@ -408,11 +408,7 @@ class ManyClassDecoder(nn.Module):
         """Perform a forward pass."""
         B, M, _ = test_embeddings.shape
         q_BME = self.q_projection(test_embeddings)
-        # Defensive: align cached train_embeddings dtype with the current
-        # q_projection output so a cache reused across precision contexts
-        # (e.g. via attribute mutation or external cache transport) doesn't
-        # error on a Linear dtype mismatch. Mirrors the guard in
-        # ICLAttention's cached path.
+        # Mirrors the dtype guard in ICLAttention's cached path.
         if train_embeddings.dtype != q_BME.dtype:
             train_embeddings = train_embeddings.to(q_BME.dtype)
         k_BNE = self.k_projection(train_embeddings)
