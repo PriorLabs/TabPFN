@@ -30,7 +30,7 @@ import logging as _logging
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, cast
 from typing_extensions import override
 
 import numpy as np
@@ -44,6 +44,7 @@ from torch.nn.attention import SDPBackend, sdpa_kernel
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
+    AttentionBackend,
     PerformanceOptions,
 )
 from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
@@ -270,9 +271,6 @@ _SDPA_BACKENDS = [
     SDPBackend.CUDNN_ATTENTION,
 ]
 _SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS, SDPBackend.MATH]
-
-
-AttentionBackend = Literal["auto", "sdpa", "fa3"]
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +643,7 @@ def _batched_scaled_dot_product_attention(
     softmax_scaling_layer: nn.Module | None = None,
     _backends_override: list[SDPBackend] | None = None,
     *,
-    attention_backend: AttentionBackend = "sdpa",
+    attention_backend: AttentionBackend = AttentionBackend.SDPA,
 ) -> torch.Tensor:
     """Scaled dot-product attention chunked over the batch dimension.
 
@@ -654,19 +652,23 @@ def _batched_scaled_dot_product_attention(
 
     ``attention_backend``:
 
-    - ``"auto"``: use FA3 if eligible (Hopper, fp16/bf16, supported head_dim,
-      FA3 importable) AND :func:`is_fa3_preferred_for` is True; else SDPA.
-    - ``"sdpa"`` (default): always SDPA.
-    - ``"fa3"``: force FA3; raise if ineligible (bypasses seqlen threshold).
+    - :attr:`AttentionBackend.AUTO`: use FA3 if eligible (Hopper, fp16/bf16,
+      supported head_dim, FA3 importable) AND :func:`is_fa3_preferred_for` is
+      True; else SDPA.
+    - :attr:`AttentionBackend.SDPA` (default): always SDPA.
+    - :attr:`AttentionBackend.FA3`: force FA3; raise if ineligible (bypasses
+      seqlen threshold).
     """
-    if attention_backend == "fa3":
+    if attention_backend == AttentionBackend.FA3:
         if not is_fa3_eligible_for(q_BSHD):
             raise RuntimeError(
-                "attention_backend='fa3' was requested but FA3 is not "
-                f"eligible for this call: {fa3_unavailable_reason(q_BSHD)}"
+                "AttentionBackend.FA3 was requested but FA3 is not eligible "
+                f"for this call: {fa3_unavailable_reason(q_BSHD)}"
             )
         return _fa3_attention(q_BSHD, k_BSJD, v_BSJD, softmax_scaling_layer)
-    if attention_backend == "auto" and is_fa3_preferred_for(q_BSHD, k_BSJD):
+    if attention_backend == AttentionBackend.AUTO and is_fa3_preferred_for(
+        q_BSHD, k_BSJD
+    ):
         return _fa3_attention(q_BSHD, k_BSJD, v_BSJD, softmax_scaling_layer)
 
     q_BHSD = q_BSHD.permute(0, 2, 1, 3)
@@ -744,10 +746,8 @@ def _fa3_attention(
         q_BHSD = q_BSHD.permute(0, 2, 1, 3)
         src_len = k_BSJD.shape[1]
         q_BHSD = softmax_scaling_layer(q_BHSD, src_len)
-        q_BSHD = q_BHSD.permute(0, 2, 1, 3).contiguous()
-    else:
-        q_BSHD = q_BSHD.contiguous()
-    return fa3_attn_func(q_BSHD, k_BSJD.contiguous(), v_BSJD.contiguous())
+        q_BSHD = q_BHSD.permute(0, 2, 1, 3)
+    return fa3_attn_func(q_BSHD.contiguous(), k_BSJD.contiguous(), v_BSJD.contiguous())
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +904,7 @@ class ICLAttention(nn.Module):
         *,
         cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
-        attention_backend: AttentionBackend = "sdpa",
+        attention_backend: AttentionBackend = AttentionBackend.SDPA,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Self-attention where k/v are restricted to train rows.
 
@@ -1191,7 +1191,7 @@ class ICLTransformerBlock(nn.Module):
         *,
         cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
-        attention_backend: AttentionBackend = "sdpa",
+        attention_backend: AttentionBackend = AttentionBackend.SDPA,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass with optional KV cache support.
 

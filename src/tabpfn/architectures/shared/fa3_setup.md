@@ -1,14 +1,15 @@
 # FlashAttention-3 (Hopper) backend
 
 TabPFN v3 can dispatch attention to FlashAttention-3 instead of PyTorch's
-SDPA. FA3 is expected to be meaningfully faster on Hopper-class GPUs
-(H100, H200): an externally contributed micro-benchmark on v2.5 attention
-shapes reported ~1.5–1.7× over SDPA (we plan to re-run this internally
-before citing in the v3 model report). v3 numbers will land alongside the
-v3 report itself.
+SDPA. On Hopper-class GPUs (H100, H200), FA3 outperforms SDPA above a
+sequence-length crossover empirically measured on v3 ICL self-attention —
+see the comment on `_FA3_MIN_SEQLEN_FOR_SPEEDUP` in `fa3_backend.py` (next
+to this file) for the measured numbers and the [auto-mode threshold
+section](#auto-also-applies-a-sequence-length-threshold) below for how the
+constant is applied at dispatch time.
 
-This is **opt-in**. Default is `attention_backend="auto"`, which uses FA3
-when eligible and SDPA otherwise.
+This is **opt-in**. Default is `AttentionBackend.AUTO`, which uses FA3 when
+eligible and SDPA otherwise.
 
 ## When FA3 is used
 
@@ -104,22 +105,24 @@ later H100 nodes can `pip install` directly without rebuilding.
 
 ## Selecting the backend
 
-Pass `attention_backend` via `PerformanceOptions`:
+Pass `attention_backend` via `PerformanceOptions`. The
+`AttentionBackend` enum is a `str`-mixin, so the bare strings `"auto"`,
+`"sdpa"` and `"fa3"` are also accepted.
 
 ```python
-from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures.interface import AttentionBackend, PerformanceOptions
 
 # Auto: FA3 if eligible, SDPA otherwise (recommended)
-options = PerformanceOptions(attention_backend="auto")
+options = PerformanceOptions(attention_backend=AttentionBackend.AUTO)
 
 # Force SDPA — useful for A/B comparison
-options = PerformanceOptions(attention_backend="sdpa")
+options = PerformanceOptions(attention_backend=AttentionBackend.SDPA)
 
 # Force FA3 — raises RuntimeError if ineligible. Bypasses the
 # auto-mode seqlen threshold, so FA3 will run even at small shapes
 # where SDPA would win — useful for A/B comparison and for users
 # who know their workload sits above the crossover anyway.
-options = PerformanceOptions(attention_backend="fa3")
+options = PerformanceOptions(attention_backend=AttentionBackend.FA3)
 
 model(x, y, performance_options=options)
 ```

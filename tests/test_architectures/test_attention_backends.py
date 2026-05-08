@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tabpfn.architectures.interface import AttentionBackend
 from tabpfn.architectures.shared import fa3_backend
 from tabpfn.architectures.shared.fa3_backend import (
     is_fa3_eligible_for,
@@ -75,14 +76,23 @@ def test__sdpa_backend_default_path_unchanged_when_fa3_unavailable() -> None:
         dtype=torch.float32,
     )
 
-    out_auto = _batched_scaled_dot_product_attention(q, k, v, attention_backend="auto")
-    out_sdpa = _batched_scaled_dot_product_attention(q, k, v, attention_backend="sdpa")
+    out_auto = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.AUTO
+    )
+    out_sdpa = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.SDPA
+    )
+    # The enum is a ``str``-mixin, so passing the bare string should also work.
+    out_sdpa_str = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend="sdpa"
+    )
 
     torch.testing.assert_close(out_auto, out_sdpa)
+    torch.testing.assert_close(out_sdpa, out_sdpa_str)
 
 
 def test__forced_fa3_raises_with_actionable_message_when_ineligible() -> None:
-    """Forced 'fa3' on CPU/non-Hopper raises a clear error, not a silent fallback."""
+    """Forced FA3 on CPU/non-Hopper raises a clear error, not a silent fallback."""
     q, k, v = _make_qkv(
         batch=1,
         seq_q=4,
@@ -95,7 +105,9 @@ def test__forced_fa3_raises_with_actionable_message_when_ineligible() -> None:
     )
 
     with pytest.raises(RuntimeError, match="FA3"):
-        _batched_scaled_dot_product_attention(q, k, v, attention_backend="fa3")
+        _batched_scaled_dot_product_attention(
+            q, k, v, attention_backend=AttentionBackend.FA3
+        )
 
 
 def test__eligibility_rejects_unsupported_head_dim() -> None:
@@ -161,8 +173,12 @@ def test__fa3_batch_heads_above_cuda_max_grid() -> None:
     k = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
     v = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
 
-    out_sdpa = _batched_scaled_dot_product_attention(q, k, v, attention_backend="sdpa")
-    out_fa3 = _batched_scaled_dot_product_attention(q, k, v, attention_backend="fa3")
+    out_sdpa = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.SDPA
+    )
+    out_fa3 = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.FA3
+    )
 
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)
 
@@ -199,8 +215,12 @@ def test__fa3_matches_sdpa_within_tolerance(
         dtype=dtype,
     )
 
-    out_sdpa = _batched_scaled_dot_product_attention(q, k, v, attention_backend="sdpa")
-    out_fa3 = _batched_scaled_dot_product_attention(q, k, v, attention_backend="fa3")
+    out_sdpa = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.SDPA
+    )
+    out_fa3 = _batched_scaled_dot_product_attention(
+        q, k, v, attention_backend=AttentionBackend.FA3
+    )
 
     # 5e-3 abs matches the contributor's test_fa3.py for the same shapes.
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)
