@@ -107,6 +107,21 @@ class PerformanceOptions:
     compile and autotune will be run. Tuning results are cached, so should
     persist across runs."""
 
+    attention_backend: Literal["auto", "sdpa", "fa3"] = "auto"
+    """Attention kernel selection.
+
+    - ``"auto"`` (default): prefer FlashAttention-3 when the call is eligible
+      (Hopper GPU, fp16/bf16, supported head_dim, FA3 package importable);
+      otherwise fall back to PyTorch SDPA with the standard backend list.
+    - ``"sdpa"``: always use PyTorch SDPA — same behaviour as before this option
+      existed.
+    - ``"fa3"``: force FA3. Raises ``RuntimeError`` if FA3 is not eligible for
+      a given call (e.g. wrong GPU class, head_dim, or dtype). Use only when
+      benchmarking FA3 specifically.
+
+    Architectures that don't support FA3 ignore this option silently.
+    """
+
 
 class ArchitectureModule(Protocol):
     """Interface that modules containing model architectures should implement."""
