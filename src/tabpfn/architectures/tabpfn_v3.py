@@ -926,8 +926,11 @@ class ICLAttention(nn.Module):
             k_cache, v_cache = k, v
             if self.num_kv_heads_test is not None:
                 nh_test_heads = self.num_kv_heads_test
-                k_cache = k_cache[:, :, :nh_test_heads]
-                v_cache = v_cache[:, :, :nh_test_heads]
+                # .contiguous() so the kept slice owns its storage and the
+                # full-projection backing tensor can be freed; otherwise the
+                # cache silently retains all KV heads via the slice view.
+                k_cache = k_cache[:, :, :nh_test_heads].contiguous()
+                v_cache = v_cache[:, :, :nh_test_heads].contiguous()
             kv_entry = KVCacheEntry(key=k_cache.detach(), value=v_cache.detach())
         return result, kv_entry
 
