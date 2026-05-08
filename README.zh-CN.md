@@ -314,7 +314,7 @@ reg_cpu = load_fitted_tabpfn_model("my_reg.tabpfn_fit", device="cpu")
 <details>
 <summary>每个 TabPFN-2.5 检查点的更多详细信息</summary>
 
-我们在在真实数据集上微调的检查点前添加 🌍 表情符号。请参阅 [TabPFN-2.5 论文](https://arxiv.org/abs/2511.08667) 获取 43 个数据集的列表。
+我们在真实数据集上微调的检查点前添加 🌍 表情符号。请参阅 [TabPFN-2.5 论文](https://arxiv.org/abs/2511.08667) 获取 43 个数据集的列表。我们在真实数据集上微调的检查点前添加 🌍 表情符号。请参阅 [TabPFN-2.5 论文](https://arxiv.org/abs/2511.08667) 获取 43 个数据集的列表。我们在真实数据集上微调的检查点前添加 🌍 表情符号。请参阅 [TabPFN-2.5 论文](https://arxiv.org/abs/2511.08667) 获取 43 个数据集的列表。
 
 - `tabpfn-v2.5-classifier-v2.5_default.ckpt` 🌍：默认分类检查点，在真实数据上微调。
 - `tabpfn-v2.5-classifier-v2.5_default-2.ckpt`：最佳分类合成检查点。使用此检查点获取不带真实数据微调的默认 TabPFN-2.5 分类模型。
