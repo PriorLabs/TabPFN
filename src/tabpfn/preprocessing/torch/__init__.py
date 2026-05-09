@@ -17,10 +17,12 @@ from .steps import (
     TorchSelectiveQuantileTransformerStep,
     TorchShuffleFeaturesStep,
     TorchSoftClipOutliersStep,
+    TorchSquashingScalerStep,
     TorchStandardScalerStep,
 )
 from .torch_quantile_transformer import TorchQuantileTransformer
 from .torch_soft_clip_outliers import TorchSoftClipOutliers
+from .torch_squashing_scaler import TorchSquashingScaler
 from .torch_standard_scaler import TorchStandardScaler
 
 __all__ = [
@@ -36,6 +38,8 @@ __all__ = [
     "TorchShuffleFeaturesStep",
     "TorchSoftClipOutliers",
     "TorchSoftClipOutliersStep",
+    "TorchSquashingScaler",
+    "TorchSquashingScalerStep",
     "TorchStandardScaler",
     "TorchStandardScalerStep",
     "create_gpu_preprocessing_pipeline",
