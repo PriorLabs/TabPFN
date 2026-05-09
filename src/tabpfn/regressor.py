@@ -670,8 +670,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.n_train_samples_ = int(X.shape[0])
 
-        y_float = y.float() if isinstance(y, torch.Tensor) else torch.as_tensor(
-            y, dtype=torch.float32
+        y_float = (
+            y.float()
+            if isinstance(y, torch.Tensor)
+            else torch.as_tensor(y, dtype=torch.float32)
         )
         y_mean = y_float.mean()
         # Match the standard fit path's np.std (population std, ddof=0).
@@ -916,9 +918,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @track_model_call(model_method="fit", param_names=["X", "y"])
-    def fit_with_differentiable_input(
-        self, X: torch.Tensor, y: torch.Tensor
-    ) -> Self:
+    def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
 
         Mirror of ``TabPFNClassifier.fit_with_differentiable_input``. Lets
