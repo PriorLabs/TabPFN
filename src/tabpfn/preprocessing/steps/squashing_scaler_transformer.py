@@ -92,10 +92,10 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
     max_absolute_value : float, default=3.0
         Maximum absolute value that the transformed data can take.
 
-    quantile_range : tuple of float, default=(0.25, 0.75)
-        The quantiles used to compute the scaling factor. The first value is the lower
-        quantile and the second value is the upper quantile. The default values are the
-        25th and 75th percentiles, respectively. The quantiles are used to compute the
+    quantile_range : tuple of float, default=(25.0, 75.0)
+        The quantiles (on a 0-100 scale) used to compute the scaling factor. The first
+        value is the lower quantile and the second value is the upper quantile. The
+        default values are the 25th and 75th percentiles, respectively. The quantiles are used to compute the
         scaling factor for the robust scaling step. The quantiles are computed from the
         finite values in the input column. If the two quantiles are equal, the scaling
         factor is computed from the 0th and 100th percentiles (i.e., the minimum and
@@ -260,7 +260,7 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
         minmax_cols = (q_lower == q_upper) & ~zero_cols
         robust_cols = ~(minmax_cols | zero_cols)
 
-        eps = np.finfo("float32").tiny
+        eps = np.finfo(X.dtype).tiny
         self.robust_center_ = q_median[robust_cols]
         self.robust_scale_ = q_upper[robust_cols] - q_lower[robust_cols]
         self.minmax_center_ = q_median[minmax_cols]

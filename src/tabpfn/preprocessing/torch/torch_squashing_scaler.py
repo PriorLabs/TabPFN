@@ -41,12 +41,12 @@ class TorchSquashingScaler:
     def __init__(
         self,
         max_absolute_value: float = 3.0,
-        quantile_range: tuple[float, float] = (0.25, 0.75),
+        quantile_range: tuple[float, float] = (25.0, 75.0),
     ) -> None:
         super().__init__()
-        if not (0.0 <= quantile_range[0] < quantile_range[1] <= 1.0):
+        if not (0.0 <= quantile_range[0] < quantile_range[1] <= 100.0):
             raise ValueError(
-                "quantile_range must satisfy 0 <= lower < upper <= 1, got "
+                "quantile_range must satisfy 0 <= lower < upper <= 100, got "
                 f"{quantile_range!r}.",
             )
         if not (max_absolute_value > 0):
@@ -105,7 +105,11 @@ class TorchSquashingScaler:
         col_max = torch.where(all_nan, torch.full_like(col_max, float("nan")), col_max)
 
         lower_q, upper_q = self.quantile_range
-        qs = torch.tensor([lower_q, 0.5, upper_q], device=device, dtype=x_finite.dtype)
+        qs = torch.tensor(
+            [lower_q / 100.0, 0.5, upper_q / 100.0],
+            device=device,
+            dtype=x_finite.dtype,
+        )
         quantiles = torch.nanquantile(x_finite, qs, dim=0)
         q_lower, q_median, q_upper = quantiles[0], quantiles[1], quantiles[2]
 
@@ -113,7 +117,7 @@ class TorchSquashingScaler:
         minmax_mask = (q_lower == q_upper) & ~zero_mask
         robust_mask = ~(zero_mask | minmax_mask)
 
-        eps = torch.finfo(torch.float32).tiny
+        eps = torch.finfo(dtype).tiny
         center = torch.zeros(feature_shape, device=device, dtype=dtype)
         scale = torch.ones(feature_shape, device=device, dtype=dtype)
 

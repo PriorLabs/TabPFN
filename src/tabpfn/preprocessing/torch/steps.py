@@ -87,7 +87,7 @@ class TorchSquashingScalerStep(TorchPreprocessingStep):
     def __init__(
         self,
         max_absolute_value: float = 3.0,
-        quantile_range: tuple[float, float] = (0.25, 0.75),
+        quantile_range: tuple[float, float] = (25.0, 75.0),
     ) -> None:
         """Initialize the squashing scaler step."""
         super().__init__()
