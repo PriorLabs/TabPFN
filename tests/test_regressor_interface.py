@@ -1007,9 +1007,7 @@ def test__fit_with_differentiable_input__grad_flows_to_upstream_module(
     )
     reg.fit_with_differentiable_input(X_train, y_train)
 
-    averaged_logits, _outputs, borders = reg.forward(
-        X_test, use_inference_mode=True
-    )
+    averaged_logits, _outputs, borders = reg.forward(X_test, use_inference_mode=True)
 
     # averaged_logits is [N_borders, N_samples] after the transpose in
     # forward(); reduce to a scalar per sample via softmax over bin centers.
