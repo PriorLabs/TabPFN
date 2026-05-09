@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Torch implementation of StandardScaler with NaN handling."""
 
 from __future__ import annotations

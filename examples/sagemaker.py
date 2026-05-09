@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Invoke a TabPFN 2.5 model via a SageMaker Runtime endpoint.
 
 This module demonstrates how to:

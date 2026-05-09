@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from importlib.metadata import version
 
 from tabpfn.classifier import TabPFNClassifier

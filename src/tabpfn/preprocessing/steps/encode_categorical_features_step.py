@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encode Categorical Features Step."""
 
 from __future__ import annotations

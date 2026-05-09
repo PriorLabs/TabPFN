@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from __future__ import annotations
 
 import pytest
@@ -70,5 +72,5 @@ def test_average_bar_distributions_into_different_one():
     ).item() == pytest.approx(1.0)
     pos = torch.tensor([new_small_d.borders[-2]])
     assert new_small_d.cdf(new_small_logits, pos).item() == pytest.approx(
-        sum([bd.cdf(lo, pos)[0].item() for bd, lo in zip(bar_dists, logits)]) / 4
+        sum(bd.cdf(lo, pos)[0].item() for bd, lo in zip(bar_dists, logits)) / 4
     )

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module for validation logic.
 
 This includes input validation with sklearn's methods,

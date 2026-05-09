@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Remove Constant Features Step."""
 
 from __future__ import annotations

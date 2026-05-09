@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Check that the current output of the model matches reference predictions.
 
 This ensures that the output of a model does not change once it has been released, and

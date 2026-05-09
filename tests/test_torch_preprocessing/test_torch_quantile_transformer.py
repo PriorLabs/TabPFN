@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for TorchQuantileTransformer."""
 
 from __future__ import annotations

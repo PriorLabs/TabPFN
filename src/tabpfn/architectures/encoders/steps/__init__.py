@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from .feature_group_projections_encoder_step import (
     LinearInputEncoderStep,
     MLPInputEncoderStep,

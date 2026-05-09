@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to normalize the input in different ways."""
 
 from __future__ import annotations

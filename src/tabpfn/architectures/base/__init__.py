@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """The base architecture.
 
 This is the original model before we switched to the multiple architecture arrangement.
@@ -215,7 +217,7 @@ def get_y_encoder(
 
     steps += [
         LinearInputEncoderStep(
-            num_features=sum([i["dim"] for i in inputs_to_merge]),  # type: ignore
+            num_features=sum(i["dim"] for i in inputs_to_merge),  # type: ignore
             emsize=embedding_size,
             in_keys=tuple(i["name"] for i in inputs_to_merge),  # type: ignore
             out_keys=("output",),

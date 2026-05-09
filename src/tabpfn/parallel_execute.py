@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Parallel evaluation of a set of functions across multiple PyTorch devices."""
 
 from __future__ import annotations

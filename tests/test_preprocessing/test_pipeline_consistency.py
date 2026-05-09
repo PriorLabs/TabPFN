@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Check that preprocessing pipeline output matches reference transformations.
 
 This ensures that the preprocessing behavior does not change unintentionally

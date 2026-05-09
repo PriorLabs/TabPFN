@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for TorchTruncatedSVD, TorchSafeStandardScaler, and AddSVDFeaturesStep."""
 
 from __future__ import annotations

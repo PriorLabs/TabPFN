@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Contains a collection of different model architectures.
 
 "Architecture" refers to a PyTorch module, which is then wrapped by e.g.

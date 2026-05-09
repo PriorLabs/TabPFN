@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Utility functions for preprocessing steps."""
 
 from __future__ import annotations

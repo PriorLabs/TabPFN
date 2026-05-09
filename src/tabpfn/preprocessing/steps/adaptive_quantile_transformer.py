@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Adaptive Quantile Transformer."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Torch operations for preprocessing with NaN handling."""
 
 from __future__ import annotations

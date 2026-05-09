@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Function for evaluating a function on a Tensor in chunks.
 
 This reduces the memory required for inference.

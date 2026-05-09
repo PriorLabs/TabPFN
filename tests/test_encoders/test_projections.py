@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the projections from cell-level tensors to embedding space."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the finetuning experiment logging module."""
 
 from __future__ import annotations

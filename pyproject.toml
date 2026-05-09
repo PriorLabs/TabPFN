@@ -106,7 +106,8 @@ log_level = "DEBUG"
 xfail_strict = true
 addopts = "--durations=10 -vv"
 markers = [
-    "slow: slow tests that we run only on merge, rather than in PRs"
+    "slow: slow tests that we run only on merge, rather than in PRs",
+    "hopper: tests requiring a Hopper-class GPU (sm90+) and the flash_attn_interface package; skipped automatically elsewhere",
 ]
 
 # https://github.com/charliermarsh/ruff
@@ -127,6 +128,12 @@ extend-exclude = [
 # time on established project.
 extend-safe-fixes = ["ALL"]
 
+# Enable preview mode but only opt-in to preview rules we explicitly select
+# (currently: CPY001 from flake8-copyright). Without this, `CPY001` is silently
+# ignored by ruff.
+preview = true
+explicit-preview-rules = true
+
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
@@ -137,6 +144,7 @@ select = [
   "B",
   "BLE",
   "COM",
+  "CPY001", # flake8-copyright (preview rule; selected by exact code)
   "C4",
   "D",
   # "DTZ",  # One day I should know how to utilize timezones and dates...
@@ -229,10 +237,21 @@ exclude = [
   "**/*.ipynb",
 ]
 
+[tool.ruff.lint.flake8-copyright]
+# All files must carry a Prior Labs copyright header. Convention is:
+#   #  Copyright (c) Prior Labs GmbH <YEAR>.
+# The year is the year the file was first authored — it is not auto-rewritten
+
+notice-rgx = '(?i)Copyright \(c\)'
+author = "Prior Labs GmbH"
+
 [tool.ruff.lint.per-file-ignores]
 # These files are copied without changes from extenal repositories, so ignore all rules.
 "src/tabpfn/misc/debug_versions.py" = ["ALL"]
 "src/tabpfn/misc/_sklearn_compat.py" = ["ALL"]
+
+# Open-source / externally-attributed code: do NOT add a Prior Labs copyright header.
+"src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py" = ["CPY001"]
 
 "tests/*.py" = [
   "S101",

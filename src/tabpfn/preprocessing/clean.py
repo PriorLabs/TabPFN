@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module for cleaning the data.
 
 These cleaning steps are performed before further preprocessing,

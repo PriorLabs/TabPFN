@@ -510,9 +510,9 @@ def pad_tensors(
             tensors that are padded only along this dimension.
             If false, rows and feature dimensions are padded.
     """
-    max_size_clms = max([item.size(-1) for item in tensor_list])
+    max_size_clms = max(item.size(-1) for item in tensor_list)
     if not labels:
-        max_size_rows = max([item.size(-2) for item in tensor_list])
+        max_size_rows = max(item.size(-2) for item in tensor_list)
     ret_list = []
     for item in tensor_list:
         pad_seqence = [0, max_size_clms - item.size(-1)]

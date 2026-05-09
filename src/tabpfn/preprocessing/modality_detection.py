@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module to infer feature modalities: numerical, categorical, text, etc."""
 
 from __future__ import annotations

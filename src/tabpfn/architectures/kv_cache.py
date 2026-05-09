@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """KV cache data structures for explicit cache passing through architectures.
 
 Provides cache containers for storing key-value projections from attention

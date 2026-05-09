@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from .adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
 )

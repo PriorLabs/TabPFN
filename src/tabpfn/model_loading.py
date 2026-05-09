@@ -1080,6 +1080,7 @@ def save_tabpfn_model(
         znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
 
     configs = model.configs_
+    inference_config = getattr(model, "inference_config_", None)
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 
     for ens_model, config, path in zip(
@@ -1104,6 +1105,8 @@ def save_tabpfn_model(
             "architecture_name": architecture_name,
             "inference_config": asdict(model.inference_config_),
         }
+        if inference_config is not None:
+            checkpoint["inference_config"] = asdict(inference_config)
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)

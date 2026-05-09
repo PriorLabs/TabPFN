@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to encode multiclass classification targets."""
 
 from __future__ import annotations
