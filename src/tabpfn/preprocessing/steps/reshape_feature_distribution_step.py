@@ -27,6 +27,7 @@ from tabpfn.preprocessing.datamodel import (
 )
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
+    PreprocessingStepResult,
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
@@ -286,7 +287,43 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.transformer_ is not None, "You must call fit first"
-        return self.transformer_.transform(X), None, None  # type: ignore
+        return self.transformer_.transform(X), None, None
+
+    @override
+    def fit_transform(
+        self,
+        X: np.ndarray,
+        feature_schema: FeatureSchema,
+    ) -> PreprocessingStepResult:
+        # The default base-class implementation calls ``_fit`` then
+        # ``_transform``. ``_fit`` here calls ``ColumnTransformer.fit(X)``,
+        # whose sklearn implementation runs ``fit_transform(X)`` internally and
+        # discards the result. ``_transform`` then runs the transform a second
+        # time. For a 100k x 100 squashing-scaler workload that doubled pass
+        # costs ~675 ms.  Doing the fit and transform in one call avoids it.
+        if hasattr(self, "n_added_columns_"):
+            del self.n_added_columns_
+        if hasattr(self, "modality_added_"):
+            del self.modality_added_
+
+        n_samples, n_features = X.shape
+        transformer, output_schema = self._create_transformers_and_new_schema(
+            n_samples,
+            n_features,
+            feature_schema,
+        )
+        x_transformed = transformer.fit_transform(X)
+        self.transformer_ = transformer
+        self.feature_schema_updated_ = output_schema
+
+        self._validate_added_data(X_added=None, modality_added=None)
+
+        return PreprocessingStepResult(
+            X=x_transformed,
+            feature_schema=output_schema,
+            X_added=None,
+            modality_added=None,
+        )  # type: ignore
 
     def _get_append_to_original_decision(
         self,
