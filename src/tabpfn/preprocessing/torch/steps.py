@@ -237,7 +237,15 @@ class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
     ) -> TorchPreprocessingStepResult:
         """Override to select only target columns for squashing scaler."""
         del column_indices
+        orig_device = x.device
         target_x = x[:, :, self._target_column_indices]
+
+        # The squashing scaler is dominated by torch.nanquantile (sort-based)
+        # plus several small element-wise kernels.  On MPS, per-kernel launch
+        # overhead makes this slower than CPU; on CUDA the GPU is preferred.
+        run_on_cpu = orig_device.type == "mps"
+        if run_on_cpu:
+            target_x = target_x.cpu()
 
         if fitted_cache is None:
             fitted_cache = self._scaler.fit(target_x[:num_train_rows])
@@ -245,6 +253,9 @@ class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
             fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
 
         transformed = self._scaler.transform(target_x, fitted_cache=fitted_cache)
+
+        if run_on_cpu:
+            transformed = transformed.to(orig_device)
 
         x = x.clone()
         x[:, :, self._target_column_indices] = transformed
