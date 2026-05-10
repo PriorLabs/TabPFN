@@ -58,7 +58,8 @@ def create_gpu_preprocessing_pipeline(
 
     if enable_gpu_preprocessing and feature_schema is not None:
         # Quantile transform — target columns are annotated in the schema
-        # by ReshapeFeatureDistributionsStep(schedule_quantile_for_gpu=True).
+        # by ReshapeFeatureDistributionsStep with
+        # schedule_gpu_transform=GPUTransformType.QUANTILE.
         quantile_target_indices = (
             feature_schema.get_indices_marked_for_gpu_quantile_transform()
         )
@@ -76,7 +77,8 @@ def create_gpu_preprocessing_pipeline(
             )
 
         # Squashing scaler — target columns are annotated in the schema
-        # by ReshapeFeatureDistributionsStep(schedule_squashing_scaler_for_gpu=True).
+        # by ReshapeFeatureDistributionsStep with
+        # schedule_gpu_transform=GPUTransformType.SQUASHING_SCALER.
         squashing_scaler_target_indices = (
             feature_schema.get_indices_marked_for_gpu_squashing_scaler_transform()
         )

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
 
+from tabpfn.preprocessing.datamodel import GPUTransformType
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingPipeline,
     PreprocessingStep,
@@ -76,41 +77,23 @@ def create_preprocessing_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
-<<<<<<< HEAD
-    has_svd = (
-        not pconfig.differentiable
-        and pconfig.global_transformer_name is not None
-        and pconfig.global_transformer_name != "None"
-    )
-
-    # Decide whether the quantile transform moves to GPU.
-    # The reshape step still runs on CPU (handling subsampling, categorical
-    # reclassification, append_to_original) but uses "none" (identity) as the
-    # transform so the actual quantile work happens on GPU.
-    # When SVD is configured but stays on CPU, quantile must also stay on CPU
-    # so that SVD sees quantile-transformed data (SVD runs after quantile).
-    # Decide whether the quantile / squashing scaler transform moves to GPU.
-    # The reshape step still runs on CPU (handling categorical reclassification,
-    # append_to_original) but uses "none" (identity) as the transform so the
-    # actual transform work happens on GPU.
-=======
-    # Decide whether the quantile transform moves to GPU. The reshape step
+    # Decide whether the reshape transform moves to GPU. The reshape step
     # still runs on CPU (handling categorical reclassification,
     # append_to_original) but uses "none" (identity) as the transform so the
-    # actual quantile work happens on GPU.
->>>>>>> ben/fix-torch-svd
-    schedule_quantile_for_gpu = enable_gpu_preprocessing and is_gpu_quantile_eligible(
-        pconfig.name
-    )
-    schedule_squashing_scaler_for_gpu = (
-        enable_gpu_preprocessing and is_gpu_squashing_scaler_eligible(pconfig.name)
-    )
-    schedule_for_gpu = schedule_quantile_for_gpu or schedule_squashing_scaler_for_gpu
+    # actual work happens on GPU.
+    schedule_gpu_transform: GPUTransformType | None = None
+    if enable_gpu_preprocessing:
+        if is_gpu_quantile_eligible(pconfig.name):
+            schedule_gpu_transform = GPUTransformType.QUANTILE
+        elif is_gpu_squashing_scaler_eligible(pconfig.name):
+            schedule_gpu_transform = GPUTransformType.SQUASHING_SCALER
 
     if pconfig.differentiable:
         steps.append(DifferentiableZNormStep())
     else:
-        reshape_transform_name = "none" if schedule_for_gpu else pconfig.name
+        reshape_transform_name = (
+            "none" if schedule_gpu_transform is not None else pconfig.name
+        )
         steps.append(
             ReshapeFeatureDistributionsStep(
                 transform_name=reshape_transform_name,
@@ -118,8 +101,7 @@ def create_preprocessing_pipeline(
                 max_features_per_estimator=pconfig.max_features_per_estimator,
                 apply_to_categorical=(pconfig.categorical_name == "numeric"),
                 random_state=random_state,
-                schedule_quantile_for_gpu=schedule_quantile_for_gpu,
-                schedule_squashing_scaler_for_gpu=schedule_squashing_scaler_for_gpu,
+                schedule_gpu_transform=schedule_gpu_transform,
             )
         )
 

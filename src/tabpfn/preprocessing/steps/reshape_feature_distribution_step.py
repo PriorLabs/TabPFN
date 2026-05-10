@@ -136,27 +136,49 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         append_to_original: bool | Literal["auto"] = False,
         max_features_per_estimator: int = 500,
         random_state: int | np.random.Generator | None = None,
-        schedule_quantile_for_gpu: bool = False,
-        schedule_squashing_scaler_for_gpu: bool = False,
+        schedule_gpu_transform: GPUTransformType | None = None,
     ):
+        """Initialize the step.
+
+        Args:
+            transform_name: Key into
+                :func:`get_all_reshape_feature_distribution_preprocessors`
+                selecting the transform to apply (e.g. ``"safepower"``,
+                ``"quantile_uni_coarse"``, ``"squashing_scaler_default"``).
+                Use ``"none"`` to disable the transform itself while still
+                running this step's schema logic (e.g. when the actual
+                transform will run on GPU — see ``schedule_gpu_transform``).
+            apply_to_categorical: If True, the transform is applied to
+                categorical columns as well as numerical ones. If False,
+                categorical columns pass through unchanged.
+            append_to_original: If True, transformed columns are appended to
+                the original columns instead of replacing them. If
+                ``"auto"``, this is decided based on the number of features
+                (see :attr:`APPEND_TO_ORIGINAL_THRESHOLD` and
+                ``max_features_per_estimator``).
+            max_features_per_estimator: Upper bound on the number of
+                features the downstream estimator should see. Used by the
+                ``"auto"`` decision for ``append_to_original``.
+            random_state: Random state used by stochastic transforms (e.g.
+                quantile transformers) and the ``"per_feature"`` random
+                selection.
+            schedule_gpu_transform: When set, marks the output numerical
+                columns with this :class:`GPUTransformType` so the GPU
+                preprocessing pipeline picks them up. The CPU transform
+                itself is not skipped — pass ``transform_name="none"`` to
+                let the GPU side do the actual work.
+        """
         super().__init__()
 
         if max_features_per_estimator <= 0:
             raise ValueError("max_features_per_estimator must be a positive integer.")
-
-        if schedule_quantile_for_gpu and schedule_squashing_scaler_for_gpu:
-            raise ValueError(
-                "schedule_quantile_for_gpu and schedule_squashing_scaler_for_gpu "
-                "are mutually exclusive."
-            )
 
         self.transform_name = transform_name
         self.apply_to_categorical = apply_to_categorical
         self.append_to_original = append_to_original
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
-        self.schedule_quantile_for_gpu = schedule_quantile_for_gpu
-        self.schedule_squashing_scaler_for_gpu = schedule_squashing_scaler_for_gpu
+        self.schedule_gpu_transform = schedule_gpu_transform
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
     def _create_transformers_and_new_schema(
@@ -254,13 +276,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             num_columns=n_output_features,
         )
 
-        gpu_transform_marker: GPUTransformType | None = None
-        if self.schedule_quantile_for_gpu:
-            gpu_transform_marker = GPUTransformType.QUANTILE
-        elif self.schedule_squashing_scaler_for_gpu:
-            gpu_transform_marker = GPUTransformType.SQUASHING_SCALER
-
-        if gpu_transform_marker is not None:
+        if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
                 # Output: [original_all, transformed_copies]
                 # The appended copies are the GPU transform targets.
@@ -275,7 +291,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 new_schema.features[idx] = Feature(
                     name=f.name,
                     modality=f.modality,
-                    scheduled_gpu_transform=gpu_transform_marker,
+                    scheduled_gpu_transform=self.schedule_gpu_transform,
                 )
 
         return transformer, new_schema
