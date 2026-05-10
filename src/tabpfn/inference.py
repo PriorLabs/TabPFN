@@ -1034,7 +1034,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         autocast: bool,
-        keep_cache_on_device: bool = False,
+        keep_cache_on_device: bool = True,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -1054,10 +1054,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             autocast: Whether to use torch.autocast during cache build.
-            keep_cache_on_device: If True, keep each per-estimator KV cache
-                on the device where it was built.  Uses more device memory
-                but avoids CPU↔GPU transfers, giving lower latency.  When
-                False (default), caches are moved to CPU after building and
+            keep_cache_on_device: If True (default), keep each per-estimator
+                KV cache on the device where it was built.  Uses more device
+                memory but avoids CPU↔GPU transfers, giving lower latency.
+                When False, caches are moved to CPU after building and
                 transferred to the target device on every predict call.
         """
         super().__init__(
