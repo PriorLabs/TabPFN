@@ -417,7 +417,11 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         )
 
         timed_outputs = _TimedIterator(
-            parallel_execute(devices, model_forward_functions)
+            parallel_execute(
+                devices,
+                model_forward_functions,
+                prewarm_lapack=self.ensemble_preprocessor.any_estimator_uses_gpu_svd(),
+            )
         )
 
         for config, output in zip(self.ensemble_preprocessor.configs, timed_outputs):
@@ -658,6 +662,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = inference_mode
         self.no_preprocessing = no_preprocessing
         self.X_train_shape_before_preprocessing = X_train.shape
+        self.ensemble_preprocessor = ensemble_preprocessor
 
         fit_preprocess_start = time.perf_counter()
         self.ensemble_members: list[TabPFNEnsembleMember] = (
@@ -721,7 +726,11 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         )
 
         timed_outputs = _TimedIterator(
-            parallel_execute(devices, model_forward_functions)
+            parallel_execute(
+                devices,
+                model_forward_functions,
+                prewarm_lapack=self.ensemble_preprocessor.any_estimator_uses_gpu_svd(),
+            )
         )
 
         for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
@@ -1059,6 +1068,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
+        self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
@@ -1089,7 +1099,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
             for ensemble_member in self.ensemble_members
         )
-        timed_caches = _TimedIterator(parallel_execute(devices, build_functions))
+        timed_caches = _TimedIterator(
+            parallel_execute(
+                devices,
+                build_functions,
+                prewarm_lapack=self.ensemble_preprocessor.any_estimator_uses_gpu_svd(),
+            )
+        )
         self.kv_caches: list = list(timed_caches)
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
@@ -1209,7 +1225,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             for i, ensemble_member in enumerate(self.ensemble_members)
         )
         timed_outputs = _TimedIterator(
-            parallel_execute(devices, model_forward_functions)
+            parallel_execute(
+                devices,
+                model_forward_functions,
+                prewarm_lapack=self.ensemble_preprocessor.any_estimator_uses_gpu_svd(),
+            )
         )
 
         for output, ensemble_member in zip(timed_outputs, self.ensemble_members):

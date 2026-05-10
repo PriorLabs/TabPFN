@@ -115,10 +115,7 @@ def create_gpu_preprocessing_pipeline(
         # Note that this will slow down the GPU pipeline unnecessarily because
         # of GPU<->CPU transfers.
         # TODO: Run fingerprint features on GPU natively.
-        add_fingerprint = config.add_fingerprint_feature and (
-            quantile_on_gpu or has_svd
-        )
-        if add_fingerprint:
+        if config.add_fingerprint_feature:
             steps.append((TorchAddFingerprintFeaturesStep(), None))
 
         # Shuffle features (always when enable_gpu_preprocessing)

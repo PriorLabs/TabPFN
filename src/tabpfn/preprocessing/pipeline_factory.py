@@ -76,6 +76,7 @@ def create_preprocessing_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
+<<<<<<< HEAD
     has_svd = (
         not pconfig.differentiable
         and pconfig.global_transformer_name is not None
@@ -92,6 +93,12 @@ def create_preprocessing_pipeline(
     # The reshape step still runs on CPU (handling categorical reclassification,
     # append_to_original) but uses "none" (identity) as the transform so the
     # actual transform work happens on GPU.
+=======
+    # Decide whether the quantile transform moves to GPU. The reshape step
+    # still runs on CPU (handling categorical reclassification,
+    # append_to_original) but uses "none" (identity) as the transform so the
+    # actual quantile work happens on GPU.
+>>>>>>> ben/fix-torch-svd
     schedule_quantile_for_gpu = enable_gpu_preprocessing and is_gpu_quantile_eligible(
         pconfig.name
     )
@@ -137,13 +144,9 @@ def create_preprocessing_pipeline(
                     )
                 )
 
-    # Fingerprint moves to the GPU pipeline only when quantile or SVD is on
-    # GPU (those steps precede fingerprint and change the data the hash sees).
-    # When neither is on GPU, fingerprint stays on CPU at its original position.
-    fingerprint_on_gpu = enable_gpu_preprocessing and (
-        schedule_quantile_for_gpu or has_svd
-    )
-    if config.add_fingerprint_feature and not fingerprint_on_gpu:
+    # Fingerprint moves to the GPU pipeline when GPU preprocessing is enabled
+    # (quantile and/or SVD will run on GPU and change the data the hash sees).
+    if config.add_fingerprint_feature and not enable_gpu_preprocessing:
         steps.append(AddFingerprintFeaturesStep())
 
     # Shuffle moves to GPU when enable_gpu_preprocessing is on.

@@ -235,6 +235,24 @@ class TabPFNEnsemblePreprocessor:
             y_for_stratification=y_train if task_type == "classifier" else None,
         )
 
+    def any_estimator_uses_gpu_svd(self) -> bool:
+        """True if any ensemble estimator will run SVD on the GPU.
+
+        Used to gate the LAPACK lazy-wrapper pre-warm in
+        ``parallel_execute``: pre-warm is only needed when the parallel
+        functions will hit ``torch.svd_lowrank`` -> ``torch.linalg.qr``.
+        Mirrors the SVD-step inclusion logic in ``create_preprocessing_pipeline``
+        and ``create_gpu_preprocessing_pipeline``.
+        """
+        if not self.enable_gpu_preprocessing:
+            return False
+        return any(
+            not c.preprocess_config.differentiable
+            and c.preprocess_config.global_transformer_name is not None
+            and c.preprocess_config.global_transformer_name != "None"
+            for c in self.configs
+        )
+
     def fit_transform_ensemble_members_iterator(
         self,
         X_train: np.ndarray | torch.Tensor,
