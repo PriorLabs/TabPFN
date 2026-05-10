@@ -76,6 +76,7 @@ class _TestModel(Architecture):
         return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
 
     @property
+    @override
     def embedding_dim(self) -> int:
         return 2
 
@@ -118,6 +119,7 @@ class _TestModelLegacy(Architecture):
         return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
 
     @property
+    @override
     def embedding_dim(self) -> int:
         return 2
 

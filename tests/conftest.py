@@ -16,8 +16,6 @@ import numpy as np
 import pytest
 import torch
 
-from tabpfn.model_loading import ModelSource, get_cache_dir
-
 
 def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
     """Configure pytest with global settings."""
@@ -31,13 +29,3 @@ def set_global_seed() -> None:
     torch.manual_seed(seed)
     np.random.seed(seed)  # noqa: NPY002
     random.seed(seed)
-
-
-def is_v3_classifier_in_cache() -> bool:
-    cache_dir = get_cache_dir()
-    return (cache_dir / ModelSource.get_classifier_v3().default_filename).exists()
-
-
-def is_v3_regressor_in_cache() -> bool:
-    cache_dir = get_cache_dir()
-    return (cache_dir / ModelSource.get_regressor_v3().default_filename).exists()
