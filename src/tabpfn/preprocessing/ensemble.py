@@ -241,11 +241,15 @@ class TabPFNEnsemblePreprocessor:
         Used to gate the LAPACK lazy-wrapper pre-warm in
         ``parallel_execute``: pre-warm is only needed when the parallel
         functions will hit ``torch.svd_lowrank`` -> ``torch.linalg.qr``.
+        Mirrors the SVD-step inclusion logic in ``create_preprocessing_pipeline``
+        and ``create_gpu_preprocessing_pipeline``.
         """
         if not self.enable_gpu_preprocessing:
             return False
         return any(
-            c.preprocess_config.global_transformer_name is not None
+            not c.preprocess_config.differentiable
+            and c.preprocess_config.global_transformer_name is not None
+            and c.preprocess_config.global_transformer_name != "None"
             for c in self.configs
         )
 

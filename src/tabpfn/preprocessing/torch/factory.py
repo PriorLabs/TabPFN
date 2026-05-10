@@ -73,8 +73,13 @@ def create_gpu_preprocessing_pipeline(
                 )
             )
 
-        # SVD features
-        if pconfig.global_transformer_name is not None:
+        # SVD features — gating mirrors the CPU pipeline's ``has_svd``.
+        has_svd = (
+            not pconfig.differentiable
+            and pconfig.global_transformer_name is not None
+            and pconfig.global_transformer_name != "None"
+        )
+        if has_svd:
             steps.append(
                 (
                     TorchAddSVDFeaturesStep(
