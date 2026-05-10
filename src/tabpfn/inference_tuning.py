@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Inference tuning helpers for TabPFN fit/predict calls."""
 
 from __future__ import annotations

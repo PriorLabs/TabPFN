@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """A TabPFN regressor that finetunes the underlying model for a single task.
 
 This module provides the FinetunedTabPFNRegressor class, which wraps TabPFN

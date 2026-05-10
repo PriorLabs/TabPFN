@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Function for loading the pre-generated column embeddings."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to remove duplicate features. Note, this is a No-op currently."""
 
 from __future__ import annotations

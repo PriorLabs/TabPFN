@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module to infer feature types."""
 
 from __future__ import annotations

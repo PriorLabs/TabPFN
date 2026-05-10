@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """DEPRECATION WARNING: Please note that this module will be deprecated in future
 versions of TabPFN in favor of a new torch-based preprocessing pipeline.
 """

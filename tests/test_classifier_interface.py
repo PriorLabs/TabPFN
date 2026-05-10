@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from __future__ import annotations
 
 import io
@@ -590,6 +592,22 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+
+@pytest.mark.parametrize("model_version", list(ModelVersion))
+def test__fit_and_predict__on_demo_dataset__accuracy_reasonable(
+    model_version: ModelVersion,
+) -> None:
+    if model_version == ModelVersion.V3 and not is_v3_classifier_in_cache():
+        pytest.skip("V3 classifier model not in cache.")
+
+    X, y = sklearn.datasets.load_iris(return_X_y=True)
+    model = TabPFNClassifier.create_default_for_version(
+        version=model_version, random_state=0
+    )
+    model.fit(X, y)
+    accuracy = accuracy_score(y, model.predict(X))
+    assert accuracy > 0.97
 
 
 # TODO(eddiebergman): Should probably run a larger suite with different configurations

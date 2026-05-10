@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Label encoding utilities for TabPFN classifier."""
 
 from __future__ import annotations

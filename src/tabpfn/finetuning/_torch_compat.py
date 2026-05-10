@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """PyTorch compatibility helpers.
 
 This module contains small shims to keep TabPFN compatible across multiple

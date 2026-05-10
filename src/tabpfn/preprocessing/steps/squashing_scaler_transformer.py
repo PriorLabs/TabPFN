@@ -13,7 +13,6 @@ from typing_extensions import override
 
 import numpy as np
 from sklearn.base import BaseEstimator, OneToOneFeatureMixin, TransformerMixin
-from sklearn.preprocessing import RobustScaler
 from sklearn.utils.validation import FLOAT_DTYPES, check_is_fitted
 
 try:
@@ -80,34 +79,6 @@ def _soft_clip(
     return np.where(mask_inf == -1, -max_absolute_value, X)
 
 
-class _MinMaxScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
-    """A variation of scikit-learn MinMaxScaler.
-
-    A simple min-max scaler that centers the median to zero and scales
-    the data to the range [-1, 1].
-
-    scikit-learn MinMaxScaler computes the following::
-
-        X_std = (X - X.min(axis=0)) / (X.max(axis=0) - X.min(axis=0))
-        X_scaled = X_std * (max - min) + min
-
-    This scaler computes the following::
-
-        X_scaled = 2 * (X - median) / (X.max(axis=0) - X.min(axis=0) + eps)
-    """
-
-    def fit(self, X: np.ndarray, y: None | np.ndarray = None) -> _MinMaxScaler:
-        del y
-        eps = np.finfo("float32").tiny
-        self.median_ = np.nanmedian(X, axis=0)
-        self.scale_ = 2 / (np.nanmax(X, axis=0) - np.nanmin(X, axis=0) + eps)
-        return self
-
-    def transform(self, X: np.ndarray) -> np.ndarray:
-        check_is_fitted(self, ["median_", "scale_"])
-        return self.scale_ * (X - self.median_)
-
-
 class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
     r"""Perform robust centering and scaling followed by soft clipping.
 
@@ -121,10 +92,10 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
     max_absolute_value : float, default=3.0
         Maximum absolute value that the transformed data can take.
 
-    quantile_range : tuple of float, default=(0.25, 0.75)
-        The quantiles used to compute the scaling factor. The first value is the lower
-        quantile and the second value is the upper quantile. The default values are the
-        25th and 75th percentiles, respectively. The quantiles are used to compute the
+    quantile_range : tuple of float, default=(25.0, 75.0)
+        The quantiles (on a 0-100 scale) used to compute the scaling factor. The first
+        value is the lower quantile and the second value is the upper quantile. The
+        default values are the 25th and 75th percentiles, respectively. The quantiles are used to compute the
         scaling factor for the robust scaling step. The quantiles are computed from the
         finite values in the input column. If the two quantiles are equal, the scaling
         factor is computed from the 0th and 100th percentiles (i.e., the minimum and
@@ -211,8 +182,10 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
            [nan]])
     """  # noqa: E501
 
-    robust_scaler_: RobustScaler | None
-    minmax_scaler_: _MinMaxScaler | None
+    robust_center_: np.ndarray
+    robust_scale_: np.ndarray
+    minmax_center_: np.ndarray
+    minmax_scale_: np.ndarray
     robust_cols_: np.ndarray
     minmax_cols_: np.ndarray
     zero_cols_: np.ndarray
@@ -262,43 +235,39 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
             ensure_2d=True,
             ensure_all_finite=False,
         )
-        # To use sklearn scalers, we need to convert np.inf to np.nan.
+        # Convert np.inf to np.nan so the percentile/min/max routines below
+        # operate only on the finite distribution of each column.
         X, _ = _mask_inf(X)
 
-        # For each column, we apply 1 out of 3 scaling methods:
-        # If the max is equal to the min, then we fill the column with zeros.
-        zero_cols = np.nanmax(X, axis=0) == np.nanmin(X, axis=0)
+        # All column statistics are computed in a single pass: nanmin, nanmax, and
+        # the (lower, median, upper) quantiles. Reusing these avoids the duplicate
+        # nanpercentile call that previously came from constructing a sklearn
+        # RobustScaler that re-derived the same quartiles internally.
+        col_min = np.nanmin(X, axis=0)
+        col_max = np.nanmax(X, axis=0)
+        lower_q, upper_q = self.quantile_range
+        q_lower, q_median, q_upper = np.nanpercentile(
+            X, [lower_q, 50.0, upper_q], axis=0
+        )
 
-        # If the two quantiles defined by quantile_range have the same values, we
-        # use a customized MinMaxScaler. We remove from this selection columns that
-        # are already selected as zero cols (i.e. columns that have the same min and max
-        # also have the same quantile_range values).
-        quantiles = np.nanpercentile(X, self.quantile_range, axis=0)
-        minmax_cols = quantiles[0, :] == quantiles[1, :]
-        minmax_cols = minmax_cols & ~zero_cols
-
-        # Otherwise (general case), we use a RobustScaler.
+        # For each column, exactly one of three scaling strategies applies:
+        # 1) zero_cols: max == min, so the column is constant; finite values
+        #    are mapped to 0 in transform.
+        # 2) minmax_cols: q_lower == q_upper but max != min; we fall back to a
+        #    median-centered scaling using the full range.
+        # 3) robust_cols: the general case, scaled by (q_upper - q_lower).
+        zero_cols = col_max == col_min
+        minmax_cols = (q_lower == q_upper) & ~zero_cols
         robust_cols = ~(minmax_cols | zero_cols)
 
-        if robust_cols.any():
-            self.robust_scaler_ = RobustScaler(
-                with_centering=True,
-                with_scaling=True,
-                quantile_range=self.quantile_range,
-                copy=True,
-            )
-            self.robust_scaler_ = self.robust_scaler_.fit(X[:, robust_cols])
-        else:
-            self.robust_scaler_ = None
+        eps = np.finfo(X.dtype).tiny
+        self.robust_center_ = q_median[robust_cols]
+        self.robust_scale_ = q_upper[robust_cols] - q_lower[robust_cols]
+        self.minmax_center_ = q_median[minmax_cols]
+        self.minmax_scale_ = 2.0 / (col_max[minmax_cols] - col_min[minmax_cols] + eps)
+
         self.robust_cols_ = robust_cols
-
-        if minmax_cols.any():
-            self.minmax_scaler_ = _MinMaxScaler()
-            self.minmax_scaler_ = self.minmax_scaler_.fit(X[:, minmax_cols])
-        else:
-            self.minmax_scaler_ = None
         self.minmax_cols_ = minmax_cols
-
         self.zero_cols_ = zero_cols
 
         return self
@@ -346,8 +315,10 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
         check_is_fitted(
             self,
             [
-                "robust_scaler_",
-                "minmax_scaler_",
+                "robust_center_",
+                "robust_scale_",
+                "minmax_center_",
+                "minmax_scale_",
                 "zero_cols_",
                 "robust_cols_",
                 "minmax_cols_",
@@ -370,15 +341,13 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
         # copy the input since we change the values in place
         X_tr = X.copy()
         if self.robust_cols_.any():
-            assert self.robust_scaler_ is not None
-            X_tr[:, self.robust_cols_] = self.robust_scaler_.transform(
-                X[:, self.robust_cols_]
-            )
+            X_tr[:, self.robust_cols_] = (
+                X[:, self.robust_cols_] - self.robust_center_
+            ) / self.robust_scale_
         if self.minmax_cols_.any():
-            assert self.minmax_scaler_ is not None
-            X_tr[:, self.minmax_cols_] = self.minmax_scaler_.transform(
-                X[:, self.minmax_cols_]
-            )
+            X_tr[:, self.minmax_cols_] = (
+                X[:, self.minmax_cols_] - self.minmax_center_
+            ) * self.minmax_scale_
         if self.zero_cols_.any():
             # if the scale is 0, we set the values to 0
             X_tr = _set_zeros(X_tr, self.zero_cols_)

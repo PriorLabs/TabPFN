@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Safe Power Transformer."""
 
 from __future__ import annotations

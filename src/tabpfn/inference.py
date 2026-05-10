@@ -489,7 +489,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
     on several datasets at once.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_trains: list[torch.Tensor],
         y_trains: list[torch.Tensor],
@@ -502,6 +502,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
+        performance_options: PerformanceOptions,
     ) -> None:
         """Initialize the batched inference engine without preprocessing.
 
@@ -517,6 +518,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            performance_options: Performance and memory options forwarded to
+                the model on each forward call.
         """
         for ensemble_config in ensemble_configs:
             if len(ensemble_config) > 1:
@@ -537,6 +540,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         self.feature_schema_list = feature_schema
         self.ensemble_configs = ensemble_configs
         self.inference_mode = inference_mode
+        self.performance_options = performance_options
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
@@ -579,6 +583,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
+                    performance_options=self.performance_options,
                     **kwargs,
                 )
             forward_time += time.perf_counter() - forward_start

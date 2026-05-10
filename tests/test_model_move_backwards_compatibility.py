@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 from __future__ import annotations
 
 
@@ -11,8 +13,8 @@ def test__packages_can_still_be_imported_from_old_location() -> None:
     import tabpfn.model.config  # noqa: PLC0415
     import tabpfn.model.encoders  # noqa: PLC0415
     import tabpfn.model.layer  # noqa: PLC0415
-    import tabpfn.model.loading  # noqa: PLC0415
-    import tabpfn.model.memory  # noqa: PLC0415
+    import tabpfn.model.loading  # noqa: PLC0415, F401
+    import tabpfn.model.memory  # noqa: PLC0415, F401
     import tabpfn.model.mlp  # noqa: PLC0415
     import tabpfn.model.preprocessing  # noqa: PLC0415
     import tabpfn.model.transformer  # noqa: PLC0415

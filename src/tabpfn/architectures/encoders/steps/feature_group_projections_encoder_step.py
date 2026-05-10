@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """DEPRECATED: Projections from cell-level tensors to embedding space.
 
 Please use the standalone modules like `nn.Linear` or an MLP module

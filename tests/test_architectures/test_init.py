@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for tabpfn.architectures.__init__."""
 
 from __future__ import annotations

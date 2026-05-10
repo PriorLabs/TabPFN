@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Download all TabPFN model files for offline use."""
 
 from __future__ import annotations

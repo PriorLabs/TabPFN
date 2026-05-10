@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for tabpfn.parallel_execute."""
 
 from __future__ import annotations

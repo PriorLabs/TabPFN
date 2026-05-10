@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Interfaces for creating preprocessing pipelines."""
 
 from __future__ import annotations

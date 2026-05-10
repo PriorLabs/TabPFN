@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the preprocessing datamodel module."""
 
 from __future__ import annotations

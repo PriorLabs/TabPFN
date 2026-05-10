@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to add frequency-based features to the input."""
 
 from __future__ import annotations

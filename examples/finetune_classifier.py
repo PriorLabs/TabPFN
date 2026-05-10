@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Example of fine-tuning a TabPFN classifier using the FinetunedTabPFNClassifier wrapper.
 
 Note: We recommend running the fine-tuning script on a CUDA-enabled GPU with 80 GB of VRAM.

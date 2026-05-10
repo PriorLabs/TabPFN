@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Module for fitting and transforming preprocessing pipelines."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the v2.5 single-file model."""
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Encoder step to handle variable number of features."""
 
 from __future__ import annotations

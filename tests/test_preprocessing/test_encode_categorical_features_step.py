@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for EncodeCategoricalFeaturesStep, focusing on feature modality handling."""
 
 from __future__ import annotations

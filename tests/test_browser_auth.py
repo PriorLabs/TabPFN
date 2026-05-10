@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests for the browser-based license acceptance module."""
 
 from __future__ import annotations
@@ -162,7 +164,7 @@ class TestVerifyToken:
                 url="",
                 code=401,
                 msg="",
-                hdrs=None,
+                hdrs=None,  # type: ignore[arg-type]
                 fp=None,  # type: ignore[arg-type]
             ),
         ):
@@ -176,7 +178,7 @@ class TestVerifyToken:
                 url="",
                 code=403,
                 msg="",
-                hdrs=None,
+                hdrs=None,  # type: ignore[arg-type]
                 fp=None,  # type: ignore[arg-type]
             ),
         ):
@@ -198,7 +200,7 @@ class TestVerifyToken:
                 url="",
                 code=500,
                 msg="",
-                hdrs=None,
+                hdrs=None,  # type: ignore[arg-type]
                 fp=None,  # type: ignore[arg-type]
             ),
         ):
@@ -484,7 +486,7 @@ class TestHeadlessCbreakLoop:
         """KeyboardInterrupt during read returns None."""
         cbreak_loop = self._import_cbreak_loop()
         fake = self._fake_stdin("")
-        fake.read = lambda _n: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[assignment,method-assign]
+        fake.read = lambda _n: (_ for _ in ()).throw(KeyboardInterrupt)  # type: ignore[assignment,method-assign,misc]
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():

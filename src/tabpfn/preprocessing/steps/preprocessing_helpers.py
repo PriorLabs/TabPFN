@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Feature Preprocessing Transformer Step."""
 
 from __future__ import annotations

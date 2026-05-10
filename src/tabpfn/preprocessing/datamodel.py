@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Data model for the preprocessing pipeline."""
 
 from __future__ import annotations

@@ -80,7 +80,10 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.ensemble import (
+    TabPFNEnsemblePreprocessor,
+    scale_n_estimators_for_feature_coverage,
+)
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.utils import (
@@ -103,7 +106,11 @@ if TYPE_CHECKING:
     from torch.types import _dtype
 
     from tabpfn.architectures.base.memory import MemorySavingMode
-    from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.architectures.interface import (
+        Architecture,
+        ArchitectureConfig,
+        PerformanceOptions,
+    )
     from tabpfn.inference_config import InferenceConfig
 
     try:
@@ -640,8 +647,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
+        self.n_estimators_ = scale_n_estimators_for_feature_coverage(
+            n_estimators=self.n_estimators,
+            n_total_features=n_features,
+            preprocessor_configs=preprocessor_configs,
+        )
         ensemble_configs = generate_classification_ensemble_configs(
-            num_estimators=self.n_estimators,
+            num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
@@ -654,7 +666,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 estimator_type=self.estimator_type
             ),
         )
-        assert len(ensemble_configs) == self.n_estimators
+        assert len(ensemble_configs) == self.n_estimators_
 
         return ensemble_configs, X, y
 
@@ -705,8 +717,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # Ensemble definition
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
+        self.n_estimators_ = scale_n_estimators_for_feature_coverage(
+            n_estimators=self.n_estimators,
+            n_total_features=feature_schema.num_columns,
+            preprocessor_configs=preprocessor_configs,
+        )
         ensemble_configs = generate_classification_ensemble_configs(
-            num_estimators=self.n_estimators,
+            num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
@@ -719,7 +736,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 estimator_type=self.estimator_type
             ),
         )
-        assert len(ensemble_configs) == self.n_estimators
+        assert len(ensemble_configs) == self.n_estimators_
 
         return ensemble_configs, X, y
 
@@ -817,7 +834,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             fit_mode=self.fit_mode,
             X_train=X,
             y_train=y,
-            feature_schema=self.inferred_feature_schema_,
             models=self.models_,
             ensemble_preprocessor=self.ensemble_preprocessor_,
             devices_=self.devices_,
@@ -838,6 +854,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         cat_ix: list[list[list[int]]],
         configs: list[list[EnsembleConfig]],
         *,
+        performance_options: PerformanceOptions,
         no_refit: bool = True,
     ) -> TabPFNClassifier:
         """Used in Fine-Tuning. Fit the model to preprocessed inputs from torch
@@ -852,6 +869,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             y_preprocessed: The target variable obtained from the preprocessed Dataset
             cat_ix: categorical indices obtained from the preprocessed Dataset
             configs: Ensemble configurations obtained from the preprocessed Dataset
+            performance_options: Performance and memory options forwarded to the
+                model on each forward call inside the resulting executor.
             no_refit: if True, the classifier will not be reinitialized when calling
                 fit multiple times.
         """
@@ -875,6 +894,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             num_features=X_preprocessed[0].shape[1],
         )
 
+        self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
             X_trains=X_preprocessed,
             y_trains=y_preprocessed,
@@ -886,6 +906,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             force_inference_dtype=self.forced_inference_dtype_,
             save_peak_mem=self.memory_saving_mode,
             inference_mode=not self.differentiable_input,
+            performance_options=performance_options,
         )
 
         return self
@@ -924,6 +945,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
+            self.n_estimators_ = len(ensemble_configs)
 
         self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
             configs=ensemble_configs,
@@ -1466,7 +1488,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 autocast=self.use_autocast_,
                 task_type="multiclass",
             ),
-            total=self.n_estimators,
+            total=self.n_estimators_,
             desc="TabPFN inference",
             unit="estimator",
             disable=not self.show_progress_bar,

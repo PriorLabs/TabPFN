@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Tests verifying CPU-only vs CPU+GPU preprocessing pipeline consistency.
 
 When ``enable_gpu_preprocessing=True``, the quantile transform, SVD, and shuffle

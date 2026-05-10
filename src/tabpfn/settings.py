@@ -1,3 +1,5 @@
+#  Copyright (c) Prior Labs GmbH 2026.
+
 """Settings module for TabPFN configuration."""
 
 from __future__ import annotations

@@ -24,6 +24,7 @@ from tabpfn.preprocessing.torch.torch_quantile_transformer import (
     TorchQuantileTransformer,
 )
 from tabpfn.preprocessing.torch.torch_soft_clip_outliers import TorchSoftClipOutliers
+from tabpfn.preprocessing.torch.torch_squashing_scaler import TorchSquashingScaler
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 from tabpfn.preprocessing.torch.torch_svd import (
     TorchSafeStandardScaler,
@@ -77,6 +78,36 @@ class TorchStandardScalerStep(TorchPreprocessingStep):
         fitted_cache: dict[str, torch.Tensor],
     ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
         """Transform columns using the fitted scaler."""
+        return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
+
+
+class TorchSquashingScalerStep(TorchPreprocessingStep):
+    """Pipeline step wrapper for TorchSquashingScaler."""
+
+    def __init__(
+        self,
+        max_absolute_value: float = 3.0,
+        quantile_range: tuple[float, float] = (25.0, 75.0),
+    ) -> None:
+        """Initialize the squashing scaler step."""
+        super().__init__()
+        self._scaler = TorchSquashingScaler(
+            max_absolute_value=max_absolute_value,
+            quantile_range=quantile_range,
+        )
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Fit the squashing scaler on the selected columns."""
+        return self._scaler.fit(x)
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        """Transform columns using the fitted squashing scaler."""
         return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
 
 
