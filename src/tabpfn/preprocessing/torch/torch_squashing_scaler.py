@@ -104,13 +104,18 @@ class TorchSquashingScaler:
         col_min = torch.where(all_nan, torch.full_like(col_min, float("nan")), col_min)
         col_max = torch.where(all_nan, torch.full_like(col_max, float("nan")), col_max)
 
+        # torch.nanquantile requires float32 or float64; upcast (e.g. from
+        # float16) just for the quantile computation, then cast results back.
+        quantile_dtype = (
+            dtype if dtype in (torch.float32, torch.float64) else torch.float32
+        )
         lower_q, upper_q = self.quantile_range
         qs = torch.tensor(
             [lower_q / 100.0, 0.5, upper_q / 100.0],
             device=device,
-            dtype=x_finite.dtype,
+            dtype=quantile_dtype,
         )
-        quantiles = torch.nanquantile(x_finite, qs, dim=0)
+        quantiles = torch.nanquantile(x_finite.to(quantile_dtype), qs, dim=0).to(dtype)
         q_lower, q_median, q_upper = quantiles[0], quantiles[1], quantiles[2]
 
         zero_mask = col_max == col_min

@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     compute_effective_n_quantiles,
+    get_squashing_scaler_max_absolute_value,
 )
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
@@ -18,6 +19,7 @@ from tabpfn.preprocessing.torch.steps import (
     TorchAddFingerprintFeaturesStep,
     TorchAddSVDFeaturesStep,
     TorchSelectiveQuantileTransformerStep,
+    TorchSelectiveSquashingScalerStep,
     TorchShuffleFeaturesStep,
     TorchSoftClipOutliersStep,
 )
@@ -56,7 +58,7 @@ def create_gpu_preprocessing_pipeline(
 
     if enable_gpu_preprocessing and feature_schema is not None:
         # Quantile transform — target columns are annotated in the schema
-        # by ReshapeFeatureDistributionsStep(mark_quantile_for_gpu=True).
+        # by ReshapeFeatureDistributionsStep(schedule_quantile_for_gpu=True).
         quantile_target_indices = (
             feature_schema.get_indices_marked_for_gpu_quantile_transform()
         )
@@ -73,10 +75,30 @@ def create_gpu_preprocessing_pipeline(
                 )
             )
 
-        # SVD features
-        # TODO: We disable SVD on GPU for now because we've seen memory issues.
-        svd_on_gpu = False
-        if svd_on_gpu and pconfig.global_transformer_name is not None:
+        # Squashing scaler — target columns are annotated in the schema
+        # by ReshapeFeatureDistributionsStep(schedule_squashing_scaler_for_gpu=True).
+        squashing_scaler_target_indices = (
+            feature_schema.get_indices_marked_for_gpu_squashing_scaler_transform()
+        )
+        if squashing_scaler_target_indices:
+            max_absolute_value = get_squashing_scaler_max_absolute_value(pconfig.name)
+            steps.append(
+                (
+                    TorchSelectiveSquashingScalerStep(
+                        max_absolute_value=max_absolute_value,
+                        target_column_indices=squashing_scaler_target_indices,
+                    ),
+                    None,  # operates on explicit indices, receives full tensor
+                )
+            )
+
+        # SVD features — gating mirrors the CPU pipeline's ``has_svd``.
+        has_svd = (
+            not pconfig.differentiable
+            and pconfig.global_transformer_name is not None
+            and pconfig.global_transformer_name != "None"
+        )
+        if has_svd:
             steps.append(
                 (
                     TorchAddSVDFeaturesStep(
@@ -94,7 +116,7 @@ def create_gpu_preprocessing_pipeline(
         # of GPU<->CPU transfers.
         # TODO: Run fingerprint features on GPU natively.
         add_fingerprint = config.add_fingerprint_feature and (
-            quantile_on_gpu or svd_on_gpu
+            quantile_on_gpu or has_svd
         )
         if add_fingerprint:
             steps.append((TorchAddFingerprintFeaturesStep(), None))

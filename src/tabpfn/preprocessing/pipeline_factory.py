@@ -23,6 +23,7 @@ from tabpfn.preprocessing.steps import (
 )
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     is_gpu_quantile_eligible,
+    is_gpu_squashing_scaler_eligible,
 )
 
 if TYPE_CHECKING:
@@ -75,8 +76,6 @@ def create_preprocessing_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
-    # Hardcode svd_on_gpu to False for now.
-    svd_on_gpu = False
     has_svd = (
         not pconfig.differentiable
         and pconfig.global_transformer_name is not None
@@ -89,16 +88,22 @@ def create_preprocessing_pipeline(
     # transform so the actual quantile work happens on GPU.
     # When SVD is configured but stays on CPU, quantile must also stay on CPU
     # so that SVD sees quantile-transformed data (SVD runs after quantile).
-    schedule_quantile_for_gpu = (
-        enable_gpu_preprocessing
-        and is_gpu_quantile_eligible(pconfig.name)
-        and not (has_svd and not svd_on_gpu)
+    # Decide whether the quantile / squashing scaler transform moves to GPU.
+    # The reshape step still runs on CPU (handling categorical reclassification,
+    # append_to_original) but uses "none" (identity) as the transform so the
+    # actual transform work happens on GPU.
+    schedule_quantile_for_gpu = enable_gpu_preprocessing and is_gpu_quantile_eligible(
+        pconfig.name
     )
+    schedule_squashing_scaler_for_gpu = (
+        enable_gpu_preprocessing and is_gpu_squashing_scaler_eligible(pconfig.name)
+    )
+    schedule_for_gpu = schedule_quantile_for_gpu or schedule_squashing_scaler_for_gpu
 
     if pconfig.differentiable:
         steps.append(DifferentiableZNormStep())
     else:
-        reshape_transform_name = "none" if schedule_quantile_for_gpu else pconfig.name
+        reshape_transform_name = "none" if schedule_for_gpu else pconfig.name
         steps.append(
             ReshapeFeatureDistributionsStep(
                 transform_name=reshape_transform_name,
@@ -107,6 +112,7 @@ def create_preprocessing_pipeline(
                 apply_to_categorical=(pconfig.categorical_name == "numeric"),
                 random_state=random_state,
                 schedule_quantile_for_gpu=schedule_quantile_for_gpu,
+                schedule_squashing_scaler_for_gpu=schedule_squashing_scaler_for_gpu,
             )
         )
 
@@ -118,7 +124,7 @@ def create_preprocessing_pipeline(
             )
         )
 
-        if not svd_on_gpu:
+        if not enable_gpu_preprocessing:
             use_global_transformer = (
                 pconfig.global_transformer_name is not None
                 and pconfig.global_transformer_name != "None"
@@ -135,7 +141,7 @@ def create_preprocessing_pipeline(
     # GPU (those steps precede fingerprint and change the data the hash sees).
     # When neither is on GPU, fingerprint stays on CPU at its original position.
     fingerprint_on_gpu = enable_gpu_preprocessing and (
-        schedule_quantile_for_gpu or svd_on_gpu
+        schedule_quantile_for_gpu or has_svd
     )
     if config.add_fingerprint_feature and not fingerprint_on_gpu:
         steps.append(AddFingerprintFeaturesStep())
