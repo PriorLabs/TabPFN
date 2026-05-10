@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 from collections.abc import Generator, Iterable, Sequence
 from multiprocessing.pool import ThreadPool
 from typing import Callable, Generic, Protocol, TypeVar
@@ -12,6 +13,30 @@ from typing import Callable, Generic, Protocol, TypeVar
 import torch
 
 R_co = TypeVar("R_co", covariant=True)
+
+_LAPACK_PREWARM_LOCK = threading.Lock()
+_LAPACK_PREWARMED_DEVICES: set[torch.device] = set()
+
+
+def _prewarm_lapack_lazy_init(devices: Sequence[torch.device]) -> None:
+    """Touch ``torch.linalg.qr`` once per cuda device on the main thread.
+
+    PyTorch's LAPACK lazy wrapper is not thread-safe on first use: when
+    several threads first-call ``torch.linalg.qr`` (transitively, via
+    ``torch.svd_lowrank`` in the GPU SVD preprocessing step) at the same
+    time, PyTorch raises ``RuntimeError: lazy wrapper should be called at
+    most once`` and the process aborts.  We avoid the race by warming the
+    binding on each cuda device on the main thread before the thread pool
+    spawns.  Memoised so the cost is paid at most once per device per
+    process.
+    """
+    with _LAPACK_PREWARM_LOCK:
+        for device in devices:
+            if device.type != "cuda" or device in _LAPACK_PREWARMED_DEVICES:
+                continue
+            with torch.cuda.device(device):
+                torch.linalg.qr(torch.empty(2, 2, device=device).normal_())
+            _LAPACK_PREWARMED_DEVICES.add(device)
 
 
 class ParallelFunction(Protocol, Generic[R_co]):
@@ -32,6 +57,8 @@ class ParallelFunction(Protocol, Generic[R_co]):
 def parallel_execute(
     devices: Sequence[torch.device],
     functions: Iterable[ParallelFunction[R_co]],
+    *,
+    prewarm_lapack: bool = False,
 ) -> Generator[R_co]:
     """Evaluate the given functions in parallel across `devices`.
 
@@ -45,6 +72,10 @@ def parallel_execute(
     Args:
         devices: The devices to use for evaluation.
         functions: The functions to evaluate following the `ParallelFunction` protocol.
+        prewarm_lapack: If True, pre-initialise ``torch.linalg.qr`` on each cuda
+            device on the main thread before the thread pool spawns.  Required when
+            the parallel functions use ``torch.svd_lowrank`` (or any other path
+            that hits PyTorch's racy LAPACK lazy wrapper).
 
     Returns:
         A generator consisting of the return values of the functions, in the same order
@@ -54,7 +85,9 @@ def parallel_execute(
         # If we only have one device then just use the current thread to avoid overhead.
         yield from _execute_in_current_thread(devices[0], functions)
     else:
-        yield from _execute_with_multithreading(devices, functions)
+        yield from _execute_with_multithreading(
+            devices, functions, prewarm_lapack=prewarm_lapack
+        )
 
 
 def _execute_in_current_thread(
@@ -67,7 +100,11 @@ def _execute_in_current_thread(
 def _execute_with_multithreading(
     devices: Sequence[torch.device],
     functions: Iterable[ParallelFunction[R_co]],
+    *,
+    prewarm_lapack: bool = False,
 ) -> Generator[R_co]:
+    if prewarm_lapack:
+        _prewarm_lapack_lazy_init(devices)
     free_devices: queue.Queue[int] = queue.Queue(maxsize=len(devices))
     for device_index, _ in enumerate(devices):
         free_devices.put(device_index, block=False)

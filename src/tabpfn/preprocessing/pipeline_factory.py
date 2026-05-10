@@ -75,24 +75,12 @@ def create_preprocessing_pipeline(
 
     steps.append(RemoveConstantFeaturesStep())
 
-    # Hardcode svd_on_gpu to False for now.
-    svd_on_gpu = False
-    has_svd = (
-        not pconfig.differentiable
-        and pconfig.global_transformer_name is not None
-        and pconfig.global_transformer_name != "None"
-    )
-
-    # Decide whether the quantile transform moves to GPU.
-    # The reshape step still runs on CPU (handling subsampling, categorical
-    # reclassification, append_to_original) but uses "none" (identity) as the
-    # transform so the actual quantile work happens on GPU.
-    # When SVD is configured but stays on CPU, quantile must also stay on CPU
-    # so that SVD sees quantile-transformed data (SVD runs after quantile).
-    schedule_quantile_for_gpu = (
-        enable_gpu_preprocessing
-        and is_gpu_quantile_eligible(pconfig.name)
-        and not (has_svd and not svd_on_gpu)
+    # Decide whether the quantile transform moves to GPU. The reshape step
+    # still runs on CPU (handling categorical reclassification,
+    # append_to_original) but uses "none" (identity) as the transform so the
+    # actual quantile work happens on GPU.
+    schedule_quantile_for_gpu = enable_gpu_preprocessing and is_gpu_quantile_eligible(
+        pconfig.name
     )
 
     if pconfig.differentiable:
@@ -118,7 +106,7 @@ def create_preprocessing_pipeline(
             )
         )
 
-        if not svd_on_gpu:
+        if not enable_gpu_preprocessing:
             use_global_transformer = (
                 pconfig.global_transformer_name is not None
                 and pconfig.global_transformer_name != "None"
@@ -131,13 +119,9 @@ def create_preprocessing_pipeline(
                     )
                 )
 
-    # Fingerprint moves to the GPU pipeline only when quantile or SVD is on
-    # GPU (those steps precede fingerprint and change the data the hash sees).
-    # When neither is on GPU, fingerprint stays on CPU at its original position.
-    fingerprint_on_gpu = enable_gpu_preprocessing and (
-        schedule_quantile_for_gpu or svd_on_gpu
-    )
-    if config.add_fingerprint_feature and not fingerprint_on_gpu:
+    # Fingerprint moves to the GPU pipeline when GPU preprocessing is enabled
+    # (quantile and/or SVD will run on GPU and change the data the hash sees).
+    if config.add_fingerprint_feature and not enable_gpu_preprocessing:
         steps.append(AddFingerprintFeaturesStep())
 
     # Shuffle moves to GPU when enable_gpu_preprocessing is on.

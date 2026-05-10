@@ -74,9 +74,7 @@ def create_gpu_preprocessing_pipeline(
             )
 
         # SVD features
-        # TODO: We disable SVD on GPU for now because we've seen memory issues.
-        svd_on_gpu = False
-        if svd_on_gpu and pconfig.global_transformer_name is not None:
+        if pconfig.global_transformer_name is not None:
             steps.append(
                 (
                     TorchAddSVDFeaturesStep(
@@ -93,10 +91,7 @@ def create_gpu_preprocessing_pipeline(
         # Note that this will slow down the GPU pipeline unnecessarily because
         # of GPU<->CPU transfers.
         # TODO: Run fingerprint features on GPU natively.
-        add_fingerprint = config.add_fingerprint_feature and (
-            quantile_on_gpu or svd_on_gpu
-        )
-        if add_fingerprint:
+        if config.add_fingerprint_feature:
             steps.append((TorchAddFingerprintFeaturesStep(), None))
 
         # Shuffle features (always when enable_gpu_preprocessing)
