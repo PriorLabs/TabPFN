@@ -598,9 +598,6 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
 def test__fit_and_predict__on_demo_dataset__accuracy_reasonable(
     model_version: ModelVersion,
 ) -> None:
-    if model_version == ModelVersion.V3 and not is_v3_classifier_in_cache():
-        pytest.skip("V3 classifier model not in cache.")
-
     X, y = sklearn.datasets.load_iris(return_X_y=True)
     model = TabPFNClassifier.create_default_for_version(
         version=model_version, random_state=0

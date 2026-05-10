@@ -347,9 +347,6 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
 def test__fit_and_predict__on_demo_dataset__r2_reasonable(
     model_version: ModelVersion,
 ) -> None:
-    if model_version == ModelVersion.V3 and not is_v3_regressor_in_cache():
-        pytest.skip("V3 regressor model not in cache.")
-
     X, y = sklearn.datasets.make_friedman1(n_samples=200, noise=0.1, random_state=0)
     model = TabPFNRegressor.create_default_for_version(
         version=model_version, random_state=0
