@@ -1025,7 +1025,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         autocast: bool,
-        keep_cache_on_device: bool = False,
+        keep_cache_on_device: bool = True,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
