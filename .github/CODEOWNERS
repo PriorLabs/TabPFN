@@ -4,3 +4,10 @@
 .github/workflows/release-create-pr.yml  @PriorLabs/release-maintainers
 .github/workflows/release-tag-on-merge.yml       @PriorLabs/release-maintainers
 .github/workflows/release-publish.yml    @PriorLabs/release-maintainers
+
+# AI-assistant workflows – any change to these (including pinned action SHAs,
+# trigger predicates, or permission grants) requires release-maintainer review,
+# since a misconfigured agent workflow on a public repository expands the
+# supply-chain surface meaningfully.
+.github/workflows/claude.yml             @PriorLabs/release-maintainers
+.github/workflows/claude-code-review.yml @PriorLabs/release-maintainers
