@@ -46,7 +46,7 @@ def convert_checkpoint(
     output_metadata: Path,
 ) -> None:
     """Convert a TabPFN checkpoint into SafeTensors plus JSON metadata."""
-    checkpoint = torch.load(input_checkpoint, map_location="cpu", weights_only=None)
+    checkpoint = torch.load(input_checkpoint, map_location="cpu", weights_only=False)
 
     if not isinstance(checkpoint, dict):
         raise TypeError(
@@ -66,7 +66,7 @@ def convert_checkpoint(
                 f"Expected all state_dict values to be tensors. "
                 f"Key {key!r} has type {type(value).__name__}."
             )
-        tensors[key] = value.detach().cpu()
+        tensors[key] = value.detach().cpu().contiguous()
 
     metadata = {
         key: _json_safe(value)

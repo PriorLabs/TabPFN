@@ -905,14 +905,37 @@ def get_loss_criterion(
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
 
 
-def _file_identity(path: str) -> tuple[int, int]:
-    """Return a cheap identity tuple (mtime_ns, size) for cache-keying."""
-    st = Path(path).stat()
-    return (st.st_mtime_ns, st.st_size)
+def _file_identity(path: str) -> tuple[int, int, int | None, int | None]:
+    """Return a cheap identity tuple for cache-keying.
+
+    For SafeTensors checkpoints, include the sidecar metadata file identity so
+    cached loads are invalidated when either the tensor file or metadata changes.
+    """
+    checkpoint_path = Path(path)
+    checkpoint_stat = checkpoint_path.stat()
+
+    metadata_mtime_ns = None
+    metadata_size = None
+
+    if checkpoint_path.suffix == ".safetensors":
+        metadata_path = checkpoint_path.with_suffix(".non_tensor_metadata.json")
+        if metadata_path.exists():
+            metadata_stat = metadata_path.stat()
+            metadata_mtime_ns = metadata_stat.st_mtime_ns
+            metadata_size = metadata_stat.st_size
+
+    return (
+        checkpoint_stat.st_mtime_ns,
+        checkpoint_stat.st_size,
+        metadata_mtime_ns,
+        metadata_size,
+    )
 
 
 @functools.lru_cache(maxsize=1)
-def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
+def _load_checkpoint_cached(
+    path: str, _identity: tuple[int, int, int | None, int | None]
+) -> dict:
     """Load and cache a checkpoint from disk.
 
     The ``_identity`` key ensures the cache is invalidated when the file at
