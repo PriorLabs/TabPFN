@@ -104,7 +104,7 @@ Choose the right TabPFN implementation for your needs:
 
 ## License
 
-The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under [non-commercial licenses](https://docs.priorlabs.ai/models#tabpfn-model-license); see the docs for each release's exact terms. TabPFN-3 is used by default.
+The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-commercial licenses (TabPFN-3 [license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE); see the [Models page](https://docs.priorlabs.ai/models#tabpfn-model-license) for prior releases). TabPFN-3 is used by default.
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
