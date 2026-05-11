@@ -125,6 +125,12 @@ class TabPFNOutOfMemoryError(TabPFNError):
             f"Not sure which? If model.{predict_method}(X_test[:1]) "
             f"also fails, it's (2)."
         )
+        if self.device_name == "MPS":
+            message += (
+                "\n\nOn MPS, consider installing MLX (pip install mlx). This "
+                "automatically enables flash attention, which will drastically reduce "
+                "memory usage for datasets with more than 1500 samples."
+            )
         if original_error is not None:
             message += f"\n\nOriginal error: {original_error}"
         super().__init__(message)

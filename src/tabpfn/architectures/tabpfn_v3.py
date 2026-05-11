@@ -39,22 +39,17 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn.attention import SDPBackend, sdpa_kernel
+from torch.nn.attention import SDPBackend
 
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
-    AttentionBackend,
     PerformanceOptions,
 )
 from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
-from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
-from tabpfn.architectures.shared.fa3_backend import (
-    fa3_attn_func,
-    fa3_unavailable_reason,
-    is_fa3_eligible_for,
-    is_fa3_preferred_for,
+from tabpfn.architectures.shared.scaled_dot_product_attention import (
+    scaled_dot_product_attention,
 )
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
@@ -615,25 +610,25 @@ class SoftmaxScalingMLP(nn.Module):
         nn.init.zeros_(self.query_mlp[-1].bias)  # type: ignore
 
     @override
-    def forward(self, q_BHSD: torch.Tensor, n: int) -> torch.Tensor:
+    def forward(self, q_BSHD: torch.Tensor, n: int) -> torch.Tensor:
         """Applies scalable attention scaling to queries.
 
         Args:
-            q_BHSD: Query tensor after projection, shape `[B, H, S, D]`.
+            q_BSHD: Query tensor after projection, shape `[B, S, H, D]`.
                 B: Batch size.
-                H: Number of heads.
                 S: Sequence length.
+                H: Number of heads.
                 D: Head dimension.
             n: Number of elements for log-n scaling.
 
         Returns:
-            Scaled query tensor, same shape as `q_BHSD`.
+            Scaled query tensor, same shape as `q_BSHD`.
         """
-        logn_11 = _safe_log_seqlen(n, q_BHSD.device, q_BHSD.dtype).reshape(1, 1)
-        base_scales = self.base_mlp(logn_11).view(1, self.num_heads, 1, self.head_dim)
-        modulation = 1 + torch.tanh(self.query_mlp(q_BHSD))
+        logn_11 = _safe_log_seqlen(n, q_BSHD.device, q_BSHD.dtype).reshape(1, 1)
+        base_scales = self.base_mlp(logn_11).view(1, 1, self.num_heads, self.head_dim)
+        modulation = 1 + torch.tanh(self.query_mlp(q_BSHD))
         scales = base_scales * modulation
-        return q_BHSD * scales
+        return q_BSHD * scales
 
 
 def _batched_scaled_dot_product_attention(
@@ -642,112 +637,12 @@ def _batched_scaled_dot_product_attention(
     v_BSJD: torch.Tensor,
     softmax_scaling_layer: nn.Module | None = None,
     _backends_override: list[SDPBackend] | None = None,
-    *,
-    attention_backend: AttentionBackend = AttentionBackend.SDPA,
 ) -> torch.Tensor:
-    """Scaled dot-product attention chunked over the batch dimension.
-
-    For large batch sizes (> CUDA max-grid), we split into sub-batches.
-    Softmax scaling is applied to queries before the SDPA call when provided.
-
-    ``attention_backend``:
-
-    - :attr:`AttentionBackend.AUTO`: use FA3 if eligible (Hopper, fp16/bf16,
-      supported head_dim, FA3 importable) AND :func:`is_fa3_preferred_for` is
-      True; else SDPA.
-    - :attr:`AttentionBackend.SDPA` (default): always SDPA.
-    - :attr:`AttentionBackend.FA3`: force FA3; raise if ineligible (bypasses
-      seqlen threshold).
-    """
-    if attention_backend == AttentionBackend.FA3:
-        if not is_fa3_eligible_for(q_BSHD):
-            raise RuntimeError(
-                "AttentionBackend.FA3 was requested but FA3 is not eligible "
-                f"for this call: {fa3_unavailable_reason(q_BSHD)}"
-            )
-        return _fa3_attention(q_BSHD, k_BSJD, v_BSJD, softmax_scaling_layer)
-    if attention_backend == AttentionBackend.AUTO and is_fa3_preferred_for(
-        q_BSHD, k_BSJD
-    ):
-        return _fa3_attention(q_BSHD, k_BSJD, v_BSJD, softmax_scaling_layer)
-
-    q_BHSD = q_BSHD.permute(0, 2, 1, 3)
-    k_BJSD = k_BSJD.permute(0, 2, 1, 3)
-    v_BJSD = v_BSJD.permute(0, 2, 1, 3)
-
+    """SDPA with optional query scaling."""
     if softmax_scaling_layer is not None:
-        src_len = k_BJSD.shape[-2]
-        q_BHSD = softmax_scaling_layer(q_BHSD, src_len)
-
-    num_q_heads = q_BHSD.shape[-3]
-    num_kv_heads = k_BJSD.shape[-3]
-    dtype_supports_gqa = q_BHSD.dtype in {torch.float16, torch.bfloat16}
-    if num_q_heads == num_kv_heads:
-        keys = k_BJSD
-        values = v_BJSD
-        enable_gqa = {}
-    elif gqa_is_supported() and dtype_supports_gqa:
-        keys = k_BJSD
-        values = v_BJSD
-        enable_gqa = {"enable_gqa": True}
-    else:
-        repeat = num_q_heads // num_kv_heads
-        keys = k_BJSD.repeat_interleave(repeat, dim=-3)
-        values = v_BJSD.repeat_interleave(repeat, dim=-3)
-        enable_gqa = {}
-
-    if _backends_override is not None:
-        backends = _backends_override
-    else:
-        backends = (
-            _SDPA_BACKENDS_CPU if not torch.cuda.is_available() else _SDPA_BACKENDS
-        )
-
-    num_parallel_calls = q_BHSD.shape[:2].numel()
-    torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.
-    torch._check(q_BHSD.shape[0] >= 1)
-    CUDA_MAX_GRID = 65536
-    num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
-    sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
-
-    with sdpa_kernel(backends=backends):
-        outputs = []
-        for i in range(num_iterations):
-            outputs.append(
-                torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
-                    keys[i * sub_batch : (i + 1) * sub_batch],
-                    values[i * sub_batch : (i + 1) * sub_batch],
-                    attn_mask=None,
-                    **enable_gqa,
-                )
-            )
-    output_BHSD = outputs[0] if len(outputs) == 1 else torch.cat(outputs)
-    return output_BHSD.permute(0, 2, 1, 3)
-
-
-def _fa3_attention(
-    q_BSHD: torch.Tensor,
-    k_BSJD: torch.Tensor,
-    v_BSJD: torch.Tensor,
-    softmax_scaling_layer: nn.Module | None,
-) -> torch.Tensor:
-    """Run attention via FA3, preserving (B, S, H, D) layout. GQA is native.
-
-    ``softmax_scaling_layer`` (if any) operates in (B, H, S, D), hence the
-    permutes around it.
-    """
-    assert q_BSHD.dim() == 4, (
-        f"FA3 expects (B, S, H, D); got tensor of shape {tuple(q_BSHD.shape)}"
-    )
-    assert k_BSJD.dim() == 4
-    assert v_BSJD.dim() == 4
-    if softmax_scaling_layer is not None:
-        q_BHSD = q_BSHD.permute(0, 2, 1, 3)
         src_len = k_BSJD.shape[1]
-        q_BHSD = softmax_scaling_layer(q_BHSD, src_len)
-        q_BSHD = q_BHSD.permute(0, 2, 1, 3)
-    return fa3_attn_func(q_BSHD.contiguous(), k_BSJD.contiguous(), v_BSJD.contiguous())
+        q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
+    return scaled_dot_product_attention(q_BSHD, k_BSJD, v_BSJD, _backends_override)
 
 
 # ---------------------------------------------------------------------------
@@ -904,7 +799,6 @@ class ICLAttention(nn.Module):
         *,
         cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
-        attention_backend: AttentionBackend = AttentionBackend.SDPA,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Self-attention where k/v are restricted to train rows.
 
@@ -918,8 +812,6 @@ class ICLAttention(nn.Module):
                 directly.
             return_kv: If True, also return the computed K/V as a
                 :class:`KVCacheEntry`.
-            attention_backend: Backend selector forwarded to
-                :func:`_batched_scaled_dot_product_attention`.
 
         Returns:
             ``(output, kv_entry)`` where ``kv_entry`` is ``None`` unless
@@ -951,7 +843,6 @@ class ICLAttention(nn.Module):
                 k,
                 v,
                 softmax_scaling_layer=self.softmax_scaling_layer,
-                attention_backend=attention_backend,
             )
         else:
             N = R if single_eval_pos is None else single_eval_pos
@@ -970,7 +861,6 @@ class ICLAttention(nn.Module):
                     k,
                     v,
                     softmax_scaling_layer=self.softmax_scaling_layer,
-                    attention_backend=attention_backend,
                 )
                 # Test rows: fewer KV heads (GQA / MQA)
                 nh_test_heads = self.num_kv_heads_test
@@ -979,7 +869,6 @@ class ICLAttention(nn.Module):
                     k[:, :, :nh_test_heads],
                     v[:, :, :nh_test_heads],
                     softmax_scaling_layer=self.softmax_scaling_layer,
-                    attention_backend=attention_backend,
                 )
                 out = torch.cat([out_train, out_test], dim=1)
             else:
@@ -988,7 +877,6 @@ class ICLAttention(nn.Module):
                     k,
                     v,
                     softmax_scaling_layer=self.softmax_scaling_layer,
-                    attention_backend=attention_backend,
                 )
 
         result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))
@@ -1191,7 +1079,6 @@ class ICLTransformerBlock(nn.Module):
         *,
         cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
-        attention_backend: AttentionBackend = AttentionBackend.SDPA,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass with optional KV cache support.
 
@@ -1201,7 +1088,6 @@ class ICLTransformerBlock(nn.Module):
             save_peak_memory_factor: Chunking factor for memory saving.
             cached_kv: Pre-computed K/V for this layer.
             return_kv: If True, also return the K/V cache entry.
-            attention_backend: Backend selector forwarded to ``ICLAttention``.
 
         Returns:
             ``(output, kv_entry)`` where ``kv_entry`` is ``None`` unless
@@ -1215,7 +1101,6 @@ class ICLTransformerBlock(nn.Module):
                 self.layernorm(x_BRE),
                 single_eval_pos=single_eval_pos,
                 return_kv=True,
-                attention_backend=attention_backend,
             )
             x_BRE = x_BRE + attn_out
         elif cached_kv is not None:
@@ -1229,7 +1114,6 @@ class ICLTransformerBlock(nn.Module):
                     self.layernorm(x),
                     single_eval_pos=single_eval_pos,
                     cached_kv=cached_kv,
-                    attention_backend=attention_backend,
                 )
                 return out
 
@@ -1250,7 +1134,6 @@ class ICLTransformerBlock(nn.Module):
                 out, _ = self.icl_attention(
                     self.layernorm(x),
                     single_eval_pos=single_eval_pos,
-                    attention_backend=attention_backend,
                 )
                 return out
 
@@ -1831,7 +1714,6 @@ class TabPFNV3(Architecture):
 
         icl_cache_out: KVCache | None = None  # Populated if return_kv_cache is True.
 
-        attention_backend = performance_options.attention_backend
         if kv_cache is not None and not kv_cache.is_empty():
             # Cache path: no y_icl embedding; use cached K/V pairs
             for layer_idx, block in enumerate(self.icl_blocks):
@@ -1840,7 +1722,6 @@ class TabPFNV3(Architecture):
                     0,
                     performance_options.save_peak_memory_factor,
                     cached_kv=kv_cache.icl_cache.kv[layer_idx],
-                    attention_backend=attention_backend,
                 )
         else:
             if num_train > 0:
@@ -1856,7 +1737,6 @@ class TabPFNV3(Architecture):
                         num_train,
                         performance_options.save_peak_memory_factor,
                         return_kv=True,
-                        attention_backend=attention_backend,
                     )
                     icl_cache_out.kv[layer_idx] = kv_entry
             else:
@@ -1868,14 +1748,12 @@ class TabPFNV3(Architecture):
                             num_train,
                             use_reentrant=False,
                             save_peak_memory_factor=performance_options.save_peak_memory_factor,
-                            attention_backend=attention_backend,
                         )
                     else:
                         x_BRiD, _ = block(
                             x_BRiD,
                             num_train,
                             performance_options.save_peak_memory_factor,
-                            attention_backend=attention_backend,
                         )
 
         x_BRiD = self.output_norm(x_BRiD)

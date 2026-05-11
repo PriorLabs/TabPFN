@@ -17,12 +17,12 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.architectures.interface import AttentionBackend
+import tabpfn.architectures.shared.scaled_dot_product_attention as _sdpa_mod
 from tabpfn.architectures.shared import fa3_backend
 from tabpfn.architectures.shared.fa3_backend import (
-    is_fa3_eligible_for,
+    is_fa3_eligible,
     is_fa3_importable,
-    is_fa3_preferred_for,
+    is_fa3_preferred,
 )
 from tabpfn.architectures.tabpfn_v3 import _batched_scaled_dot_product_attention
 
@@ -63,8 +63,10 @@ def _make_qkv(
 # ---------------------------------------------------------------------
 
 
-def test__sdpa_backend_default_path_unchanged_when_fa3_unavailable() -> None:
-    """Auto on CPU/non-Hopper falls back silently to SDPA; matches explicit sdpa."""
+def test__sdpa_backend_default_path_unchanged_when_fa3_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auto on CPU/non-Hopper falls back silently to SDPA; output is correct."""
     q, k, v = _make_qkv(
         batch=1,
         seq_q=8,
@@ -76,38 +78,15 @@ def test__sdpa_backend_default_path_unchanged_when_fa3_unavailable() -> None:
         dtype=torch.float32,
     )
 
-    out_auto = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.AUTO
-    )
-    out_sdpa = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.SDPA
-    )
-    # The enum is a ``str``-mixin, so passing the bare string should also work.
-    out_sdpa_str = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend="sdpa"
-    )
+    # Patch FA3 as unavailable to confirm SDPA path is taken.
+    monkeypatch.setattr(fa3_backend, "is_fa3_importable", lambda: False)
+    out_no_fa3 = _batched_scaled_dot_product_attention(q, k, v)
 
-    torch.testing.assert_close(out_auto, out_sdpa)
-    torch.testing.assert_close(out_sdpa, out_sdpa_str)
+    # Without patch: CPU can't use FA3 (no Hopper), so output must match.
+    monkeypatch.undo()
+    out_auto = _batched_scaled_dot_product_attention(q, k, v)
 
-
-def test__forced_fa3_raises_with_actionable_message_when_ineligible() -> None:
-    """Forced FA3 on CPU/non-Hopper raises a clear error, not a silent fallback."""
-    q, k, v = _make_qkv(
-        batch=1,
-        seq_q=4,
-        seq_kv=4,
-        n_heads_q=2,
-        n_heads_kv=2,
-        head_dim=16,
-        device="cpu",
-        dtype=torch.float32,
-    )
-
-    with pytest.raises(RuntimeError, match="FA3"):
-        _batched_scaled_dot_product_attention(
-            q, k, v, attention_backend=AttentionBackend.FA3
-        )
+    torch.testing.assert_close(out_no_fa3, out_auto)
 
 
 def test__eligibility_rejects_unsupported_head_dim() -> None:
@@ -115,7 +94,7 @@ def test__eligibility_rejects_unsupported_head_dim() -> None:
     if not torch.cuda.is_available():
         pytest.skip("eligibility check needs CUDA tensor")
     q = torch.zeros(1, 4, 2, 16, device="cuda", dtype=torch.float16)
-    assert not is_fa3_eligible_for(q)
+    assert not is_fa3_eligible(q)
 
 
 def test__preferred_falls_back_to_sdpa_below_seqlen_threshold(
@@ -126,24 +105,24 @@ def test__preferred_falls_back_to_sdpa_below_seqlen_threshold(
     Capability is mocked True so we exercise just the perf threshold; this
     keeps the test runnable on any host (no Hopper required).
     """
-    monkeypatch.setattr(fa3_backend, "is_fa3_eligible_for", lambda _q: True)
+    monkeypatch.setattr(fa3_backend, "is_fa3_eligible", lambda _q: True)
 
     seq_below = fa3_backend._FA3_MIN_SEQLEN_FOR_SPEEDUP - 1
     seq_at = fa3_backend._FA3_MIN_SEQLEN_FOR_SPEEDUP
     q_small = torch.zeros(1, seq_below, 8, 64)
     k_small = torch.zeros(1, seq_below, 8, 64)
-    assert not is_fa3_preferred_for(q_small, k_small)
+    assert not is_fa3_preferred(q_small, k_small)
 
     q_at = torch.zeros(1, seq_at, 8, 64)
     k_at = torch.zeros(1, seq_at, 8, 64)
-    assert is_fa3_preferred_for(q_at, k_at)
+    assert is_fa3_preferred(q_at, k_at)
 
     # Cross-attention with small Q but large K (e.g. test queries against
     # a large support set) should still route through FA3 — the per-call
     # work is dominated by K and amortises FA3's overhead.
     q_small_q = torch.zeros(1, 256, 8, 64)
     k_large_k = torch.zeros(1, 100_000, 8, 64)
-    assert is_fa3_preferred_for(q_small_q, k_large_k)
+    assert is_fa3_preferred(q_small_q, k_large_k)
 
 
 # ---------------------------------------------------------------------
@@ -153,7 +132,9 @@ def test__preferred_falls_back_to_sdpa_below_seqlen_threshold(
 
 @pytest.mark.hopper
 @_skip_unless_fa3
-def test__fa3_batch_heads_above_cuda_max_grid() -> None:
+def test__fa3_batch_heads_above_cuda_max_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """FA3 must handle B*H > CUDA_MAX_GRID (65536) without silent failure.
 
     The SDPA path explicitly chunks at 65536 to work around pytorch
@@ -173,12 +154,14 @@ def test__fa3_batch_heads_above_cuda_max_grid() -> None:
     k = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
     v = torch.randn(batch, seq, n_heads, head_dim, device="cuda", dtype=torch.float16)
 
-    out_sdpa = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.SDPA
-    )
-    out_fa3 = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.FA3
-    )
+    # SDPA reference: patch FA3 as unavailable so auto-dispatch uses SDPA.
+    monkeypatch.setattr(fa3_backend, "is_fa3_importable", lambda: False)
+    out_sdpa = _batched_scaled_dot_product_attention(q, k, v)
+    monkeypatch.undo()
+
+    # FA3 run: force FA3 regardless of seqlen threshold (seq=16 < threshold).
+    monkeypatch.setattr(_sdpa_mod, "is_fa3_preferred", lambda *_: True)
+    out_fa3 = _batched_scaled_dot_product_attention(q, k, v)
 
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)
 
@@ -203,6 +186,7 @@ def test__fa3_matches_sdpa_within_tolerance(
     n_heads_q: int,
     n_heads_kv: int,
     dtype: torch.dtype,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     q, k, v = _make_qkv(
         batch=2,
@@ -215,12 +199,14 @@ def test__fa3_matches_sdpa_within_tolerance(
         dtype=dtype,
     )
 
-    out_sdpa = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.SDPA
-    )
-    out_fa3 = _batched_scaled_dot_product_attention(
-        q, k, v, attention_backend=AttentionBackend.FA3
-    )
+    # SDPA reference: patch FA3 as unavailable so auto-dispatch uses SDPA.
+    monkeypatch.setattr(fa3_backend, "is_fa3_importable", lambda: False)
+    out_sdpa = _batched_scaled_dot_product_attention(q, k, v)
+    monkeypatch.undo()
+
+    # FA3 run: force FA3 regardless of seqlen threshold.
+    monkeypatch.setattr(_sdpa_mod, "is_fa3_preferred", lambda *_: True)
+    out_fa3 = _batched_scaled_dot_product_attention(q, k, v)
 
     # 5e-3 abs matches the contributor's test_fa3.py for the same shapes.
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)

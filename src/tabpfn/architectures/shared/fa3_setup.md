@@ -8,9 +8,6 @@ to this file) for the measured numbers and the [auto-mode threshold
 section](#auto-also-applies-a-sequence-length-threshold) below for how the
 constant is applied at dispatch time.
 
-This is **opt-in**. Default is `AttentionBackend.AUTO`, which uses FA3 when
-eligible and SDPA otherwise.
-
 ## When FA3 is used
 
 The dispatcher routes a call to FA3 only when **all** of the following hold:
@@ -20,32 +17,12 @@ The dispatcher routes a call to FA3 only when **all** of the following hold:
   (compute capability 9.0+).
 - The dtype is `torch.float16` or `torch.bfloat16`.
 - The head dimension is one of `{64, 96, 128, 192, 256}`.
-
-Calls that don't satisfy these (e.g. v3's `dist_embedder` with head_dim=16)
-fall back to SDPA in `auto` mode, or raise in `fa3` mode.
-
-### `auto` also applies a sequence-length threshold
-
-Beyond the capability gates above, `auto` mode additionally requires
-`max(seq_q, seq_kv) >= _FA3_MIN_SEQLEN_FOR_SPEEDUP` (currently `10_000`,
-defined in `fa3_backend.py`). Below that threshold, FA3's per-call
-dispatch overhead exceeds its kernel-throughput win and SDPA is faster
-end-to-end — so `auto` falls back to SDPA. The threshold is a pure
-performance tuning, not a capability gate, and is therefore **bypassed
-when `attention_backend="fa3"` is forced** (force still requires the
-capability gates, but always picks FA3 once those pass, even on small
-shapes).
-
-The 10 000 crossover comes from a v3 forward-pass H100 benchmark: SDPA wins
-by 10–15 % at `n_train=1k`; FA3 starts to win at `n_train=10k` (decisively
-at `n_features=10`, near parity at `n_features=100/500`); FA3 wins uniformly
-from `n_train=100k` upward, reaching 1.49–1.73× at `n_train=10⁶`. Update the
-constant if later kernels move the crossover.
-
-`max(seq_q, seq_kv)` rather than `seq_q` alone so cross-attention with
-small queries against a large support set (e.g. test rows querying a
-million-row train cache) still routes through FA3 — the per-call work
-there is dominated by the K/V side and amortises FA3's overhead.
+- `max(seq_q, seq_kv) >= _FA3_MIN_SEQLEN_FOR_SPEEDUP` (currently `10_000`,
+  defined in `fa3_backend.py`) The 10 000 crossover comes from a v3 forward-pass
+  H100 benchmark: SDPA wins by 10–15 % at `n_train=1k`; FA3 starts to win
+  at `n_train=10k` (decisively at `n_features=10`, near parity at `n_features=100/500`);
+  FA3 wins uniformly from `n_train=100k` upward, reaching 1.49–1.73× at `n_train=10⁶`.
+  Update the constant if later kernels move the crossover.
 
 ## Building the FA3 wheel
 
@@ -103,31 +80,6 @@ The build node and runtime node must agree on:
 Build takes ~30–60 min and ~32 GB RAM; cache the wheel on shared storage so
 later H100 nodes can `pip install` directly without rebuilding.
 
-## Selecting the backend
-
-Pass `attention_backend` via `PerformanceOptions`. The
-`AttentionBackend` enum is a `str`-mixin, so the bare strings `"auto"`,
-`"sdpa"` and `"fa3"` are also accepted.
-
-```python
-from tabpfn.architectures.interface import AttentionBackend, PerformanceOptions
-
-# Auto: FA3 if eligible, SDPA otherwise (recommended)
-options = PerformanceOptions(attention_backend=AttentionBackend.AUTO)
-
-# Force SDPA — useful for A/B comparison
-options = PerformanceOptions(attention_backend=AttentionBackend.SDPA)
-
-# Force FA3 — raises RuntimeError if ineligible. Bypasses the
-# auto-mode seqlen threshold, so FA3 will run even at small shapes
-# where SDPA would win — useful for A/B comparison and for users
-# who know their workload sits above the crossover anyway.
-options = PerformanceOptions(attention_backend=AttentionBackend.FA3)
-
-model(x, y, performance_options=options)
-```
-
-The setting applies for the duration of one `forward()` call only.
 
 ## Numerical equivalence
 

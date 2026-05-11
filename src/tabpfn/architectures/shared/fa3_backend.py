@@ -21,8 +21,7 @@ _FA3_SUPPORTED_HEAD_DIMS = frozenset({64, 96, 128, 192, 256})
 
 # Below this Q/K sequence length, FA3's per-call dispatch overhead exceeds
 # its kernel-throughput win, so SDPA is faster end-to-end. Used by
-# ``is_fa3_preferred_for`` to gate the ``auto`` dispatch only — forcing
-# ``attention_backend="fa3"`` still routes to FA3 below the threshold.
+# ``is_fa3_preferred`` to gate the auto dispatch.
 # Crossover measured on H100 + v3 ICL self-attention: SDPA wins at n_train=1k
 # by 10-15%; FA3 wins at n_train=10k (decisively at n_features=10, ~parity at
 # n_features=100/500); FA3 wins uniformly from n_train=100k upward.
@@ -59,55 +58,27 @@ def _is_hopper(device: torch.device) -> bool:
     return cap[0] == _HOPPER_COMPUTE_CAPABILITY_MAJOR
 
 
-def is_fa3_eligible_for(q: torch.Tensor) -> bool:
+def is_fa3_eligible(q: torch.Tensor) -> bool:
     """True iff FA3 can serve this attention call (capability gate, not perf)."""
-    if not is_fa3_importable():
-        return False
-    if not q.is_cuda:
-        return False
-    if not _is_hopper(q.device):
-        return False
-    if q.dtype not in (torch.float16, torch.bfloat16):
-        return False
     head_dim = q.shape[-1]
-    return head_dim in _FA3_SUPPORTED_HEAD_DIMS
+    return (
+        is_fa3_importable()
+        and q.is_cuda
+        and _is_hopper(q.device)
+        and q.dtype in (torch.float16, torch.bfloat16)
+        and head_dim in _FA3_SUPPORTED_HEAD_DIMS
+    )
 
 
-def is_fa3_preferred_for(q: torch.Tensor, k: torch.Tensor) -> bool:
+def is_fa3_preferred(q: torch.Tensor, k: torch.Tensor) -> bool:
     """True iff FA3 is eligible and past the speedup threshold.
 
     Compares ``max(seq_q, seq_kv)`` against :data:`_FA3_MIN_SEQLEN_FOR_SPEEDUP`.
     """
-    if not is_fa3_eligible_for(q):
-        return False
     # max(seq_q, seq_kv) so cross-attention with small Q against a large K
     # (test queries vs train cache) still routes through FA3.
-    return max(q.shape[1], k.shape[1]) >= _FA3_MIN_SEQLEN_FOR_SPEEDUP
-
-
-def fa3_unavailable_reason(q: torch.Tensor) -> str:
-    """Human-readable explanation of why FA3 cannot be used for this call."""
-    if not is_fa3_importable():
-        return (
-            "FA3 package 'flash_attn_interface' not importable; "
-            "see fa3_setup.md (next to this file) to build from source on Hopper."
-        )
-    if not q.is_cuda:
-        return f"FA3 requires CUDA tensors; got device {q.device}."
-    if not _is_hopper(q.device):
-        return (
-            "FA3 requires a Hopper Nvidia GPU (H100/H200, compute capability "
-            "9.x). Blackwell needs FlashAttention-4, a separate toolchain."
-        )
-    if q.dtype not in (torch.float16, torch.bfloat16):
-        return f"FA3 requires fp16/bf16; got {q.dtype}."
-    head_dim = q.shape[-1]
-    if head_dim not in _FA3_SUPPORTED_HEAD_DIMS:
-        return (
-            f"FA3 supports head_dim in {sorted(_FA3_SUPPORTED_HEAD_DIMS)}; "
-            f"got {head_dim}."
-        )
-    return ""  # eligible
+    max_seq_len = max(q.shape[1], k.shape[1])
+    return is_fa3_eligible(q) and max_seq_len >= _FA3_MIN_SEQLEN_FOR_SPEEDUP
 
 
 def fa3_attn_func(
