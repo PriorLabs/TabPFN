@@ -187,7 +187,7 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 ### **Usage & Compatibility**
 
 **Q: What dataset sizes work best with TabPFN?**
-A: TabPFN-2.5 is optimized for **datasets up to 50,000 rows**. For larger datasets, consider using **Random Forest preprocessing** or other extensions. See our [Colab notebook](https://colab.research.google.com/drive/154SoIzNW1LHBWyrxNwmBqtFAr1uZRZ6a#scrollTo=OwaXfEIWlhC8) for strategies.
+A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) is recommended for up to **1,000,000 rows** and **2,000 features**. If your dataset exceeds the recommended row limit for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
 
 **Q: Why can't I use TabPFN with Python 3.8?**
 A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
