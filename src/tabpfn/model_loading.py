@@ -924,6 +924,13 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 
 def _load_checkpoint(path: str) -> dict:
     """Load a checkpoint from disk."""
+    checkpoint_path = Path(path)
+
+    if checkpoint_path.suffix == ".safetensors":
+        from tabpfn.safetensors_checkpoint import load_safetensors_checkpoint
+
+        return load_safetensors_checkpoint(checkpoint_path)
+
     # Catch the `FutureWarning` that torch raises. This should be dealt with!
     # The warning is raised due to `torch.load`, which advises against ckpt
     # files that contain non-tensor data.
