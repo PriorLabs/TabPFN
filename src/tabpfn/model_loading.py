@@ -604,7 +604,7 @@ def load_model_criterion_config(  # noqa: PLR0912
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -838,7 +838,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"],
 ) -> tuple[
     list[Path],
     list[Path],

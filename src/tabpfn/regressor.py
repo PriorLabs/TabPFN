@@ -818,9 +818,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             self.fit_mode = "fit_preprocessors"
 
-        if self.fit_mode == "fit_with_cache" and (
-            self.model_path == "auto" or "v2.6" in str(self.model_path)
-        ):
+        if self.fit_mode == "fit_with_cache" and "v2.6" in str(self.model_path):
             raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
 
         static_seed, _ = infer_random_state(self.random_state)
