@@ -169,22 +169,22 @@ class ModelSource:  # noqa: D101
     @classmethod
     def get_classifier_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v3-classifier-20260506.ckpt",
+            "tabpfn-v3-classifier-v3_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
-            default_filename="tabpfn-v3-classifier-20260506.ckpt",
+            default_filename="tabpfn-v3-classifier-v3_default.ckpt",
             filenames=filenames,
         )
 
     @classmethod
     def get_regressor_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
-            "tabpfn-v3-regressor-20260506.ckpt",
+            "tabpfn-v3-regressor-v3_default.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
-            default_filename="tabpfn-v3-regressor-20260506.ckpt",
+            default_filename="tabpfn-v3-regressor-v3_default.ckpt",
             filenames=filenames,
         )
 
@@ -975,10 +975,10 @@ def load_model(
     )
 
     if "test_targets_MB" in inspect.signature(model.forward).parameters:
-        # The model computes the loss internally. Support for this was only added after
-        # v2.5, so we can safely assume that the inference config is stored in the
-        # checkpoint.
-        model.load_state_dict(full_state)
+        # The model computes the loss internally. Strip criterion keys that
+        # save_tabpfn_model may have written so load_state_dict doesn't reject them.
+        model_state = {k: v for k, v in full_state.items() if "criterion." not in k}
+        model.load_state_dict(model_state)
         model.eval()
         inference_config = InferenceConfig(
             **_rename_old_inference_config_keys(checkpoint["inference_config"])
@@ -1102,6 +1102,7 @@ def save_tabpfn_model(
             "state_dict": state_dict,
             "config": asdict(config),
             "architecture_name": architecture_name,
+            "inference_config": asdict(model.inference_config_),
         }
         if inference_config is not None:
             checkpoint["inference_config"] = asdict(inference_config)
@@ -1227,11 +1228,14 @@ def load_fitted_tabpfn_model(
 
 def _resolve_architecture_name(config: ArchitectureConfig) -> str:
     """Resolve the architecture name from the config."""
-    name = getattr(config, "name", "")
-    if "v3" in name:
+    from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5Config  # noqa: PLC0415
+    from tabpfn.architectures.tabpfn_v2_6 import TabPFNV2p6Config  # noqa: PLC0415
+    from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config  # noqa: PLC0415
+
+    if isinstance(config, TabPFNV3Config):
         return "tabpfn_v3"
-    if "2.6" in name:
+    if isinstance(config, TabPFNV2p6Config):
         return "tabpfn_v2_6"
-    if "2.5" in name:
+    if isinstance(config, TabPFNV2p5Config):
         return "tabpfn_v2_5"
     return "base"
