@@ -219,7 +219,9 @@ This script will download the main classifier and regressor models, as well as a
 
 **Manual Download**
 
-1. Download the model files manually from the [Prior Labs Hugging Face org](https://huggingface.co/Prior-Labs). Pick the release you want and grab the default classifier and regressor checkpoints — for the current default (TabPFN-3) those are `tabpfn-v3-classifier-20260506.ckpt` and `tabpfn-v3-regressor-20260506.ckpt`.
+1. Download the model files manually from HuggingFace:
+   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
+   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
