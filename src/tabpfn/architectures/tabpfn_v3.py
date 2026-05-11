@@ -265,13 +265,17 @@ class TabPFNV3Cache:
         return total // (1024 * 1024)
 
 
+# MATH is the reference implementation. Keeping it as a final fallback
+# avoids "No available kernel" errors on GPUs where none of the fast
+# backends are eligible — e.g. FlashAttention requires sm80+, so on a
+# Turing card (sm75, T4) all three faster backends bail and SDPA crashes
+# without this entry.
 _SDPA_BACKENDS = [
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
-    SDPBackend.MATH,  # fallback for older GPUs or unsupported configurations
+    SDPBackend.MATH,
 ]
-_SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS]
 
 
 # ---------------------------------------------------------------------------
@@ -700,9 +704,7 @@ def _batched_scaled_dot_product_attention(
     if _backends_override is not None:
         backends = _backends_override
     else:
-        backends = (
-            _SDPA_BACKENDS_CPU if not torch.cuda.is_available() else _SDPA_BACKENDS
-        )
+        backends = _SDPA_BACKENDS
 
     num_parallel_calls = q_BHSD.shape[:2].numel()
     torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.
