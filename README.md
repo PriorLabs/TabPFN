@@ -73,7 +73,7 @@ For complete examples, see the [tabpfn_for_binary_classification.py](https://git
 - **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
 - **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
 - **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
-- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. The current default (**TabPFN-3**) is recommended for up to **1,000,000 rows** and **2,000 features**; see the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
+- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. The current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features) — larger feature counts trade off against row capacity. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
 
 ## TabPFN Ecosystem
 
@@ -118,7 +118,7 @@ tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 
 For high-throughput or massive-scale production environments, we offer an **Enterprise Edition** with the following capabilities:
 -   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
--   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**, beyond the default TabPFN-3 limit of 1 million rows.
+-   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**, well beyond TabPFN-3's highest supported operating point of 1 million rows.
 -   **Commercial Support**: Includes a Commercial Enterprise License for production use-cases, dedicated integration support, and access to private high-speed inference engines.
 
 **To learn more or request a commercial license, please contact us at [sales@priorlabs.ai](mailto:sales@priorlabs.ai).**
@@ -187,7 +187,7 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 ### **Usage & Compatibility**
 
 **Q: What dataset sizes work best with TabPFN?**
-A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) is recommended for up to **1,000,000 rows** and **2,000 features**, and the previous default (**TabPFN-2.6**) for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended row limit for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features); larger feature counts trade off against row capacity. The previous default (**TabPFN-2.6**) is recommended for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended limits for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
 
 **Q: Why can't I use TabPFN with Python 3.8?**
 A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
