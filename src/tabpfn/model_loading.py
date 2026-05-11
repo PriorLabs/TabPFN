@@ -838,7 +838,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"],
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v3",
 ) -> tuple[
     list[Path],
     list[Path],
