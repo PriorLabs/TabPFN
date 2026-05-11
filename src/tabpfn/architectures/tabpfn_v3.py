@@ -701,10 +701,9 @@ def _batched_scaled_dot_product_attention(
         values = v_BJSD.repeat_interleave(repeat, dim=-3)
         enable_gqa = {}
 
-    if _backends_override is not None:
-        backends = _backends_override
-    else:
-        backends = _SDPA_BACKENDS
+    backends = (
+        _backends_override if _backends_override is not None else _SDPA_BACKENDS
+    )
 
     num_parallel_calls = q_BHSD.shape[:2].numel()
     torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.
