@@ -73,7 +73,7 @@ For complete examples, see the [tabpfn_for_binary_classification.py](https://git
 - **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
 - **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
 - **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
-- **Mind the dataset size**: TabPFN works best on datasets with fewer than 100,000 samples and 2000 features. For larger datasets, we recommend looking at the [Large datasets guide](https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py).
+- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits — see the [Models page](https://docs.priorlabs.ai/models) for the per-checkpoint row/feature limits.
 
 ## TabPFN Ecosystem
 
@@ -89,9 +89,6 @@ Choose the right TabPFN implementation for your needs:
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
   -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
-  -  **`rf_pfn`**: Combine TabPFN with traditional models like Random Forests for hybrid approaches.
-  -  **`hpo`**: Automated hyperparameter optimization tailored to TabPFN.
-  -  **`post_hoc_ensembles`**: Boost performance by ensembling multiple TabPFN models post-training.
 
   To install:
   ```bash
@@ -104,150 +101,6 @@ Choose the right TabPFN implementation for your needs:
 
 - **[TabPFN UX](https://ux.priorlabs.ai)**
   No-code graphical interface to explore TabPFN capabilities—ideal for business users and prototyping.
-
-## TabPFN Workflow at a Glance
-Follow this decision tree to build your model and choose the right extensions from our ecosystem. It walks you through critical questions about your data, hardware, and performance needs, guiding you to the best solution for your specific use case.
-
-```mermaid
----
-config:
-  theme: 'default'
-  themeVariables:
-    edgeLabelBackground: 'white'
----
-graph LR
-    %% 1. DEFINE COLOR SCHEME & STYLES
-    classDef default fill:#fff,stroke:#333,stroke-width:2px,color:#333;
-    classDef start_node fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#333;
-    classDef process_node fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#333;
-    classDef decision_node fill:#fff8e1,stroke:#ffa000,stroke-width:2px,color:#333;
-
-    style Infrastructure fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Unsupervised fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Data fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Performance fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Interpretability fill:#fff,stroke:#ccc,stroke-width:5px;
-
-    %% 2. DEFINE GRAPH STRUCTURE
-    subgraph Infrastructure
-        start((Start)) --> gpu_check["GPU available?"];
-        gpu_check -- Yes --> local_version["Use TabPFN<br/>(local PyTorch)"];
-        gpu_check -- No --> api_client["Use TabPFN-Client<br/>(cloud API)"];
-        task_type["What is<br/>your task?"]
-    end
-
-    local_version --> task_type
-    api_client --> task_type
-
-    end_node((Workflow<br/>Complete));
-
-    subgraph Unsupervised
-        unsupervised_type["Select<br/>Unsupervised Task"];
-        unsupervised_type --> imputation["Imputation"]
-        unsupervised_type --> data_gen["Data<br/>Generation"];
-        unsupervised_type --> tabebm["Data<br/>Augmentation"];
-        unsupervised_type --> density["Outlier<br/>Detection"];
-        unsupervised_type --> embedding["Get<br/>Embeddings"];
-    end
-
-
-    subgraph Data
-        data_check["Data Checks"];
-        model_choice["Samples > 50k or<br/>Classes > 10?"];
-        data_check -- "Table Contains Text Data?" --> api_backend_note["Note: API client has<br/>native text support"];
-        api_backend_note --> model_choice;
-        data_check -- "Time-Series Data?" --> ts_features["Use Time-Series<br/>Features"];
-        ts_features --> model_choice;
-        data_check -- "Purely Tabular" --> model_choice;
-        model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, 50k-100k samples" --> ignore_limits["Set<br/>ignore_pretraining_limits=True"];
-        model_choice -- "Yes, >100k samples" --> subsample["Large Datasets Guide<br/>"];
-        model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
-    end
-
-    subgraph Performance
-        finetune_check["Need<br/>Finetuning?"];
-        performance_check["Need Even Better Performance?"];
-        speed_check["Need faster inference<br/>at prediction time?"];
-        kv_cache["Enable KV Cache<br/>(fit_mode='fit_with_cache')<br/><small>Faster predict; +Memory ~O(N×F)</small>"];
-        tuning_complete["Tuning Complete"];
-
-        finetune_check -- Yes --> finetuning["Finetuning"];
-        finetune_check -- No --> performance_check;
-
-        finetuning --> performance_check;
-
-        performance_check -- No --> tuning_complete;
-        performance_check -- Yes --> hpo["HPO"];
-        performance_check -- Yes --> post_hoc["Post-Hoc<br/>Ensembling"];
-        performance_check -- Yes --> more_estimators["More<br/>Estimators"];
-        performance_check -- Yes --> speed_check;
-
-        speed_check -- Yes --> kv_cache;
-        speed_check -- No --> tuning_complete;
-
-        hpo --> tuning_complete;
-        post_hoc --> tuning_complete;
-        more_estimators --> tuning_complete;
-        kv_cache --> tuning_complete;
-    end
-
-    subgraph Interpretability
-
-        tuning_complete --> interpretability_check;
-
-        interpretability_check["Need<br/>Interpretability?"];
-
-        interpretability_check --> feature_selection["Feature Selection"];
-        interpretability_check --> partial_dependence["Partial Dependence Plots"];
-        interpretability_check --> shapley["Explain with<br/>SHAP"];
-        interpretability_check --> shap_iq["Explain with<br/>SHAP IQ"];
-        interpretability_check -- No --> end_node;
-
-        feature_selection --> end_node;
-        partial_dependence --> end_node;
-        shapley --> end_node;
-        shap_iq --> end_node;
-
-    end
-
-    %% 3. LINK SUBGRAPHS AND PATHS
-    task_type -- "Classification or Regression" --> data_check;
-    task_type -- "Unsupervised" --> unsupervised_type;
-
-    subsample --> finetune_check;
-    ignore_limits --> finetune_check;
-    many_class --> finetune_check;
-
-    %% 4. APPLY STYLES
-    class start,end_node start_node;
-    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,ignore_limits,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators,kv_cache process_node;
-    class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check,speed_check decision_node;
-    class tuning_complete process_node;
-
-    %% 5. ADD CLICKABLE LINKS (INCLUDING KV CACHE EXAMPLE)
-    click local_version "https://github.com/PriorLabs/TabPFN" "TabPFN Backend Options"
-    click api_client "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Client"
-    click api_backend_note "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Backend"
-    click unsupervised_type "https://github.com/PriorLabs/tabpfn-extensions" "TabPFN Extensions"
-    click imputation "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/imputation.py" "TabPFN Imputation Example"
-    click data_gen "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/generate_data.py" "TabPFN Data Generation Example"
-    click tabebm "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/tabebm/tabebm_augment_real_world_data.ipynb" "TabEBM Data Augmentation Example"
-    click density "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/density_estimation_outlier_detection.py" "TabPFN Density Estimation/Outlier Detection Example"
-    click embedding "https://github.com/PriorLabs/tabpfn-extensions/tree/main/examples/embedding" "TabPFN Embedding Example"
-    click ts_features "https://github.com/PriorLabs/tabpfn-time-series" "TabPFN Time-Series Example"
-    click many_class "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/many_class/many_class_classifier_example.py" "Many Class Example"
-    click finetuning "https://github.com/PriorLabs/TabPFN/blob/main/examples/finetune_classifier.py" "Finetuning Example"
-    click feature_selection "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/feature_selection.py" "Feature Selection Example"
-    click partial_dependence "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/pdp_example.py" "Partial Dependence Plots Example"
-    click shapley "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/shap_example.py" "Shapley Values Example"
-    click shap_iq "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/shapiq_example.py" "SHAP IQ Example"
-    click post_hoc "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/phe/phe_example.py" "Post-Hoc Ensemble Example"
-    click hpo "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/hpo/tuned_tabpfn.py" "HPO Example"
-    click subsample "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py" "Large Datasets Example"
-    click kv_cache "https://github.com/PriorLabs/TabPFN/blob/main/examples/kv_cache_fast_prediction.py" "KV Cache Fast Prediction Example"
-
-```
 
 ## License
 
@@ -439,15 +292,15 @@ A: **Yes!**
 
 **Q: How can I improve TabPFN’s performance?**
 A: Best practices:
-- Use **AutoTabPFNClassifier** from [TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions) for post-hoc ensembling
 - Feature engineering: Add domain-specific features to improve model performance
+- See the [Improving Performance guide](https://docs.priorlabs.ai/improving-performance) for the full escalation path
 
 Not effective:
 - Adapt feature scaling
 - Convert categorical features to numerical values (e.g., one-hot encoding)
 
 **Q: What are the different checkpoints on [Hugging-Face](https://huggingface.co/Prior-Labs/tabpfn_2_5/tree/main)?**
-A: Beyond the default checkpoints, the other available checkpoints are experimental and worse on average, and we recommend to always start with the defaults. They can be used as part of an ensembling or hyperparameter optimization system (and are used automatically in `AutoTabPFNClassifier`) or tried out manually. Their name suffixes refer to what we expect them to be good at.
+A: Beyond the default checkpoints, the other available checkpoints are experimental and worse on average, and we recommend to always start with the defaults. They can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
 <details>
 <summary>More detail on each TabPFN-2.5 checkpoint</summary>
