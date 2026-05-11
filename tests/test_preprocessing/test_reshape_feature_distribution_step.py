@@ -478,9 +478,10 @@ def test__reshape_step_append_original_logic(
     )
 
 
-def test__schedule_quantile_for_gpu__auto_resolves_to_false__numerical_columns_marked():
+def test__schedule_gpu_transform__auto_resolves_to_false__numerical_columns_marked():
     """When append_to_original='auto' resolves to False, numerical columns must
-    be marked with GPUTransformType.QUANTILE when schedule_quantile_for_gpu=True.
+    be marked with GPUTransformType.QUANTILE when
+    schedule_gpu_transform=GPUTransformType.QUANTILE.
     """
     rng = np.random.default_rng(42)
     n_samples, n_features = 100, 4
@@ -493,7 +494,7 @@ def test__schedule_quantile_for_gpu__auto_resolves_to_false__numerical_columns_m
         transform_name="quantile_uni",
         append_to_original="auto",
         max_features_per_estimator=6,
-        schedule_quantile_for_gpu=True,
+        schedule_gpu_transform=GPUTransformType.QUANTILE,
         random_state=42,
     )
     result = step.fit_transform(X, feature_schema)

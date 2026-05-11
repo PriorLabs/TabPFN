@@ -204,6 +204,77 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         return self._qt.transform(x, fitted_cache=fitted_cache), None, None
 
 
+class TorchSelectiveSquashingScalerStep(TorchPreprocessingStep):
+    """Squashing scaler that only transforms specified column indices.
+
+    Mirrors :class:`TorchSelectiveQuantileTransformerStep`: this step needs to be
+    registered with ``modalities=None`` in the GPU pipeline so it receives the full
+    tensor. It selects only preconfigured ``target_column_indices`` and applies the
+    squashing scaler, writing the results back. All other columns are left
+    unchanged.
+    """
+
+    def __init__(
+        self,
+        max_absolute_value: float,
+        target_column_indices: list[int],
+        quantile_range: tuple[float, float] = (25.0, 75.0),
+    ) -> None:
+        super().__init__()
+        self._scaler = TorchSquashingScaler(
+            max_absolute_value=max_absolute_value,
+            quantile_range=quantile_range,
+        )
+        self._target_column_indices = target_column_indices
+
+    @override
+    def fit_transform(
+        self,
+        x: torch.Tensor,
+        column_indices: list[int],
+        num_train_rows: int,
+        fitted_cache: dict[str, torch.Tensor] | None = None,
+    ) -> TorchPreprocessingStepResult:
+        """Override to select only target columns for squashing scaler."""
+        del column_indices
+        orig_device = x.device
+        target_x = x[:, :, self._target_column_indices]
+
+        # The squashing scaler is dominated by torch.nanquantile (sort-based)
+        # plus several small element-wise kernels.  On MPS, per-kernel launch
+        # overhead makes this slower than CPU; on CUDA the GPU is preferred.
+        run_on_cpu = orig_device.type == "mps"
+        if run_on_cpu:
+            target_x = target_x.cpu()
+
+        if fitted_cache is None:
+            fitted_cache = self._scaler.fit(target_x[:num_train_rows])
+        else:
+            fitted_cache = _move_cache_to_device(fitted_cache, target_x.device)
+
+        transformed = self._scaler.transform(target_x, fitted_cache=fitted_cache)
+
+        if run_on_cpu:
+            transformed = transformed.to(orig_device)
+
+        x = x.clone()
+        x[:, :, self._target_column_indices] = transformed
+
+        return TorchPreprocessingStepResult(x=x, fitted_cache=fitted_cache)
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        return self._scaler.fit(x)
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        return self._scaler.transform(x, fitted_cache=fitted_cache), None, None
+
+
 class TorchShuffleFeaturesStep(TorchPreprocessingStep):
     """Shuffle features on GPU, consistent with CPU ShuffleFeaturesStep.
 

@@ -35,6 +35,7 @@ class GPUTransformType(str, Enum):
     """
 
     QUANTILE = "quantile"
+    SQUASHING_SCALER = "squashing_scaler"
 
 
 @dataclasses.dataclass
@@ -116,6 +117,14 @@ class FeatureSchema:
             i
             for i, f in enumerate(self.features)
             if f.scheduled_gpu_transform == GPUTransformType.QUANTILE
+        ]
+
+    def get_indices_marked_for_gpu_squashing_scaler_transform(self) -> list[int]:
+        """Get column indices marked for GPU squashing scaler transform."""
+        return [
+            i
+            for i, f in enumerate(self.features)
+            if f.scheduled_gpu_transform == GPUTransformType.SQUASHING_SCALER
         ]
 
     def clear_gpu_transform_marks(self) -> FeatureSchema:
