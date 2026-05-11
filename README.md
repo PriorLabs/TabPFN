@@ -104,7 +104,7 @@ Choose the right TabPFN implementation for your needs:
 
 ## License
 
-The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE). TabPFN-3 is used by default.
+The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-commercial licenses — see each release on the [Prior Labs Hugging Face org](https://huggingface.co/Prior-Labs) for the exact terms. TabPFN-3 is used by default.
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
@@ -219,9 +219,7 @@ This script will download the main classifier and regressor models, as well as a
 
 **Manual Download**
 
-1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
-   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
+1. Download the model files manually from the [Prior Labs Hugging Face org](https://huggingface.co/Prior-Labs). Pick the release you want and grab the default classifier and regressor checkpoints — for the current default (TabPFN-3) those are `tabpfn-v3-classifier-20260506.ckpt` and `tabpfn-v3-regressor-20260506.ckpt`.
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
