@@ -41,7 +41,7 @@ uv sync
 
 ### Basic Usage
 
-To use our default TabPFN-2.6 model, trained purely on synthetic data:
+To use our default TabPFN-3 model:
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -55,14 +55,14 @@ reg.fit(X_train, y_train)  # downloads checkpoint on first use
 predictions = reg.predict(X_test)
 ```
 
-To use other model versions (e.g. TabPFN-2.5):
+To use other model versions (e.g. the previous default, TabPFN-2.6):
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
-classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
-regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
+regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 ```
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
@@ -104,7 +104,7 @@ Choose the right TabPFN implementation for your needs:
 
 ## License
 
-The TabPFN-2.5 and TabPFN-2.6 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_2_6/blob/main/LICENSE). These are used by default.
+The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE). TabPFN-3 is used by default.
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
@@ -117,8 +117,8 @@ tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 ## Enterprise & Production
 
 For high-throughput or massive-scale production environments, we offer an **Enterprise Edition** with the following capabilities:
--   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN-2.6 into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
--   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**—a 1,000x increase over the default TabPFN-2.5 and TabPFN-2.6 models.
+-   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
+-   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**, beyond the default TabPFN-3 limit of 1 million rows.
 -   **Commercial Support**: Includes a Commercial Enterprise License for production use-cases, dedicated integration support, and access to private high-speed inference engines.
 
 **To learn more or request a commercial license, please contact us at [sales@priorlabs.ai](mailto:sales@priorlabs.ai).**
@@ -187,14 +187,14 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 ### **Usage & Compatibility**
 
 **Q: What dataset sizes work best with TabPFN?**
-A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-2.6**) is recommended for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended row limit for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) is recommended for up to **1,000,000 rows** and **2,000 features**, and the previous default (**TabPFN-2.6**) for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended row limit for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
 
 **Q: Why can't I use TabPFN with Python 3.8?**
 A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
 
 ### **Installation & Setup**
 
-**Q: How do I get access to TabPFN-2.5 / TabPFN-2.6?**
+**Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3?**
 
 On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
@@ -220,8 +220,8 @@ This script will download the main classifier and regressor models, as well as a
 **Manual Download**
 
 1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v2.5-classifier-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-classifier-v2.5_default.ckpt) (Note: the classifier default uses the model fine-tuned on real data).
-   - Regressor: [tabpfn-v2.5-regressor-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-regressor-v2.5_default.ckpt)
+   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
+   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
