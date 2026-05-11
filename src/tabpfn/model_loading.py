@@ -499,14 +499,13 @@ def _download_model(
         ModelVersion.V2_6: "tabpfn_2_6",
         ModelVersion.V3: "tabpfn_3",
     }
-    # Skip license check for now until tabpfn_3 is public
-    # if version in _HF_REPOS:
-    #     try:
-    #         from tabpfn.browser_auth import ensure_license_accepted
+    if version in _HF_REPOS:
+        try:
+            from tabpfn.browser_auth import ensure_license_accepted  # noqa: PLC0415
 
-    #         ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
-    #     except Exception as e:
-    #         return [e]
+            ensure_license_accepted(hf_repo_id=_HF_REPOS[version])
+        except Exception as e:  # noqa: BLE001
+            return [e]
 
     try:
         model_source = _get_model_source(version, ModelType(which))
