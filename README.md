@@ -299,8 +299,8 @@ Not effective:
 - Adapt feature scaling
 - Convert categorical features to numerical values (e.g., one-hot encoding)
 
-**Q: What are the different checkpoints on [Hugging-Face](https://huggingface.co/Prior-Labs/tabpfn_2_5/tree/main)?**
-A: Beyond the default checkpoints, the other available checkpoints are experimental and worse on average, and we recommend to always start with the defaults. They can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
+**Q: What are the different checkpoints on [Hugging Face](https://huggingface.co/Prior-Labs)?**
+A: Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
 <details>
 <summary>More detail on each TabPFN-2.5 checkpoint</summary>
