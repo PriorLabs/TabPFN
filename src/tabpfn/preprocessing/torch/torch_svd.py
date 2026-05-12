@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import torch
 
 
@@ -81,8 +79,7 @@ class TorchTruncatedSVD:
 
         if x.device.type == "mps":
             # SVD operators ('aten::linalg_svd', 'aten::linalg_qr') are not currently
-            # supported on the MPS backend so we run on the CPU instead. This may, of
-            # course, be slower.
+            # supported on the MPS backend, so we run on the CPU instead.
             x = x.cpu()
 
         n_samples, n_features = x.shape
@@ -121,16 +118,7 @@ class TorchTruncatedSVD:
             s = s[:n_components]
             vh = v[:, :n_components].T  # V [n_features, q] → V^T [n_comp, n_features]
         else:
-            # Fall back to full SVD for small matrices or when n_components
-            # is close to min(n_samples, n_features).
-            with warnings.catch_warnings():
-                # PyTorch warns that SVD falls back to the CPU on MPS devices. There's
-                # nothing that the user can do, so hide it.
-                msg = ".*linalg_svd.*not currently supported on the MPS backend.*"
-                warnings.filterwarnings("ignore", message=msg)
-
-                u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
-
+            u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
             u = u[:, :n_components]
             s = s[:n_components]
             vh = vh[:n_components, :]
