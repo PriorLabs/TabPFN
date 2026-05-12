@@ -18,34 +18,24 @@
 >
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
+### Installation
+```bash
+pip install tabpfn
+```
+
+Note: For best performance on Apple Silicon/MPS, consider installing a pytorch version after
+the nightly "2.13.0.dev20260510". This enables flash attention without relying on MLX
+(the latter requires a GPU-CPU-GPU roundtrip).
+
+
+### Basic Usage
+
 > ⚡ **GPU Recommended**:
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
 > On CPU, only small datasets (≲1000 samples) are feasible.
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
-### Installation
-Official installation (pip)
-```bash
-pip install tabpfn
-```
-OR installation from source
-```bash
-pip install "tabpfn @ git+https://github.com/PriorLabs/TabPFN.git"
-```
-OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation) (version 0.10.0 or higher recommended), which we use for development, then run
-```bash
-git clone https://github.com/PriorLabs/TabPFN.git --depth 1
-cd TabPFN
-uv sync
-```
-
-Note: For best performance on MPS, consider installing a pytorch version after
-the nightly "2.13.0.dev20260510". This enables flash attention without relying on MLX
-(the latter requires a GPU-CPU-GPU roundtrip).
-
-### Basic Usage
-
-To use our default TabPFN-2.6 model, trained purely on synthetic data:
+To use our default TabPFN-3 model:
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -59,25 +49,17 @@ reg.fit(X_train, y_train)  # downloads checkpoint on first use
 predictions = reg.predict(X_test)
 ```
 
-To use other model versions (e.g. TabPFN-2.5):
+To use other model versions (e.g. the previous default, TabPFN-2.6):
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
-classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
-regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
+regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 ```
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
-
-
-### Usage Tips
-
-- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
-- **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
-- **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
-- **Mind the dataset size**: TabPFN works best on datasets with fewer than 100,000 samples and 2000 features. For larger datasets, we recommend looking at the [Large datasets guide](https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py).
 
 ## TabPFN Ecosystem
 
@@ -87,20 +69,16 @@ Choose the right TabPFN implementation for your needs:
   Simple API client for using TabPFN via cloud-based inference.
 
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**
-  A powerful companion repository packed with advanced utilities, integrations, and features - great place to contribute:
+  Community extensions and integrations, including:
 
   -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
   -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
-  -  **`rf_pfn`**: Combine TabPFN with traditional models like Random Forests for hybrid approaches.
-  -  **`hpo`**: Automated hyperparameter optimization tailored to TabPFN.
-  -  **`post_hoc_ensembles`**: Boost performance by ensembling multiple TabPFN models post-training.
 
   To install:
   ```bash
-  git clone https://github.com/priorlabs/tabpfn-extensions.git
-  pip install -e tabpfn-extensions
+  pip install tabpfn-extensions
   ```
 
 - **[TabPFN (this repo)](https://github.com/priorlabs/tabpfn)**
@@ -109,153 +87,9 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN UX](https://ux.priorlabs.ai)**
   No-code graphical interface to explore TabPFN capabilities—ideal for business users and prototyping.
 
-## TabPFN Workflow at a Glance
-Follow this decision tree to build your model and choose the right extensions from our ecosystem. It walks you through critical questions about your data, hardware, and performance needs, guiding you to the best solution for your specific use case.
-
-```mermaid
----
-config:
-  theme: 'default'
-  themeVariables:
-    edgeLabelBackground: 'white'
----
-graph LR
-    %% 1. DEFINE COLOR SCHEME & STYLES
-    classDef default fill:#fff,stroke:#333,stroke-width:2px,color:#333;
-    classDef start_node fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#333;
-    classDef process_node fill:#e0f2f1,stroke:#00796b,stroke-width:2px,color:#333;
-    classDef decision_node fill:#fff8e1,stroke:#ffa000,stroke-width:2px,color:#333;
-
-    style Infrastructure fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Unsupervised fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Data fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Performance fill:#fff,stroke:#ccc,stroke-width:5px;
-    style Interpretability fill:#fff,stroke:#ccc,stroke-width:5px;
-
-    %% 2. DEFINE GRAPH STRUCTURE
-    subgraph Infrastructure
-        start((Start)) --> gpu_check["GPU available?"];
-        gpu_check -- Yes --> local_version["Use TabPFN<br/>(local PyTorch)"];
-        gpu_check -- No --> api_client["Use TabPFN-Client<br/>(cloud API)"];
-        task_type["What is<br/>your task?"]
-    end
-
-    local_version --> task_type
-    api_client --> task_type
-
-    end_node((Workflow<br/>Complete));
-
-    subgraph Unsupervised
-        unsupervised_type["Select<br/>Unsupervised Task"];
-        unsupervised_type --> imputation["Imputation"]
-        unsupervised_type --> data_gen["Data<br/>Generation"];
-        unsupervised_type --> tabebm["Data<br/>Augmentation"];
-        unsupervised_type --> density["Outlier<br/>Detection"];
-        unsupervised_type --> embedding["Get<br/>Embeddings"];
-    end
-
-
-    subgraph Data
-        data_check["Data Checks"];
-        model_choice["Samples > 50k or<br/>Classes > 10?"];
-        data_check -- "Table Contains Text Data?" --> api_backend_note["Note: API client has<br/>native text support"];
-        api_backend_note --> model_choice;
-        data_check -- "Time-Series Data?" --> ts_features["Use Time-Series<br/>Features"];
-        ts_features --> model_choice;
-        data_check -- "Purely Tabular" --> model_choice;
-        model_choice -- "No" --> finetune_check;
-        model_choice -- "Yes, 50k-100k samples" --> ignore_limits["Set<br/>ignore_pretraining_limits=True"];
-        model_choice -- "Yes, >100k samples" --> subsample["Large Datasets Guide<br/>"];
-        model_choice -- "Yes, >10 classes" --> many_class["Many-Class<br/>Method"];
-    end
-
-    subgraph Performance
-        finetune_check["Need<br/>Finetuning?"];
-        performance_check["Need Even Better Performance?"];
-        speed_check["Need faster inference<br/>at prediction time?"];
-        kv_cache["Enable KV Cache<br/>(fit_mode='fit_with_cache')<br/><small>Faster predict; +Memory ~O(N×F)</small>"];
-        tuning_complete["Tuning Complete"];
-
-        finetune_check -- Yes --> finetuning["Finetuning"];
-        finetune_check -- No --> performance_check;
-
-        finetuning --> performance_check;
-
-        performance_check -- No --> tuning_complete;
-        performance_check -- Yes --> hpo["HPO"];
-        performance_check -- Yes --> post_hoc["Post-Hoc<br/>Ensembling"];
-        performance_check -- Yes --> more_estimators["More<br/>Estimators"];
-        performance_check -- Yes --> speed_check;
-
-        speed_check -- Yes --> kv_cache;
-        speed_check -- No --> tuning_complete;
-
-        hpo --> tuning_complete;
-        post_hoc --> tuning_complete;
-        more_estimators --> tuning_complete;
-        kv_cache --> tuning_complete;
-    end
-
-    subgraph Interpretability
-
-        tuning_complete --> interpretability_check;
-
-        interpretability_check["Need<br/>Interpretability?"];
-
-        interpretability_check --> feature_selection["Feature Selection"];
-        interpretability_check --> partial_dependence["Partial Dependence Plots"];
-        interpretability_check --> shapley["Explain with<br/>SHAP"];
-        interpretability_check --> shap_iq["Explain with<br/>SHAP IQ"];
-        interpretability_check -- No --> end_node;
-
-        feature_selection --> end_node;
-        partial_dependence --> end_node;
-        shapley --> end_node;
-        shap_iq --> end_node;
-
-    end
-
-    %% 3. LINK SUBGRAPHS AND PATHS
-    task_type -- "Classification or Regression" --> data_check;
-    task_type -- "Unsupervised" --> unsupervised_type;
-
-    subsample --> finetune_check;
-    ignore_limits --> finetune_check;
-    many_class --> finetune_check;
-
-    %% 4. APPLY STYLES
-    class start,end_node start_node;
-    class local_version,api_client,imputation,data_gen,tabebm,density,embedding,api_backend_note,ts_features,subsample,ignore_limits,many_class,finetuning,feature_selection,partial_dependence,shapley,shap_iq,hpo,post_hoc,more_estimators,kv_cache process_node;
-    class gpu_check,task_type,unsupervised_type,data_check,model_choice,finetune_check,interpretability_check,performance_check,speed_check decision_node;
-    class tuning_complete process_node;
-
-    %% 5. ADD CLICKABLE LINKS (INCLUDING KV CACHE EXAMPLE)
-    click local_version "https://github.com/PriorLabs/TabPFN" "TabPFN Backend Options"
-    click api_client "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Client"
-    click api_backend_note "https://github.com/PriorLabs/tabpfn-client" "TabPFN API Backend"
-    click unsupervised_type "https://github.com/PriorLabs/tabpfn-extensions" "TabPFN Extensions"
-    click imputation "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/imputation.py" "TabPFN Imputation Example"
-    click data_gen "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/generate_data.py" "TabPFN Data Generation Example"
-    click tabebm "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/tabebm/tabebm_augment_real_world_data.ipynb" "TabEBM Data Augmentation Example"
-    click density "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/unsupervised/density_estimation_outlier_detection.py" "TabPFN Density Estimation/Outlier Detection Example"
-    click embedding "https://github.com/PriorLabs/tabpfn-extensions/tree/main/examples/embedding" "TabPFN Embedding Example"
-    click ts_features "https://github.com/PriorLabs/tabpfn-time-series" "TabPFN Time-Series Example"
-    click many_class "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/many_class/many_class_classifier_example.py" "Many Class Example"
-    click finetuning "https://github.com/PriorLabs/TabPFN/blob/main/examples/finetune_classifier.py" "Finetuning Example"
-    click feature_selection "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/feature_selection.py" "Feature Selection Example"
-    click partial_dependence "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/pdp_example.py" "Partial Dependence Plots Example"
-    click shapley "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/shap_example.py" "Shapley Values Example"
-    click shap_iq "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/interpretability/shapiq_example.py" "SHAP IQ Example"
-    click post_hoc "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/phe/phe_example.py" "Post-Hoc Ensemble Example"
-    click hpo "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/hpo/tuned_tabpfn.py" "HPO Example"
-    click subsample "https://github.com/PriorLabs/tabpfn-extensions/blob/main/examples/large_datasets/large_datasets_example.py" "Large Datasets Example"
-    click kv_cache "https://github.com/PriorLabs/TabPFN/blob/main/examples/kv_cache_fast_prediction.py" "KV Cache Fast Prediction Example"
-
-```
-
 ## License
 
-The TabPFN-2.5 and TabPFN-2.6 model weights are licensed under a [non-commercial license](https://huggingface.co/Prior-Labs/tabpfn_2_6/blob/main/LICENSE). These are used by default.
+The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-commercial licenses (TabPFN-3 [license](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/LICENSE); see the [Models page](https://docs.priorlabs.ai/models#tabpfn-model-license) for prior releases). TabPFN-3 is used by default.
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
@@ -268,8 +102,7 @@ tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
 ## Enterprise & Production
 
 For high-throughput or massive-scale production environments, we offer an **Enterprise Edition** with the following capabilities:
--   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN-2.6 into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
--   **Large Data Mode (Scaling Mode)**: An advanced operating mode that lifts row constraints to support datasets with up to **10 million rows**—a 1,000x increase over the default TabPFN-2.5 and TabPFN-2.6 models.
+-   **Fast Inference Mode**: A proprietary distillation engine that converts TabPFN into a compact MLP or tree ensemble, delivering orders-of-magnitude lower latency for real-time applications.
 -   **Commercial Support**: Includes a Commercial Enterprise License for production use-cases, dedicated integration support, and access to private high-speed inference engines.
 
 **To learn more or request a commercial license, please contact us at [sales@priorlabs.ai](mailto:sales@priorlabs.ai).**
@@ -294,6 +127,9 @@ We're building the future of tabular machine learning and would love your involv
 ## Citation
 
 You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
+
+<details>
+<summary><b>BibTeX</b></summary>
 
 ```bibtex
 @misc{grinsztajn2025tabpfn,
@@ -331,21 +167,39 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 }
 ```
 
+</details>
 
+
+
+## Usage Tips
+
+- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
+- **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
+- **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
+- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. The current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features) — larger feature counts trade off against row capacity. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
 
 ## ❓ FAQ
 
 ### **Usage & Compatibility**
 
-**Q: What dataset sizes work best with TabPFN?**
-A: TabPFN-2.5 is optimized for **datasets up to 50,000 rows**. For larger datasets, consider using **Random Forest preprocessing** or other extensions. See our [Colab notebook](https://colab.research.google.com/drive/154SoIzNW1LHBWyrxNwmBqtFAr1uZRZ6a#scrollTo=OwaXfEIWlhC8) for strategies.
+<details>
+<summary><b>Q: What dataset sizes work best with TabPFN?</b></summary>
 
-**Q: Why can't I use TabPFN with Python 3.8?**
-A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
+Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features); larger feature counts trade off against row capacity. The previous default (**TabPFN-2.6**) is recommended for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended limits for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+
+</details>
+
+<details>
+<summary><b>Q: Why can't I use TabPFN with Python 3.8?</b></summary>
+
+TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
+
+</details>
 
 ### **Installation & Setup**
 
-**Q: How do I get access to TabPFN-2.5 / TabPFN-2.6?**
+<details>
+<summary><b>Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3?</b></summary>
 
 On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
@@ -353,7 +207,10 @@ On first use, TabPFN will automatically open a browser window where you can log 
 
 If access via the browser-based flow is not an option for you, please contact us at [`sales@priorlabs.ai`](mailto:sales@priorlabs.ai).
 
-**Q: How do I use TabPFN without an internet connection?**
+</details>
+
+<details>
+<summary><b>Q: How do I use TabPFN without an internet connection?</b></summary>
 
 TabPFN automatically downloads model weights when first used. For offline usage:
 
@@ -371,8 +228,8 @@ This script will download the main classifier and regressor models, as well as a
 **Manual Download**
 
 1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v2.5-classifier-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-classifier-v2.5_default.ckpt) (Note: the classifier default uses the model fine-tuned on real data).
-   - Regressor: [tabpfn-v2.5-regressor-v2.5_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_2_5/blob/main/tabpfn-v2.5-regressor-v2.5_default.ckpt)
+   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
+   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
@@ -382,13 +239,21 @@ This script will download the main classifier and regressor models, as well as a
      - macOS: `~/Library/Caches/tabpfn/`
      - Linux: `~/.cache/tabpfn/`
 
-**Q: I'm getting a `pickle` error when loading the model. What should I do?**
-A: Try the following:
+</details>
+
+<details>
+<summary><b>Q: I'm getting a <code>pickle</code> error when loading the model. What should I do?</b></summary>
+
+Try the following:
 - Download the newest version of tabpfn `pip install tabpfn --upgrade`
 - Ensure model files downloaded correctly (re-download if needed)
 
-**Q: What environment variables can I use to configure TabPFN?**
-A: TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
+</details>
+
+<details>
+<summary><b>Q: What environment variables can I use to configure TabPFN?</b></summary>
+
+TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
 
 **Authentication:**
 - `TABPFN_TOKEN`: Provide a PriorLabs authentication token directly (useful for headless/CI environments). Obtain one from [https://ux.priorlabs.ai](https://ux.priorlabs.ai).
@@ -410,8 +275,12 @@ export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
 
 Or simply set them in your `.env`
 
-**Q: How do I save and load a trained TabPFN model?**
-A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
+</details>
+
+<details>
+<summary><b>Q: How do I save and load a trained TabPFN model?</b></summary>
+
+Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
 it later with :func:`load_fitted_tabpfn_model` (or the corresponding
 ``load_from_fit_state`` class methods).
 
@@ -436,73 +305,40 @@ To store just the foundation model weights (without a fitted estimator) use
 checkpoint of the pre-trained weights so you can later create and fit a fresh
 estimator. Reload the checkpoint with ``load_model_criterion_config``.
 
+</details>
+
 ### **Performance & Limitations**
 
-**Q: Can TabPFN handle missing values?**
-A: **Yes!**
+<details>
+<summary><b>Q: Can TabPFN handle missing values?</b></summary>
 
-**Q: How can I improve TabPFN’s performance?**
-A: Best practices:
-- Use **AutoTabPFNClassifier** from [TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions) for post-hoc ensembling
+**Yes!**
+
+</details>
+
+<details>
+<summary><b>Q: How can I improve TabPFN's performance?</b></summary>
+
+Best practices:
 - Feature engineering: Add domain-specific features to improve model performance
+- See the [Improving Performance guide](https://docs.priorlabs.ai/improving-performance) for the full escalation path
 
 Not effective:
 - Adapt feature scaling
 - Convert categorical features to numerical values (e.g., one-hot encoding)
 
-**Q: What are the different checkpoints on [Hugging-Face](https://huggingface.co/Prior-Labs/tabpfn_2_5/tree/main)?**
-A: Beyond the default checkpoints, the other available checkpoints are experimental and worse on average, and we recommend to always start with the defaults. They can be used as part of an ensembling or hyperparameter optimization system (and are used automatically in `AutoTabPFNClassifier`) or tried out manually. Their name suffixes refer to what we expect them to be good at.
+</details>
 
 <details>
-<summary>More detail on each TabPFN-2.5 checkpoint</summary>
+<summary><b>Q: What are the different checkpoints on <a href="https://huggingface.co/Prior-Labs">Hugging Face</a>?</b></summary>
 
-We add the 🌍 emoji for checkpoints finetuned on real datasets. See the [TabPFN-2.5 paper](https://arxiv.org/abs/2511.08667) for the list of 43 datasets.
-
-- `tabpfn-v2.5-classifier-v2.5_default.ckpt` 🌍: default classification checkpoint, finetuned on real-data.
-- `tabpfn-v2.5-classifier-v2.5_default-2.ckpt`: best classification synthetic checkpoint. Use this to get the default TabPFN-2.5 classification model without real-data finetuning.
-- `tabpfn-v2.5-classifier-v2.5_large-features-L.ckpt`: specialized for larger features (up to 500) and small samples (< 5K).
-- `tabpfn-v2.5-classifier-v2.5_large-features-XL.ckpt`: specialized for larger features (up to  1000, could support `max_features_per_estimator=1000`).
-- `tabpfn-v2.5-classifier-v2.5_large-samples.ckpt`: specialized for larger sample sizes (larger than 30K)
-- `tabpfn-v2.5-classifier-v2.5_real.ckpt` 🌍: other real-data finetuned classification checkpoint. Pretty good overall but bad on large features (>100-200).
-- `tabpfn-v2.5-classifier-v2.5_real-large-features.ckpt` 🌍: other real-data finetuned classification checkpoint, worse on large samples (> 10K)
-- `tabpfn-v2.5-classifier-v2.5_real-large-samples-and-features.ckpt` 🌍: identical to `tabpfn-v2.5-classifier-v2.5_default.ckpt`
-- `tabpfn-v2.5-classifier-v2.5_variant.ckpt`: pretty good but bad on large features (> 100-200).
-- `tabpfn-v2.5-regressor-v2.5_default.ckpt`: default regression checkpoint, trained on synthetic data only.
-- `tabpfn-v2.5-regressor-v2.5_low-skew.ckpt`: variant specialized at low target skew data (but quite bad on average).
-- `tabpfn-v2.5-regressor-v2.5_quantiles.ckpt`: variant which might be interesting for quantile / distribution estimation, though the default should still be prioritized for this.
-- `tabpfn-v2.5-regressor-v2.5_real.ckpt` 🌍: finetuned on real-data. Best checkpoint among the checkpoints finetuned on real data. For regression we recommend the synthetic-only checkpoint as a default, but this checkpoint is quite a bit better on some datasets.
-- `tabpfn-v2.5-regressor-v2.5_real-variant.ckpt` 🌍: other regression variant finetuned on real data.
-- `tabpfn-v2.5-regressor-v2.5_small-samples.ckpt`: variant slightly better on small (< 3K) samples.
-- `tabpfn-v2.5-regressor-v2.5_variant.ckpt`: other variant, no clear specialty but can be better on a few datasets.
+Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
 </details>
 
-
-## Development
-
-1. Install [uv](https://docs.astral.sh/uv/)
-2. Setup environment:
-```bash
-git clone https://github.com/PriorLabs/TabPFN.git
-cd TabPFN
-uv sync
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pre-commit install
-```
-
-3. Before committing:
-```bash
-pre-commit run --all-files
-```
-
-4. Run tests:
-```bash
-pytest tests/
-```
-
 ## Anonymized Telemetry
 
-This project collects fully anonymous usage telemetry with an option to opt-out of any telemetry or opt-in to extended telemetry.
+This project collects fully anonymous usage telemetry disabled by default.
 
 The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
@@ -512,10 +348,10 @@ The data is used exclusively to help us provide stability to the relevant produc
 
 For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
-**To opt out**, set the following environment variable:
+**To opt in**, set the following environment variable:
 
 ```bash
-export TABPFN_DISABLE_TELEMETRY=1
+export TABPFN_DISABLE_TELEMETRY=0
 ```
 ---
 

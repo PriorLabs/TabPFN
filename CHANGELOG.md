@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.0] - 2026-05-12
+
+### Breaking Changes
+
+- **Major release**: TabPFN-3 is now the default model. New users and existing users who do not pin a model will automatically get TabPFN-3 going forward. To use a previous model version, use the `create_default_for_version()` classmethod on `TabPFNClassifier` / `TabPFNRegressor`, or pass an explicit `model_path` to the estimator constructor to pin a specific model file. ([#948](https://github.com/PriorLabs/TabPFN/pull/948))
+
+### Added
+
+- Add opt-in feature subsampling strategies across ensemble members when the number of features exceeds `max_features_per_estimator`. Set `FEATURE_SUBSAMPLING_METHOD` in the inference config to one of `"random"` (default), `"balanced"`, or `"constant_and_balanced"`. ([#851](https://github.com/PriorLabs/TabPFN/pull/851))
+- Add enable_torch_compile to PerformanceOptions. ([#879](https://github.com/PriorLabs/TabPFN/pull/879))
+- Add GPU preprocessing pipeline that runs feature transformations (quantile normalization, SVD) directly on the GPU as part of the model forward pass. ([#884](https://github.com/PriorLabs/TabPFN/pull/884))
+- Add `get_inference_config()` method to `TabPFNClassifier` and `TabPFNRegressor`. This method loads the model checkpoint if needed and returns the active `InferenceConfig`, allowing inspection of preprocessing and inference settings before calling `fit()`. ([#890](https://github.com/PriorLabs/TabPFN/pull/890))
+- Add an optional `show_progress_bar` flag to TabPFN classifier and regressor inference, defaulting to `False`. ([#899](https://github.com/PriorLabs/TabPFN/pull/899))
+- Add a nightly workflow that reproduces every example notebook's pip-install sequence in a fresh venv and asserts `tabpfn` resolves to the latest PyPI release. ([#901](https://github.com/PriorLabs/TabPFN/pull/901))
+- Add `gini_feature_importance` and `gini_feature_importance_lightgbm` as new `FEATURE_SUBSAMPLING_METHOD` options. Both rank features by importance and always include the top-K most predictive features per estimator when the dataset exceeds `max_features_per_estimator`. LightGBM is an optional dependency (`pip install tabpfn[lightgbm]`). ([#908](https://github.com/PriorLabs/TabPFN/pull/908))
+- Add TabPFN v3 support: `TabPFNClassifier` and `TabPFNRegressor` now support `ModelVersion.V3`, including `create_default_for_version(ModelVersion.V3)` and explicit v3 model paths. ([#909](https://github.com/PriorLabs/TabPFN/pull/909))
+- Add `auto` as a new `FEATURE_SUBSAMPLING_METHOD` option. When selected, it automatically uses `gini_feature_importance` (LightGBM-based) for datasets with more than 100k samples where feature subsampling is needed, and falls back to `balanced` otherwise. LightGBM is now a required dependency (previously optional via `pip install tabpfn[lightgbm]`). ([#913](https://github.com/PriorLabs/TabPFN/pull/913))
+- Add `embedding_dim` abstract property to the `Architecture` interface, exposing the output embedding dimension for all architecture implementations. ([#924](https://github.com/PriorLabs/TabPFN/pull/924))
+- Stratified row subsampling for the classifier: when `SUBSAMPLE_SAMPLES` is set, each ensemble member now draws rows that preserve the original class proportions, using a balanced round-robin pool per class to ensure uniform row coverage across estimators. ([#928](https://github.com/PriorLabs/TabPFN/pull/928))
+- Add opt-in FlashAttention-3 backend selector for v3 (`PerformanceOptions.attention_backend`). On Hopper GPUs, "auto" routes to FA3 once the sequence length amortises FA3's dispatch overhead; otherwise falls back to PyTorch SDPA. ([#935](https://github.com/PriorLabs/TabPFN/pull/935))
+- Auto-scale `n_estimators` at fit time so every feature is covered by at least one ensemble member. The effective count is exposed as `n_estimators_`; a `UserWarning` is emitted when scaling triggers. ([#937](https://github.com/PriorLabs/TabPFN/pull/937))
+- Add `TorchSquashingScaler` and `TorchSquashingScalerStep` — a torch implementation of `SquashingScaler` mirroring the CPU version. ([#938](https://github.com/PriorLabs/TabPFN/pull/938))
+- Run SVD on GPU when `enable_gpu_preprocessing=True` by pre-warming PyTorch's LAPACK lazy wrapper on the main thread before parallel dispatch to avoid a multi-GPU race in `torch.svd_lowrank` -> `torch.linalg.qr`. ([#941](https://github.com/PriorLabs/TabPFN/pull/941))
+- Schedule the squashing scaler on GPU when the configuration is eligible. This makes the preprocessing significantly faster. ([#944](https://github.com/PriorLabs/TabPFN/pull/944))
+
+### Changed
+
+- Introduces balanced subsampling of features for improved performance for datasets with large number of features. Results may vary slightly because of different seeds. ([#851](https://github.com/PriorLabs/TabPFN/pull/851))
+- Model checkpoint caching now automatically invalidates when the file on disk changes (detected via mtime and size), so replaced checkpoints (e.g. during finetuning) are always reloaded. ([#863](https://github.com/PriorLabs/TabPFN/pull/863))
+- Row subsampling across ensemble members now uses round-robin balanced sampling. This replaces the previous random sampling approach. ([#886](https://github.com/PriorLabs/TabPFN/pull/886))
+- Remove unused v2.6 defaults from `InferenceConfig.get_default()`. V2.6 checkpoints always embed their own `InferenceConfig`, so these defaults were never used at inference time. The v2.6 preprocessor config factories are also removed from `tabpfn.preprocessing`. ([#890](https://github.com/PriorLabs/TabPFN/pull/890))
+- Renamed `InferenceConfig.CONSTANT_FEATURE_COUNT` to `FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT` to better reflect its purpose. Old checkpoints that store the previous key name are migrated transparently on load. ([#900](https://github.com/PriorLabs/TabPFN/pull/900))
+- Updated copyright year to 2026 and consolidated the `authors` field in `pyproject.toml` to a single Prior Labs entry. ([#916](https://github.com/PriorLabs/TabPFN/pull/916))
+- Speed up `ReshapeFeatureDistributionsStep` ~2x on large numerical workloads (~1670 ms → ~870 ms on 100k×100): inline `SquashingScaler`'s robust/minmax branches into a single `nanpercentile` pass, and call `ColumnTransformer.fit_transform` once instead of `fit` + `transform` (sklearn's `fit` already runs the transform internally). Behavior unchanged. ([#938](https://github.com/PriorLabs/TabPFN/pull/938))
+- Keep the inference cache on the GPU by default when `fit_mode="fit_with_cache"`, avoiding host/device transfers on each predict call. The per-estimator KV caches are reachable via `model.executor_.kv_caches`. ([#942](https://github.com/PriorLabs/TabPFN/pull/942))
+- Clean up README and inline references to removed/deprecated tabpfn-extensions modules (`rf_pfn`, `post_hoc_ensembles`, `hpo`) and the retired `large_datasets` example. Drops the now-stale workflow mermaid diagram, updates the OOM error message to link to the Models page, and removes the unused `AutoTabPFNClassifier` import from the Colab demo notebook. ([#945](https://github.com/PriorLabs/TabPFN/pull/945))
+
+### Fixed
+
+- Fix inference precision to respect force_inference_dtype in KV cache engine and skip thinking tokens during cache-building. ([#802](https://github.com/PriorLabs/TabPFN/pull/802))
+- Reduce TabPFNRegressor peak GPU memory at large test-set sizes by chunking the row dimension inside `translate_probs_across_borders`. Output is unchanged; peak drops ~60% at `n_test=250k` (57.6 GB → 22.8 GB on an H100). ([#882](https://github.com/PriorLabs/TabPFN/pull/882))
+- Fix v2.6 producing near-random outputs on Apple Silicon (MPS). `F.scaled_dot_product_attention` on MPS silently returns wrong values for non-contiguous q/k/v (upstream: pytorch/pytorch#181133); we now force contiguity before the call. Iris multiclass accuracy on MPS: 0.48 → 0.98. ([#888](https://github.com/PriorLabs/TabPFN/pull/888))
+- Fix `FinetunedTabPFNClassifier`/`FinetunedTabPFNRegressor` dropping pandas feature names from the final inference model. The raw training inputs are now retained so the fitted inference estimator records `feature_names_in_`, and calling `predict_proba`/`predict` with a DataFrame no longer triggers spurious sklearn feature-name warnings. ([#892](https://github.com/PriorLabs/TabPFN/pull/892))
+- Adapt `recompute_layer` flag in `FinetunedTabPFNClassifier`/`FinetunedTabPFNRegressor` to new `PerformanceOptions` interface. ([#917](https://github.com/PriorLabs/TabPFN/pull/917))
+- Fix `save_tabpfn_model` not setting `architecture_name="tabpfn_v3"` for v3 configs and not persisting `inference_config_`, which broke resuming v3 finetuning from a saved checkpoint. ([#930](https://github.com/PriorLabs/TabPFN/pull/930))
+- Reduce KV cache GPU memory in `fit_with_cache` by materialising only the kept KV head(s) at cache-build time. Output is unchanged. ([#933](https://github.com/PriorLabs/TabPFN/pull/933))
+- Fix `RuntimeError: No available kernel` on v3 inference for GPUs where none of FlashAttention / EfficientAttention / CuDNN-Attention are eligible (e.g. Turing-class cards like the T4) by adding `SDPBackend.MATH` as a final fallback in `_SDPA_BACKENDS`. ([#947](https://github.com/PriorLabs/TabPFN/pull/947))
+
+
 ## [7.1.1] - 2026-04-09
 
 ### Added

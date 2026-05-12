@@ -30,7 +30,6 @@ from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
 
-from .conftest import is_v3_regressor_in_cache
 from .utils import (
     get_pytest_devices,
     is_cpu_float16_supported,
@@ -41,7 +40,11 @@ from .utils import (
 devices = get_pytest_devices()
 
 
-model_sources = [ModelSource.get_regressor_v2(), ModelSource.get_regressor_v2_5()]
+model_sources = [
+    ModelSource.get_regressor_v2(),
+    ModelSource.get_regressor_v2_5(),
+    ModelSource.get_regressor_v3(),
+]
 fit_modes = ["low_memory", "fit_preprocessors"]
 
 
@@ -280,8 +283,9 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
     assert model.predict(X).shape == (X.shape[0],)
 
 
-# Only v2 and 2.5 support the KV cache at the moment.
-@pytest.mark.parametrize("model_version", [ModelVersion.V2, ModelVersion.V2_5])
+@pytest.mark.parametrize(
+    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V3]
+)
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
@@ -317,8 +321,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 def test__fit_preprocessors_and_low_memory_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
 ) -> None:
-    if model_version == ModelVersion.V3 and not is_v3_regressor_in_cache():
-        pytest.skip("V3 regressor model not in cache; skipping V3-specific test.")
     kwargs = {
         "version": model_version,
         "n_estimators": 2,
@@ -345,9 +347,6 @@ def test__fit_preprocessors_and_low_memory_produce_equal_results(
 def test__fit_and_predict__on_demo_dataset__r2_reasonable(
     model_version: ModelVersion,
 ) -> None:
-    if model_version == ModelVersion.V3 and not is_v3_regressor_in_cache():
-        pytest.skip("V3 regressor model not in cache.")
-
     X, y = sklearn.datasets.make_friedman1(n_samples=200, noise=0.1, random_state=0)
     model = TabPFNRegressor.create_default_for_version(
         version=model_version, random_state=0

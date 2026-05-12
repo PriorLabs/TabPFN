@@ -579,8 +579,6 @@ class TabPFNV2p6(Architecture):
             self.input_size // 4, self.input_size
         )
         self._do_encoder_nan_check = True
-        # TODO(Phil): This is here to not fail the memory computation. We should make
-        # this a proper API.
         self.emsize = config.emsize
 
     @property

@@ -14,12 +14,16 @@ from tabpfn.architectures.shared.mlx_backend import (
     is_mlx_preferred,
 )
 
+# MATH is the reference implementation. Keeping it as a final fallback
+# avoids "No available kernel" errors on GPUs where none of the fast
+# backends are eligible — e.g. FlashAttention requires sm80+, so on a
+# Turing card (sm75, T4) all three faster backends bail and SDPA crashes
+# without this entry.
 _SDPA_BACKENDS = [
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
 ]
-_SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS, SDPBackend.MATH]
 
 
 def is_torch_mps_preferred(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
@@ -118,12 +122,7 @@ def scaled_dot_product_attention(
         values = v_BJSD.repeat_interleave(repeat, dim=-3)
         enable_gqa = {}
 
-    if _backends_override is not None:
-        backends = _backends_override
-    else:
-        backends = (
-            _SDPA_BACKENDS_CPU if not torch.cuda.is_available() else _SDPA_BACKENDS
-        )
+    backends = _backends_override if _backends_override is not None else _SDPA_BACKENDS
 
     num_parallel_calls = q_BHSD.shape[:2].numel()
     torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.

@@ -93,10 +93,12 @@ def test__to__between_fits__outputs_equal(
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-def test__to__fit_with_cache_and_after_first_fit__raises_error(
+def test__fit_with_cache__raises_error_for_v2_6(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
 ) -> None:
-    estimator = estimator_class(fit_mode="fit_with_cache", n_estimators=2)
+    estimator = estimator_class.create_default_for_version(
+        ModelVersion.V2_6, fit_mode="fit_with_cache", n_estimators=2
+    )
     X_train, _, y_train = _get_tiny_dataset(estimator)
 
     with pytest.raises(
@@ -127,7 +129,8 @@ def test__to__after_fit__no_tensors_left_on_old_device(
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
 @pytest.mark.parametrize(
-    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6]
+    "model_version",
+    [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6, ModelVersion.V3],
 )
 def test__to__after_fit_and_predict__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],

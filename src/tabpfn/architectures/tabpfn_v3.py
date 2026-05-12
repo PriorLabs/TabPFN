@@ -39,7 +39,6 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn.attention import SDPBackend
 
 from tabpfn.architectures.interface import (
     Architecture,
@@ -55,6 +54,8 @@ from tabpfn.errors import is_oom_error
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 if TYPE_CHECKING:
+    from torch.nn.attention import SDPBackend
+
     from tabpfn.constants import TaskType
 
 
@@ -259,14 +260,6 @@ class TabPFNV3Cache:
             for h in self.inducing_hidden:
                 total += h.numel() * h.element_size()
         return total // (1024 * 1024)
-
-
-_SDPA_BACKENDS = [
-    SDPBackend.FLASH_ATTENTION,
-    SDPBackend.EFFICIENT_ATTENTION,
-    SDPBackend.CUDNN_ATTENTION,
-]
-_SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS, SDPBackend.MATH]
 
 
 # ---------------------------------------------------------------------------
