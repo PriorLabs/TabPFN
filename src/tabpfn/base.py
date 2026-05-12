@@ -370,6 +370,24 @@ def create_inference_engine(  # noqa: PLR0913
     raise ValueError(f"Invalid fit_mode: {fit_mode}")
 
 
+def reject_categoricals_for_differentiable_input(
+    categorical_features_indices: Sequence[int] | None,
+) -> None:
+    """Reject categorical features in the differentiable-input fit path.
+
+    The differentiable path uses an identity preprocessor (no
+    ordinal-encoding step), so categorical columns have no valid handling
+    and would corrupt the prompt-tuning signal.
+    """
+    if (
+        categorical_features_indices is not None
+        and len(categorical_features_indices) > 0
+    ):
+        raise ValueError(
+            "Categorical features are not supported for differentiable input."
+        )
+
+
 def initialize_model_variables_helper(
     calling_instance: TabPFNRegressor | TabPFNClassifier,
     model_type: Literal["regressor", "classifier"],

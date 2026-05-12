@@ -1054,53 +1054,57 @@ def test__fit__differentiable_input_true__raises_helpful_error() -> None:
         reg.fit(X, y)
 
 
-def test__fit_with_differentiable_input__categorical_features_rejected() -> None:
-    """The differentiable path does not support categorical features."""
-    reg = TabPFNRegressor(
-        n_estimators=1,
-        ignore_pretraining_limits=True,
-        device="cpu",
-        differentiable_input=True,
-        categorical_features_indices=[0],
-    )
-    X = torch.randn(20, 4)
-    y = torch.randn(20)
-    with pytest.raises(ValueError, match="Categorical features"):
-        reg.fit_with_differentiable_input(X, y)
-
-
-def test__fit_with_differentiable_input__constant_target_rejected() -> None:
-    """A constant-target y has no signal to predict differentiably and would
-    collapse the bardist borders; reject with a clear error.
+@pytest.mark.parametrize(
+    ("case_id", "extra_kwargs", "X", "y", "match"),
+    [
+        # The differentiable path uses an identity preprocessor and has no
+        # ordinal-encoding step, so categorical columns have no valid handling.
+        (
+            "categorical_features",
+            {"categorical_features_indices": [0]},
+            torch.randn(20, 4),
+            torch.randn(20),
+            "Categorical features",
+        ),
+        # Constant target collapses the bardist borders to a single point.
+        (
+            "constant_target",
+            {},
+            torch.randn(5, 4),
+            torch.full((5,), 3.14),
+            "Constant or near-constant target",
+        ),
+        # torch.std defaults to correction=1 and returns NaN for N=1; our path
+        # uses correction=0 so std collapses to 0 and trips the constant-target
+        # guard instead of a downstream NaN.
+        (
+            "single_sample",
+            {},
+            torch.randn(1, 4),
+            torch.tensor([2.0]),
+            "Constant or near-constant target",
+        ),
+    ],
+)
+def test__fit_with_differentiable_input__bad_input_raises_value_error(
+    case_id: str,
+    extra_kwargs: dict[str, object],
+    X: torch.Tensor,
+    y: torch.Tensor,
+    match: str,
+) -> None:
+    """Bad inputs to the differentiable fit path must raise ValueError with a
+    clear message rather than producing NaNs or crashing downstream.
     """
+    del case_id  # Only used for parametrize ids.
     reg = TabPFNRegressor(
         n_estimators=1,
         ignore_pretraining_limits=True,
         device="cpu",
         differentiable_input=True,
+        **extra_kwargs,  # type: ignore[arg-type]
     )
-    X = torch.randn(5, 4)
-    y = torch.full((5,), 3.14)
-    with pytest.raises(ValueError, match="Constant or near-constant target"):
-        reg.fit_with_differentiable_input(X, y)
-
-
-def test__fit_with_differentiable_input__single_sample_y_does_not_nan() -> None:
-    """torch.std defaults to sample std (correction=1) which returns NaN for
-    N=1. Our path uses correction=0 (population std) so std is well defined
-    even for a single sample (it just collapses to 0, which then trips the
-    constant-target guard — what we want). Verify the failure mode is the
-    explicit ValueError, not a downstream NaN.
-    """
-    reg = TabPFNRegressor(
-        n_estimators=1,
-        ignore_pretraining_limits=True,
-        device="cpu",
-        differentiable_input=True,
-    )
-    X = torch.randn(1, 4)
-    y = torch.tensor([2.0])
-    with pytest.raises(ValueError, match="Constant or near-constant target"):
+    with pytest.raises(ValueError, match=match):
         reg.fit_with_differentiable_input(X, y)
 
 

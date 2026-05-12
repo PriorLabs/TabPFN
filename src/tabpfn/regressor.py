@@ -48,6 +48,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    reject_categoricals_for_differentiable_input,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -57,7 +58,6 @@ from tabpfn.errors import TabPFNValidationError, handle_oom_errors
 from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
-    InferenceEngineCachePreprocessing,
 )
 from tabpfn.model_loading import (
     ModelSource,
@@ -647,89 +647,92 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         return initialize_model_variables_helper(self, self.estimator_type)
 
-    def _refresh_targets_for_differentiable_input(
-        self, X: torch.Tensor, y: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Per-fit-call data-dependent setup for the differentiable path.
+    def _rebuild_raw_space_bardist(self) -> None:
+        """Rebuild ``raw_space_bardist_`` from current ``y_train_mean_``/std_.
 
-        Validates input shape, z-normalises ``y`` as a torch op (preserves
-        grads), updates the standardisation stats, and rebuilds
-        ``raw_space_bardist_`` in the caller's current target scale. Run on
-        every ``fit_with_differentiable_input`` call so the regressor's
-        target stats always match the data being fit; the model load and
-        ensemble configs are cached in ``_initialize_for_differentiable_input``
-        and run only on the first call.
+        Detaches the znorm-space borders so the rebuilt buffer never holds a
+        y autograd graph — required for the differentiable-input path and a
+        no-op for the standard path. Both ``y_train_mean_`` and
+        ``y_train_std_`` must already be set as Python floats.
         """
-        validate_dataset_size(
-            X=X,
-            y=y,
-            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
-            devices=self.devices_,
-            ignore_pretraining_limits=self.ignore_pretraining_limits,
-        )
-        self.n_train_samples_ = int(X.shape[0])
-
-        y_float = (
-            y.float()
-            if isinstance(y, torch.Tensor)
-            else torch.as_tensor(y, dtype=torch.float32)
-        )
-        y_mean = y_float.mean()
-        # Match the standard fit path's np.std (population std, ddof=0).
-        # torch.std defaults to correction=1 (sample std), which differs from
-        # numpy and returns NaN for N=1; clamp keeps the divisor non-zero.
-        y_std = torch.clamp(y_float.std(correction=0), min=1e-20)
-        # Constant targets would collapse the bardist borders to a single
-        # point; the differentiable path has no analogue of fit()'s
-        # is_constant_target_ short-circuit, so reject up front.
-        if y_std.detach().item() <= 1e-12:
-            raise ValueError(
-                "Constant or near-constant target (std≈0) is not supported "
-                "by fit_with_differentiable_input; there is no signal to "
-                "predict differentiably. Use fit() for constant-target data."
-            )
-        # Detach when storing as Python floats — raw_space_bardist_ is a
-        # frozen lookup table and must not hold a y-grad graph. Users who
-        # need fully differentiable target scaling should z-normalise y
-        # themselves before calling fit_with_differentiable_input so the
-        # mean/std are constants here.
-        self.y_train_mean_ = y_mean.detach().item()
-        self.y_train_std_ = y_std.detach().item()
-        y_normalized = (y_float - y_mean) / y_std
-
-        # raw_space_bardist_ is a constant lookup in the caller's target
-        # scale; detach so the buffer does not hold onto y's grad graph.
         borders = self.znorm_space_bardist_.borders.detach()
         self.raw_space_bardist_ = FullSupportBarDistribution(
             borders * self.y_train_std_ + self.y_train_mean_,
         ).float()
-        return X, y_normalized
+
+    def _build_ensemble_preprocessor_and_executor(
+        self,
+        *,
+        X: Any,
+        y: Any,
+        ensemble_configs: list[RegressorEnsembleConfig],
+        static_seed: int,
+        byte_size: int,
+        n_preprocessing_jobs: int,
+        inference_mode: bool,
+    ) -> None:
+        """Build ``self.ensemble_preprocessor_`` and ``self.executor_``.
+
+        Shared between the standard fit path and the differentiable-input
+        path. The two paths differ only in ``n_preprocessing_jobs``
+        (forced to 1 in the differentiable path so the autograd graph on
+        ``X`` survives joblib's process-boundary pickling) and
+        ``inference_mode`` (False under differentiable input so backprop
+        works through the executor).
+        """
+        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
+            configs=ensemble_configs,
+            n_samples=X.shape[0],
+            feature_schema=self.inferred_feature_schema_,
+            # Use static_seed so we're independent of any random generation
+            # inside the initialize functions above.
+            random_state=static_seed,
+            n_preprocessing_jobs=n_preprocessing_jobs,
+            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
+            enable_gpu_preprocessing=self.inference_config_.ENABLE_GPU_PREPROCESSING,
+            feature_subsampling_method=FeatureSubsamplingMethod(
+                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+            ),
+            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
+            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+            X_train=X,
+            y_train=y,
+            task_type=self.estimator_type,
+        )
+        self.executor_ = create_inference_engine(
+            fit_mode=self.fit_mode,
+            X_train=X,
+            y_train=y,
+            ensemble_preprocessor=self.ensemble_preprocessor_,
+            models=self.models_,
+            devices_=self.devices_,
+            byte_size=byte_size,
+            forced_inference_dtype_=self.forced_inference_dtype_,
+            memory_saving_mode=self.memory_saving_mode,
+            use_autocast_=self.use_autocast_,
+            inference_mode=inference_mode,
+        )
 
     def _initialize_for_differentiable_input(
         self,
         X: torch.Tensor,
-        y: torch.Tensor,
         rng: np.random.Generator,
-    ) -> tuple[list[RegressorEnsembleConfig], torch.Tensor, torch.Tensor]:
+    ) -> tuple[list[RegressorEnsembleConfig], torch.Tensor]:
         """First-call setup for the differentiable path.
 
         Mirrors the classifier-side helper so that gradients can flow from a
         loss back to upstream torch modules feeding ``X`` (and optionally
         ``y``). Skips the standard numpy preprocessing path and uses a
-        differentiable identity preprocessor. Subsequent calls reuse the
-        feature schema and ensemble configs but re-run target normalization
-        via ``_refresh_targets_for_differentiable_input``.
+        differentiable identity preprocessor. y-target normalization happens
+        every call inside ``fit_with_differentiable_input``; this helper is
+        only for the cached feature-schema and ensemble-config setup.
         """
         # Minimal preprocessing for prompt tuning: no categorical features,
         # all-numerical schema, identity preprocessor that preserves grads.
-        if (
-            self.categorical_features_indices is not None
-            and len(self.categorical_features_indices) > 0
-        ):
-            raise ValueError(
-                "Categorical features are not supported for differentiable input."
-            )
+        reject_categoricals_for_differentiable_input(
+            self.categorical_features_indices
+        )
         n_features = X.shape[1]
         # One Feature instance per column — list multiplication would share
         # the same dataclass and any later in-place update would leak across
@@ -741,12 +744,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         self.n_features_in_ = n_features
 
-        X, y_normalized = self._refresh_targets_for_differentiable_input(X, y)
-
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
-        # n_estimators_ mirrors classifier.py:650 — must be set here so
-        # downstream predict()/forward() (which use self.n_estimators_) work
-        # after the differentiable fit path.
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
             n_estimators=self.n_estimators,
             n_total_features=n_features,
@@ -770,7 +768,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         assert len(ensemble_configs) == self.n_estimators_
 
-        return ensemble_configs, X, y_normalized
+        return ensemble_configs, X
 
     def _initialize_dataset_preprocessing(
         self,
@@ -954,8 +952,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         is_first_fit_call = not hasattr(self, "models_")
         if is_first_fit_call:
             byte_size = self._initialize_model_variables()
-            ensemble_configs, X, y = self._initialize_for_differentiable_input(
-                X=X, y=y, rng=rng
+            ensemble_configs, X = self._initialize_for_differentiable_input(
+                X=X, rng=rng
             )
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
             remove_non_differentiable_preprocessing_from_models(models=self.models_)
@@ -964,39 +962,59 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
-            # Mirror classifier.py:948 — re-assert n_estimators_ from cached
-            # configs so it survives across calls (and after pickling).
+            # Mirror classifier.py: re-assert n_estimators_ from cached
+            # configs so a subsequent call after pickling restores it.
             self.n_estimators_ = len(ensemble_configs)
-            # Re-validate and re-normalise y for the new fit data so that
-            # raw_space_bardist_ and y_train_mean_/std_ track the current
-            # targets. The model load and ensemble configs stay cached.
-            X, y = self._refresh_targets_for_differentiable_input(X, y)
 
-        # Force sequential preprocessing: with differentiable input, X carries
+        # Refresh target stats and rebuild the raw-space bardist on every
+        # call so they track the current fit data; cached state is only the
+        # model load, feature schema, and ensemble configs above.
+        validate_dataset_size(
+            X=X,
+            y=y,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            devices=self.devices_,
+            ignore_pretraining_limits=self.ignore_pretraining_limits,
+        )
+        self.n_train_samples_ = int(X.shape[0])
+
+        y_float = (
+            y.float()
+            if isinstance(y, torch.Tensor)
+            else torch.as_tensor(y, dtype=torch.float32)
+        )
+        y_mean = y_float.mean()
+        # Match the standard fit's np.std (population std, ddof=0). torch.std
+        # defaults to correction=1 and returns NaN for N=1; clamp keeps the
+        # divisor non-zero. The constant-target guard below catches the
+        # remaining bardist-collapse case.
+        y_std = torch.clamp(y_float.std(correction=0), min=1e-20)
+        if y_std.detach().item() <= 1e-12:
+            raise ValueError(
+                "Constant or near-constant target (std≈0) is not supported "
+                "by fit_with_differentiable_input; there is no signal to "
+                "predict differentiably. Use fit() for constant-target data."
+            )
+        # Detach when storing as Python floats — raw_space_bardist_ is a
+        # frozen lookup and must not hold a y autograd graph. Users who need
+        # fully differentiable target scaling should z-normalise y themselves
+        # before calling so the mean/std are constants here.
+        self.y_train_mean_ = y_mean.detach().item()
+        self.y_train_std_ = y_std.detach().item()
+        y = (y_float - y_mean) / y_std
+        self._rebuild_raw_space_bardist()
+
+        # Force sequential preprocessing: with differentiable input X carries
         # an autograd graph that does not survive joblib's process-boundary
         # pickling. Sequential execution preserves the graph in-process.
-        self.ensemble_preprocessor_ = TabPFNEnsemblePreprocessor(
-            configs=ensemble_configs,
-            n_samples=X.shape[0],
-            feature_schema=self.inferred_feature_schema_,
-            random_state=static_seed,
+        self._build_ensemble_preprocessor_and_executor(
+            X=X,
+            y=y,
+            ensemble_configs=ensemble_configs,
+            static_seed=static_seed,
+            byte_size=byte_size,
             n_preprocessing_jobs=1,
-            feature_subsampling_method=FeatureSubsamplingMethod(
-                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
-            ),
-            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
-        )
-
-        self.executor_ = InferenceEngineCachePreprocessing(
-            X_train=X,
-            y_train=y,
-            models=self.models_,
-            ensemble_preprocessor=self.ensemble_preprocessor_,
-            devices=self.devices_,
-            dtype_byte_size=byte_size,
-            force_inference_dtype=self.forced_inference_dtype_,
-            save_peak_mem=self.memory_saving_mode,
             inference_mode=False,
         )
 
@@ -1069,43 +1087,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.y_train_std_ = std.item() + 1e-20
         self.y_train_mean_ = mean.item()
         y = (y - self.y_train_mean_) / self.y_train_std_
-        self.raw_space_bardist_ = FullSupportBarDistribution(
-            self.znorm_space_bardist_.borders * self.y_train_std_ + self.y_train_mean_,
-        ).float()
+        self._rebuild_raw_space_bardist()
 
-        ensemble_preprocessor = TabPFNEnsemblePreprocessor(
-            configs=ensemble_configs,
-            n_samples=X.shape[0],
-            feature_schema=self.inferred_feature_schema_,
-            # Note: we use the static_seed so we're independent of the random generation
-            # inside the initialize function above
-            random_state=static_seed,
-            n_preprocessing_jobs=self.n_preprocessing_jobs,
-            keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
-            enable_gpu_preprocessing=self.inference_config_.ENABLE_GPU_PREPROCESSING,
-            feature_subsampling_method=FeatureSubsamplingMethod(
-                self.inference_config_.FEATURE_SUBSAMPLING_METHOD
-            ),
-            constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
-            subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
-            importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
-            X_train=X,
-            y_train=y,
-            task_type=self.estimator_type,
-        )
-
-        self.executor_ = create_inference_engine(
-            fit_mode=self.fit_mode,
-            X_train=X,
-            y_train=y,
-            ensemble_preprocessor=ensemble_preprocessor,
-            models=self.models_,
-            devices_=self.devices_,
+        self._build_ensemble_preprocessor_and_executor(
+            X=X,
+            y=y,
+            ensemble_configs=ensemble_configs,
+            static_seed=static_seed,
             byte_size=byte_size,
-            forced_inference_dtype_=self.forced_inference_dtype_,
-            memory_saving_mode=self.memory_saving_mode,
-            use_autocast_=self.use_autocast_,
+            n_preprocessing_jobs=self.n_preprocessing_jobs,
             # TODO: Standard fit usually uses inference_mode=True, before it was enabled
+            inference_mode=True,
         )
 
         return self
