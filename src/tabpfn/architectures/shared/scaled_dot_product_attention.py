@@ -23,6 +23,7 @@ _SDPA_BACKENDS = [
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.MATH,
 ]
 
 
