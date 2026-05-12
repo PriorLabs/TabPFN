@@ -70,6 +70,7 @@ def _reference_attn_cpu(
     return torch.einsum("bhsj,bhjd->bhsd", scores.softmax(dim=-1), v32).to(q.dtype)
 
 
+@_skip_unless_mps
 def test__eligible_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """mx=None (import failure) makes every tensor ineligible."""
     monkeypatch.setattr(mlx_backend, "mx", None)
@@ -83,6 +84,7 @@ def test__eligible_false_for_cpu_tensors() -> None:
     assert not is_eligible_for_mlx(q, q, q)
 
 
+@_skip_unless_mps
 def test__eligible_false_for_head_dim_over_128() -> None:
     """head_dim=129 is rejected regardless of other properties."""
     q = torch.zeros(1, 2, 8, 129, dtype=torch.float16, device="mps")
@@ -270,8 +272,15 @@ def test__dispatch_routes_through_mlx_when_preferred(
 @pytest.mark.skipif(
     torch.__version__ >= "2.13.dev20260510", reason="torch 2.13 uses SDPA"
 )
+@pytest.mark.parametrize(
+    ("n_q_heads", "n_kv_heads"),
+    [(4, 4), (8, 2)],
+    ids=["mha", "gqa"],
+)
 def test__dispatch_mlx_matches_sdpa_reference(
     monkeypatch: pytest.MonkeyPatch,
+    n_q_heads: int,
+    n_kv_heads: int,
 ) -> None:
     """Output matches SDPA reference and flash_attention_mlx is called."""
     monkeypatch.setattr(_sdpa_mod, "is_mlx_preferred", lambda *_: True)
@@ -286,19 +295,24 @@ def test__dispatch_mlx_matches_sdpa_reference(
     monkeypatch.setattr(_sdpa_mod, "flash_attention_mlx", _spy)
 
     head_dim = 64
-    q, k, v = _mps_qkv(batch=1, seq_q=32, seq_kv=32, n_heads=4, head_dim=head_dim)
-    q_bshd = q.permute(0, 2, 1, 3)
-    k_bshd = k.permute(0, 2, 1, 3)
-    v_bshd = v.permute(0, 2, 1, 3)
+    g = torch.Generator(device="mps").manual_seed(42)
+    kw = {"device": "mps", "dtype": torch.float16, "generator": g}
+    q_bshd = torch.randn(1, 32, n_q_heads, head_dim, **kw)
+    k_bshd = torch.randn(1, 32, n_kv_heads, head_dim, **kw)
+    v_bshd = torch.randn(1, 32, n_kv_heads, head_dim, **kw)
 
     out_mlx = _sdpa_mod.scaled_dot_product_attention(q_bshd, k_bshd, v_bshd)
 
     assert called, "flash_attention_mlx was not called"
 
-    q_cpu = q_bshd.cpu().float().permute(0, 2, 1, 3)
+    q_cpu = q_bshd.cpu().float().permute(0, 2, 1, 3)  # BHSD
     k_cpu = k_bshd.cpu().float().permute(0, 2, 1, 3)
     v_cpu = v_bshd.cpu().float().permute(0, 2, 1, 3)
+    if n_q_heads != n_kv_heads:
+        repeat = n_q_heads // n_kv_heads
+        k_cpu = k_cpu.repeat_interleave(repeat, dim=1)
+        v_cpu = v_cpu.repeat_interleave(repeat, dim=1)
     ref = torch.nn.functional.scaled_dot_product_attention(q_cpu, k_cpu, v_cpu)
-    ref = ref.permute(0, 2, 1, 3).half()
+    ref = ref.permute(0, 2, 1, 3).half()  # back to BSHD
 
     torch.testing.assert_close(out_mlx.cpu(), ref.cpu(), atol=1e-2, rtol=1e-2)
