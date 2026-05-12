@@ -123,6 +123,9 @@ We're building the future of tabular machine learning and would love your involv
 
 You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
 
+<details>
+<summary><b>BibTeX</b></summary>
+
 ```bibtex
 @misc{grinsztajn2025tabpfn,
   title={TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models},
@@ -158,6 +161,8 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
   year={2023}
 }
 ```
+
+</details>
 
 
 
