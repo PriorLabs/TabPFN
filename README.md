@@ -83,15 +83,12 @@ Choose the right TabPFN implementation for your needs:
   Simple API client for using TabPFN via cloud-based inference.
 
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**
-  A powerful companion repository packed with advanced utilities, integrations, and features - great place to contribute:
+  A respository of extensions for the TabPFN models, including:
 
   -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
   -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
-  -  **`rf_pfn`**: Combine TabPFN with traditional models like Random Forests for hybrid approaches.
-  -  **`hpo`**: Automated hyperparameter optimization tailored to TabPFN.
-  -  **`post_hoc_ensembles`**: Boost performance by ensembling multiple TabPFN models post-training.
 
   To install:
   ```bash
