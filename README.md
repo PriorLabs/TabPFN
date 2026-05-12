@@ -85,10 +85,10 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**
   A respository of extensions for the TabPFN models, including:
 
-  -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
-  -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
-  -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
-  -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
+  - **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
+  - **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
+  - **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
+  - **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
 
 - **[TabPFN (this repo)](https://github.com/priorlabs/tabpfn)**
   Core implementation for fast and local inference with PyTorch and CUDA support.
