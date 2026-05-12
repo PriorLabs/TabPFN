@@ -56,14 +56,6 @@ regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
 
-
-### Usage Tips
-
-- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
-- **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
-- **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
-- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. The current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features) — larger feature counts trade off against row capacity. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
-
 ## TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:
@@ -168,6 +160,13 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 ```
 
 
+
+## Usage Tips
+
+- **Use batch prediction mode**: Each `predict` call recomputes the training set. Calling `predict` on 100 samples separately is almost 100 times slower and more expensive than a single call. If the test set is very large, split it into chunks of 1000 samples each.
+- **Avoid data preprocessing**: Do not apply data scaling or one-hot encoding when feeding data to the model.
+- **Use a GPU**: TabPFN is slow to execute on a CPU. Ensure a GPU is available for better performance.
+- **Mind the dataset size**: TabPFN works best on datasets within its recommended size limits. The current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features) — larger feature counts trade off against row capacity. See the [Models page](https://docs.priorlabs.ai/models) for the limits of other checkpoints.
 
 ## ❓ FAQ
 
