@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.1] - 2026-05-12
+
+### Fixed
+
+- Remove warning about SVD falling back to CPU on MPS, as there's nothing the user can do. ([#957](https://github.com/PriorLabs/TabPFN/pull/957))
+
+
 ## [8.0.0] - 2026-05-12
 
 ### Breaking Changes
