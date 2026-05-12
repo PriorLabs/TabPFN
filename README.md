@@ -24,24 +24,13 @@
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
 ### Installation
-Official installation (pip)
 ```bash
 pip install tabpfn
-```
-OR installation from source
-```bash
-pip install "tabpfn @ git+https://github.com/PriorLabs/TabPFN.git"
-```
-OR local development installation: First [install uv](https://docs.astral.sh/uv/getting-started/installation) (version 0.10.0 or higher recommended), which we use for development, then run
-```bash
-git clone https://github.com/PriorLabs/TabPFN.git --depth 1
-cd TabPFN
-uv sync
 ```
 
 ### Basic Usage
 
-To use our default TabPFN-2.6 model, trained purely on synthetic data:
+To use our TabPFN-3.0 model, trained purely on synthetic data:
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -55,14 +44,14 @@ reg.fit(X_train, y_train)  # downloads checkpoint on first use
 predictions = reg.predict(X_test)
 ```
 
-To use other model versions (e.g. TabPFN-2.5):
+To use other model versions (e.g. TabPFN-2.6):
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
-classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
-regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_5)
+classifier = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
+regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 ```
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
