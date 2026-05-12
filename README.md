@@ -72,18 +72,12 @@ Choose the right TabPFN implementation for your needs:
   Simple API client for using TabPFN via cloud-based inference.
 
 - **[TabPFN Extensions](https://github.com/priorlabs/tabpfn-extensions)**
-  A powerful companion repository packed with advanced utilities, integrations, and features - great place to contribute:
+  Community extensions and integrations - great place to contribute:
 
   -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
   -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
-
-  To install:
-  ```bash
-  git clone https://github.com/priorlabs/tabpfn-extensions.git
-  pip install -e tabpfn-extensions
-  ```
 
 - **[TabPFN (this repo)](https://github.com/priorlabs/tabpfn)**
   Core implementation for fast and local inference with PyTorch and CUDA support.
