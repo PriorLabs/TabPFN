@@ -269,8 +269,9 @@ _SDPA_BACKENDS = [
     SDPBackend.FLASH_ATTENTION,
     SDPBackend.EFFICIENT_ATTENTION,
     SDPBackend.CUDNN_ATTENTION,
+    SDPBackend.MATH,  # fallback for older GPUs or unsupported configurations
 ]
-_SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS, SDPBackend.MATH]
+_SDPA_BACKENDS_CPU = [*_SDPA_BACKENDS]
 
 
 # ---------------------------------------------------------------------------
