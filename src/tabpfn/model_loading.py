@@ -170,6 +170,8 @@ class ModelSource:  # noqa: D101
     def get_classifier_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-classifier-v3_default.ckpt",
+            "tabpfn-v3-classifier-v3_20260417_binary.ckpt",
+            "tabpfn-v3-classifier-v3_20260417_multiclass.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -181,6 +183,8 @@ class ModelSource:  # noqa: D101
     def get_regressor_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-regressor-v3_default.ckpt",
+            "tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt",
+            "tabpfn-v3-regressor-v3_20260506_timeseries.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
