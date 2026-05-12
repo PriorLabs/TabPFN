@@ -34,10 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- - Introduces balanced subsampling of features for improved performance for datasets with large number of features.
-  - Results may vary slightly because of different seeds.
-
-  ([#851](https://github.com/PriorLabs/TabPFN/pull/851))
+- Introduces balanced subsampling of features for improved performance for datasets with large number of features. Results may vary slightly because of different seeds. ([#851](https://github.com/PriorLabs/TabPFN/pull/851))
 - Model checkpoint caching now automatically invalidates when the file on disk changes (detected via mtime and size), so replaced checkpoints (e.g. during finetuning) are always reloaded. ([#863](https://github.com/PriorLabs/TabPFN/pull/863))
 - Row subsampling across ensemble members now uses round-robin balanced sampling. This replaces the previous random sampling approach. ([#886](https://github.com/PriorLabs/TabPFN/pull/886))
 - Remove unused v2.6 defaults from `InferenceConfig.get_default()`. V2.6 checkpoints always embed their own `InferenceConfig`, so these defaults were never used at inference time. The v2.6 preprocessor config factories are also removed from `tabpfn.preprocessing`. ([#890](https://github.com/PriorLabs/TabPFN/pull/890))
