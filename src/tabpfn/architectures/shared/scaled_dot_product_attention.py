@@ -92,9 +92,9 @@ def scaled_dot_product_attention(
         for i in range(num_iterations):
             outputs.append(
                 torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
-                    keys[i * sub_batch : (i + 1) * sub_batch],
-                    values[i * sub_batch : (i + 1) * sub_batch],
+                    q_BHSD[i * sub_batch : (i + 1) * sub_batch].contiguous(),
+                    keys[i * sub_batch : (i + 1) * sub_batch].contiguous(),
+                    values[i * sub_batch : (i + 1) * sub_batch].contiguous(),
                     attn_mask=None,
                     **enable_gqa,
                 )
