@@ -744,11 +744,19 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X, y_normalized = self._refresh_targets_for_differentiable_input(X, y)
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
+        # n_estimators_ mirrors classifier.py:650 — must be set here so
+        # downstream predict()/forward() (which use self.n_estimators_) work
+        # after the differentiable fit path.
+        self.n_estimators_ = scale_n_estimators_for_feature_coverage(
+            n_estimators=self.n_estimators,
+            n_total_features=n_features,
+            preprocessor_configs=preprocessor_configs,
+        )
         # Polynomial features go through sklearn StandardScaler on numpy and
         # are not differentiable; force "no" regardless of the runtime default
         # (the regressor config defaults to a non-zero value).
         ensemble_configs = generate_regression_ensemble_configs(
-            num_estimators=self.n_estimators,
+            num_estimators=self.n_estimators_,
             add_fingerprint_feature=self.inference_config_.FINGERPRINT_FEATURE,
             feature_shift_decoder=self.inference_config_.FEATURE_SHIFT_METHOD,
             polynomial_features="no",
@@ -760,7 +768,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 estimator_type=self.estimator_type
             ),
         )
-        assert len(ensemble_configs) == self.n_estimators
+        assert len(ensemble_configs) == self.n_estimators_
 
         return ensemble_configs, X, y_normalized
 
@@ -956,6 +964,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
             ensemble_configs = self.ensemble_configs_  # Reuse from first fit
+            # Mirror classifier.py:948 — re-assert n_estimators_ from cached
+            # configs so it survives across calls (and after pickling).
+            self.n_estimators_ = len(ensemble_configs)
             # Re-validate and re-normalise y for the new fit data so that
             # raw_space_bardist_ and y_train_mean_/std_ track the current
             # targets. The model load and ensemble configs stay cached.
