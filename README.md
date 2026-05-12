@@ -289,32 +289,9 @@ Not effective:
 **Q: What are the different checkpoints on [Hugging Face](https://huggingface.co/Prior-Labs)?**
 A: Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
-
-## Development
-
-1. Install [uv](https://docs.astral.sh/uv/)
-2. Setup environment:
-```bash
-git clone https://github.com/PriorLabs/TabPFN.git
-cd TabPFN
-uv sync
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pre-commit install
-```
-
-3. Before committing:
-```bash
-pre-commit run --all-files
-```
-
-4. Run tests:
-```bash
-pytest tests/
-```
-
 ## Anonymized Telemetry
 
-This project collects fully anonymous usage telemetry with an option to opt-out of any telemetry or opt-in to extended telemetry.
+This project collects fully anonymous usage telemetry disabled by default.
 
 The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
@@ -324,10 +301,10 @@ The data is used exclusively to help us provide stability to the relevant produc
 
 For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
-**To opt out**, set the following environment variable:
+**To opt in**, set the following environment variable:
 
 ```bash
-export TABPFN_DISABLE_TELEMETRY=1
+export TABPFN_DISABLE_TELEMETRY=0
 ```
 ---
 
