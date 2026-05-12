@@ -39,6 +39,10 @@ cd TabPFN
 uv sync
 ```
 
+Note: For best performance on MPS, consider installing a pytorch version after
+the nightly "2.13.0.dev20260510". This enables flash attention without relying on MLX
+(the latter requires a GPU-CPU-GPU roundtrip).
+
 ### Basic Usage
 
 To use our default TabPFN-2.6 model, trained purely on synthetic data:

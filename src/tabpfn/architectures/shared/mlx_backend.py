@@ -65,6 +65,7 @@ def flash_attention_mlx(
     Pytorch SDPA has only very limited support for flash attention on MPS, which is
     incompatible with shapes encountered in our model. To reduce memory usage, we route
     to MLX during inference.
+    Zero-padding does not change the dot product, and we scale by the original head_dim.
     """
     D = q_BHSD.shape[-1]
     if D > 128:

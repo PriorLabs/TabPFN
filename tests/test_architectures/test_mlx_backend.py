@@ -70,15 +70,10 @@ def _reference_attn_cpu(
     return torch.einsum("bhsj,bhjd->bhsd", scores.softmax(dim=-1), v32).to(q.dtype)
 
 
-# ---------------------------------------------------------------------------
-# is_eligible_for_mlx — pure-logic tests, no MPS required
-# ---------------------------------------------------------------------------
-
-
 def test__eligible_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """mx=None (import failure) makes every tensor ineligible."""
     monkeypatch.setattr(mlx_backend, "mx", None)
-    q = torch.zeros(1, 2, 8, 64, dtype=torch.float16)
+    q = torch.zeros(1, 2, 8, 64, dtype=torch.float16, device="mps")
     assert not is_eligible_for_mlx(q, q, q)
 
 
@@ -90,7 +85,7 @@ def test__eligible_false_for_cpu_tensors() -> None:
 
 def test__eligible_false_for_head_dim_over_128() -> None:
     """head_dim=129 is rejected regardless of other properties."""
-    q = torch.zeros(1, 2, 8, 129, dtype=torch.float16)
+    q = torch.zeros(1, 2, 8, 129, dtype=torch.float16, device="mps")
     assert not is_eligible_for_mlx(q, q, q)
 
 
@@ -130,11 +125,6 @@ def test__eligible_false_at_head_dim_129() -> None:
     assert not is_eligible_for_mlx(q, q, q)
 
 
-# ---------------------------------------------------------------------------
-# is_mlx_preferred
-# ---------------------------------------------------------------------------
-
-
 def test__preferred_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mlx_backend, "mx", None)
     q = torch.zeros(1, 2, 8, 64)
@@ -143,18 +133,13 @@ def test__preferred_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -
 
 
 @_skip_unless_mlx_and_mps
-def test__preferred_requires_seq_kv_ge_1536() -> None:
-    """Threshold is 1536; one below must not prefer MLX, at-threshold must."""
+def test__preferred_requires_seq_kv_ge_129() -> None:
+    """Threshold is 128; one below must not prefer MLX, at-threshold must."""
     q = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.float16)
-    k_below = torch.zeros(1, 2, 1535, 64, device="mps", dtype=torch.float16)
-    k_at = torch.zeros(1, 2, 1536, 64, device="mps", dtype=torch.float16)
+    k_below = torch.zeros(1, 2, 127, 64, device="mps", dtype=torch.float16)
+    k_at = torch.zeros(1, 2, 128, 64, device="mps", dtype=torch.float16)
     assert not is_mlx_preferred(q, k_below, k_below)
     assert is_mlx_preferred(q, k_at, k_at)
-
-
-# ---------------------------------------------------------------------------
-# _torch_to_mlx / _mlx_to_torch — conversion round-trips (no MPS needed)
-# ---------------------------------------------------------------------------
 
 
 @_skip_unless_mlx
@@ -176,11 +161,6 @@ def test__conversion_roundtrip_bfloat16() -> None:
     mx.eval(arr)
     result = _mlx_to_torch(arr, t.device, t.dtype)
     torch.testing.assert_close(result, t)
-
-
-# ---------------------------------------------------------------------------
-# flash_attention_mlx — error path (head_dim > 128)
-# ---------------------------------------------------------------------------
 
 
 @_skip_unless_mlx_and_mps
@@ -287,6 +267,9 @@ def test__dispatch_routes_through_mlx_when_preferred(
 
 
 @_skip_unless_mlx_and_mps
+@pytest.mark.skipif(
+    torch.__version__ >= "2.13.dev20260510", reason="torch 2.13 uses SDPA"
+)
 def test__dispatch_mlx_matches_sdpa_reference(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
