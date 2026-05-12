@@ -25,7 +25,7 @@ dependencies = [
   "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
   "filelock>=3.11.0",
   "lightgbm>=3.0",
-  "mlx>=0.30.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "mlx>=0.29.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 requires-python = ">=3.9"
 authors = [{ name = "Prior Labs", email = "opensource@priorlabs.ai" }]
