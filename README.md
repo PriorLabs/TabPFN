@@ -173,15 +173,24 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 
 ### **Usage & Compatibility**
 
-**Q: What dataset sizes work best with TabPFN?**
-A: Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features); larger feature counts trade off against row capacity. The previous default (**TabPFN-2.6**) is recommended for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended limits for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+<details>
+<summary><b>Q: What dataset sizes work best with TabPFN?</b></summary>
 
-**Q: Why can't I use TabPFN with Python 3.8?**
-A: TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
+Recommended row and feature limits vary by checkpoint — see the [Models page](https://docs.priorlabs.ai/models) for the per-release limits. As a quick reference, the current default (**TabPFN-3**) supports up to **1,000,000 × 200**, **100,000 × 2,000**, or **1,000 × 20,000** (rows × features); larger feature counts trade off against row capacity. The previous default (**TabPFN-2.6**) is recommended for up to **100,000 rows** and **2,000 features**. If your dataset exceeds the recommended limits for your checkpoint, you can subsample, set `ignore_pretraining_limits=True` to push past the size guardrail, or upgrade to a release with a higher limit.
+
+</details>
+
+<details>
+<summary><b>Q: Why can't I use TabPFN with Python 3.8?</b></summary>
+
+TabPFN requires **Python 3.9+** due to newer language features. Compatible versions: **3.9, 3.10, 3.11, 3.12, 3.13**.
+
+</details>
 
 ### **Installation & Setup**
 
-**Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3?**
+<details>
+<summary><b>Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3?</b></summary>
 
 On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
@@ -189,7 +198,10 @@ On first use, TabPFN will automatically open a browser window where you can log 
 
 If access via the browser-based flow is not an option for you, please contact us at [`sales@priorlabs.ai`](mailto:sales@priorlabs.ai).
 
-**Q: How do I use TabPFN without an internet connection?**
+</details>
+
+<details>
+<summary><b>Q: How do I use TabPFN without an internet connection?</b></summary>
 
 TabPFN automatically downloads model weights when first used. For offline usage:
 
@@ -218,13 +230,21 @@ This script will download the main classifier and regressor models, as well as a
      - macOS: `~/Library/Caches/tabpfn/`
      - Linux: `~/.cache/tabpfn/`
 
-**Q: I'm getting a `pickle` error when loading the model. What should I do?**
-A: Try the following:
+</details>
+
+<details>
+<summary><b>Q: I'm getting a <code>pickle</code> error when loading the model. What should I do?</b></summary>
+
+Try the following:
 - Download the newest version of tabpfn `pip install tabpfn --upgrade`
 - Ensure model files downloaded correctly (re-download if needed)
 
-**Q: What environment variables can I use to configure TabPFN?**
-A: TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
+</details>
+
+<details>
+<summary><b>Q: What environment variables can I use to configure TabPFN?</b></summary>
+
+TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
 
 **Authentication:**
 - `TABPFN_TOKEN`: Provide a PriorLabs authentication token directly (useful for headless/CI environments). Obtain one from [https://ux.priorlabs.ai](https://ux.priorlabs.ai).
@@ -246,8 +266,12 @@ export PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:512"
 
 Or simply set them in your `.env`
 
-**Q: How do I save and load a trained TabPFN model?**
-A: Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
+</details>
+
+<details>
+<summary><b>Q: How do I save and load a trained TabPFN model?</b></summary>
+
+Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
 it later with :func:`load_fitted_tabpfn_model` (or the corresponding
 ``load_from_fit_state`` class methods).
 
@@ -272,13 +296,21 @@ To store just the foundation model weights (without a fitted estimator) use
 checkpoint of the pre-trained weights so you can later create and fit a fresh
 estimator. Reload the checkpoint with ``load_model_criterion_config``.
 
+</details>
+
 ### **Performance & Limitations**
 
-**Q: Can TabPFN handle missing values?**
-A: **Yes!**
+<details>
+<summary><b>Q: Can TabPFN handle missing values?</b></summary>
 
-**Q: How can I improve TabPFN’s performance?**
-A: Best practices:
+**Yes!**
+
+</details>
+
+<details>
+<summary><b>Q: How can I improve TabPFN's performance?</b></summary>
+
+Best practices:
 - Feature engineering: Add domain-specific features to improve model performance
 - See the [Improving Performance guide](https://docs.priorlabs.ai/improving-performance) for the full escalation path
 
@@ -286,8 +318,14 @@ Not effective:
 - Adapt feature scaling
 - Convert categorical features to numerical values (e.g., one-hot encoding)
 
-**Q: What are the different checkpoints on [Hugging Face](https://huggingface.co/Prior-Labs)?**
-A: Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
+</details>
+
+<details>
+<summary><b>Q: What are the different checkpoints on <a href="https://huggingface.co/Prior-Labs">Hugging Face</a>?</b></summary>
+
+Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
+
+</details>
 
 ## Anonymized Telemetry
 
