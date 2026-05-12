@@ -51,6 +51,7 @@ from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.errors import is_oom_error
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 if TYPE_CHECKING:
@@ -2008,6 +2009,7 @@ class TabPFNV3(Architecture):
         else:
             row_chunk_size = None
             col_chunk_size = None
+
         force_recompute_layer = performance_options.force_recompute_layer
         save_peak_memory_factor = performance_options.save_peak_memory_factor
 
@@ -2035,6 +2037,7 @@ class TabPFNV3(Architecture):
 
         # --- Phase 1: compute inducing hidden when chunking w/o a pre-built cache. ---
         use_chunks = row_chunk_size is not None and row_chunk_size < num_rows
+
         if use_chunks and precomputed_hidden is None:
             eff_col_chunk = col_chunk_size if col_chunk_size is not None else C
             while True:
@@ -2048,15 +2051,14 @@ class TabPFNV3(Architecture):
                         enable_torch_compile=performance_options.enable_torch_compile,
                     )
                     break
-                except torch.cuda.OutOfMemoryError:
-                    if eff_col_chunk <= 1:
+                except RuntimeError as e:
+                    if not is_oom_error(e) or eff_col_chunk <= 1:
                         raise
                     torch.cuda.empty_cache()
+                    torch.mps.empty_cache()
                     eff_col_chunk //= 2
-                    _logger.warning(
-                        "CUDA OOM during Phase 1; halving col_chunk_size to %d",
-                        eff_col_chunk,
-                    )
+                    _logger.warning("OOM: halving col_chunk_size to %d", eff_col_chunk)
+                    self.inference_col_chunk_size = eff_col_chunk
 
         # --- Shared per-chunk loop: embed → dist-embedder → column-aggregator ---
         # When not chunking, the single iteration covers all rows. force_recompute_layer
@@ -2101,16 +2103,16 @@ class TabPFNV3(Architecture):
                         inducing_hidden = chunk_hidden
                     parts.append(row_embedding_chunk)
                 break
-            except torch.cuda.OutOfMemoryError:
-                if not use_chunks or effective_chunk_size <= 1:
+            except RuntimeError as e:
+                if not is_oom_error(e) or not use_chunks or effective_chunk_size <= 1:
                     raise
                 parts.clear()
                 torch.cuda.empty_cache()
                 effective_chunk_size //= 2
                 _logger.warning(
-                    "CUDA OOM during Phase 2; halving row_chunk_size to %d",
-                    effective_chunk_size,
+                    "OOM: halving row_chunk_size to %d", effective_chunk_size
                 )
+                self.inference_row_chunk_size = effective_chunk_size
 
         if use_chunks:
             inducing_hidden = precomputed_hidden

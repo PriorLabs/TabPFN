@@ -149,6 +149,13 @@ class TabPFNMPSOutOfMemoryError(TabPFNOutOfMemoryError):
     device_name = "MPS"
 
 
+def is_oom_error(e: Exception) -> bool:
+    """Return True if *e* is a GPU out-of-memory error (CUDA or MPS)."""
+    return isinstance(e, torch.OutOfMemoryError) or (
+        isinstance(e, RuntimeError) and "out of memory" in str(e).lower()
+    )
+
+
 @contextmanager
 def handle_oom_errors(
     devices: tuple[torch.device, ...],

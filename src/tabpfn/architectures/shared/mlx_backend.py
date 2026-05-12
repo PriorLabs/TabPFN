@@ -19,13 +19,12 @@ except ImportError:
 def is_eligible_for_mlx(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
     """True iff MLX can serve this attention call (capability gate, not perf)."""
     head_dim = q.shape[-1]
+    _DTYPES = (torch.float16, torch.bfloat16, torch.float32)
     return (
         mx is not None
         and (q.is_mps and k.is_mps and v.is_mps)
         and not (q.requires_grad or k.requires_grad or v.requires_grad)
-        and q.dtype in (torch.float16, torch.bfloat16, torch.float32)
-        and k.dtype in (torch.float16, torch.bfloat16, torch.float32)
-        and v.dtype in (torch.float16, torch.bfloat16, torch.float32)
+        and (q.dtype in _DTYPES and k.dtype in _DTYPES and v.dtype in _DTYPES)
         and head_dim <= 128
     )
 
@@ -34,7 +33,9 @@ def is_mlx_preferred(
     q_BHSD: torch.Tensor, k_BJSD: torch.Tensor, v_BJSD: torch.Tensor
 ) -> bool:
     """True iff MLX is preferred for this attention call."""
-    return is_eligible_for_mlx(q_BHSD, k_BJSD, v_BJSD) and k_BJSD.shape[2] >= 1536
+    # Note: Inference speed of MLX is worse for seq_len < 1500 but the memory savings
+    # are often required to not run out of memory.
+    return is_eligible_for_mlx(q_BHSD, k_BJSD, v_BJSD) and k_BJSD.shape[2] >= 128
 
 
 def _torch_to_mlx(torch_tensor: torch.Tensor) -> mx.array:
