@@ -290,6 +290,23 @@ Not effective:
 **Q: What are the different checkpoints on [Hugging Face](https://huggingface.co/Prior-Labs)?**
 A: Each TabPFN release publishes a default classification and regression checkpoint. Some releases also publish a handful of experimental variants — these aren't guaranteed to exist for every release. We recommend starting with the defaults; the variants are experimental and worse on average. When present, they can be used as part of an ensembling or hyperparameter optimization system, or tried out manually. Their name suffixes refer to what we expect them to be good at.
 
+For **TabPFN-3**, the following specialized checkpoints are available on Hugging Face:
+
+| Checkpoint | Task | Specialization |
+| --- | --- | --- |
+| [`tabpfn-v3-classifier-v3_20260417_binary.ckpt`](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-v3_20260417_binary.ckpt) | Classification | Specialized for binary classification for datasets with <200k rows |
+| [`tabpfn-v3-classifier-v3_20260417_multiclass.ckpt`](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-v3_20260417_multiclass.ckpt) | Classification | Specialized for multiclass classification for datasets with <200k rows |
+| [`tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt`](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt) | Regression | Specialized for regression for datasets with <100k rows and alternative preprocessing |
+| [`tabpfn-v3-regressor-v3_20260506_timeseries.ckpt`](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-v3_20260506_timeseries.ckpt) | Regression | Fine-tuned on synthetic time-series data; used by default in TabPFN-TS-3 |
+
+To use one of these checkpoints, pass its path via `model_path`:
+
+```python
+from tabpfn import TabPFNClassifier
+
+clf = TabPFNClassifier(model_path="tabpfn-v3-classifier-v3_20260417_binary.ckpt")
+```
+
 
 ## Development
 
