@@ -18,17 +18,17 @@
 >
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
-> ⚡ **GPU Recommended**:
-> For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
-> On CPU, only small datasets (≲1000 samples) are feasible.
-> No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
-
 ### Installation
 ```bash
 pip install tabpfn
 ```
 
 ### Basic Usage
+
+> ⚡ **GPU Recommended**:
+> For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
+> On CPU, only small datasets (≲1000 samples) are feasible.
+> No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
 To use our default TabPFN-3 model:
 
