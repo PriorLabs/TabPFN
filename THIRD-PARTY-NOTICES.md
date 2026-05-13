@@ -11,7 +11,7 @@ canonical list).
 
 | Upstream | Local path | Upstream license |
 |---|---|---|
-| skrub — `SquashingScaler` | `src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py` | BSD-3-Clause |
+| skrub — `SquashingScaler` | `src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py`<br>`src/tabpfn/preprocessing/torch/torch_squashing_scaler.py` | BSD-3-Clause |
 
 ---
 
@@ -20,10 +20,13 @@ canonical list).
 ### skrub — SquashingScaler
 
 **Upstream:** https://github.com/skrub-data/skrub
-**Local path:** `src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py`
+**Local paths:**
+- `src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py` — CPU/scikit-learn implementation
+- `src/tabpfn/preprocessing/torch/torch_squashing_scaler.py` — PyTorch port of the same algorithm, with explicit-state fit/apply semantics
+
 **License:** BSD-3-Clause
 **Copyright:** Copyright (c) 2018-2023, The dirty_cat developers, 2023-2026 the skrub developers. All rights reserved. (per the skrub `LICENSE.txt`)
-**Modifications:** Adapted to fit TabPFN's preprocessing pipeline; algorithmic logic preserved. Upstream does not ship a per-file copyright header; attribution is carried in this NOTICE plus the in-file block.
+**Modifications:** Adapted to fit TabPFN's preprocessing pipeline; algorithmic logic preserved across both implementations. Upstream does not ship a per-file copyright header; attribution is carried in this NOTICE plus the in-file blocks.
 
 ---
 

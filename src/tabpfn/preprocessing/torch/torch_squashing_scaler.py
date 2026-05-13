@@ -3,10 +3,16 @@
 """Torch implementation of SquashingScaler with NaN handling.
 
 Mirrors the CPU
-:class:`tabpfn.preprocessing.steps.squashing_scaler_transformer.SquashingScaler`:
-robust median-centering with quartile scaling (or a min-max fallback when the
-inter-quartile range collapses), followed by an injective soft-clip into
-``[-max_absolute_value, +max_absolute_value]``.
+:class:`tabpfn.preprocessing.steps.squashing_scaler_transformer.SquashingScaler`,
+which is itself adapted from skrub:
+  https://github.com/skrub-data/skrub
+The algorithmic logic (robust median-centering with quartile scaling, min-max
+fallback, soft-clip) is derived from skrub's ``SquashingScaler``.
+
+Original skrub attribution:
+  Copyright (c) 2018-2023, The dirty_cat developers, 2023-2026 the skrub developers.
+  All rights reserved.
+  SPDX-License-Identifier: BSD-3-Clause
 
 The state is returned explicitly from ``fit`` rather than stored on the
 instance, matching the rest of ``preprocessing/torch``.
