@@ -7,6 +7,8 @@ incompatible with our model. To reduce memory usage, we route to MLX during infe
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import torch
 
@@ -14,6 +16,11 @@ try:
     import mlx.core as mx
 except ImportError:
     mx = None
+
+
+# Float32 on M5 chips runs with lower precision by default. Disabling TF32 circumvents
+# this. See https://github.com/ml-explore/mlx/issues/3534.
+os.environ["MLX_ENABLE_TF32"] = "0"
 
 
 def is_eligible_for_mlx(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
