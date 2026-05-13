@@ -1,5 +1,14 @@
 # mypy: ignore-errors
-# taken from https://github.com/sklearn-compat/sklearn-compat
+#
+# Vendored from sklearn-compat: https://github.com/sklearn-compat/sklearn-compat
+#
+# Copyright (c) 2024, Guillaume Lemaitre
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# sklearn-compat is distributed under the BSD-3-Clause license; see the
+# repository LICENSE for full terms. This file is the vendored, single-file
+# distribution intended for projects that prefer not to depend on the
+# sklearn-compat package directly.
 """Ease developer experience to support multiple versions of scikit-learn.
 
 This file is intended to be vendored in your project if you do not want to depend on

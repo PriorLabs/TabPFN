@@ -11,9 +11,12 @@ from scipy import optimize
 from sklearn.preprocessing import PowerTransformer
 
 
-# this is taken from https://github.com/scipy/scipy/pull/18852
-# which fix overflow issues
-# we can directly import from scipy once we drop support for scipy < 1.12
+# Adapted from scipy: https://github.com/scipy/scipy/pull/18852
+# (fixes Yeo-Johnson overflow issues; can be replaced with a direct scipy
+# import once support for scipy < 1.12 is dropped).
+#
+# Copyright (c) 2001-2002 Enthought, Inc. 2003-2025, SciPy Developers.
+# SPDX-License-Identifier: BSD-3-Clause
 def _yeojohnson(
     x: np.ndarray,
     lmbda: float | None = None,
