@@ -196,6 +196,10 @@ jobs:
       TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
+      # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
+      # Xet caches each downloaded file's chunks in ~/.cache/huggingface/xet/,
+      # roughly doubling the effective disk footprint on the runner.
+      HF_HUB_DISABLE_XET: "1"
 
     steps:
       - name: Checkout TabPFN at current ref
