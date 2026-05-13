@@ -22,7 +22,8 @@ canonical list).
 **Upstream:** https://github.com/skrub-data/skrub
 **Local path:** `src/tabpfn/preprocessing/steps/squashing_scaler_transformer.py`
 **License:** BSD-3-Clause
-**Modifications:** Adapted to fit TabPFN's preprocessing pipeline; algorithmic logic preserved.
+**Copyright:** Copyright (c) 2018-2023, The dirty_cat developers, 2023-2026 the skrub developers. All rights reserved. (per the skrub `LICENSE.txt`)
+**Modifications:** Adapted to fit TabPFN's preprocessing pipeline; algorithmic logic preserved. Upstream does not ship a per-file copyright header; attribution is carried in this NOTICE plus the in-file block.
 
 ---
 
@@ -30,6 +31,6 @@ canonical list).
 
 When vendoring or adapting third-party code:
 
-1. Preserve the upstream copyright and license header verbatim at the top of the affected source file (for whole-file vendoring) or inline next to the adapted block (for partial adaptation).
-2. If the upstream ships a `LICENSE` / `NOTICE` file, vendor that file alongside the code.
-3. Add a row to the summary table and a per-upstream notice to this file.
+1. Preserve any upstream per-file copyright and license header verbatim. If the upstream does not ship a per-file header, add an attribution block citing the upstream URL, copyright holder, and SPDX license identifier.
+2. When vendoring a whole directory of upstream code, also vendor the upstream `LICENSE` / `NOTICE` file alongside it. For single-file adaptations, the in-file attribution plus the entry in this NOTICE file is sufficient.
+3. Add a row to the summary table and a per-upstream notice to this file, including the upstream copyright line when one is published.

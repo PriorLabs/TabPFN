@@ -1,6 +1,11 @@
 """Implementation of the SquashingScaler, adapted from skrub.
 
-See https://skrub-data.org/stable/reference/generated/skrub.SquashingScaler.html
+Adapted from skrub: https://github.com/skrub-data/skrub
+  reference: https://skrub-data.org/stable/reference/generated/skrub.SquashingScaler.html
+
+Copyright (c) 2018-2023, The dirty_cat developers, 2023-2026 the skrub developers.
+All rights reserved.
+SPDX-License-Identifier: BSD-3-Clause
 
 This preprocessing is used e.g. in RealMLP, see https://arxiv.org/abs/2407.04491
 """
