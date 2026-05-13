@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "8.0.1"
+version = "8.0.2"
 dependencies = [
   "torch>=2.5",
   "numpy>=1.21.6",

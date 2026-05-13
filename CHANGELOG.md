@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.2] - 2026-05-13
+
+### Added
+
+- Add flash attention support for MPS to reduce memory usage. Remove attention_backend. ([#949](https://github.com/PriorLabs/TabPFN/pull/949))
+
+### Changed
+
+- Modernized the SHAP / Shapley Values section in `TabPFN_Demo_Local.ipynb` to use `shapiq` (with TabPFN's KV cache enabled), and made small fixes to the feature-selection, time-series, and causal-inference sections. ([#960](https://github.com/PriorLabs/TabPFN/pull/960))
+
+
 ## [8.0.1] - 2026-05-12
 
 ### Fixed
