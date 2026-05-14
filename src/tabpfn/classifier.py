@@ -202,6 +202,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         *,
         n_estimators: int = 8,
+        ensemble_batch_size: int | None = None,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -249,6 +250,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 categorical. If `None`, the model will infer the categorical columns.
                 If provided, we might ignore some of the suggestion to better fit the
                 data seen during pre-training.
+
+            ensemble_batch_size:
+                Batch compatible ensemble members together during single-device
+                prediction. This reduces the number of forward passes needed for
+                `n_estimators > 1` in `low_memory` or `fit_preprocessors` mode.
+
+                - If `None`, estimators are evaluated one-by-one.
+                - If an int, up to that many compatible ensemble members are evaluated
+                  in one forward pass on a single device.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -456,6 +466,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.ensemble_batch_size = ensemble_batch_size
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -807,6 +818,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            ensemble_batch_size=self.ensemble_batch_size,
             inference_mode=True,
         )
 
@@ -1453,7 +1465,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             if original_ndim == 2:
                 # Shape is [Nsamples, NClasses] -> [Nsamples, 1,  NClasses]
                 processed_output = output.unsqueeze(1)
-                config_list = [config]
+                config_list = config if isinstance(config, list) else [config]
             elif original_ndim == 3:
                 # Shape is [Nsamples, batch_size, NClasses]
                 processed_output = output
@@ -1484,7 +1496,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
                     output_batch.append(processed_output[:, i, use_perm])
 
-            outputs.append(torch.stack(output_batch, dim=1))
+            outputs.extend(output_batch)
 
         # --- Post-processing ---
         stacked_outputs = torch.stack(outputs)
@@ -1501,11 +1513,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if output.ndim > 2 and use_inference_mode:
             output = output.squeeze(1) if not return_raw_logits else output.squeeze(2)
 
-        if not use_inference_mode:
-            # This case is primarily for fine-tuning where NLLLoss expects [B, C, N]
-            if output.ndim == 2:  # was likely [N, C]
-                output = output.unsqueeze(0)  # [1, N, C]
-            output = output.transpose(0, 1).transpose(1, 2)
+        if not use_inference_mode and return_raw_logits:
+            # Fine-tuning consumes raw logits as [Q, B, E, L]. The batched
+            # engine currently emits [E, Q, L] after selecting B=1.
+            if output.ndim == 3:
+                output = output.permute(1, 0, 2).unsqueeze(1)
+            elif output.ndim == 4:
+                output = output.permute(1, 2, 0, 3)
+        elif not use_inference_mode:
+            # This case is primarily for fine-tuning where NLLLoss expects
+            # [B, C, N]. The batched engine emits averaged [N, C].
+            if output.ndim == 2:
+                output = output.T.unsqueeze(0)
+            elif output.ndim == 3:
+                output = output.permute(1, 2, 0)
 
         return output
 

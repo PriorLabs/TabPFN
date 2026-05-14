@@ -440,10 +440,11 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         bardist_loss_fn = self._bardist_loss
 
         _, per_estim_logits, _ = self._training_forward(X_query_batch)
-        # per_estim_logits is a list (per estimator) of tensors with shape [Q, B(=1), L]
-
-        # shape suffix: Q=n_queries, B=batch(=1), E=estimators, L=logits
-        logits_QBEL = torch.stack(per_estim_logits, dim=2)
+        # per_estim_logits is a list (per estimator) of tensors. The batched
+        # inference path selects the only supported meta-batch item, so each
+        # tensor is [Q, L]. Restore B=1 for the shared loss layout.
+        logits_QLE = torch.stack(per_estim_logits, dim=2)
+        logits_QBEL = logits_QLE.permute(0, 2, 1).unsqueeze(1)
 
         Q, B, E, L = logits_QBEL.shape
         num_bars = bardist_loss_fn.num_bars
