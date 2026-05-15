@@ -368,8 +368,6 @@ if sklearn_version < parse_version("1.6"):
         return get_tags(estimator).estimator_type == "clusterer"
 
     # test_common
-    from sklearn.utils.estimator_checks import _construct_instance
-
     def type_of_target(y, input_name="", *, raise_unknown=False):
         # fix for raise_unknown which is introduced in scikit-learn 1.6
         from sklearn.utils.multiclass import type_of_target
@@ -388,6 +386,12 @@ if sklearn_version < parse_version("1.6"):
         return _raise_or_return(target_type)
 
     def _construct_instances(Estimator):
+        # Imported lazily so that `import tabpfn` does not pull in
+        # sklearn.utils.estimator_checks (see module __getattr__ below).
+        from sklearn.utils.estimator_checks import (  # noqa: PLC0415
+            _construct_instance,
+        )
+
         yield _construct_instance(Estimator)
 
     # validation
@@ -839,13 +843,6 @@ else:
         TargetTags,
         TransformerTags,
     )
-    from sklearn.utils._test_common.instance_generator import (
-        _construct_instances,  # noqa: F401
-    )
-    from sklearn.utils.estimator_checks import (
-        check_estimator,  # noqa: F401
-        parametrize_with_checks,  # noqa: F401
-    )
     from sklearn.utils.multiclass import type_of_target  # noqa: F401
 
     # validation
@@ -1000,3 +997,31 @@ else:
         is_polars_df,  # noqa: F401
     )
     from sklearn.metrics._classification import _check_targets  # noqa: F401
+
+
+########################################################################################
+# Lazy test-only helpers (local deviation from upstream sklearn-compat)
+########################################################################################
+# `check_estimator`, `parametrize_with_checks` and `_construct_instances` are only
+# used by the test suite. Importing them eagerly pulls in
+# sklearn.utils.estimator_checks / sklearn.utils._test_common.instance_generator,
+# which transitively import a large number of estimators on every `import tabpfn`
+# (hundreds of modules, ~0.1s). Expose them lazily so the public import surface is
+# unchanged while keeping `import tabpfn` lean.
+#
+# Note: for scikit-learn < 1.6 `_construct_instances` is defined above as a real
+# module-level function, so this __getattr__ is only consulted for it on >= 1.6.
+
+
+def __getattr__(name):
+    if name in ("check_estimator", "parametrize_with_checks"):
+        from sklearn.utils import estimator_checks  # noqa: PLC0415
+
+        return getattr(estimator_checks, name)
+    if name == "_construct_instances":
+        from sklearn.utils._test_common.instance_generator import (  # noqa: PLC0415
+            _construct_instances,
+        )
+
+        return _construct_instances
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
