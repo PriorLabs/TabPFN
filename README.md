@@ -119,10 +119,17 @@ We're building the future of tabular machine learning and would love your involv
 
 2. **Contribute**:
    - Report bugs or request features
-   - Submit pull requests (please make sure to open an issue discussing the feature/bug first if none exists)
    - Share your research and use cases
+   - Submit pull requests — **please open an issue first** (see below)
 
 3. **Stay Updated**: Star the repo and join Discord for the latest updates
+
+> [!IMPORTANT]
+> **Open an issue before starting work on a PR.**
+>
+> If there's a feature you'd like to add or a bug you've found, please [open a GitHub issue](https://github.com/priorlabs/tabpfn/issues) with a high-level sketch of your plan. This lets us give feedback on the approach *before* you invest the effort, saving everyone time and increasing the chance your change lands.
+>
+> There are many reasons a PR may not be mergeable — design fit, scope, compatibility, planned refactors, etc. — and these are often hard to spot from the outside, especially for a first-time contributor.
 
 ## Citation
 
