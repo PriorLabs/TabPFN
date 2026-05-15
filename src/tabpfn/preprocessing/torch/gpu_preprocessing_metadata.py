@@ -14,6 +14,7 @@ _GPU_ELIGIBLE_QUANTILE_TRANSFORMS = frozenset(
         "quantile_uni",
         "quantile_uni_coarse",
         "quantile_uni_fine",
+        "quantile_uni_extrapolate",
     }
 )
 

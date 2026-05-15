@@ -542,6 +542,14 @@ def get_all_reshape_feature_distribution_preprocessors(
             ),
             random_state=random_state,
         ),
+        "quantile_uni_extrapolate": AdaptiveQuantileTransformer(
+            output_distribution="uniform",
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_uni_extrapolate", num_examples
+            ),
+            extrapolate_ratio=1.0,
+            random_state=random_state,
+        ),
         "squashing_scaler_default": SquashingScaler(),
         "squashing_scaler_max10": SquashingScaler(max_absolute_value=10.0),
         "robust": RobustScaler(unit_variance=True),

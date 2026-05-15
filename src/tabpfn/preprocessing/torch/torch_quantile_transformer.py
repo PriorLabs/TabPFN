@@ -17,15 +17,25 @@ class TorchQuantileTransformer:
     quantile information from the training data.
     """
 
-    def __init__(self, n_quantiles: int = 1_000) -> None:
+    def __init__(
+        self,
+        n_quantiles: int = 1_000,
+        extrapolate_ratio: float | None = None,
+    ) -> None:
         """Initialize the quantile transformer.
 
         Args:
             n_quantiles: Number of quantiles to compute. More quantiles give
                 a better approximation of the CDF but use more memory.
+            extrapolate_ratio: When set, inputs outside the fitted range are
+                linearly extrapolated past ``[0, 1]`` and clipped at
+                ``-ratio`` / ``1 + ratio`` instead of being clamped at the
+                boundary quantile. Mirrors the
+                :class:`AdaptiveQuantileTransformer` mode-1 behaviour.
         """
         super().__init__()
         self.n_quantiles = n_quantiles
+        self.extrapolate_ratio = extrapolate_ratio
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the quantiles from the training data.
@@ -250,7 +260,10 @@ class TorchQuantileTransformer:
         result = 0.5 * (interp_forward - interp_backward)  # [n_features, n_samples]
         result = result.t()  # [n_samples, n_features]
 
-        result = torch.clamp(result, 0.0, 1.0)
+        if self.extrapolate_ratio is None:
+            result = torch.clamp(result, 0.0, 1.0)
+        else:
+            result = self._apply_extrapolation(result, x_flat, quantiles_flat)
 
         if len(original_shape) > 1:
             result = result.reshape(original_shape)
@@ -258,6 +271,49 @@ class TorchQuantileTransformer:
             result = result.squeeze(-1)
 
         return result
+
+    def _apply_extrapolation(
+        self,
+        result: torch.Tensor,
+        x: torch.Tensor,
+        quantiles: torch.Tensor,
+    ) -> torch.Tensor:
+        """Replace boundary-clamped values with linear extrapolation.
+
+        ``_interp_batched`` clamps out-of-range inputs at ``fp_first``/``fp_last``
+        (i.e. 0 and 1). When ``extrapolate_ratio`` is set, those values are
+        instead linearly extrapolated past ``[0, 1]`` using the training-data
+        range (``quantiles[0]`` and ``quantiles[-1]`` per feature) and clipped
+        at ``-ratio`` / ``1 + ratio``.
+
+        Args:
+            result: Output of the standard transform, shape [n_samples, n_features].
+            x: Original input, shape [n_samples, n_features].
+            quantiles: Per-feature breakpoints, shape [n_quantiles, n_features].
+                ``quantiles[0]`` and ``quantiles[-1]`` are the training min/max.
+        """
+        ratio = self.extrapolate_ratio
+        x_min = quantiles[0]  # [n_features]
+        x_max = quantiles[-1]  # [n_features]
+        x_range = x_max - x_min
+        safe_range = torch.where(x_range == 0, torch.ones_like(x_range), x_range)
+
+        norm_below = (x - x_min) / safe_range
+        norm_above = (x - x_max) / safe_range + 1.0
+
+        below_mask = x < x_min
+        above_mask = x > x_max
+
+        # Constant features (x_range == 0) have no meaningful extrapolation;
+        # leave the standard 0.5 midpoint untouched.
+        constant_mask = x_range == 0
+        below_mask = below_mask & ~constant_mask
+        above_mask = above_mask & ~constant_mask
+
+        result = torch.where(below_mask, torch.clamp(norm_below, -ratio, 0.0), result)
+        return torch.where(
+            above_mask, torch.clamp(norm_above, 1.0, 1.0 + ratio), result
+        )
 
     def _interp_batched(
         self,

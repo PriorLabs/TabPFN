@@ -65,6 +65,7 @@ class PreprocessorConfig:
         "quantile_norm",
         "quantile_uni_fine",
         "quantile_norm_fine",
+        "quantile_uni_extrapolate",
         "squashing_scaler_default",
         "squashing_scaler_max10",
         "robust",  # a standard sklearn robust scaler

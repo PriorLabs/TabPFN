@@ -66,11 +66,15 @@ def create_gpu_preprocessing_pipeline(
         quantile_on_gpu = len(quantile_target_indices) > 0
         if quantile_on_gpu and n_train_samples is not None:
             n_quantiles = compute_effective_n_quantiles(pconfig.name, n_train_samples)
+            extrapolate_ratio = (
+                1.0 if pconfig.name == "quantile_uni_extrapolate" else None
+            )
             steps.append(
                 (
                     TorchSelectiveQuantileTransformerStep(
                         n_quantiles=n_quantiles,
                         target_column_indices=quantile_target_indices,
+                        extrapolate_ratio=extrapolate_ratio,
                     ),
                     None,  # operates on explicit indices, receives full tensor
                 )

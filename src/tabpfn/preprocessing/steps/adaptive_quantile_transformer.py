@@ -44,7 +44,11 @@ def get_user_n_quantiles_for_preset(transform_name: str, n_samples: int) -> int:
     """
     if transform_name in ("quantile_uni", "quantile_norm"):
         return max(n_samples // 5, 2)
-    if transform_name in ("quantile_uni_coarse", "quantile_norm_coarse"):
+    if transform_name in (
+        "quantile_uni_coarse",
+        "quantile_norm_coarse",
+        "quantile_uni_extrapolate",
+    ):
         return max(n_samples // 10, 2)
     if transform_name in ("quantile_uni_fine", "quantile_norm_fine"):
         return n_samples
@@ -62,6 +66,12 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
     greater than the number of available samples in the input data (X).
     This situation can arises because we first initialize the transformer
     based on total samples and then subsample.
+
+    When ``extrapolate_ratio`` is set, inputs outside the training range
+    are linearly extrapolated beyond ``[0, 1]`` at ``transform`` time and
+    clipped at ``-extrapolate_ratio`` / ``1 + extrapolate_ratio``. This
+    preserves OOD information that would otherwise be flattened by the
+    boundary clamp. Intended for ``output_distribution="uniform"``.
     """
 
     def __init__(
@@ -69,12 +79,14 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         *,
         n_quantiles: int = 1_000,
         subsample: int = _DEFAULT_SUBSAMPLE,
+        extrapolate_ratio: float | None = None,
         **kwargs: Any,
     ) -> None:
         # Store the user's desired n_quantiles to use as an upper bound
         self._user_n_quantiles = n_quantiles
         # Initialize parent with this, but it will be adapted in fit
         super().__init__(n_quantiles=n_quantiles, subsample=subsample, **kwargs)
+        self.extrapolate_ratio = extrapolate_ratio
 
     @override
     def fit(
@@ -82,6 +94,10 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         X: np.ndarray,
         y: np.ndarray | None = None,
     ) -> AdaptiveQuantileTransformer:
+        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+            self.x_min_ = np.nanmin(X, axis=0, keepdims=True)
+            self.x_max_ = np.nanmax(X, axis=0, keepdims=True)
+
         n_samples = X.shape[0]
 
         self.n_quantiles = compute_effective_n_quantiles(
@@ -99,6 +115,33 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
             )
 
         return super().fit(X, y)
+
+    @override
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        out = super().transform(X)
+
+        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+            x_range = self.x_max_ - self.x_min_
+            # Skip constant features (matches the GPU path); also avoids a
+            # divide-by-zero in the normalisation below.
+            extrap_mask = x_range > 0
+            min_idcs = (self.x_min_ > X) & extrap_mask
+            max_idcs = (self.x_max_ < X) & extrap_mask
+            if np.any(min_idcs) or np.any(max_idcs):
+                # (X - x_max)/range + 1 simplifies to (X - x_min)/range, so
+                # one normalised array suffices for both branches.
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    norm = (X - self.x_min_) / x_range
+                if np.any(min_idcs):
+                    out[min_idcs] = np.clip(
+                        norm[min_idcs], -self.extrapolate_ratio, 0.0
+                    )
+                if np.any(max_idcs):
+                    out[max_idcs] = np.clip(
+                        norm[max_idcs], 1.0, 1.0 + self.extrapolate_ratio
+                    )
+
+        return out
 
 
 __all__ = [
