@@ -730,9 +730,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         # Minimal preprocessing for prompt tuning: no categorical features,
         # all-numerical schema, identity preprocessor that preserves grads.
-        reject_categoricals_for_differentiable_input(
-            self.categorical_features_indices
-        )
+        reject_categoricals_for_differentiable_input(self.categorical_features_indices)
         n_features = X.shape[1]
         # One Feature instance per column — list multiplication would share
         # the same dataclass and any later in-place update would leak across
