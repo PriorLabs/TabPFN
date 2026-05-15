@@ -25,6 +25,11 @@ jobs:
       contents: read
       pull-requests: read
       issues: read
+      # Required by claude-code-action to mint a short-lived OIDC token that attests
+      # that this is a real GitHub action run to Anthropic's backend. Despite being
+      # called "write", does not grant any additional access to GitHub itself. See
+      # https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws#adding-permissions-settings
+      id-token: write
 
     steps:
       - name: Checkout repository
