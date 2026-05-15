@@ -130,3 +130,19 @@ def test__no_extrapolation_when_unset__matches_baseline():
     ).fit(X)
 
     np.testing.assert_array_equal(baseline.transform(X), no_extrap.transform(X))
+
+
+def test__extrapolate_ratio__validation_guards():
+    """Invalid extrapolate_ratio configs are rejected at construction."""
+    with pytest.raises(ValueError, match="non-negative"):
+        AdaptiveQuantileTransformer(
+            output_distribution="uniform", extrapolate_ratio=-0.1
+        )
+    with pytest.raises(ValueError, match="output_distribution='uniform'"):
+        AdaptiveQuantileTransformer(
+            output_distribution="normal", extrapolate_ratio=0.1
+        )
+    # Valid config still constructs.
+    AdaptiveQuantileTransformer(
+        output_distribution="uniform", extrapolate_ratio=0.1
+    )

@@ -34,6 +34,8 @@ class TorchQuantileTransformer:
                 :class:`AdaptiveQuantileTransformer` mode-1 behaviour.
         """
         super().__init__()
+        if extrapolate_ratio is not None and extrapolate_ratio < 0:
+            raise ValueError("extrapolate_ratio must be non-negative.")
         self.n_quantiles = n_quantiles
         self.extrapolate_ratio = extrapolate_ratio
 
@@ -298,8 +300,9 @@ class TorchQuantileTransformer:
         x_range = x_max - x_min
         safe_range = torch.where(x_range == 0, torch.ones_like(x_range), x_range)
 
-        norm_below = (x - x_min) / safe_range
-        norm_above = (x - x_max) / safe_range + 1.0
+        # (x - x_max) / range + 1 simplifies to (x - x_min) / range, so a
+        # single normalised tensor serves both the below and above branches.
+        norm = (x - x_min) / safe_range
 
         below_mask = x < x_min
         above_mask = x > x_max
@@ -310,9 +313,9 @@ class TorchQuantileTransformer:
         below_mask = below_mask & ~constant_mask
         above_mask = above_mask & ~constant_mask
 
-        result = torch.where(below_mask, torch.clamp(norm_below, -ratio, 0.0), result)
+        result = torch.where(below_mask, torch.clamp(norm, -ratio, 0.0), result)
         return torch.where(
-            above_mask, torch.clamp(norm_above, 1.0, 1.0 + ratio), result
+            above_mask, torch.clamp(norm, 1.0, 1.0 + ratio), result
         )
 
     def _interp_batched(

@@ -86,6 +86,14 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         self._user_n_quantiles = n_quantiles
         # Initialize parent with this, but it will be adapted in fit
         super().__init__(n_quantiles=n_quantiles, subsample=subsample, **kwargs)
+        if extrapolate_ratio is not None:
+            if extrapolate_ratio < 0:
+                raise ValueError("extrapolate_ratio must be non-negative.")
+            if kwargs.get("output_distribution", "uniform") != "uniform":
+                raise ValueError(
+                    "extrapolate_ratio is only supported for "
+                    "output_distribution='uniform'."
+                )
         self.extrapolate_ratio = extrapolate_ratio
 
     @override
