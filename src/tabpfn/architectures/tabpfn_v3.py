@@ -1961,6 +1961,15 @@ class TabPFNV3(Architecture):
             cache[key] = torch.compile(method, dynamic=True)
         return cache[key]
 
+    def __getstate__(self) -> dict[str, Any]:
+        # `torch.compile`-d callables are not picklable, so exclude the lazily
+        # populated compile cache from (un)pickling / torch.save. It is
+        # rebuilt on demand by `_compiled()`. Delegate to nn.Module first so
+        # its own state handling (e.g. `_compiled_call_impl`) is preserved.
+        state = super().__getstate__()
+        state.pop("_torch_compile_cache", None)
+        return state
+
     def _preprocess_and_group(
         self,
         rows_RiBC: torch.Tensor,
