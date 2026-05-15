@@ -42,13 +42,17 @@ def get_user_n_quantiles_for_preset(transform_name: str, n_samples: int) -> int:
     Raises:
         ValueError: If *transform_name* is not a known quantile preset.
     """
-    if transform_name in ("quantile_uni", "quantile_norm"):
-        return max(n_samples // 5, 2)
     if transform_name in (
-        "quantile_uni_coarse",
-        "quantile_norm_coarse",
+        "quantile_uni",
+        "quantile_norm",
+        # quantile_uni_extrapolate is intentionally the same n_quantiles tier
+        # as quantile_uni: it is "the default quantile transform plus boundary
+        # extrapolation" and should differ from quantile_uni by extrapolation
+        # ONLY, not by a coarser quantile grid.
         "quantile_uni_extrapolate",
     ):
+        return max(n_samples // 5, 2)
+    if transform_name in ("quantile_uni_coarse", "quantile_norm_coarse"):
         return max(n_samples // 10, 2)
     if transform_name in ("quantile_uni_fine", "quantile_norm_fine"):
         return n_samples
