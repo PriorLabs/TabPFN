@@ -1689,9 +1689,10 @@ class TabPFNV3(Architecture):
         x_RiBC = x
         B = x_RiBC.shape[1]
         num_train = y.shape[0]
-        torch._dynamo.mark_dynamic(x_RiBC, index=0)
-        torch._dynamo.mark_dynamic(x_RiBC, index=1)
-        torch._dynamo.mark_dynamic(x_RiBC, index=2)
+        if performance_options.enable_torch_compile:
+            torch._dynamo.mark_dynamic(x_RiBC, index=0)
+            torch._dynamo.mark_dynamic(x_RiBC, index=1)
+            torch._dynamo.mark_dynamic(x_RiBC, index=2)
 
         x_BRiClE, inducing_hidden = self._stages_0_to_2(
             x_RiBC,
@@ -1919,7 +1920,7 @@ class TabPFNV3(Architecture):
 
         x_grouped_train_BNCG = x_grouped_BRiCG[:, :num_train]
         process_col_fn = (
-            self._process_col_chunk_compiled
+            self._compiled(self._process_col_chunk)
             if enable_torch_compile
             else self._process_col_chunk
         )
@@ -1927,12 +1928,13 @@ class TabPFNV3(Architecture):
         for c0 in range(0, num_columns, col_chunk_size):
             c1 = min(c0 + col_chunk_size, num_columns)
             x_grouped_chunk_BNCjG = x_grouped_train_BNCG[:, :, c0:c1]
-            torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=0)
-            torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=1)
-            # Will compile two versions: one with cols dynamic and one with cols
-            # static for the fixed chunk size.
-            if (c1 - c0) != col_chunk_size:
-                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=2)
+            if enable_torch_compile:
+                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=0)
+                torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=1)
+                # Will compile two versions: one with cols dynamic and one with
+                # cols static for the fixed chunk size.
+                if (c1 - c0) != col_chunk_size:
+                    torch._dynamo.mark_dynamic(x_grouped_chunk_BNCjG, index=2)
 
             chunk_outputs_BCjIE = process_col_fn(
                 x_grouped_chunk_BNCjG=x_grouped_chunk_BNCjG,
@@ -1944,6 +1946,29 @@ class TabPFNV3(Architecture):
 
         # Concatenate and flatten column chunks (B * C_out, I, E) per block.
         return [torch.cat(chunks, dim=1).flatten(0, 1) for chunks in hidden_per_block]
+
+    def _compiled(self, method: Callable) -> Callable:
+        """Lazily ``torch.compile`` a bound method of this instance.
+
+        The compiled callable is cached per underlying function, so dynamo /
+        inductor are only imported when ``torch.compile`` is actually
+        requested (keeping ``import tabpfn`` and eager inference free of them),
+        and each method is compiled at most once.
+        """
+        cache = self.__dict__.setdefault("_torch_compile_cache", {})
+        key = method.__func__
+        if key not in cache:
+            cache[key] = torch.compile(method, dynamic=True)
+        return cache[key]
+
+    def __getstate__(self) -> dict[str, Any]:
+        # `torch.compile`-d callables are not picklable, so exclude the lazily
+        # populated compile cache from (un)pickling / torch.save. It is
+        # rebuilt on demand by `_compiled()`. Delegate to nn.Module first so
+        # its own state handling (e.g. `_compiled_call_impl`) is preserved.
+        state = super().__getstate__()
+        state.pop("_torch_compile_cache", None)
+        return state
 
     def _preprocess_and_group(
         self,
@@ -1967,16 +1992,6 @@ class TabPFNV3(Architecture):
 
         x_grouped_BRiCG = self._group_features(x_BRiC, nan_ind_BRiC)
         return x_grouped_BRiCG, y_col_emb_BNE
-
-    @torch.compile(dynamic=True)
-    def _preprocess_and_group_compiled(
-        self,
-        rows_RiBC: torch.Tensor,
-        y: torch.Tensor,
-        num_train: int,
-        scaler_cache: dict[str, torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
-        return self._preprocess_and_group(rows_RiBC, y, num_train, scaler_cache)
 
     def _stages_0_to_2(
         self,
@@ -2019,7 +2034,7 @@ class TabPFNV3(Architecture):
 
         # --- Preprocess + y col-embed + feature grouping (single compiled pass). ---
         preprocess_fn = (
-            self._preprocess_and_group_compiled
+            self._compiled(self._preprocess_and_group)
             if performance_options.enable_torch_compile
             else self._preprocess_and_group
         )
@@ -2060,7 +2075,7 @@ class TabPFNV3(Architecture):
         effective_chunk_size = row_chunk_size if use_chunks else num_rows
 
         process_row_chunk = (
-            self._process_row_chunk_compiled
+            self._compiled(self._process_row_chunk)
             if performance_options.enable_torch_compile
             else self._process_row_chunk
         )
@@ -2073,12 +2088,13 @@ class TabPFNV3(Architecture):
                         row_chunk_start + effective_chunk_size, num_rows
                     )
                     x_grouped_chunk = x_grouped_BRiCG[:, row_chunk_start:row_chunk_end]
-                    torch._dynamo.mark_dynamic(x_grouped_chunk, index=0)
-                    torch._dynamo.mark_dynamic(x_grouped_chunk, index=2)
-                    # Will compile two versions: One with dynamic rows and one with
-                    # static rows for the fixed chunk size.
-                    if (row_chunk_end - row_chunk_start) != row_chunk_size:
-                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=1)
+                    if performance_options.enable_torch_compile:
+                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=0)
+                        torch._dynamo.mark_dynamic(x_grouped_chunk, index=2)
+                        # Will compile two versions: One with dynamic rows and
+                        # one with static rows for the fixed chunk size.
+                        if (row_chunk_end - row_chunk_start) != row_chunk_size:
+                            torch._dynamo.mark_dynamic(x_grouped_chunk, index=1)
 
                     row_embedding_chunk, chunk_hidden = process_row_chunk(
                         x_grouped_chunk_BRjCG=x_grouped_chunk,
@@ -2152,20 +2168,6 @@ class TabPFNV3(Architecture):
 
         return chunk_outputs
 
-    @torch.compile(dynamic=True)
-    def _process_col_chunk_compiled(
-        self,
-        *,
-        x_grouped_chunk_BNCjG: torch.Tensor,
-        y_col_emb_BNE: torch.Tensor | None,
-        num_train: int,
-    ) -> list[torch.Tensor]:
-        return self._process_col_chunk(
-            x_grouped_chunk_BNCjG=x_grouped_chunk_BNCjG,
-            y_col_emb_BNE=y_col_emb_BNE,
-            num_train=num_train,
-        )
-
     def _process_row_chunk(
         self,
         x_grouped_chunk_BRjCG: torch.Tensor,
@@ -2211,34 +2213,6 @@ class TabPFNV3(Architecture):
             force_recompute_layer=force_recompute_layer and is_full_path,
         )
         return row_embedding_chunk, chunk_hidden
-
-    @torch.compile(dynamic=True)
-    def _process_row_chunk_compiled(
-        self,
-        x_grouped_chunk_BRjCG: torch.Tensor,
-        y_col_emb: torch.Tensor | None,
-        chunk_start: int,
-        chunk_end: int,
-        effective_num_train: int,
-        precomputed_hidden: list[torch.Tensor] | None,
-        save_peak_memory_factor: int | None,
-        *,
-        force_recompute_layer: bool,
-        return_inducing_hidden: bool,
-        is_full_path: bool,
-    ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
-        return self._process_row_chunk(
-            x_grouped_chunk_BRjCG=x_grouped_chunk_BRjCG,
-            y_col_emb=y_col_emb,
-            chunk_start=chunk_start,
-            chunk_end=chunk_end,
-            effective_num_train=effective_num_train,
-            precomputed_hidden=precomputed_hidden,
-            save_peak_memory_factor=save_peak_memory_factor,
-            force_recompute_layer=force_recompute_layer,
-            return_inducing_hidden=return_inducing_hidden,
-            is_full_path=is_full_path,
-        )
 
 
 # ---------------------------------------------------------------------------
