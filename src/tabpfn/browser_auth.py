@@ -159,7 +159,7 @@ def _get_license_name(hf_repo_id: str) -> str:
     token = get_token()
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(url, headers=headers)  # noqa: S310
+    req = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:  # noqa: S310
             data = json.loads(resp.read())
@@ -204,7 +204,7 @@ def check_license_accepted(token: str, api_url: str, version: str) -> bool | Non
             return False
         logger.warning("Unexpected HTTP %s from license check endpoint", exc.code)
         return None
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("License check endpoint unreachable", exc_info=True)
         return None
 
@@ -504,7 +504,7 @@ def try_browser_login(gui_url: str, hf_repo_id: str | None = None) -> str | None
     # --- callback server ---
     try:
         httpd, port = _create_callback_server(gui_url, auth_event, received_token)
-    except Exception:  # noqa: BLE001
+    except Exception:
         logger.debug("Could not create callback server", exc_info=True)
         return None
 
