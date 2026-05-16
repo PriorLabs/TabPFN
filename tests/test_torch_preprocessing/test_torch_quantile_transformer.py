@@ -541,11 +541,5 @@ class TestTorchQuantileTransformerCategoricalBoundary:
 
 def test__torch_extrapolate_ratio__rejects_negative():
     """Negative extrapolate_ratio is rejected at construction."""
-    import pytest
-
-    from tabpfn.preprocessing.torch.torch_quantile_transformer import (
-        TorchQuantileTransformer,
-    )
-
     with pytest.raises(ValueError, match="non-negative"):
         TorchQuantileTransformer(n_quantiles=10, extrapolate_ratio=-1.0)

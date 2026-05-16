@@ -314,9 +314,7 @@ class TorchQuantileTransformer:
         above_mask = above_mask & ~constant_mask
 
         result = torch.where(below_mask, torch.clamp(norm, -ratio, 0.0), result)
-        return torch.where(
-            above_mask, torch.clamp(norm, 1.0, 1.0 + ratio), result
-        )
+        return torch.where(above_mask, torch.clamp(norm, 1.0, 1.0 + ratio), result)
 
     def _interp_batched(
         self,

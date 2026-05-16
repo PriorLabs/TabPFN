@@ -139,10 +139,6 @@ def test__extrapolate_ratio__validation_guards():
             output_distribution="uniform", extrapolate_ratio=-0.1
         )
     with pytest.raises(ValueError, match="output_distribution='uniform'"):
-        AdaptiveQuantileTransformer(
-            output_distribution="normal", extrapolate_ratio=0.1
-        )
+        AdaptiveQuantileTransformer(output_distribution="normal", extrapolate_ratio=0.1)
     # Valid config still constructs.
-    AdaptiveQuantileTransformer(
-        output_distribution="uniform", extrapolate_ratio=0.1
-    )
+    AdaptiveQuantileTransformer(output_distribution="uniform", extrapolate_ratio=0.1)
