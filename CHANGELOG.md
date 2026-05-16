@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.3] - 2026-05-16
+
+### Changed
+
+- Significantly reduced `import tabpfn` time (roughly halved: ~2.4s → ~1.1s warm, and ~9s → ~5s on a cold first import) by no longer importing `torch._dynamo`/`torch._inductor` or scikit-learn's estimator-check test machinery at import time. ([#972](https://github.com/PriorLabs/TabPFN/pull/972))
+
+
 ## [8.0.2] - 2026-05-13
 
 ### Added
