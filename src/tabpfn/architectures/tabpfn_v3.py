@@ -2063,7 +2063,8 @@ class TabPFNV3(Architecture):
                     if not is_oom_error(e) or eff_col_chunk <= 1:
                         raise
                     torch.cuda.empty_cache()
-                    torch.mps.empty_cache()
+                    if torch.backends.mps.is_available():
+                        torch.mps.empty_cache()
                     eff_col_chunk //= 2
                     _logger.warning("OOM: halving col_chunk_size to %d", eff_col_chunk)
                     self.inference_col_chunk_size = eff_col_chunk
