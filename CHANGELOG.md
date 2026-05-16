@@ -9,15 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [8.0.3] - 2026-05-16
 
-### Added
-
-- Add Claude Code GitHub Actions workflows (`@claude` mention handler and automated PR code-review), with author-association gating, SHA-pinned action versions, and CODEOWNERS protection on the workflow files themselves. ([#940](https://github.com/PriorLabs/TabPFN/pull/940))
-- Add `THIRD-PARTY-NOTICES.md` at repo root documenting third-party code adapted into TabPFN (currently: skrub's `SquashingScaler`, used by both the CPU and PyTorch preprocessing implementations) with upstream attribution preserved. ([#964](https://github.com/PriorLabs/TabPFN/pull/964))
-
 ### Changed
 
-- Clarify the "open an issue before submitting a PR" contribution policy in the README, promoting it from a one-line aside into a top-level `[!IMPORTANT]` callout under "Join Our Community" with a direct link to the issue tracker. ([#970](https://github.com/PriorLabs/TabPFN/pull/970))
-- Significantly reduced `import tabpfn` time (roughly halved: ~2.4s → ~1.1s warm, and ~9s → ~5s on a cold first import) by no longer importing `torch._dynamo`/`torch._inductor` or scikit-learn's estimator-check test machinery at import time. `torch.compile` is opt-in (`PerformanceOptions.enable_torch_compile`, default off), so the compilation stack and the sklearn check helpers are now loaded lazily only when actually used; eager `fit`/`predict` no longer pays for them at all. Behaviour is unchanged, including under `torch.compile`. ([#972](https://github.com/PriorLabs/TabPFN/pull/972))
+- Significantly reduced `import tabpfn` time (roughly halved: ~2.4s → ~1.1s warm, and ~9s → ~5s on a cold first import) by no longer importing `torch._dynamo`/`torch._inductor` or scikit-learn's estimator-check test machinery at import time. ([#972](https://github.com/PriorLabs/TabPFN/pull/972))
 
 
 ## [8.0.2] - 2026-05-13
