@@ -41,6 +41,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     initialize_telemetry,
+    reject_categoricals_for_differentiable_input,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -635,13 +636,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         # Minimal preprocessing for prompt tuning
-        if (
-            self.categorical_features_indices is not None
-            and len(self.categorical_features_indices) > 0
-        ):
-            raise ValueError(
-                "Categorical features are not supported for differentiable input."
-            )
+        reject_categoricals_for_differentiable_input(self.categorical_features_indices)
         n_features = X.shape[1]
         features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
         self.inferred_feature_schema_ = FeatureSchema(features=features)
