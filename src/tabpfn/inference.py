@@ -165,12 +165,7 @@ class InferenceEngine(ABC):
         )
 
     def save_state_except_model_weights(self, path: str | Path) -> None:
-        """Persist the executor state to ``path`` without the model weights.
-
-        This does not support the KV cache, and will raise an error if this is an
-        InferenceEngineCacheKV.
-        """
-        _raise_if_kv_cache_enabled_on_save_or_load(self)
+        """Persist the executor state to ``path`` without the model weights."""
         joblib.dump(self._create_copy_for_pickling(), path)
 
     @abstractmethod
@@ -190,7 +185,6 @@ class InferenceEngine(ABC):
         `models` parameter.
         """
         engine: InferenceEngine = joblib.load(Path(path))
-        _raise_if_kv_cache_enabled_on_save_or_load(engine)
         engine._set_models(models)
         return engine
 
@@ -225,14 +219,6 @@ class InferenceEngine(ABC):
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
         """Move the models to the given devices. Used when .to() is called."""
         ...
-
-
-def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
-    if isinstance(engine, (InferenceEngineCacheKV, InferenceEngineExplicitKVCache)):
-        raise NotImplementedError(
-            "Saving and loading fitted models that use "
-            '`fit_mode="fit_with_cache"` is not currently supported.'
-        )
 
 
 class SingleDeviceInferenceEngine(InferenceEngine):
@@ -994,12 +980,39 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         self._speed_metrics["predict_model_forward_seconds"] = forward_time
 
     @override
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        state_copy = deepcopy(self)
+        # Strip nn.Parameter data from models to avoid saving large weights,
+        # but keep the model structure (KV cache buffers + encoder fitted state).
+        for model in state_copy.models:
+            model.cpu()
+            for param in model.parameters():
+                param.data = torch.empty(0, device="cpu")
+        return state_copy
+
+    @override
+    def _set_models(self, models: list[Architecture]) -> None:
+        # self.models contains weight-stripped shells from the pickle.
+        # Inject fresh weights from the base models.
+        for model, ensemble_member in zip(self.models, self.ensemble_members):
+            fresh = models[ensemble_member.config._model_index]
+            fresh_params = dict(fresh.named_parameters())
+            for name, param in model.named_parameters():
+                if name not in fresh_params:
+                    raise RuntimeError(
+                        f"Parameter '{name}' not found in the base model. "
+                        "The saved fit state is incompatible with the current "
+                        "model checkpoint."
+                    )
+                param.data = fresh_params[name].data.clone()
+            if self.force_inference_dtype is not None:
+                model.type(self.force_inference_dtype)
+
+    @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
-        # Various things in the model do not currently respect the `.to()` function, and
-        # just stay on the device where they were created.
-        raise NotImplementedError(
-            "fit_mode 'fit_with_cache' does not currently support .to() after .fit()"
-        )
+        # Models are kept on CPU between predictions;
+        # iter_outputs() handles CPU-to-device transfers.
+        self.device = devices[0]
 
 
 class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
@@ -1321,6 +1334,25 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 x_is_test_only=True,
                 **kwargs,
             )
+
+    @override
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        # Temporarily detach heavy state before deepcopy to avoid a memory
+        # spike from copying model weights and GPU KV caches that we discard.
+        saved_model_caches = self.model_caches
+        saved_kv_caches = self.kv_caches
+        self.model_caches = None  # type: ignore
+        self.kv_caches = []  # type: ignore
+        try:
+            state_copy = deepcopy(self)
+        finally:
+            # Restore originals on self so the engine remains usable.
+            self.model_caches = saved_model_caches
+            self.kv_caches = saved_kv_caches
+
+        # Attach CPU copies of KV caches for portable serialization.
+        state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
+        return state_copy
 
 
 def _prepare_model_inputs(
