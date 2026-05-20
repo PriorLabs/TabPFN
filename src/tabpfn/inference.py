@@ -988,13 +988,25 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
-        state_copy = deepcopy(self)
-        # Strip nn.Parameter data from models to avoid saving large weights,
-        # but keep the model structure (KV cache buffers + encoder fitted state).
-        for model in state_copy.models:
+        # Strip nn.Parameter data before deepcopy to avoid duplicating large
+        # weights across N ensemble models just to discard them.
+        saved_param_data: list[list[torch.Tensor]] = []
+        for model in self.models:
             model.cpu()
+            params_for_model: list[torch.Tensor] = []
             for param in model.parameters():
+                params_for_model.append(param.data)
                 param.data = torch.empty(0, device="cpu")
+            saved_param_data.append(params_for_model)
+
+        try:
+            state_copy = deepcopy(self)
+        finally:
+            # Restore original parameter data so the engine remains usable.
+            for model, params in zip(self.models, saved_param_data):
+                for param, data in zip(model.parameters(), params):
+                    param.data = data
+
         return state_copy
 
     @override
@@ -1014,6 +1026,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
                 param.data = fresh_params[name].data.clone()
             if self.force_inference_dtype is not None:
                 model.type(self.force_inference_dtype)
+            model.cpu()
 
     @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
