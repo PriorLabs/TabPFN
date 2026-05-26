@@ -55,6 +55,13 @@ def get_user_n_quantiles_for_preset(transform_name: str, n_samples: int) -> int:
     raise ValueError(f"Unknown quantile preset: {transform_name}")
 
 
+def get_extrapolate_ratio_for_preset(transform_name: str) -> float | None:
+    """Return the default ``extrapolate_ratio`` for a named quantile preset."""
+    if transform_name == "quantile_uni_extrapolate":
+        return 1.0
+    return None
+
+
 class AdaptiveQuantileTransformer(QuantileTransformer):
     """A QuantileTransformer that automatically adapts the 'n_quantiles' parameter
     based on the number of samples provided during the 'fit' method.

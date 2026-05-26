@@ -7,6 +7,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
+    get_extrapolate_ratio_for_preset,
+)
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     compute_effective_n_quantiles,
     get_squashing_scaler_max_absolute_value,
@@ -66,9 +69,7 @@ def create_gpu_preprocessing_pipeline(
         quantile_on_gpu = len(quantile_target_indices) > 0
         if quantile_on_gpu and n_train_samples is not None:
             n_quantiles = compute_effective_n_quantiles(pconfig.name, n_train_samples)
-            extrapolate_ratio = (
-                1.0 if pconfig.name == "quantile_uni_extrapolate" else None
-            )
+            extrapolate_ratio = get_extrapolate_ratio_for_preset(pconfig.name)
             steps.append(
                 (
                     TorchSelectiveQuantileTransformerStep(
