@@ -31,6 +31,7 @@ from tabpfn.preprocessing.pipeline_interface import (
 )
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
     AdaptiveQuantileTransformer,
+    get_extrapolate_ratio_for_preset,
     get_user_n_quantiles_for_preset,
 )
 from tabpfn.preprocessing.steps.kdi_transformer import (
@@ -539,6 +540,16 @@ def get_all_reshape_feature_distribution_preprocessors(
             output_distribution="normal",
             n_quantiles=get_user_n_quantiles_for_preset(
                 "quantile_norm_fine", num_examples
+            ),
+            random_state=random_state,
+        ),
+        "quantile_uni_extrapolate": AdaptiveQuantileTransformer(
+            output_distribution="uniform",
+            n_quantiles=get_user_n_quantiles_for_preset(
+                "quantile_uni_extrapolate", num_examples
+            ),
+            extrapolate_ratio=get_extrapolate_ratio_for_preset(
+                "quantile_uni_extrapolate"
             ),
             random_state=random_state,
         ),

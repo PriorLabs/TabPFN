@@ -36,10 +36,17 @@ from tabpfn.utils import infer_random_state
 class TorchQuantileTransformerStep(TorchPreprocessingStep):
     """Pipeline step wrapper for TorchQuantileTransformer."""
 
-    def __init__(self, n_quantiles: int = 1_000) -> None:
+    def __init__(
+        self,
+        n_quantiles: int = 1_000,
+        extrapolate_ratio: float | None = None,
+    ) -> None:
         """Initialize the quantile transformer step."""
         super().__init__()
-        self._quantile_transformer = TorchQuantileTransformer(n_quantiles=n_quantiles)
+        self._quantile_transformer = TorchQuantileTransformer(
+            n_quantiles=n_quantiles,
+            extrapolate_ratio=extrapolate_ratio,
+        )
 
     @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -151,9 +158,13 @@ class TorchSelectiveQuantileTransformerStep(TorchPreprocessingStep):
         self,
         n_quantiles: int,
         target_column_indices: list[int],
+        extrapolate_ratio: float | None = None,
     ) -> None:
         super().__init__()
-        self._qt = TorchQuantileTransformer(n_quantiles=n_quantiles)
+        self._qt = TorchQuantileTransformer(
+            n_quantiles=n_quantiles,
+            extrapolate_ratio=extrapolate_ratio,
+        )
         self._target_column_indices = target_column_indices
 
     @override
