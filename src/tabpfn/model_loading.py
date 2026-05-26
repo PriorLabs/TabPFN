@@ -32,6 +32,7 @@ from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
@@ -170,8 +171,6 @@ class ModelSource:  # noqa: D101
     def get_classifier_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-classifier-v3_default.ckpt",
-            "tabpfn-v3-classifier-v3_20260417_binary.ckpt",
-            "tabpfn-v3-classifier-v3_20260417_multiclass.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -183,8 +182,6 @@ class ModelSource:  # noqa: D101
     def get_regressor_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-regressor-v3_default.ckpt",
-            "tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt",
-            "tabpfn-v3-regressor-v3_20260506_timeseries.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -608,7 +605,7 @@ def load_model_criterion_config(  # noqa: PLR0912
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"],
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -842,7 +839,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v3",
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -855,11 +852,6 @@ def resolve_model_path(
         model_path: An optional path to a model file. If None, the default
             model for the given `which` and `version` will be used, resolving
             to the local cache directory.
-
-            When a bare filename is given (no directory component, e.g.
-            ``"tabpfn-v3-regressor-v3_default.ckpt"``), the path is first
-            interpreted relative to the current working directory. If no file
-            exists there, it falls back to the TabPFN cache directory.
         which: The type of model ('regressor' or 'classifier').
         version: The model version (currently only 'v2').
 
@@ -876,14 +868,9 @@ def resolve_model_path(
         resolved_model_dirs = [get_cache_dir()]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
     elif isinstance(model_path, (str, Path)):
-        path = Path(model_path)
-        # A bare filename is checked against the CWD first, otherwise the cache dir as a
-        # fallback so callers can refer to a checkpoint by name alone.
-        if not path.is_absolute() and path.parent == Path() and not path.exists():
-            path = get_cache_dir() / path
-        resolved_model_paths = [path]
-        resolved_model_dirs = [path.parent]
-        resolved_model_names = [path.name]
+        resolved_model_paths = [Path(model_path)]
+        resolved_model_dirs = [resolved_model_paths[0].parent]
+        resolved_model_names = [resolved_model_paths[0].name]
     else:
         resolved_model_paths = [Path(p) for p in model_path]
         resolved_model_dirs = [p.parent for p in resolved_model_paths]
@@ -919,12 +906,6 @@ def get_loss_criterion(
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
 
 
-def _file_identity(path: str) -> tuple[int, int]:
-    """Return a cheap identity tuple (mtime_ns, size) for cache-keying."""
-    st = Path(path).stat()
-    return (st.st_mtime_ns, st.st_size)
-
-
 @functools.lru_cache(maxsize=1)
 def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     """Load and cache a checkpoint from disk.
@@ -933,19 +914,7 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     *path* is modified.  Use ``_load_checkpoint_cached.cache_clear()`` to
     free memory manually.
     """
-    return _load_checkpoint(path)
-
-
-def _load_checkpoint(path: str) -> dict:
-    """Load a checkpoint from disk."""
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weights_only=None` is the default value. In the future this will
-    # default to `True`, disallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        return torch.load(path, map_location="cpu", weights_only=None)
+    return Checkpoint(path).load()
 
 
 def load_model(
@@ -970,7 +939,8 @@ def load_model(
             trainset representation. Forwarded to get_architecture.
     """
     resolved = str(path.resolve())
-    checkpoint = _load_checkpoint_cached(resolved, _file_identity(resolved))
+    ckpt = Checkpoint(resolved)
+    checkpoint = _load_checkpoint_cached(resolved, ckpt.identity())
 
     try:
         architecture_name = checkpoint["architecture_name"]

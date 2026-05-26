@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "8.0.3"
+version = "7.1.1"
 dependencies = [
   "torch>=2.5",
+  "safetensors>=0.4.0",
   "numpy>=1.21.6",
   "scikit-learn>=1.2.0",
   "typing_extensions>=4.12.0",
@@ -25,7 +26,6 @@ dependencies = [
   "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
   "filelock>=3.11.0",
   "lightgbm>=3.0",
-  "mlx>=0.29.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 requires-python = ">=3.9"
 authors = [{ name = "Prior Labs", email = "opensource@priorlabs.ai" }]
@@ -62,7 +62,7 @@ dev = [
   {include-group = "ci"},
   # Lint/format
   "pre-commit>=4.3.0",
-  "ruff==0.15.12", # This version must be the same as in .pre-commit-config.yaml
+  "ruff==0.14.0", # This version must be the same as in .pre-commit-config.yaml
   "mypy==1.19.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
