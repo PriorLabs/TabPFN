@@ -107,8 +107,9 @@ def save_as_safetensors(checkpoint: dict[str, Any], path: str | Path) -> None:
 class _CheckpointJSONEncoder(json.JSONEncoder):
     """JSON encoder for TabPFN checkpoint metadata values.
 
-    Handles types commonly found in checkpoint configs (Path, torch dtype/device,
-    Enum, set). Raises ``TypeError`` on anything else.
+    Handles types commonly found in checkpoint configs: Path, torch dtype/device,
+    Enum, set, numpy scalars/arrays, and torch tensors. Raises ``TypeError`` on
+    anything else rather than silently dropping data.
     """
 
     @override
@@ -122,4 +123,8 @@ class _CheckpointJSONEncoder(json.JSONEncoder):
             return o.value
         if isinstance(o, set):
             return sorted(o)
-        return super().default(o)  # raises TypeError
+        raise TypeError(
+            f"Cannot encode value of type {type(o).__name__!r} for the checkpoint "
+            f"header. Add a branch to _CheckpointJSONEncoder.default() if this "
+            f"type should be supported. Value: {o!r}"
+        )
