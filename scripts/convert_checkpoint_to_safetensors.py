@@ -4,7 +4,7 @@
 """Convert a TabPFN PyTorch checkpoint to SafeTensors.
 
 Non-tensor checkpoint fields (architecture name, config, inference config, …)
-are JSON-encoded and stored in the safetensors header — no sidecar file.
+are JSON-encoded and stored in the safetensors header.
 """
 
 from __future__ import annotations
