@@ -14,6 +14,7 @@ import warnings
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from typing_extensions import override
 
 import torch
 from safetensors import safe_open
@@ -78,11 +79,6 @@ def save_as_safetensors(checkpoint: dict[str, Any], path: str | Path) -> None:
     Non-tensor fields are JSON-encoded into the safetensors header so the
     resulting file is a self-contained replacement for the legacy ``.ckpt``.
     """
-    if not isinstance(checkpoint, dict):
-        raise TypeError(
-            f"Expected checkpoint to be a dict, got {type(checkpoint).__name__}."
-        )
-
     state_dict = checkpoint.get("state_dict")
     if not isinstance(state_dict, dict):
         raise ValueError("Checkpoint does not contain a dict-valued 'state_dict'.")
@@ -112,10 +108,10 @@ class _CheckpointJSONEncoder(json.JSONEncoder):
     """JSON encoder for TabPFN checkpoint metadata values.
 
     Handles types commonly found in checkpoint configs (Path, torch dtype/device,
-    Enum, set). Raises ``TypeError`` on anything else rather than silently
-    dropping data — checkpoints are too important for graceful degradation.
+    Enum, set). Raises ``TypeError`` on anything else.
     """
 
+    @override
     def default(self, o: Any) -> Any:
         """Encode types not natively handled by ``json.JSONEncoder``."""
         if isinstance(o, Path):

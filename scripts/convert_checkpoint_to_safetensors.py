@@ -15,19 +15,15 @@ from pathlib import Path
 from tabpfn.checkpoint import Checkpoint, save_as_safetensors
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+def main() -> None:
+    """Main entry point."""
     parser = argparse.ArgumentParser(
         description="Convert a TabPFN .ckpt file to .safetensors with header metadata."
     )
     parser.add_argument("--input-checkpoint", required=True, type=Path)
     parser.add_argument("--output-safetensors", required=True, type=Path)
-    return parser.parse_args()
+    args = parser.parse_args()
 
-
-def main() -> None:
-    """Main entry point."""
-    args = parse_args()
     checkpoint = Checkpoint(args.input_checkpoint).load()
     save_as_safetensors(checkpoint, args.output_safetensors)
     print(f"Saved SafeTensors file: {args.output_safetensors}")

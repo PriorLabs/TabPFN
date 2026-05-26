@@ -171,6 +171,8 @@ class ModelSource:  # noqa: D101
     def get_classifier_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-classifier-v3_default.ckpt",
+            "tabpfn-v3-classifier-v3_20260417_binary.ckpt",
+            "tabpfn-v3-classifier-v3_20260417_multiclass.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -182,6 +184,8 @@ class ModelSource:  # noqa: D101
     def get_regressor_v3(cls) -> ModelSource:  # noqa: D102
         filenames = [
             "tabpfn-v3-regressor-v3_default.ckpt",
+            "tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt",
+            "tabpfn-v3-regressor-v3_20260506_timeseries.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -605,7 +609,7 @@ def load_model_criterion_config(  # noqa: PLR0912
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -839,7 +843,7 @@ def resolve_model_version(
 def resolve_model_path(
     model_path: ModelPath | list[ModelPath] | None,
     which: Literal["regressor", "classifier"],
-    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v2.6",
+    version: Literal["v2", "v2.5", "v2.6", "v3"] = "v3",
 ) -> tuple[
     list[Path],
     list[Path],
@@ -852,6 +856,11 @@ def resolve_model_path(
         model_path: An optional path to a model file. If None, the default
             model for the given `which` and `version` will be used, resolving
             to the local cache directory.
+
+            When a bare filename is given (no directory component, e.g.
+            ``"tabpfn-v3-regressor-v3_default.ckpt"``), the path is first
+            interpreted relative to the current working directory. If no file
+            exists there, it falls back to the TabPFN cache directory.
         which: The type of model ('regressor' or 'classifier').
         version: The model version (currently only 'v2').
 
@@ -868,9 +877,14 @@ def resolve_model_path(
         resolved_model_dirs = [get_cache_dir()]
         resolved_model_paths = [resolved_model_dirs[0] / resolved_model_names[0]]
     elif isinstance(model_path, (str, Path)):
-        resolved_model_paths = [Path(model_path)]
-        resolved_model_dirs = [resolved_model_paths[0].parent]
-        resolved_model_names = [resolved_model_paths[0].name]
+        path = Path(model_path)
+        # A bare filename is checked against the CWD first, otherwise the cache dir as a
+        # fallback so callers can refer to a checkpoint by name alone.
+        if not path.is_absolute() and path.parent == Path() and not path.exists():
+            path = get_cache_dir() / path
+        resolved_model_paths = [path]
+        resolved_model_dirs = [path.parent]
+        resolved_model_names = [path.name]
     else:
         resolved_model_paths = [Path(p) for p in model_path]
         resolved_model_dirs = [p.parent for p in resolved_model_paths]
@@ -939,8 +953,7 @@ def load_model(
             trainset representation. Forwarded to get_architecture.
     """
     resolved = str(path.resolve())
-    ckpt = Checkpoint(resolved)
-    checkpoint = _load_checkpoint_cached(resolved, ckpt.identity())
+    checkpoint = _load_checkpoint_cached(resolved, Checkpoint(resolved).identity())
 
     try:
         architecture_name = checkpoint["architecture_name"]
