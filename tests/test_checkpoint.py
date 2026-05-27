@@ -105,6 +105,7 @@ def test__save_as_safetensors__encodes_path_dtype_and_enum(tmp_path: Path) -> No
             "dtype": torch.float32,
             "color": Color.RED,
             "tags": {"a", "b"},
+            "mixed": {1, "a"},
         },
     }
     path = tmp_path / "x.safetensors"
@@ -116,6 +117,8 @@ def test__save_as_safetensors__encodes_path_dtype_and_enum(tmp_path: Path) -> No
     assert loaded["config"]["dtype"] == "torch.float32"
     assert loaded["config"]["color"] == "red"
     assert loaded["config"]["tags"] == ["a", "b"]
+    # Heterogeneous sets sort by str() so the encode doesn't raise on mixed types.
+    assert sorted(loaded["config"]["mixed"], key=str) == [1, "a"]
 
 
 def test__save_as_safetensors__unknown_type_raises(tmp_path: Path) -> None:

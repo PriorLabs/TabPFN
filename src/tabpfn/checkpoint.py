@@ -108,8 +108,7 @@ class _CheckpointJSONEncoder(json.JSONEncoder):
     """JSON encoder for TabPFN checkpoint metadata values.
 
     Handles types commonly found in checkpoint configs: Path, torch dtype/device,
-    Enum, set, numpy scalars/arrays, and torch tensors. Raises ``TypeError`` on
-    anything else rather than silently dropping data.
+    Enum, set. Raises ``TypeError`` on anything else rather than silently dropping data.
     """
 
     @override
@@ -122,7 +121,9 @@ class _CheckpointJSONEncoder(json.JSONEncoder):
         if isinstance(o, Enum):
             return o.value
         if isinstance(o, set):
-            return sorted(o)
+            # key=str so heterogeneous sets (e.g. {1, "a"}) don't raise; the
+            # sort keeps output deterministic across saves.
+            return sorted(o, key=str)
         raise TypeError(
             f"Cannot encode value of type {type(o).__name__!r} for the checkpoint "
             f"header. Add a branch to _CheckpointJSONEncoder.default() if this "
