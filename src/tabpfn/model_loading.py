@@ -32,6 +32,7 @@ from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
@@ -919,12 +920,6 @@ def get_loss_criterion(
     return FullSupportBarDistribution(borders, ignore_nan_targets=True)
 
 
-def _file_identity(path: str) -> tuple[int, int]:
-    """Return a cheap identity tuple (mtime_ns, size) for cache-keying."""
-    st = Path(path).stat()
-    return (st.st_mtime_ns, st.st_size)
-
-
 @functools.lru_cache(maxsize=1)
 def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     """Load and cache a checkpoint from disk.
@@ -933,19 +928,7 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     *path* is modified.  Use ``_load_checkpoint_cached.cache_clear()`` to
     free memory manually.
     """
-    return _load_checkpoint(path)
-
-
-def _load_checkpoint(path: str) -> dict:
-    """Load a checkpoint from disk."""
-    # Catch the `FutureWarning` that torch raises. This should be dealt with!
-    # The warning is raised due to `torch.load`, which advises against ckpt
-    # files that contain non-tensor data.
-    # This `weights_only=None` is the default value. In the future this will
-    # default to `True`, disallowing loading of arbitrary objects.
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=FutureWarning)
-        return torch.load(path, map_location="cpu", weights_only=None)
+    return Checkpoint(path).load()
 
 
 def load_model(
@@ -970,7 +953,7 @@ def load_model(
             trainset representation. Forwarded to get_architecture.
     """
     resolved = str(path.resolve())
-    checkpoint = _load_checkpoint_cached(resolved, _file_identity(resolved))
+    checkpoint = _load_checkpoint_cached(resolved, Checkpoint(resolved).identity())
 
     try:
         architecture_name = checkpoint["architecture_name"]
