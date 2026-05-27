@@ -172,7 +172,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v3-classifier-v3_default.ckpt",
             "tabpfn-v3-classifier-v3_20260417_binary.ckpt",
             "tabpfn-v3-classifier-v3_20260417_multiclass.ckpt",
-            "tabpfn-v3-classifier-v3_ood.ckpt",
+            "tabpfn-v3-classifier-v3_20260506_ood.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
@@ -186,7 +186,7 @@ class ModelSource:  # noqa: D101
             "tabpfn-v3-regressor-v3_default.ckpt",
             "tabpfn-v3-regressor-v3_20260417_mediumdata.ckpt",
             "tabpfn-v3-regressor-v3_20260506_timeseries.ckpt",
-            "tabpfn-v3-regressor-v3_ood.ckpt",
+            "tabpfn-v3-regressor-v3_20260506_ood.ckpt",
         ]
         return cls(
             repo_id="Prior-Labs/tabpfn_3",
