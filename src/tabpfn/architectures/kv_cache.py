@@ -40,8 +40,8 @@ def _quantize_tensor(
     lo, hi, max_val = _QUANTIZATION_RANGES[dtype]
     absmax = t.abs().amax()
     scale = absmax / float(max_val)
-    # Avoid division by zero for all-zero tensors. The floor must be
-    # representable in scale.dtype — a fixed 1e-12 underflows to 0 in float16.
+    # Avoid division by zero for all-zero tensors; floor at scale.dtype's
+    # smallest positive normal so the clamp is representable in any dtype.
     scale = torch.clamp(scale, min=torch.finfo(scale.dtype).tiny)
     quantized = (t / scale).round().clamp(lo, hi).to(dtype)
     return quantized, scale
