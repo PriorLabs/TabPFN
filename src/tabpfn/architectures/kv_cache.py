@@ -5,16 +5,51 @@
 Provides cache containers for storing key-value projections from attention
 layers, enabling efficient inference by reusing computed values across
 different test sets without storing state inside the model.
+
+Includes optional integer quantization (e.g. int8) via
+:class:`QuantizedKVCacheEntry` for reduced memory footprint with per-tensor
+symmetric quantization.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    import torch
-    from torch import Tensor
+import torch
+from torch import Tensor
+
+# High, low, max value for each dtype
+_QUANTIZATION_RANGES: dict[torch.dtype, tuple[int, int, int]] = {
+    torch.int8: (-128, 127, 127),
+}
+
+
+def _quantize_tensor(
+    t: Tensor, dtype: torch.dtype = torch.int8
+) -> tuple[Tensor, Tensor]:
+    """Per-tensor symmetric quantization to the given integer *dtype*.
+
+    Returns ``(quantized, scale)`` where
+    ``scale = absmax / max_val`` and ``quantized = round(t / scale)``.
+    """
+    if dtype not in _QUANTIZATION_RANGES:
+        raise ValueError(
+            f"Unsupported quantization dtype {dtype}. "
+            f"Supported: {list(_QUANTIZATION_RANGES)}"
+        )
+    lo, hi, max_val = _QUANTIZATION_RANGES[dtype]
+    absmax = t.abs().amax()
+    scale = absmax / float(max_val)
+    # Avoid division by zero for all-zero tensors. The floor must be
+    # representable in scale.dtype — a fixed 1e-12 underflows to 0 in float16.
+    scale = torch.clamp(scale, min=torch.finfo(scale.dtype).tiny)
+    quantized = (t / scale).round().clamp(lo, hi).to(dtype)
+    return quantized, scale
+
+
+def _dequantize_tensor(t: Tensor, scale: Tensor, dtype: torch.dtype) -> Tensor:
+    """Dequantize an integer tensor back to floating-point *dtype*."""
+    return t.to(dtype) * scale.to(dtype)
 
 
 @dataclass
@@ -39,16 +74,79 @@ class KVCacheEntry:
             return KVCacheEntry()
         return KVCacheEntry(key=self.key.to(device), value=self.value.to(device))
 
+    def quantize(self, dtype: torch.dtype = torch.int8) -> QuantizedKVCacheEntry:
+        """Quantize this entry with per-tensor symmetric scaling.
+
+        Args:
+            dtype: Target integer dtype (default ``torch.int8``).
+        """
+        assert self.is_valid()
+        k_q, k_s = _quantize_tensor(self.key, dtype)
+        v_q, v_s = _quantize_tensor(self.value, dtype)
+        return QuantizedKVCacheEntry(key=k_q, value=v_q, key_scale=k_s, value_scale=v_s)
+
+
+@dataclass
+class QuantizedKVCacheEntry:
+    """Quantized key-value cache entry with per-tensor scale factors.
+
+    Stores K/V as integer tensors alongside scalar scale factors for
+    symmetric quantization: ``float_value = int_value * scale``. The
+    integer dtype is implicit in the stored tensors (see ``self.key.dtype``);
+    the scale already encodes the dtype's quantization range, so dequantizing
+    requires no extra dtype bookkeeping.
+
+    Attributes:
+        key: Quantized key projections, shape ``(B, N_train, num_kv_heads, head_dim)``.
+        value: Quantized value projections, shape ``(B, N_train, num_kv_heads,
+        head_dim)``.
+        key_scale: Scalar scale factor for keys.
+        value_scale: Scalar scale factor for values.
+    """
+
+    key: Tensor | None = None
+    value: Tensor | None = None
+    key_scale: Tensor | None = None
+    value_scale: Tensor | None = None
+
+    def is_valid(self) -> bool:
+        """Check if this cache entry contains valid data."""
+        return (
+            self.key is not None
+            and self.value is not None
+            and self.key_scale is not None
+            and self.value_scale is not None
+        )
+
+    def to(self, device: torch.device | str) -> QuantizedKVCacheEntry:
+        """Move this entry to the given device."""
+        if not self.is_valid():
+            return QuantizedKVCacheEntry()
+        return QuantizedKVCacheEntry(
+            key=self.key.to(device),
+            value=self.value.to(device),
+            key_scale=self.key_scale.to(device),
+            value_scale=self.value_scale.to(device),
+        )
+
+    def dequantize(self, dtype: torch.dtype) -> KVCacheEntry:
+        """Dequantize back to a full-precision :class:`KVCacheEntry`."""
+        assert self.is_valid()
+        return KVCacheEntry(
+            key=_dequantize_tensor(self.key, self.key_scale, dtype),
+            value=_dequantize_tensor(self.value, self.value_scale, dtype),
+        )
+
 
 @dataclass
 class KVCache:
-    """Maps layer indices to KVCacheEntry objects.
+    """Maps layer indices to KVCacheEntry or QuantizedKVCacheEntry objects.
 
     Attributes:
         kv: Maps layer/block index to cached key-value projections.
     """
 
-    kv: dict[int, KVCacheEntry] = field(default_factory=dict)
+    kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = field(default_factory=dict)
 
     def is_populated(self) -> bool:
         """True when the cache contains valid data."""
@@ -57,3 +155,16 @@ class KVCache:
     def to(self, device: torch.device | str) -> KVCache:
         """Move all entries to the given device. Returns a new KVCache."""
         return KVCache(kv={idx: entry.to(device) for idx, entry in self.kv.items()})
+
+    def quantize(self, dtype: torch.dtype = torch.int8) -> KVCache:
+        """Return a new KVCache with all entries quantized.
+
+        Args:
+            dtype: Target integer dtype (default ``torch.int8``).
+        """
+        return KVCache(
+            kv={
+                idx: entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry
+                for idx, entry in self.kv.items()
+            }
+        )
