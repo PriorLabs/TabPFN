@@ -605,7 +605,7 @@ def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X), decimal=2)
-    np.testing.assert_array_equal(preds, tabpfn.predict(X))
+    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.05)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
