@@ -278,7 +278,7 @@ def main(
     ax.fill_between(X_test[:, 0], q05, q95, color="C0", alpha=0.12, label="90% CI", zorder=1)
 
     for x_edge in (4.0, 7.0):
-        ax.axvline(x_edge, color="gray", lw=1, ls=":", alpha=0.7, zorder=0)
+        ax.axvline(x_edge, color="dimgray", lw=1.2, ls="-.", alpha=0.8, zorder=4)
     ax.text(2.0,  Y_MAX * 0.92, "tight unimodal",  ha="center", fontsize=12, color="gray")
     ax.text(5.5,  Y_MAX * 0.92, "heteroscedastic", ha="center", fontsize=12, color="gray")
     ax.text(8.5,  Y_MAX * 0.92, "bimodal",         ha="center", fontsize=12, color="gray")
