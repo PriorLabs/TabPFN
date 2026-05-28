@@ -811,7 +811,7 @@ class ICLAttention(nn.Module):
         x_BRE: torch.Tensor,
         single_eval_pos: int,
         *,
-        cached_kv: KVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Self-attention where k/v are restricted to train rows.
@@ -1092,7 +1092,7 @@ class ICLTransformerBlock(nn.Module):
         single_eval_pos: int,
         save_peak_memory_factor: int | None = None,
         *,
-        cached_kv: KVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass with optional KV cache support.

@@ -331,15 +331,14 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=2)
 
 
-# Disable MPS as it doesn't support float64.
-@pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
+@pytest.mark.parametrize("device", get_pytest_devices())
 def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
     X_y: tuple[np.ndarray, np.ndarray], device: str
 ) -> None:
     kwargs = {
         "version": ModelVersion.V3,
         "n_estimators": 2,
-        "inference_precision": torch.float64,
+        "inference_precision": torch.float32,
         "random_state": 0,
         "device": device,
     }

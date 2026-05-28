@@ -18,9 +18,12 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-# High, low, max value for each dtype
+# Low, high, max-magnitude value for each dtype.
+# int8 uses the symmetric range [-127, 127] (one code below the full int8
+# range) so that ``-max * scale`` equals ``+max * scale`` and dequantization
+# cannot exceed the original absmax in magnitude.
 _QUANTIZATION_RANGES: dict[torch.dtype, tuple[int, int, int]] = {
-    torch.int8: (-128, 127, 127),
+    torch.int8: (-127, 127, 127),
 }
 
 
