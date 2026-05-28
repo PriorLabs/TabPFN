@@ -24,6 +24,19 @@ device_combinations = [
 ]
 
 
+@pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
+def test__devices_attribute__is_None_before_fit_and_set_after(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    estimator = estimator_class(n_estimators=1)
+    assert estimator.devices_ is None
+
+    X_train, _, y_train = _get_tiny_dataset(estimator)
+    estimator.fit(X_train, y_train)
+    assert estimator.devices_ is not None
+    assert all(isinstance(d, torch.device) for d in estimator.devices_)
+
+
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])

@@ -140,11 +140,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     inference_config_: InferenceConfig
     """Additional configuration of the interface for expert users."""
 
-    devices_: tuple[torch.device, ...]
-    """The devices determined to be used.
+    devices_: tuple[torch.device, ...] | None
+    """The devices used by fit() and predict(), or None if fit() was not called yet.
 
-    The devices are determined based on the `device` argument to the constructor, and
-    the devices available on the system. See the constructor documentation for details.
+    The devices are selected based on the ``device`` argument to the constructor. See
+    the constructor documentation for details.
     """
 
     feature_names_in_: npt.NDArray[Any]
@@ -496,6 +496,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
+        self.devices_ = None
         initialize_telemetry()
 
         # Only anonymously record `fit_mode` usage
