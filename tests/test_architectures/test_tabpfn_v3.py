@@ -11,6 +11,11 @@ import torch
 
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures.kv_cache import (
+    KVCache,
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
+)
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
 
 
@@ -325,4 +330,148 @@ def test__kv_cache__works_under_autocast(
     ), (
         f"Autocast ({autocast_dtype}) KV-cache output differs from autocast standard "
         f"(max diff: {(out_standard_autocast.float() - out_cached_autocast.float()).abs().max().item():.2e})"  # noqa: E501
+    )
+
+
+@torch.no_grad()
+def test__kv_cache_entry__quantize_dequantize_roundtrip() -> None:
+    """Quantize/dequantize roundtrip preserves values within int8 tolerance."""
+    torch.manual_seed(0)
+    entry = KVCacheEntry(key=torch.randn(2, 32, 4, 16), value=torch.randn(2, 32, 4, 16))
+
+    q = entry.quantize()
+    assert isinstance(q, QuantizedKVCacheEntry)
+    assert q.key.dtype == torch.int8
+    assert q.value.dtype == torch.int8
+
+    d = q.dequantize(torch.float32)
+    assert d.key.dtype == torch.float32
+    # Per-tensor int8 error: max ~absmax/127
+    assert (entry.key - d.key).abs().max() < entry.key.abs().amax() / 64
+    assert (entry.value - d.value).abs().max() < entry.value.abs().amax() / 64
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
+def test__kv_cache_entry__quantize_all_zero_is_finite(dtype: torch.dtype) -> None:
+    """All-zero inputs must round-trip without NaN/Inf across float dtypes.
+
+    Regression test for the scale-floor: a fixed 1e-12 underflows to 0 in
+    float16 and reintroduces division by zero on line 44.
+    """
+    entry = KVCacheEntry(
+        key=torch.zeros(1, 4, 1, 2, dtype=dtype),
+        value=torch.zeros(1, 4, 1, 2, dtype=dtype),
+    )
+    q = entry.quantize()
+    d = q.dequantize(dtype)
+    assert torch.all(torch.isfinite(d.key))
+    assert torch.all(torch.isfinite(d.value))
+    assert d.key.abs().max().item() == 0
+    assert d.value.abs().max().item() == 0
+
+
+def test__kv_cache_entry__quantize_unsupported_dtype_raises() -> None:
+    """Quantization with an unregistered integer dtype should raise."""
+    entry = KVCacheEntry(
+        key=torch.randn(1, 1, 1, 1),
+        value=torch.randn(1, 1, 1, 1),
+    )
+    with pytest.raises(ValueError, match="Unsupported quantization dtype"):
+        entry.quantize(dtype=torch.int16)
+
+
+def test__kv_cache__quantize_passthrough_on_already_quantized() -> None:
+    """KVCache.quantize must not re-quantize existing QuantizedKVCacheEntry values."""
+    torch.manual_seed(0)
+    entry = KVCacheEntry(
+        key=torch.randn(1, 4, 1, 2),
+        value=torch.randn(1, 4, 1, 2),
+    )
+    cache = KVCache(kv={0: entry})
+    q1 = cache.quantize()
+    q2 = q1.quantize()
+    e1 = q1.kv[0]
+    e2 = q2.kv[0]
+    assert isinstance(e2, QuantizedKVCacheEntry)
+    # Identity in storage — passthrough returns the same entry object.
+    assert e1 is e2
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+@pytest.mark.parametrize("use_chunkwise", [False, True])
+def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> None:
+    """Int8-quantized KV cache produces output close to standard forward.
+
+    Decomposes error so a regression in the cache path itself (which should
+    match standard at near machine precision) can't hide behind the loose
+    int8 tolerance used for the quantization step.
+    """
+    arch = _get_regression_model()
+
+    torch.manual_seed(42)
+    x = torch.randn(20, 1, 5, dtype=torch.float64) * 0.1
+    y = torch.randn(10, dtype=torch.float64)
+
+    perf = PerformanceOptions(use_chunkwise_inference=use_chunkwise)
+
+    out_standard = arch(x, y, performance_options=perf)
+    _, cache = arch(x, y, performance_options=perf, return_kv_cache=True)
+    out_cached = arch(x, y, performance_options=perf, kv_cache=cache)
+
+    q_cache = cache.quantize()
+    # Verify quantization happened
+    for entry in q_cache.icl_cache.kv.values():
+        assert isinstance(entry, QuantizedKVCacheEntry)
+        assert entry.key.dtype == torch.int8
+    # Train embeddings stay in native dtype
+    assert q_cache.train_embeddings.dtype == torch.float64
+
+    out_quantized = arch(x, y, performance_options=perf, kv_cache=q_cache)
+
+    # Cache path itself should match standard at near machine precision.
+    assert torch.allclose(out_standard, out_cached, atol=1e-5), (
+        f"Non-quantized cached output diverges from standard "
+        f"(max diff: {(out_standard - out_cached).abs().max().item():.2e})"
+    )
+    # Quantization adds small additional error on top of the cached forward.
+    assert torch.allclose(out_cached, out_quantized, atol=1e-2), (
+        f"Quantized cache output too far from non-quantized cached "
+        f"(max diff: {(out_cached - out_quantized).abs().max().item():.2e})"
+    )
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
+    """Int8-quantized KV cache produces output close to standard forward for mclass."""
+    arch = _get_model()
+
+    torch.manual_seed(42)
+    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+
+    out_standard = arch(x, y)
+    _, cache = arch(x, y, return_kv_cache=True)
+    out_cached = arch(x, y, kv_cache=cache)
+
+    q_cache = cache.quantize()
+    # Verify quantization happened
+    for entry in q_cache.icl_cache.kv.values():
+        assert isinstance(entry, QuantizedKVCacheEntry)
+        assert entry.key.dtype == torch.int8
+    # Train embeddings stay in full precision
+    assert q_cache.train_embeddings is not None
+    assert q_cache.train_embeddings.dtype == torch.float64
+
+    out_quantized = arch(x, y, kv_cache=q_cache)
+
+    assert torch.allclose(out_standard, out_cached, atol=1e-5), (
+        f"Non-quantized cached multiclass output diverges from standard "
+        f"(max diff: {(out_standard - out_cached).abs().max().item():.2e})"
+    )
+    assert torch.allclose(out_cached, out_quantized, atol=1e-2), (
+        f"Quantized multiclass cache output too far from non-quantized cached "
+        f"(max diff: {(out_cached - out_quantized).abs().max().item():.2e})"
     )

@@ -1017,12 +1017,16 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     When ``keep_cache_on_device=True``, each per-estimator cache is kept
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
 
+    For TabPFN-3 models, the KV cache is stored as int8 (per-tensor symmetric
+    quantization) to reduce memory footprint; dequantization happens on-the-fly
+    in the attention layer.
+
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
     train labels for the many-class decoder.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_train: np.ndarray,
         y_train: np.ndarray,
@@ -1035,6 +1039,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         autocast: bool,
         keep_cache_on_device: bool = True,
+        maybe_quantize_kv_cache: bool = True,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -1059,6 +1064,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 memory but avoids CPU↔GPU transfers, giving lower latency.
                 When False, caches are moved to CPU after building and
                 transferred to the target device on every predict call.
+            maybe_quantize_kv_cache: If True (default), quantize the KV cache
+                to reduce memory footprint if it is supported by the architecture.
+                If False, the KV cache is not quantized.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -1068,6 +1076,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
+        self.maybe_quantize_kv_cache = maybe_quantize_kv_cache
         self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
@@ -1179,6 +1188,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
+        if self.maybe_quantize_kv_cache and hasattr(cache, "quantize"):
+            cache = cache.quantize()
         if self.keep_cache_on_device:
             return cache
         return cache.to("cpu")

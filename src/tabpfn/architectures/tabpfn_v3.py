@@ -45,7 +45,7 @@ from tabpfn.architectures.interface import (
     ArchitectureConfig,
     PerformanceOptions,
 )
-from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
+from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry, QuantizedKVCacheEntry
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -241,8 +241,28 @@ class TabPFNV3Cache:
             ),
         )
 
+    def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV3Cache:
+        """Return a new cache with quantized ICL KV entries.
+
+        Only the ICL KV cache is quantized; ``train_embeddings``,
+        ``scaler_cache``, and ``inducing_hidden`` stay in full precision.
+
+        Args:
+            dtype: Target integer dtype (default ``torch.int8``).
+        """
+        return TabPFNV3Cache(
+            icl_cache=self.icl_cache.quantize(dtype),
+            train_embeddings=self.train_embeddings,
+            train_shape=self.train_shape,
+            scaler_cache=self.scaler_cache,
+            inducing_hidden=self.inducing_hidden,
+        )
+
     def cache_size_mb(self) -> int:
-        """Return the memory occupied by cached tensors in MB."""
+        """Return the memory occupied by cached tensors in MB.
+
+        Uses integer division, so returns 0 for caches smaller than 1 MB.
+        """
         total = 0
         for entry in self.icl_cache.kv.values():
             if entry.key is not None:
@@ -791,7 +811,7 @@ class ICLAttention(nn.Module):
         x_BRE: torch.Tensor,
         single_eval_pos: int,
         *,
-        cached_kv: KVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Self-attention where k/v are restricted to train rows.
@@ -817,12 +837,13 @@ class ICLAttention(nn.Module):
 
         if cached_kv is not None:
             # Use pre-computed K/V from cache (test-only path)
+            if isinstance(cached_kv, QuantizedKVCacheEntry):
+                cached_kv = cached_kv.dequantize(q.dtype)
             k = cached_kv.key
             v = cached_kv.value
             assert k is not None, "cached key is None"
             assert v is not None, "cached value is None"
             # Match dtype in case of autocast (e.g. fp32 cache under fp16)
-            # TODO: Add kv (de-)quantization here
             if k.dtype != q.dtype:
                 k = k.to(q.dtype)
                 v = v.to(q.dtype)
@@ -1071,7 +1092,7 @@ class ICLTransformerBlock(nn.Module):
         single_eval_pos: int,
         save_peak_memory_factor: int | None = None,
         *,
-        cached_kv: KVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass with optional KV cache support.

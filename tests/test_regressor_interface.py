@@ -6,7 +6,7 @@ import io
 import itertools
 import os
 import typing
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 from unittest import mock
 
 import numpy as np
@@ -25,6 +25,7 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.inference import InferenceEngineExplicitKVCache
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -289,7 +290,10 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
+    X_y: tuple[np.ndarray, np.ndarray],
+    model_version: ModelVersion,
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kwargs = {
         "version": model_version,
@@ -307,12 +311,52 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
 
+    original_init = InferenceEngineExplicitKVCache.__init__
+
+    def _init_without_kv_quantization(
+        self: InferenceEngineExplicitKVCache, *args: Any, **kwargs: Any
+    ) -> None:
+        kwargs.setdefault("maybe_quantize_kv_cache", False)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        InferenceEngineExplicitKVCache, "__init__", _init_without_kv_quantization
+    )
+
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor.create_default_for_version(
         fit_mode="fit_with_cache", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=2)
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
+    X_y: tuple[np.ndarray, np.ndarray], device: str
+) -> None:
+    kwargs = {
+        "version": ModelVersion.V3,
+        "n_estimators": 2,
+        "inference_precision": torch.float32,
+        "random_state": 0,
+        "device": device,
+    }
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
+    tabpfn.fit(X, y)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNRegressor.create_default_for_version(
+        fit_mode="fit_with_cache", **kwargs
+    )
+    tabpfn.fit(X, y)
+    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.25)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
@@ -730,6 +774,10 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         random_state=42,
         inference_config={
             "POLYNOMIAL_FEATURES": "no",
+            # Set to False to avoid different fingerprint features for tiny
+            # numerical variations e.g. from non-deterministic algorithms in
+            # preprocessing steps before adding the fingerprint feature.
+            "FINGERPRINT_FEATURE": False,
         },
     )
     model.fit(X, y)
@@ -753,6 +801,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         random_state=42,
         inference_config={
             "POLYNOMIAL_FEATURES": "no",
+            "FINGERPRINT_FEATURE": False,  # see above for why
         },
     )
     model_with_constants.fit(X_with_constants, y)
