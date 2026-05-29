@@ -1,10 +1,12 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Verify each example notebook resolves `tabpfn` to the latest PyPI release.
+"""Verify each example notebook resolves pinned packages to PyPI latest.
 
 Reproduces the install sequence from each `examples/notebooks/*.ipynb` in a
-fresh venv and asserts that `tabpfn` resolves to the version currently
-published as latest on PyPI.
+fresh venv and asserts that `tabpfn` (always) and `tabpfn-extensions` (when
+the notebook installs it) resolve to the version currently published as
+latest on PyPI. Catches the case where a stale upper pin or transitive
+constraint silently downgrades a package below its latest release.
 
 Skipped by default. Set `RUN_NOTEBOOK_INSTALL_CHECK=1` to enable.
 Intended to run from `.github/workflows/nightly-notebook-check.yml`, not
@@ -52,24 +54,49 @@ def _extract_install_lines(notebook_path: Path) -> list[str]:
     return lines
 
 
-@functools.lru_cache(maxsize=1)
-def _latest_tabpfn_version() -> str:
-    """Fetch latest tabpfn version from PyPI.
+@functools.cache
+def _latest_pypi_version(package: str) -> str:
+    """Fetch latest version of `package` from PyPI.
 
-    Cached so we only hit PyPI once per session regardless of notebook count.
-    Network failures crash the test loudly — the workflow surfaces them as
-    nightly-failure issues for the maintainer to investigate or rerun.
+    Cached so we only hit PyPI once per (session, package) regardless of
+    notebook count. Network failures crash the test loudly — the workflow
+    surfaces them as nightly-failure issues for the maintainer to
+    investigate or rerun.
     """
     req = Request(
-        "https://pypi.org/pypi/tabpfn/json",
+        f"https://pypi.org/pypi/{package}/json",
         headers={"User-Agent": "tabpfn-notebook-check/1.0"},
     )
     with urlopen(req, timeout=15) as r:  # noqa: S310
         return cast("str", json.load(r)["info"]["version"])
 
 
+def _installed_version(package: str, env: dict[str, str]) -> str | None:
+    """Return the installed version of `package` in `env`'s venv, or None."""
+    show = subprocess.run(  # noqa: S603
+        ["uv", "pip", "show", package],  # noqa: S607
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if show.returncode != 0:
+        return None
+    return next(
+        (
+            line.split(":", 1)[1].strip()
+            for line in show.stdout.splitlines()
+            if line.startswith("Version:")
+        ),
+        None,
+    )
+
+
 @pytest.mark.parametrize("notebook", NOTEBOOKS, ids=lambda p: p.name)
-def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None:
+def test_notebook_resolves_latest_pinned_packages(
+    notebook: Path,
+    tmp_path: Path,
+) -> None:
     if shutil.which("uv") is None:
         pytest.skip("uv not on PATH")
 
@@ -104,20 +131,34 @@ def test_notebook_resolves_latest_tabpfn(notebook: Path, tmp_path: Path) -> None
             timeout=600,
         )
 
-    show = subprocess.run(
-        ["uv", "pip", "show", "tabpfn"],  # noqa: S607
-        env=env,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    installed = next(
-        line.split(":", 1)[1].strip()
-        for line in show.stdout.splitlines()
-        if line.startswith("Version:")
-    )
+    # `tabpfn` must be installed by every notebook in this directory; the
+    # nightly check exists precisely to catch the case where a notebook's
+    # install sequence stops resolving it to latest. `tabpfn-extensions` is
+    # only installed by some notebooks (e.g. TabPFN_Demo_Local), so we only
+    # check it when present — a notebook that doesn't install it isn't
+    # expected to.
+    required = ["tabpfn"]
+    optional = ["tabpfn-extensions"]
 
-    latest = _latest_tabpfn_version()
-    assert installed == latest, (
-        f"{notebook.name}: installed tabpfn=={installed}, PyPI latest is {latest}."
-    )
+    failures = []
+    for package in required:
+        installed = _installed_version(package, env)
+        if installed is None:
+            failures.append(f"{package} not installed")
+            continue
+        latest = _latest_pypi_version(package)
+        if installed != latest:
+            failures.append(
+                f"{package}=={installed} (PyPI latest is {latest})",
+            )
+    for package in optional:
+        installed = _installed_version(package, env)
+        if installed is None:
+            continue
+        latest = _latest_pypi_version(package)
+        if installed != latest:
+            failures.append(
+                f"{package}=={installed} (PyPI latest is {latest})",
+            )
+
+    assert not failures, f"{notebook.name}: " + "; ".join(failures)
