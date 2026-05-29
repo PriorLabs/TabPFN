@@ -7,13 +7,13 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.patches import Patch
 from scipy.ndimage import uniform_filter1d
 
 if TYPE_CHECKING:
+    import matplotlib.pyplot as plt
+
     from tabpfn import TabPFNRegressor
 
 _STAT_STYLES = {
@@ -69,6 +69,16 @@ def plot_regression_distribution(
     Returns:
         The matplotlib axes containing the plot.
     """
+    # Local import because matplotlib is an optional dependency.
+    try:
+        import matplotlib.pyplot as plt  # noqa: PLC0415
+        from matplotlib.patches import Patch  # noqa: PLC0415
+    except ModuleNotFoundError as err:
+        raise ModuleNotFoundError(
+            "matplotlib is required for plotting. "
+            'Install it with `pip install "tabpfn[viz]"`'
+        ) from err
+
     out = regressor.predict(_as_single_row(x), output_type="full")
     logits, criterion = out["logits"], out["criterion"]
 

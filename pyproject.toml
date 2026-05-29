@@ -53,6 +53,7 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
+viz = ["matplotlib>=3.5"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"
