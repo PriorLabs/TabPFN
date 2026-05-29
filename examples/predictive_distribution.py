@@ -11,24 +11,27 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from matplotlib.axes import Axes
-from matplotlib.colors import Colormap
 
 from tabpfn import TabPFNRegressor
 
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.colors import Colormap
 
-def heatmap_with_box_sizes(
+
+def heatmap_with_box_sizes(  # noqa: PLR0913
     ax: Axes,
     data: torch.Tensor,
     x_starts: torch.Tensor,
     x_ends: torch.Tensor,
     y_starts: torch.Tensor,
     y_ends: torch.Tensor,
+    *,
     cmap: Colormap | None = None,
     set_lims: bool = True,
     threshold_i: float = 0.0,
@@ -70,6 +73,7 @@ def plot_bar_distribution(
     x: torch.Tensor,
     bar_borders: torch.Tensor,
     logits: torch.Tensor,
+    *,
     merge_bars: int | None = None,
     restrict_to_range: tuple[float, float] | None = None,
     plot_log_probs: bool = False,
@@ -127,11 +131,12 @@ def main(
     n_train: int = 400,
     n_test: int = 200,
     n_estimators: int = 4,
+    *,
     no_show: bool = False,
     out_dir: Path | None = None,
 ) -> None:
     if out_dir is None:
-        out_dir = Path(".")
+        out_dir = Path()
     rng = np.random.default_rng(0)
     x_train = rng.uniform(0.0, 10.0, n_train).astype(np.float32)
     y_clean = np.sin(0.6 * x_train)
@@ -203,7 +208,7 @@ if __name__ == "__main__":
     parser.add_argument("--n-test",       type=int,  default=200,      metavar="N")
     parser.add_argument("--n-estimators", type=int,  default=4,        metavar="N")
     parser.add_argument("--no-show",      action="store_true")
-    parser.add_argument("--out-dir",      type=Path, default=Path("."))
+    parser.add_argument("--out-dir",      type=Path, default=Path())
     args = parser.parse_args()
     if args.no_show:
         plt.switch_backend("Agg")
