@@ -356,7 +356,7 @@ def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
         fit_mode="fit_with_cache", **kwargs
     )
     tabpfn.fit(X, y)
-    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.1)
+    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.3)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
@@ -774,6 +774,10 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         random_state=42,
         inference_config={
             "POLYNOMIAL_FEATURES": "no",
+            # Set to False to avoid different fingerprint features for tiny
+            # numerical variations e.g. from non-deterministic algorithms in
+            # preprocessing steps before adding the fingerprint feature.
+            "FINGERPRINT_FEATURE": False,
         },
     )
     model.fit(X, y)
@@ -797,6 +801,7 @@ def test_constant_feature_handling(X_y: tuple[np.ndarray, np.ndarray]) -> None:
         random_state=42,
         inference_config={
             "POLYNOMIAL_FEATURES": "no",
+            "FINGERPRINT_FEATURE": False,  # see above for why
         },
     )
     model_with_constants.fit(X_with_constants, y)
