@@ -39,7 +39,8 @@ for ax, idx, label in zip(
     true_val = y_test[idx]
     true_line = ax.axvline(true_val, color="purple", ls="-.", lw=1.4, label=f"true = {true_val:.0f}")
     leg = ax.get_legend()
-    ax.legend(handles=[*leg.legend_handles, true_line], fontsize=9)
+    handles = getattr(leg, "legend_handles", None) or getattr(leg, "legendHandles", [])
+    ax.legend(handles=[*handles, true_line], fontsize=9)
     ax.set_title(label)
 
 plt.tight_layout()
