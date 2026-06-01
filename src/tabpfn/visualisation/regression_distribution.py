@@ -8,13 +8,12 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
-import pandas as pd
 from scipy.ndimage import uniform_filter1d
 
 if TYPE_CHECKING:
     import matplotlib.pyplot as plt
 
-    from tabpfn import TabPFNRegressor
+    from tabpfn.regressor import FullOutputDict
 
 _STAT_STYLES = {
     "mean": ("#d62728", "-"),
@@ -23,26 +22,44 @@ _STAT_STYLES = {
 }
 
 
-def _as_single_row(x: object) -> np.ndarray | pd.DataFrame:
-    """Coerce a single sample (1d array, Series or 1-row frame) to a 2d input."""
-    if isinstance(x, pd.Series):
-        return x.to_frame().T
-    if isinstance(x, pd.DataFrame):
-        if len(x) != 1:
-            raise ValueError(f"Expected a single row, got {len(x)} rows.")
-        return x
-    arr = np.asarray(x)
-    if arr.ndim == 1:
-        arr = arr.reshape(1, -1)
-    if arr.shape[0] != 1:
-        raise ValueError(f"Expected a single row, got shape {arr.shape}.")
-    return arr
+def _validate_args(
+    prediction: FullOutputDict,
+    sample_idx: int,
+    statistics: Sequence[str],
+    quantile_interval: tuple[float, float] | None,
+    zoom_quantile: float | None,
+    smooth: float,
+) -> None:
+    if not {"logits", "criterion"} <= prediction.keys():
+        raise ValueError(
+            'prediction must be the output of predict(..., output_type="full").'
+        )
+    unknown = [name for name in statistics if name not in _STAT_STYLES]
+    if unknown:
+        raise ValueError(
+            f"Unknown statistics {unknown}; choose from {list(_STAT_STYLES)}."
+        )
+    if quantile_interval is not None:
+        lo_q, hi_q = quantile_interval
+        if not 0 <= lo_q < hi_q <= 1:
+            raise ValueError(
+                "quantile_interval must be (low, high) with 0 <= low < high <= 1."
+            )
+    if zoom_quantile is not None and not 0 < zoom_quantile <= 1:
+        raise ValueError("zoom_quantile must be in (0, 1].")
+    if smooth < 0:
+        raise ValueError("smooth must be non-negative.")
+    n_samples = prediction["logits"].shape[0]
+    if not 0 <= sample_idx < n_samples:
+        raise ValueError(
+            f"sample_idx {sample_idx} is out of range for {n_samples} sample(s)."
+        )
 
 
 def plot_regression_distribution(
-    regressor: TabPFNRegressor,
-    x: object,
+    prediction: FullOutputDict,
     *,
+    sample_idx: int = 0,
     statistics: Sequence[str] = ("mean", "median", "mode"),
     quantile_interval: tuple[float, float] | None = (0.1, 0.9),
     zoom_quantile: float | None = 0.99,
@@ -53,8 +70,9 @@ def plot_regression_distribution(
     """Plot the predicted target distribution for a single sample.
 
     Args:
-        regressor: A fitted ``TabPFNRegressor``.
-        x: One sample, as a 1d array, a ``pandas.Series`` or a 1-row frame.
+        prediction: Output of ``regressor.predict(X, output_type="full")``. It may
+            hold several samples; pick the one to plot with ``sample_idx``.
+        sample_idx: Index of the sample to plot within ``prediction``.
         statistics: Point statistics to mark with a vertical line. Any of
             ``"mean"``, ``"median"``, ``"mode"``.
         quantile_interval: Central interval to shade, e.g. ``(0.1, 0.9)`` for the
@@ -69,6 +87,10 @@ def plot_regression_distribution(
     Returns:
         The matplotlib axes containing the plot.
     """
+    _validate_args(
+        prediction, sample_idx, statistics, quantile_interval, zoom_quantile, smooth
+    )
+
     # Local import because matplotlib is an optional dependency.
     try:
         import matplotlib.pyplot as plt  # noqa: PLC0415
@@ -79,8 +101,8 @@ def plot_regression_distribution(
             'Install it with `pip install "tabpfn[viz]"`'
         ) from err
 
-    out = regressor.predict(_as_single_row(x), output_type="full")
-    logits, criterion = out["logits"], out["criterion"]
+    logits = prediction["logits"][sample_idx : sample_idx + 1]
+    criterion = prediction["criterion"]
 
     widths = criterion.bucket_widths.cpu()
     centers = (criterion.borders[:-1].cpu() + widths / 2).numpy()
@@ -105,7 +127,7 @@ def plot_regression_distribution(
         )
 
     for name in statistics:
-        value = float(np.atleast_1d(out[name])[0])
+        value = float(np.atleast_1d(prediction[name])[sample_idx])
         c, ls = _STAT_STYLES[name]
         legend_handles.append(
             ax.axvline(value, color=c, ls=ls, lw=1.6, label=f"{name} = {value:.3g}")

@@ -2,6 +2,6 @@
 
 #  Copyright (c) Prior Labs GmbH 2026.
 
-from tabpfn.visualization.regression_distribution import plot_regression_distribution
+from tabpfn.visualisation.regression_distribution import plot_regression_distribution
 
 __all__ = ["plot_regression_distribution"]
