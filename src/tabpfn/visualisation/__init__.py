@@ -1,4 +1,4 @@
-"""Visualization utilities for TabPFN."""
+"""Visualisation utilities for TabPFN."""
 
 #  Copyright (c) Prior Labs GmbH 2026.
 
