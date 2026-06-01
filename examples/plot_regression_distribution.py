@@ -14,9 +14,7 @@ from tabpfn import TabPFNRegressor
 from tabpfn.visualisation import plot_regression_distribution
 
 X, y = load_diabetes(return_X_y=True)
-X_train, X_test, y_train, y_test = train_test_split(
-    X, y, test_size=0.2, random_state=0
-)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
 
 reg = TabPFNRegressor(n_estimators=4)
 reg.fit(X_train, y_train)
