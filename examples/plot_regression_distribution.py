@@ -14,7 +14,9 @@ from tabpfn import TabPFNRegressor
 from tabpfn.visualisation import plot_regression_distribution
 
 
-def main(output_path: str = "regression_distribution.png", *, show: bool = True) -> None:
+def main(
+    output_path: str = "regression_distribution.png", *, show: bool = True
+) -> None:
     """Fit a regressor and plot the predicted distribution for three test points."""
     X, y = load_diabetes(return_X_y=True)
     X_train, X_test, y_train, y_test = train_test_split(
@@ -44,7 +46,9 @@ def main(output_path: str = "regression_distribution.png", *, show: bool = True)
             true_val, color="purple", ls="-.", lw=1.4, label=f"true = {true_val:.0f}"
         )
         leg = ax.get_legend()
-        handles = getattr(leg, "legend_handles", None) or getattr(leg, "legendHandles", [])
+        handles = getattr(leg, "legend_handles", None) or getattr(
+            leg, "legendHandles", []
+        )
         ax.legend(handles=[*handles, true_line], fontsize=9)
         ax.set_title(title)
 
