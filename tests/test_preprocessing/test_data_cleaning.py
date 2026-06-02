@@ -427,3 +427,35 @@ class TestTagFeaturesAndSanitizeData:
         # min_unique_for_numerical, the modalities may be different if
         # auto-detecting them on an ordinally encoded data frame.
         assert feature_schema_first.features == feature_schema_second.features
+
+
+def test__classifier_fit_predict__all_missing_categorical_then_strings() -> None:
+    """End-to-end regression for the ordinal-encoder fit/predict dtype asymmetry.
+
+    A categorical column that is all-missing at fit but has real string values at
+    predict used to crash with `could not convert string to float`.
+    """
+    rng = np.random.default_rng(0)
+    n = 30
+    X_train = pd.DataFrame(
+        {
+            "num0": rng.normal(size=n),
+            "num1": rng.normal(size=n),
+            "cat": pd.Series([None] * n, dtype="object"),  # all-missing at fit
+        }
+    )
+    y = (X_train["num0"] > 0).astype(int).to_numpy()
+
+    X_test = pd.DataFrame(
+        {
+            "num0": rng.normal(size=10),
+            "num1": rng.normal(size=10),
+            "cat": rng.choice(["normal", "high", "low"], size=10),  # strings at predict
+        }
+    )
+
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model.fit(X_train, y)
+
+    assert model.predict(X_test).shape == (X_test.shape[0],)
+    assert model.predict_proba(X_test).shape == (X_test.shape[0], len(np.unique(y)))
