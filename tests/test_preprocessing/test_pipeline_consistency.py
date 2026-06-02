@@ -27,19 +27,8 @@ import numpy as np
 import pytest
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
-from tabpfn.preprocessing.datamodel import Feature
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-
-try:
-    from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
-
-    NEW_PIPELINE_IMPLEMENTATION = True
-except ImportError:
-    try:
-        from tabpfn.preprocessing.pipeline_interface import TransformResult
-    except ImportError:
-        pytest.skip("Pipeline consistency tests cannot be run", allow_module_level=True)
-    NEW_PIPELINE_IMPLEMENTATION = False
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +47,7 @@ def _get_random_data_with_categoricals(
     n_samples: int = 20,
     n_numerical: int = 3,
     n_categorical: int = 2,
-) -> tuple[np.ndarray, FeatureSchema | list[int]]:
+) -> tuple[np.ndarray, FeatureSchema]:
     """Generate random data with both numerical and categorical features."""
     n_features = n_numerical + n_categorical
     X = np.zeros((n_samples, n_features), dtype=np.float64)
@@ -81,19 +70,16 @@ def _get_random_data_with_categoricals(
         nan_mask = random_state.random((n_samples,)) < 0.1
         X[:, i][nan_mask] = np.nan
 
-    if NEW_PIPELINE_IMPLEMENTATION:
-        # Build column metadata
-        features = [
-            Feature(name=None, modality=FeatureModality.NUMERICAL)  # type: ignore
-            for _ in range(n_numerical)
-        ] + [
-            Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
-            for _ in range(n_categorical)
-        ]
-        schema = FeatureSchema(features=features)  # type: ignore
-        return X, schema
-    categorical_indices = list(range(n_numerical, n_features))
-    return X, categorical_indices
+    # Build column metadata
+    features = [
+        Feature(name=None, modality=FeatureModality.NUMERICAL)  # type: ignore
+        for _ in range(n_numerical)
+    ] + [
+        Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
+        for _ in range(n_categorical)
+    ]
+    schema = FeatureSchema(features=features)  # type: ignore
+    return X, schema
 
 
 def _create_ensemble_config(
@@ -288,30 +274,21 @@ def _transform_with_pipeline(
 ) -> tuple[np.ndarray, np.ndarray, dict[str, list[int]]]:
     """Run the preprocessing pipeline and return transformed data."""
     rng = np.random.default_rng(RANDOM_STATE)
-    X_train, schema_or_cat_indices = _get_random_data_with_categoricals(
-        rng, n_samples=N_SAMPLES
-    )
+    X_train, schema = _get_random_data_with_categoricals(rng, n_samples=N_SAMPLES)
     X_test, _ = _get_random_data_with_categoricals(rng, n_samples=N_TEST_SAMPLES)
 
     config = test_case.config_factory()
     pipeline = create_preprocessing_pipeline(config, random_state=RANDOM_STATE)
 
-    result_train = pipeline.fit_transform(X_train, schema_or_cat_indices)
+    result_train = pipeline.fit_transform(X_train, schema)
     result_test = pipeline.transform(X_test)
 
-    if NEW_PIPELINE_IMPLEMENTATION:
-        schema_dict: dict[str, list[int]] = {"categorical": []}
-        for idx, feature in enumerate(result_train.feature_schema.features):
-            key = feature.modality.value
-            if key not in schema_dict:
-                schema_dict[key] = []
-            schema_dict[key].append(idx)
-    else:
-        assert isinstance(result_train, TransformResult)
-        _, categorical_indices = result_train
-        schema_dict = {
-            "categorical": categorical_indices,
-        }
+    schema_dict: dict[str, list[int]] = {"categorical": []}
+    for idx, feature in enumerate(result_train.feature_schema.features):
+        key = feature.modality.value
+        if key not in schema_dict:
+            schema_dict[key] = []
+        schema_dict[key].append(idx)
 
     # Ensure we return numpy arrays (pipeline may return tensors in some cases)
     X_train_out = np.asarray(result_train.X)
