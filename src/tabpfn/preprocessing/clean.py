@@ -65,7 +65,7 @@ def clean_data(
     return X_numpy, ord_encoder, feature_schema
 
 
-def fix_dtypes(  # noqa: D103
+def fix_dtypes(  # noqa: D103, C901, PLR0912
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -127,6 +127,14 @@ def fix_dtypes(  # noqa: D103
     #
     if convert_dtype:
         X = X.convert_dtypes()
+        # Columns still `object` after convert_dtypes (e.g. all-missing columns) are
+        # typed as `string` so the ordinal encoder's dtype-based column selection is
+        # consistent between fit and predict. Otherwise an all-missing column is
+        # `object` at fit (-> passthrough) but `string` at predict; the frozen
+        # passthrough then lets raw strings reach the float cast below and crash.
+        object_columns = X.select_dtypes(include=["object"]).columns
+        if len(object_columns) > 0:
+            X[object_columns] = X[object_columns].astype("string")
 
     numerical_columns = X.select_dtypes(include=["number"]).columns
     if len(numerical_columns) > 0:
