@@ -1,12 +1,10 @@
-"""The TabPFN v2 model.
+"""The TabPFN v2 model, implemented as a single file.
 
-Compared to v2 as implemented by the base architecture, this version is still missing
-the following feature required for public deployment:
-- This implementation does not support the KV cache.
-
-Like the base architecture, it loads the positional embeddings from disk for the
-production seed 42 (see :meth:`TabPFNV2.add_column_embeddings`), so their values are
-consistent across devices.
+This is a single-file reimplementation of v2, replacing the multi-file ``base``
+architecture. Like the base architecture, it loads the positional embeddings from disk
+for the production seed 42 (see :meth:`TabPFNV2.add_column_embeddings`, so their values
+are consistent across devices) and supports a KV cache for fast inference (an explicit
+cache passed through :meth:`TabPFNV2.forward`, see :class:`TabPFNV2Cache`).
 
 Although the transformer layers have been renamed/restructured relative to the base
 architecture, checkpoints trained with the base architecture can still be loaded: see
@@ -34,6 +32,11 @@ from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
     PerformanceOptions,
+)
+from tabpfn.architectures.kv_cache import (
+    KVCache,
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
@@ -161,18 +164,33 @@ class AlongColumnAttention(Attention):
         self,
         x_BcRE: torch.Tensor,
         single_eval_pos: int | None = None,
-    ) -> torch.Tensor:
+        *,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        return_kv: bool = False,
+    ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass for attention between cells of a single column.
 
         Args:
             x_BcRE: The input tensor of shape (Bc, R, E), where:
                 - Bc: Batch size * number of columns
-                - R: Total rows (test + train).
+                - R: Total rows (test + train), or test-only rows when ``cached_kv``
+                  is provided.
                 - E: Embedding size.
             single_eval_pos: The position from which on everything is treated as test
                 set. If None, no mask is applied and all positions are attended to. If
                 given, each query after single_eval_pos will only attend to positions
-                before single_eval_pos.
+                before single_eval_pos. Should be 0 when ``cached_kv`` is provided.
+            cached_kv: Pre-computed train key/value projections from a previous forward
+                pass. When provided, the K/V projections are skipped and every query
+                (all rows are test rows) attends to these cached values via the single
+                multi-query-attention head.
+            return_kv: If True, also return the train key/value projections as a
+                :class:`KVCacheEntry`. Only the first key/value head is cached, since
+                test rows attend to the first head only (multi-query attention).
+
+        Returns:
+            ``(output, kv_entry)`` where ``kv_entry`` is ``None`` unless ``return_kv``
+            is True.
         """
         # H: number of heads.
         # D: head dimension.
@@ -180,31 +198,53 @@ class AlongColumnAttention(Attention):
         # N: number of train points = single_eval_pos
         # M: number of test points
         Bc, R, _ = x_BcRE.shape
-        # If no single_eval_pos was specified, then the whole input is training.
-        N = R if single_eval_pos is None else single_eval_pos
 
-        q_flat_BcSHF = self.q_projection(x_BcRE)
-        k_flat_BcNHF = self.k_projection(x_BcRE[:, :N])
-        v_flat_BcNHF = self.v_projection(x_BcRE[:, :N])
-        q_BcRHD = q_flat_BcSHF.view(Bc, R, -1, self.head_dim)
-        k_BcNHD = k_flat_BcNHF.view(Bc, N, -1, self.head_dim)
-        v_BcNHD = v_flat_BcNHF.view(Bc, N, -1, self.head_dim)
+        q_BcRHD = self.q_projection(x_BcRE).view(Bc, R, -1, self.head_dim)
 
-        if single_eval_pos == R:
-            output_BcSHD = _batched_scaled_dot_product_attention(
-                q_BcRHD, k_BcNHD, v_BcNHD
-            )
+        kv_entry: KVCacheEntry | None = None
+        if cached_kv is not None:
+            # Cache path: every row is a test row attending to the cached train K/V via
+            # the single multi-query-attention head.
+            if isinstance(cached_kv, QuantizedKVCacheEntry):
+                cached_kv = cached_kv.dequantize(q_BcRHD.dtype)
+            k_Bc1 = cached_kv.key
+            v_Bc1 = cached_kv.value
+            assert k_Bc1 is not None
+            assert v_Bc1 is not None
+            if k_Bc1.dtype != q_BcRHD.dtype:
+                k_Bc1 = k_Bc1.to(q_BcRHD.dtype)
+                v_Bc1 = v_Bc1.to(q_BcRHD.dtype)
+            output_BcSHD = _batched_scaled_dot_product_attention(q_BcRHD, k_Bc1, v_Bc1)
         else:
-            out_train_BcNHD = _batched_scaled_dot_product_attention(
-                q_BcRHD[:, :N], k_BcNHD, v_BcNHD
-            )
-            out_test_BcMHD = _batched_scaled_dot_product_attention(
-                q_BcRHD[:, N:], k_BcNHD[:, :, :1], v_BcNHD[:, :, :1]
-            )
-            output_BcSHD = torch.cat([out_train_BcNHD, out_test_BcMHD], dim=1)
+            # If no single_eval_pos was specified, then the whole input is training.
+            N = R if single_eval_pos is None else single_eval_pos
+            k_BcNHD = self.k_projection(x_BcRE[:, :N]).view(Bc, N, -1, self.head_dim)
+            v_BcNHD = self.v_projection(x_BcRE[:, :N]).view(Bc, N, -1, self.head_dim)
+
+            if single_eval_pos == R:
+                output_BcSHD = _batched_scaled_dot_product_attention(
+                    q_BcRHD, k_BcNHD, v_BcNHD
+                )
+            else:
+                out_train_BcNHD = _batched_scaled_dot_product_attention(
+                    q_BcRHD[:, :N], k_BcNHD, v_BcNHD
+                )
+                out_test_BcMHD = _batched_scaled_dot_product_attention(
+                    q_BcRHD[:, N:], k_BcNHD[:, :, :1], v_BcNHD[:, :, :1]
+                )
+                output_BcSHD = torch.cat([out_train_BcNHD, out_test_BcMHD], dim=1)
+
+            if return_kv:
+                # Only cache the first K/V head, since test rows attend to the first
+                # head only (multi-query attention). .contiguous() so the cache owns its
+                # storage and the full-projection tensor can be freed.
+                kv_entry = KVCacheEntry(
+                    key=k_BcNHD[:, :, :1].contiguous().detach(),
+                    value=v_BcNHD[:, :, :1].contiguous().detach(),
+                )
 
         output_BcSF = output_BcSHD.reshape(Bc, R, self.head_dim * self.num_heads)
-        return self.out_projection(output_BcSF)
+        return self.out_projection(output_BcSF), kv_entry
 
 
 def _batched_scaled_dot_product_attention(
@@ -397,7 +437,10 @@ class TabPFNBlock(nn.Module):
         x_BRCE: torch.Tensor,
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
-    ) -> torch.Tensor:
+        *,
+        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        return_kv: bool = False,
+    ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Compute one column-wise, one row-wise attention, and an MLP layer.
 
         Uses post-norm.
@@ -419,11 +462,19 @@ class TabPFNBlock(nn.Module):
                 dimension.
                 If None, use the standard forward pass compatible with gradient
                 computation.
+            cached_kv:
+                Pre-computed train key/value projections for the between-cells
+                attention. When provided, ``x_BRCE`` holds test rows only.
+            return_kv:
+                If True, also return the between-cells attention's train key/value
+                projections as a :class:`KVCacheEntry`.
 
         Returns:
-            The transformed state
+            ``(transformed_state, kv_entry)`` where ``kv_entry`` is ``None`` unless
+            ``return_kv`` is True.
         """
         # -- First Block: Attention between features.
+        # The row attention has no train/test distinction and is not cached.
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
@@ -447,16 +498,34 @@ class TabPFNBlock(nn.Module):
         # Call .contiguous() so that _chunk() can operate on x_BCRE in-place, when
         # memory saving is enabled.
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
-        x_BCRE = chunked_evaluate_maybe_inplace(
-            self.per_column_attention_between_cells,
-            x_BCRE,
-            save_peak_memory_factor,
-            residual=True,
+        kv_entry: KVCacheEntry | None = None
+        if return_kv or cached_kv is not None:
+            # Build / cache paths: bypass chunking and compute the between-cells
+            # attention in one go. We either need to capture the K/V cache entry, or the
+            # cached K/V spans the full (batch * columns) dimension. The attention folds
+            # (batch, columns) into one batch dimension, so flatten and unflatten around
+            # the call.
+            B, C = x_BCRE.shape[:2]
+            attn_out, kv_entry = self.per_column_attention_between_cells(
+                x_BCRE.flatten(0, 1),
+                single_eval_pos=single_eval_pos,
+                cached_kv=cached_kv,
+                return_kv=return_kv,
+            )
+            x_BCRE = x_BCRE + attn_out.unflatten(0, (B, C))
+        else:
             # The columns are flattened into the batch, so we compute attention over the
             # cells of each column independently.
-            batch_dims=2,
-            single_eval_pos=single_eval_pos,
-        )
+            x_BCRE = chunked_evaluate_maybe_inplace(
+                lambda x, single_eval_pos=None: self.per_column_attention_between_cells(
+                    x, single_eval_pos=single_eval_pos
+                )[0],
+                x_BCRE,
+                save_peak_memory_factor,
+                residual=True,
+                batch_dims=2,
+                single_eval_pos=single_eval_pos,
+            )
         x_BCRE = chunked_evaluate_maybe_inplace(
             self.layernorm_mha2,
             x_BCRE,
@@ -477,12 +546,79 @@ class TabPFNBlock(nn.Module):
             # the rows and the columns.
             batch_dims=3,
         )
-        return chunked_evaluate_maybe_inplace(
+        x_BRCE = chunked_evaluate_maybe_inplace(
             self.layernorm_mlp,
             x_BRCE,
             save_peak_memory_factor,
             residual=False,
             batch_dims=3,
+        )
+        return x_BRCE, kv_entry
+
+
+@dataclasses.dataclass
+class TabPFNV2Cache:
+    """Explicit KV cache for the single-file TabPFN v2 architecture.
+
+    Stores everything derived from the training data that is needed to make
+    predictions for test rows without the training rows being present:
+
+    Attributes:
+        icl_cache: Per-block train key/value projections for the between-cells
+            attention (only the first multi-query-attention head is stored).
+        encoder_state: Snapshot of the (non-persistent) fitted buffers of the feature
+            encoder, so test rows can be normalised using the training statistics.
+        y_encoder_state: Snapshot of the fitted buffers of the target encoder.
+        test_y_embedding: The embedded all-NaN target column for a single test row,
+            of shape ``(batch_size, num_targets)``. Broadcast across all test rows to
+            form the target column of the transformer input.
+        train_shape: ``(batch_size, num_train)``.
+    """
+
+    icl_cache: KVCache = dataclasses.field(default_factory=KVCache)
+    encoder_state: dict[str, torch.Tensor] | None = None
+    y_encoder_state: dict[str, torch.Tensor] | None = None
+    test_y_embedding: torch.Tensor | None = None
+    train_shape: tuple[int, int] = (0, 0)
+
+    def is_empty(self) -> bool:
+        """Return True if the cache has not been populated yet."""
+        return not self.icl_cache.is_populated()
+
+    @staticmethod
+    def _state_to(
+        state: dict[str, torch.Tensor] | None, device: torch.device | str
+    ) -> dict[str, torch.Tensor] | None:
+        if state is None:
+            return None
+        return {k: v.to(device) for k, v in state.items()}
+
+    def to(self, device: torch.device | str) -> TabPFNV2Cache:
+        """Move all cached tensors to the given device. Returns a new cache."""
+        return TabPFNV2Cache(
+            icl_cache=self.icl_cache.to(device),
+            encoder_state=self._state_to(self.encoder_state, device),
+            y_encoder_state=self._state_to(self.y_encoder_state, device),
+            test_y_embedding=(
+                None
+                if self.test_y_embedding is None
+                else self.test_y_embedding.to(device)
+            ),
+            train_shape=self.train_shape,
+        )
+
+    def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV2Cache:
+        """Return a new cache with the ICL key/value entries quantized.
+
+        Only the attention key/value projections are quantized; the encoder state and
+        target embedding stay in full precision.
+        """
+        return TabPFNV2Cache(
+            icl_cache=self.icl_cache.quantize(dtype),
+            encoder_state=self.encoder_state,
+            y_encoder_state=self.y_encoder_state,
+            test_y_embedding=self.test_y_embedding,
+            train_shape=self.train_shape,
         )
 
 
@@ -612,7 +748,87 @@ class TabPFNV2(Architecture):
         embs = self.feature_positional_embedding_embeddings(embs)
         return x_BRCX + embs[None, None]
 
-    def forward(  # noqa: C901
+    @staticmethod
+    def _snapshot_buffers(module: nn.Module) -> dict[str, torch.Tensor]:
+        """Snapshot the (possibly non-persistent) fitted buffers of a module."""
+        return {
+            name: buf.detach().clone()
+            for name, buf in module.named_buffers()
+            if buf is not None
+        }
+
+    @staticmethod
+    def _restore_buffers(
+        module: nn.Module, state: dict[str, torch.Tensor] | None
+    ) -> None:
+        """Restore buffers previously captured with :meth:`_snapshot_buffers`."""
+        if state is None:
+            return
+        for name, value in state.items():
+            *path, attr = name.split(".")
+            submodule = module
+            for part in path:
+                submodule = getattr(submodule, part)
+            setattr(submodule, attr, value)
+
+    def _preprocess_features(
+        self, x_RBC: torch.Tensor
+    ) -> tuple[torch.Tensor, int, int, int]:
+        """Pad and group the raw feature tensor for the encoder.
+
+        Returns ``(x_RSF, num_feature_groups, num_rows, batch_size)``.
+        """
+        num_features = x_RBC.shape[2]  # Number of columns.
+        padding = -num_features % self.features_per_group
+        # C is now padded.
+        x_RBC = torch.nn.functional.pad(x_RBC, (0, padding), value=0)
+        num_features += padding
+        # num_feature_groups corresponds to the number of columns the model will see.
+        num_feature_groups = num_features // self.features_per_group
+        num_rows, batch_size = x_RBC.shape[:2]
+        # Fold the feature groups into the batch size for pre-processing.
+        # S = batch size * number of feature groups.
+        unflattened_shape = [num_feature_groups, self.features_per_group]
+        x_RSF = x_RBC.unflatten(-1, unflattened_shape).flatten(1, 2)
+        return x_RSF, num_feature_groups, num_rows, batch_size
+
+    def _embed_features(
+        self,
+        x: dict[str, torch.Tensor],
+        *,
+        single_eval_pos: int,
+        num_feature_groups: int,
+        batch_size: int,
+        cache_trainset_representation: bool,
+    ) -> torch.Tensor:
+        """Encode the features and add the per-column positional embeddings."""
+        embedded_x_RSX = self.encoder(
+            x,
+            single_eval_pos=single_eval_pos,
+            cache_trainset_representation=cache_trainset_representation,
+        )
+        embedded_x_RBGX = embedded_x_RSX.unflatten(1, [batch_size, num_feature_groups])
+        embedded_x_BRGX = embedded_x_RBGX.transpose(0, 1)
+        return self.add_column_embeddings(embedded_x_BRGX)
+
+    def _decode(
+        self, x_BRCD: torch.Tensor, start: int, *, only_return_standard_out: bool
+    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        """Project the per-row embeddings of the target column to outputs.
+
+        ``start`` is the first row treated as a test row.
+        """
+        test_embeddings_TBE = x_BRCD[:, start:, -1].transpose(0, 1)
+        test_output_TB1 = self.output_projection(test_embeddings_TBE)
+        if only_return_standard_out:
+            return test_output_TB1
+        return {
+            "standard": test_output_TB1,
+            "train_embeddings": x_BRCD[:, :start, -1].transpose(0, 1),
+            "test_embeddings": test_embeddings_TBE,
+        }
+
+    def forward(  # noqa: C901, PLR0912
         self,
         x: torch.Tensor | dict[str, torch.Tensor],
         y: torch.Tensor | dict[str, torch.Tensor] | None,
@@ -621,10 +837,25 @@ class TabPFNV2(Architecture):
         categorical_inds: list[list[int]] | None = None,
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
-    ) -> torch.Tensor | dict[str, torch.Tensor]:
+        kv_cache: TabPFNV2Cache | None = None,
+        return_kv_cache: bool = False,
+        x_is_test_only: bool = False,
+    ) -> (
+        torch.Tensor
+        | dict[str, torch.Tensor]
+        | tuple[torch.Tensor | dict[str, torch.Tensor], TabPFNV2Cache | None]
+    ):
         """Perform a forward pass.
 
-        See ModelInterface.forward() for the full docstring.
+        See ModelInterface.forward() for the full docstring of the shared arguments.
+
+        In addition to those, this architecture supports an explicit KV cache:
+        ``kv_cache``, when provided and populated, makes predictions for the rows in
+        ``x`` (all treated as test rows) by attending to the cached training key/value
+        projections, without the training rows being present. ``return_kv_cache``, when
+        True, also builds and returns a :class:`TabPFNV2Cache`. ``x_is_test_only``, when
+        True, signals that ``x`` contains only test rows and requires a populated
+        ``kv_cache``.
         """
         if performance_options is None:
             performance_options = self.get_default_performance_options()
@@ -632,6 +863,14 @@ class TabPFNV2(Architecture):
         save_peak_memory_factor = performance_options.save_peak_memory_factor
         del categorical_inds
         del task_type
+
+        using_cache = kv_cache is not None and not kv_cache.is_empty()
+        if x_is_test_only and not using_cache:
+            raise ValueError(
+                "x_is_test_only=True requires a populated kv_cache; the standard "
+                "forward needs the full train+test tensor."
+            )
+
         if isinstance(x, torch.Tensor):
             x = {"main": x}
         if isinstance(y, torch.Tensor):
@@ -649,73 +888,130 @@ class TabPFNV2(Architecture):
                 f"Reshaping for multiple keys in y not implemented yet. ({y.keys()})"
             )
 
-        x_RBC = x["main"]
-        num_features = x_RBC.shape[2]  # Number of columns.
-        padding = -num_features % self.features_per_group
-        # C is now padded.
-        x_RBC = torch.nn.functional.pad(x_RBC, (0, padding), value=0)
-        num_features += padding
-        # num_feature_groups corresponds to the number of columns the model will see.
-        num_feature_groups = num_features // self.features_per_group
-        num_rows, batch_size = x_RBC.shape[:2]
-        # Fold the feature groups into the batch size for pre-processing.
-        # S = batch size * number of feature groups.
-        unflattened_shape = [num_feature_groups, self.features_per_group]
-        x_RSF = x_RBC.unflatten(-1, unflattened_shape).flatten(1, 2)
-        x["main"] = x_RSF
+        x_RSF, num_feature_groups, num_rows, batch_size = self._preprocess_features(
+            x["main"]
+        )
+        x = {"main": x_RSF}
 
-        num_train_labels = y["main"].shape[0]
-        # All tensors in y targets now have shape (num_rows, batch_size, 1).
-        y = prepare_targets(y, num_rows=num_rows, batch_size=batch_size)
-        # The encoder converts the y dict to a single target tensor.
-        embedded_y_RBY = self.y_encoder(y, single_eval_pos=num_train_labels)
-        embedded_y_BRY = embedded_y_RBY.transpose(0, 1)
+        if using_cache:
+            # Cache path: every row in x is a test row attending to the cached train
+            # K/V. Restore the encoder's fitted normalisation state from the cache.
+            self._restore_buffers(self.encoder, kv_cache.encoder_state)
+            embedded_x_BRGX = self._embed_features(
+                x,
+                single_eval_pos=0,
+                num_feature_groups=num_feature_groups,
+                batch_size=batch_size,
+                cache_trainset_representation=True,
+            )
+            # The target column is the embedded all-NaN target, broadcast to all rows.
+            test_y_BY = kv_cache.test_y_embedding.to(
+                device=embedded_x_BRGX.device, dtype=embedded_x_BRGX.dtype
+            )
+            test_y_BRY = test_y_BY[:, None, :].expand(batch_size, num_rows, -1)
+            x_BRCD = torch.cat((embedded_x_BRGX, test_y_BRY[:, :, None]), dim=2)
+            num_train_labels = kv_cache.train_shape[1]
+            block_single_eval_pos = 0
+        else:
+            # Standard / cache-build path: x contains train (+ optionally test) rows.
+            num_train_labels = y["main"].shape[0]
+            # All tensors in y targets now have shape (num_rows, batch_size, 1).
+            y = prepare_targets(y, num_rows=num_rows, batch_size=batch_size)
+            # The encoder converts the y dict to a single target tensor.
+            embedded_y_RBY = self.y_encoder(
+                y,
+                single_eval_pos=num_train_labels,
+                cache_trainset_representation=return_kv_cache,
+            )
+            embedded_y_BRY = embedded_y_RBY.transpose(0, 1)
 
-        # Unfold S = B * G into batch and feature groups.
-        # G: number of feature groups (the number of columns the model will see).
-        embedded_x_RSX = self.encoder(x, single_eval_pos=num_train_labels)
-        embedded_x_RBGX = embedded_x_RSX.unflatten(1, [batch_size, num_feature_groups])
-        embedded_x_BRGX = embedded_x_RBGX.transpose(0, 1)
-        embedded_x_BRGX = self.add_column_embeddings(embedded_x_BRGX)
+            # Unfold S = B * G into batch and feature groups.
+            # G: number of feature groups (number of columns the model will see).
+            embedded_x_BRGX = self._embed_features(
+                x,
+                single_eval_pos=num_train_labels,
+                num_feature_groups=num_feature_groups,
+                batch_size=batch_size,
+                cache_trainset_representation=return_kv_cache,
+            )
 
-        # Add the targets as an additional column.
-        x_BRCD = torch.cat((embedded_x_BRGX, embedded_y_BRY[:, :, None]), dim=2)
-        # This check results in a graph break with torch compile, so we only run it once
-        # in the beginning and then disable it.
-        if self._do_encoder_nan_check:
-            if torch.isnan(x_BRCD).any():
-                raise ValueError(
-                    "Found NaNs in the encoded x and y. Make sure to use "
-                    "a NaN-handling encoder."
-                )
-            self._do_encoder_nan_check = False
+            # Add the targets as an additional column.
+            x_BRCD = torch.cat((embedded_x_BRGX, embedded_y_BRY[:, :, None]), dim=2)
+            # This check results in a graph break with torch compile, so we only run it
+            # once in the beginning and then disable it.
+            if self._do_encoder_nan_check:
+                if torch.isnan(x_BRCD).any():
+                    raise ValueError(
+                        "Found NaNs in the encoded x and y. Make sure to use "
+                        "a NaN-handling encoder."
+                    )
+                self._do_encoder_nan_check = False
+            block_single_eval_pos = num_train_labels
 
         # This model is really heavy on memory but light on compute. On an A100,
         # we are completely CPU-bound. Using checkpointing, we can save a lot of
         # memory, which we can invest into increasing the compute via increased batch
         # size.
-        for block in self.blocks:
-            if force_recompute_layer:
-                x_BRCD = torch.utils.checkpoint.checkpoint(
-                    block, x_BRCD, num_train_labels, save_peak_memory_factor
+        icl_cache_out = KVCache() if (return_kv_cache and not using_cache) else None
+        for layer_idx, block in enumerate(self.blocks):
+            if return_kv_cache and not using_cache:
+                x_BRCD, kv_entry = block(
+                    x_BRCD,
+                    block_single_eval_pos,
+                    save_peak_memory_factor,
+                    return_kv=True,
                 )
+                icl_cache_out.kv[layer_idx] = kv_entry
+            elif using_cache:
+                x_BRCD, _ = block(
+                    x_BRCD,
+                    block_single_eval_pos,
+                    save_peak_memory_factor,
+                    cached_kv=kv_cache.icl_cache.kv[layer_idx],
+                )
+            elif force_recompute_layer:
+                x_BRCD = torch.utils.checkpoint.checkpoint(
+                    block, x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                )[0]
             else:
-                x_BRCD = block(x_BRCD, num_train_labels, save_peak_memory_factor)
+                x_BRCD, _ = block(
+                    x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                )
 
-        # T: number of test samples
-        # B: batch size
-        # E: embedding size
-        test_embeddings_TBE = x_BRCD[:, num_train_labels:, -1].transpose(0, 1)
-        test_output_TB1 = self.output_projection(test_embeddings_TBE)
+        # In the cache path every row is a test row; otherwise test rows start after the
+        # training rows.
+        output = self._decode(
+            x_BRCD,
+            0 if using_cache else num_train_labels,
+            only_return_standard_out=only_return_standard_out,
+        )
 
-        if only_return_standard_out:
-            return test_output_TB1
+        if not return_kv_cache:
+            return output
 
-        output = {"standard": test_output_TB1}
-        output["train_embeddings"] = x_BRCD[:, :num_train_labels, -1].transpose(0, 1)
-        output["test_embeddings"] = test_embeddings_TBE
+        if using_cache:
+            return output, kv_cache
 
-        return output
+        # Build the cache for later test-only inference.
+        nan_y = {
+            "main": torch.full(
+                (1, batch_size, 1),
+                float("nan"),
+                device=x_RSF.device,
+                dtype=x_RSF.dtype,
+            )
+        }
+        nan_y_RBY = self.y_encoder(
+            nan_y, single_eval_pos=0, cache_trainset_representation=True
+        )
+        built_cache = TabPFNV2Cache(
+            icl_cache=icl_cache_out,
+            encoder_state=self._snapshot_buffers(self.encoder),
+            y_encoder_state=self._snapshot_buffers(self.y_encoder),
+            test_y_embedding=nan_y_RBY[0].detach(),
+            train_shape=(batch_size, num_train_labels),
+        )
+        return output, built_cache
 
 
 def _replace_keys_from_base_architecture(
@@ -832,14 +1128,17 @@ def get_architecture(
         config: The config returned by parse_config(). This method should use a
             runtime isinstance() check to downcast the config to this architecture's
             specific config class.
-        cache_trainset_representation: If True, the model should be configured to
-            cache the training data during inference to improve speed.
+        cache_trainset_representation: Accepted for interface compatibility but
+            ignored. This architecture uses an explicit KV cache passed through
+            forward() (``kv_cache`` / ``return_kv_cache``) rather than model-internal
+            caching, so no special construction is required.
 
     Returns: the constructed architecture
     """
     assert isinstance(config, TabPFNV2Config)
-    if cache_trainset_representation:
-        raise NotImplementedError("TabPFNV2 does not support kv cache yet.")
+    # The explicit KV cache is selected at call time via forward()'s kv_cache /
+    # return_kv_cache arguments, so the model does not need configuring here.
+    del cache_trainset_representation
     n_out = config.max_num_classes or config.num_buckets
     return TabPFNV2(
         config=config,
