@@ -566,9 +566,7 @@ class TabPFNV2(Architecture):
             generator=generator,
         )
         embs = self.feature_positional_embedding_embeddings(embs)
-        x_BRCX += embs[None, None]
-
-        return x_BRCX
+        return x_BRCX + embs[None, None]
 
     def forward(  # noqa: C901
         self,
