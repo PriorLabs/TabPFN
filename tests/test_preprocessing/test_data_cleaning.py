@@ -459,3 +459,40 @@ def test__classifier_fit_predict__all_missing_categorical_then_strings() -> None
 
     assert model.predict(X_test).shape == (X_test.shape[0],)
     assert model.predict_proba(X_test).shape == (X_test.shape[0], len(np.unique(y)))
+
+
+def test__classifier_fit_predict__all_missing_declared_categorical_then_strings() -> (
+    None
+):
+    """End-to-end regression for a *declared* categorical column that is all-missing."""
+    rng = np.random.RandomState(0)
+    n = 40
+    X_fit = pd.DataFrame(
+        {
+            "a": rng.rand(n),
+            "c": pd.Series([np.nan] * n, dtype="category"),  # all-missing at fit
+        }
+    )
+    y = pd.Series((rng.rand(n) > 0.5).astype(int))
+
+    X_pred = pd.DataFrame(
+        {
+            "a": rng.rand(6),
+            "c": pd.Series(
+                ["normal", "abn", "normal", "abn", "normal", "abn"], dtype="category"
+            ),
+        }
+    )
+
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        categorical_features_indices=[1],  # "c" explicitly declared categorical
+        random_state=0,
+    )
+    clf.fit(X_fit, y)
+
+    proba = clf.predict_proba(X_pred)
+    assert proba.shape == (len(X_pred), 2)
+    assert np.isfinite(proba).all()

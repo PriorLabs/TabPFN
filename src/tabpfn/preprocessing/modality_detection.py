@@ -80,9 +80,13 @@ def _detect_feature_modality(
 ) -> FeatureModality:
     n_unique = _get_unique_with_sklearn_compatible_error(s)
 
-    if n_unique <= 1:
+    if n_unique <= 1 and not reported_categorical:
         # Either all values are missing, or all values are the same.
-        # If there's a single value but also missing ones, it's not constant
+        # If there's a single value but also missing ones, it's not constant.
+        # Columns the user explicitly declared categorical are kept categorical
+        # (handled below) even when all-missing, so they route through the ordinal
+        # encoder consistently between fit and predict instead of being treated as
+        # a constant numeric column that crashes on string values seen at predict.
         return FeatureModality.CONSTANT
 
     if _is_numeric_pandas_series(s):
