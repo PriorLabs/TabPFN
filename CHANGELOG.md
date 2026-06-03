@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.4] - 2026-06-03
+
+### Added
+
+- Add SafeTensors checkpoint loading. TabPFN can now load model checkpoints from `.safetensors` files in addition to the legacy `.ckpt` format, with non-tensor metadata (architecture name, model config, inference config) embedded in the safetensors header. ([#981](https://github.com/PriorLabs/TabPFN/pull/981))
+- Register `tabpfn-v3-classifier-v3_20260506_ood.ckpt` and `tabpfn-v3-regressor-v3_20260506_ood.ckpt` so they can be loaded from Hugging Face by filename. ([#982](https://github.com/PriorLabs/TabPFN/pull/982))
+- Add a visualisation utility to plot the predicted distribution (regression) in `tabpfn.visualization` ([#987](https://github.com/PriorLabs/TabPFN/pull/987))
+
+### Changed
+
+- Remove the feature selection cell from the TabPFN_Demo_Local example notebook. ([#978](https://github.com/PriorLabs/TabPFN/pull/978))
+- Quantize KV cache to int8 for `fit_mode="fit_with_cache"` on TabPFN-3 models. Reduces ICL KV cache memory ~2 with no accuracy loss. ([#983](https://github.com/PriorLabs/TabPFN/pull/983))
+
+### Fixed
+
+- Fixed a `could not convert string to float` crash when a categorical/string feature is all-missing during fit but has real string values at predict, caused by a fit/predict dtype-routing asymmetry in the ordinal encoder. ([#992](https://github.com/PriorLabs/TabPFN/pull/992))
+
+
 ## [8.0.3] - 2026-05-16
 
 ### Changed
