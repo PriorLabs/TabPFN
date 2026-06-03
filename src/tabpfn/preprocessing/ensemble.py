@@ -1192,11 +1192,21 @@ def _resolve_feature_subsampling_method(
     return FeatureSubsamplingMethod.BALANCED
 
 
+MAX_AUTO_SCALED_N_ESTIMATORS = 32
+"""Upper bound on the n_estimators value produced by feature-coverage scaling.
+
+Very wide datasets would otherwise require an unbounded number of estimators to
+cover every feature. We cap the auto-scaled value here; beyond this point some
+features may never be sampled unless the user raises n_estimators explicitly.
+"""
+
+
 def scale_n_estimators_for_feature_coverage(
     *,
     n_estimators: int,
     n_total_features: int,
     preprocessor_configs: Sequence[PreprocessorConfig],
+    auto_scale_n_estimators: bool = True,
 ) -> int:
     """Scale up n_estimators so every feature is included in at least one estimator.
 
@@ -1205,23 +1215,47 @@ def scale_n_estimators_for_feature_coverage(
     ``n_estimators * max_features_per_estimator < n_total_features`` some features
     are never sampled. Returns the smallest n_estimators that covers all features
     (using the smallest ``max_features_per_estimator`` across the supplied configs,
-    which is the binding budget).
+    which is the binding budget), capped at ``MAX_AUTO_SCALED_N_ESTIMATORS``. When
+    the cap binds, full coverage is not reached and some features may never be
+    sampled unless the user raises ``n_estimators`` explicitly.
+
+    When ``auto_scale_n_estimators`` is False the scaling is skipped and
+    ``n_estimators`` is returned unchanged (this is the ``auto_scale_n_estimators``
+    constructor argument on the estimator); some features may then never be sampled.
     """
-    if not preprocessor_configs:
+    if not auto_scale_n_estimators or not preprocessor_configs:
         return n_estimators
     min_max_features = min(c.max_features_per_estimator for c in preprocessor_configs)
     if min_max_features <= 0:
         return n_estimators
     min_required = math.ceil(n_total_features / min_max_features)
-    if n_estimators >= min_required:
+    target = min(min_required, MAX_AUTO_SCALED_N_ESTIMATORS)
+    if n_estimators >= target:
         return n_estimators
-    warnings.warn(
-        f"Auto-scaling n_estimators from {n_estimators} to {min_required} so "
-        f"every feature is included in at least one ensemble member "
-        f"(n_total_features={n_total_features}, "
-        f"max_features_per_estimator={min_max_features}). "
-        f"Pass n_estimators >= {min_required} to silence this warning.",
-        UserWarning,
-        stacklevel=2,
-    )
-    return min_required
+    if min_required > MAX_AUTO_SCALED_N_ESTIMATORS:
+        warnings.warn(
+            f"Auto-scaling n_estimators from {n_estimators} to {target}, capped at "
+            f"MAX_AUTO_SCALED_N_ESTIMATORS={MAX_AUTO_SCALED_N_ESTIMATORS}. Full "
+            f"feature coverage would require {min_required} estimators "
+            f"(n_total_features={n_total_features}, "
+            f"max_features_per_estimator={min_max_features}); because of the cap "
+            f"some features may never be sampled. Pass n_estimators >= "
+            f"{min_required} to cover all features, or set "
+            f"auto_scale_n_estimators=False to disable scaling.",
+            UserWarning,
+            stacklevel=2,
+        )
+    else:
+        warnings.warn(
+            f"Auto-scaling n_estimators from {n_estimators} to {target} so "
+            f"every feature is included in at least one ensemble member "
+            f"(n_total_features={n_total_features}, "
+            f"max_features_per_estimator={min_max_features}). "
+            f"Pass n_estimators >= {target} to silence this warning. "
+            f"If this scaling is not desired, set auto_scale_n_estimators=False "
+            f"in the estimator constructor to disable it (note: some features may "
+            f"then never be sampled).",
+            UserWarning,
+            stacklevel=2,
+        )
+    return target
