@@ -90,12 +90,12 @@ jobs:
             -0
 
       # We use a persistent HuggingFace cache to avoid hitting rate limits.
-      - &hf-cache
-        name: HuggingFace cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - &restore-hf-cache
+        name: Restore HuggingFace cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ${{ github.workspace }}/hf_cache
-          key: hf-cache-${{ github.run_id }}
+          key: hf-cache-${{ hashFiles('hf_cache/**') }}
           restore-keys: |
             hf-cache-
           enableCrossOsArchive: true
@@ -149,6 +149,16 @@ jobs:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
+      # Save even if tests failed: partial downloads still help future runs.
+      - &save-hf-cache
+        name: Save HuggingFace cache
+        if: always()
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ github.workspace }}/hf_cache
+          key: hf-cache-${{ hashFiles('hf_cache/**') }}
+          enableCrossOsArchive: true
+
   # -------------------------------------------------------------------
   # Ubuntu-latest + highest dependencies (used as gate for GPU)
   # -------------------------------------------------------------------
@@ -187,13 +197,15 @@ jobs:
             --show-only-failing \
             -0
 
-      - *hf-cache
+      - *restore-hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
 
       - name: Run Tests
         run: uv run --no-sync pytest tests/
+
+      - *save-hf-cache
 
   # -------------------------------------------------------------------
   # First Party Packages
@@ -238,7 +250,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
 
-      - *hf-cache
+      - *restore-hf-cache
 
       - name: Restore model cache
         id: restore-model-cache
@@ -264,6 +276,8 @@ jobs:
         run: |
           cd ${{ matrix.repo-name }}
           uv run --with ../TabPFN --all-extras pytest -m "not uses_tabpfn_client"
+
+      - *save-hf-cache
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -322,7 +336,7 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cu128 \
             --index-strategy unsafe-best-match
 
-      - *hf-cache
+      - *restore-hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
@@ -333,3 +347,5 @@ jobs:
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
         run: uv run --no-sync pytest tests/
+
+      - *save-hf-cache
