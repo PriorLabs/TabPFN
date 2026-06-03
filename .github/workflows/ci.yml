@@ -149,7 +149,8 @@ jobs:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
-      # Save even if tests failed: partial downloads still help future runs.
+        # Save even if tests failed: partial downloads avoid future runs hitting the
+        # rate limits.
       - &save-hf-cache
         name: Save HuggingFace cache
         if: always()
