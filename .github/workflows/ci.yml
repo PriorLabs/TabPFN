@@ -13,8 +13,6 @@ concurrency:
 env:
   TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
   HF_HUB_CACHE: ${{ github.workspace }}/hf_cache
-  HF_TOKEN: ${{ secrets.HF_TOKEN }}
-  TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
 jobs:
   check_python_linting:
@@ -62,6 +60,9 @@ jobs:
             python-version: "3.14"
             dependency-set: highest
     runs-on: ${{ matrix.os }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -97,7 +98,7 @@ jobs:
           key: hf-cache-${{ github.run_id }}
           restore-keys: |
             hf-cache-
-                enableCrossOsArchive: true
+          enableCrossOsArchive: true
 
       # We separately cache TabPFN model checkpoints. This is required so that PRs from
       # forks, which can't access HF_TOKEN/TABPFN_TOKEN, already have the checkpoint
@@ -156,6 +157,9 @@ jobs:
     needs: check_python_linting
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -207,6 +211,8 @@ jobs:
           - tabpfn-extensions
           - tabpfn-time-series
     env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
       # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
       # Xet caches each downloaded file's chunks in ~/.cache/huggingface/xet/,
       # roughly doubling the effective disk footprint on the runner.
@@ -288,6 +294,9 @@ jobs:
             torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
