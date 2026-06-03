@@ -14,6 +14,7 @@ from tabpfn.architectures import base, tabpfn_v2_sf
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
+from tabpfn.architectures.tabpfn_v2_sf import TabPFNV2Cache
 
 
 def _create_identical_small_v2_and_base() -> tuple[
@@ -264,3 +265,97 @@ def test__column_embeddings__non_production_seed_does_not_use_disk() -> None:
     )
     out_small = arch_small.add_column_embeddings(x_small.clone())
     assert torch.allclose(out_small[0, 0], expected_random, atol=1e-6)
+
+
+def _make_kv_cache_data() -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Return ``(x_full, y_train, num_train)`` for the KV-cache tests."""
+    torch.manual_seed(0)
+    num_train, num_test, num_features = 30, 7, 5
+    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float64)
+    x_full = x_full * 0.5
+    y_train = torch.randint(0, 10, (num_train, 1), dtype=torch.float64)
+    return x_full, y_train, num_train
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__kv_cache__matches_standard_forward() -> None:
+    """KV-cache inference must match the standard (full train+test) forward."""
+    arch = _build_small_arch(seed=420)
+    arch.to(torch.float64)
+    x_full, y_train, num_train = _make_kv_cache_data()
+    x_test = x_full[num_train:]
+
+    out_standard = arch(x_full, y_train)
+
+    # Build the cache; the store-mode output must match the standard forward.
+    out_store, cache = arch(x_full, y_train, return_kv_cache=True)
+    assert isinstance(cache, TabPFNV2Cache)
+    assert not cache.is_empty()
+    assert len(cache.icl_cache.kv) == 1  # nlayers=1
+    assert cache.train_shape == (1, num_train)
+    assert cache.encoder_state is not None
+    assert torch.allclose(out_standard, out_store, atol=1e-10), (
+        "return_kv_cache=True output differs from the standard forward."
+    )
+
+    # Use the cache on test-only data.
+    out_cached = arch(x_test, y_train, kv_cache=cache, x_is_test_only=True)
+    assert out_cached.shape == out_standard.shape
+    assert torch.allclose(out_standard, out_cached, atol=1e-10), (
+        "kv_cache inference output differs from the standard forward."
+    )
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__kv_cache__non_standard_out_matches() -> None:
+    """The cache path also returns matching embeddings dicts."""
+    arch = _build_small_arch(seed=420)
+    arch.to(torch.float64)
+    x_full, y_train, num_train = _make_kv_cache_data()
+    x_test = x_full[num_train:]
+
+    out_standard = arch(x_full, y_train, only_return_standard_out=False)
+    _, cache = arch(x_full, y_train, return_kv_cache=True)
+    out_cached = arch(
+        x_test,
+        y_train,
+        only_return_standard_out=False,
+        kv_cache=cache,
+        x_is_test_only=True,
+    )
+    for key in ("standard", "test_embeddings"):
+        assert torch.allclose(out_standard[key], out_cached[key], atol=1e-10), (
+            f"cache path output for {key} differs from the standard forward."
+        )
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__kv_cache__x_is_test_only_requires_populated_cache() -> None:
+    arch = _build_small_arch(seed=420)
+    arch.to(torch.float64)
+    x_full, y_train, _ = _make_kv_cache_data()
+    with pytest.raises(ValueError, match="requires a populated kv_cache"):
+        arch(x_full, y_train, x_is_test_only=True)
+
+
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__kv_cache__quantized_roundtrip_is_close() -> None:
+    """Quantizing the cache should still give predictions close to the standard."""
+    arch = _build_small_arch(seed=420)
+    arch.to(torch.float64)
+    x_full, y_train, num_train = _make_kv_cache_data()
+    x_test = x_full[num_train:]
+
+    out_standard = arch(x_full, y_train)
+    _, cache = arch(x_full, y_train, return_kv_cache=True)
+    quantized = cache.quantize()
+    assert not quantized.is_empty()
+
+    out_cached = arch(x_test, y_train, kv_cache=quantized, x_is_test_only=True)
+    assert torch.allclose(out_standard, out_cached, atol=1e-2), (
+        "quantized kv_cache inference differs too much from the standard forward."
+    )
