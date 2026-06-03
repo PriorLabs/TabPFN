@@ -22,6 +22,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
+import pydantic
 import torch
 import torch.utils.checkpoint
 from torch import nn
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     from tabpfn.architectures.encoders import TorchPreprocessingPipeline
 
 
-@dataclasses.dataclass
+@pydantic.dataclasses.dataclass
 class TabPFNV2Config(ArchitectureConfig):
     """Configuration for the single-file TabPFN v2 architecture."""
 
