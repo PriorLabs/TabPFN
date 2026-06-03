@@ -10,6 +10,10 @@ concurrency:
   group: pr-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+  HF_HUB_CACHE: ${{ github.workspace }}/hf_cache
+
 jobs:
   check_python_linting:
     name: Ruff Linting & Formatting
@@ -57,7 +61,6 @@ jobs:
             dependency-set: highest
     runs-on: ${{ matrix.os }}
     env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
@@ -86,9 +89,20 @@ jobs:
             --show-only-failing \
             -0
 
-      # We use a cache for the model checkpoints. This allows PRs from forks, which
-      # can't access the HF_TOKEN, to have access to the model files. It also speeds up
-      # PRs and avoids flakes.
+      # We use a persistent HuggingFace cache to avoid hitting rate limits.
+      - &restore-hf-cache
+        name: Restore HuggingFace cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ github.workspace }}/hf_cache
+          key: hf-cache-${{ hashFiles('hf_cache/**') }}
+          restore-keys: |
+            hf-cache-
+          enableCrossOsArchive: true
+
+      # We separately cache TabPFN model checkpoints. This is required so that PRs from
+      # forks, which can't access HF_TOKEN/TABPFN_TOKEN, already have the checkpoint
+      # files they need.
       - &restore-model-cache
         name: Restore model cache
         id: restore-model-cache
@@ -135,6 +149,17 @@ jobs:
           TABPFN_EXCLUDE_DEVICES: mps
         run: uv run --no-sync pytest -m "not slow" tests/
 
+        # Save even if tests failed: partial downloads avoid future runs hitting the
+        # rate limits.
+      - &save-hf-cache
+        name: Save HuggingFace cache
+        if: always()
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ github.workspace }}/hf_cache
+          key: hf-cache-${{ hashFiles('hf_cache/**') }}
+          enableCrossOsArchive: true
+
   # -------------------------------------------------------------------
   # Ubuntu-latest + highest dependencies (used as gate for GPU)
   # -------------------------------------------------------------------
@@ -144,7 +169,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
@@ -174,12 +198,15 @@ jobs:
             --show-only-failing \
             -0
 
+      - *restore-hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
 
       - name: Run Tests
         run: uv run --no-sync pytest tests/
+
+      - *save-hf-cache
 
   # -------------------------------------------------------------------
   # First Party Packages
@@ -197,7 +224,6 @@ jobs:
           - tabpfn-extensions
           - tabpfn-time-series
     env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
       # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
@@ -246,6 +272,8 @@ jobs:
           docker-images: true
           swap-storage: false
 
+      - *restore-hf-cache
+
       - name: Restore model cache
         id: restore-model-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -270,6 +298,8 @@ jobs:
         run: |
           cd ${{ matrix.repo-name }}
           uv run --with ../TabPFN --all-extras pytest -m "not uses_tabpfn_client"
+
+      - *save-hf-cache
 
   # -------------------------------------------------------------------
   # GPU: To save compute we only want to execute this workflow once
@@ -301,10 +331,8 @@ jobs:
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -330,6 +358,7 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cu128 \
             --index-strategy unsafe-best-match
 
+      - *restore-hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
@@ -340,3 +369,5 @@ jobs:
           # skip cpu based tests that were run separately
           TABPFN_EXCLUDE_DEVICES: "cpu,cpu:0,mps"
         run: uv run --no-sync pytest tests/
+
+      - *save-hf-cache
