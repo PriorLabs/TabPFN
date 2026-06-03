@@ -6,8 +6,9 @@ disk (for the production seed 42, see :meth:`TabPFNV2.add_column_embeddings`) an
 supports a KV cache for fast inference (an explicit cache passed through
 :meth:`TabPFNV2.forward`, see :class:`TabPFNV2Cache`).
 
-Note that this version is not compatible with the original checkpoints as layers
-have been renamed/restructured.
+Although the transformer layers have been renamed/restructured relative to the base
+architecture, checkpoints trained with the base architecture can still be loaded: see
+:meth:`TabPFNV2.load_state_dict`, which translates the old key names on the fly.
 
 Copyright (c) Prior Labs GmbH 2025.
 """
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 from abc import ABC
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
@@ -694,6 +696,28 @@ class TabPFNV2(Architecture):
     def embedding_dim(self) -> int:
         return self.emsize
 
+    @override
+    def load_state_dict(
+        self,
+        state_dict: Mapping[str, Any],
+        strict: bool = True,
+        assign: bool = False,
+    ) -> Any:
+        """Load a state dict, translating old base-architecture key names if needed.
+
+        Checkpoints trained with the multi-file ``base`` architecture use a different
+        naming convention (and layout) for the transformer blocks and the decoder. If
+        such keys are detected, they are remapped to this architecture's names before
+        loading. The encoder/y-encoder keys are shared between the two architectures and
+        pass through unchanged.
+        """
+        has_base_keys = any(
+            k.startswith(("transformer_encoder.", "decoder_dict.")) for k in state_dict
+        )
+        if has_base_keys:
+            state_dict = _replace_keys_from_base_architecture(dict(state_dict))
+        return super().load_state_dict(state_dict, strict=strict, assign=assign)
+
     def muon_compatible_params(self) -> set[nn.Parameter]:
         """Return parameters suitable for the Muon optimizer.
 
@@ -990,6 +1014,86 @@ class TabPFNV2(Architecture):
             train_shape=(batch_size, num_train_labels),
         )
         return output, built_cache
+
+
+def _replace_keys_from_base_architecture(
+    state_dict: dict[str, torch.Tensor],
+) -> dict[str, torch.Tensor]:
+    """Translate a base-architecture state dict to the single-file v2 key names.
+
+    Only the transformer blocks and the decoder are renamed/restructured; the
+    encoder and y-encoder share their naming with the base architecture, so their keys
+    (and any other keys not in the mapping) are passed through unchanged.
+    """
+    n_layers = sum(k.endswith("self_attn_between_features._w_qkv") for k in state_dict)
+
+    base_to_v2_mapping = [
+        ("decoder_dict.standard.0.weight", "output_projection.0.weight"),
+        ("decoder_dict.standard.0.bias", "output_projection.0.bias"),
+        ("decoder_dict.standard.2.weight", "output_projection.2.weight"),
+        ("decoder_dict.standard.2.bias", "output_projection.2.bias"),
+    ]
+    for i in range(n_layers):
+        base_to_v2_mapping.extend(
+            [
+                (
+                    f"transformer_encoder.layers.{i}.mlp.linear1.weight",
+                    f"blocks.{i}.mlp.0.weight",
+                ),
+                (
+                    f"transformer_encoder.layers.{i}.mlp.linear2.weight",
+                    f"blocks.{i}.mlp.2.weight",
+                ),
+                (
+                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_qkv",
+                    f"blocks.{i}.per_sample_attention_between_features.qkv_projection.weight",
+                ),
+                (
+                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_out",
+                    f"blocks.{i}.per_sample_attention_between_features.out_projection.weight",
+                ),
+                (
+                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_qkv",
+                    f"blocks.{i}.per_column_attention_between_cells.qkv_projection.weight",
+                ),
+                (
+                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_out",
+                    f"blocks.{i}.per_column_attention_between_cells.out_projection.weight",
+                ),
+            ]
+        )
+
+    new_state_dict: dict[str, torch.Tensor] = {}
+    known_base_keys: set[str] = set()
+    for base_key, v2_key in base_to_v2_mapping:
+        known_base_keys.add(base_key)
+        if base_key not in state_dict:
+            continue
+
+        # The base QKV weight has shape (3, num_heads, head_size, input_size). Split it
+        # into separate q/k/v weights of shape (num_heads * head_size, input_size).
+        if "qkv_projection.weight" in v2_key:
+            q_key = v2_key.replace("qkv_projection", "q_projection")
+            k_key = v2_key.replace("qkv_projection", "k_projection")
+            v_key = v2_key.replace("qkv_projection", "v_projection")
+            new_state_dict[q_key] = state_dict[base_key][0].flatten(0, 1)
+            new_state_dict[k_key] = state_dict[base_key][1].flatten(0, 1)
+            new_state_dict[v_key] = state_dict[base_key][2].flatten(0, 1)
+            continue
+
+        # The base out-projection weight has shape (num_heads, head_size, output_size).
+        # Flatten the heads and transpose to the nn.Linear convention (output, input).
+        if "out_projection.weight" in v2_key:
+            new_state_dict[v2_key] = state_dict[base_key].flatten(0, 1).T
+            continue
+
+        new_state_dict[v2_key] = state_dict[base_key]
+
+    for key, value in state_dict.items():
+        if key not in known_base_keys:
+            new_state_dict[key] = value
+
+    return new_state_dict
 
 
 def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2Config, dict[str, Any]]:

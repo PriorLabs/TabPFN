@@ -17,87 +17,6 @@ from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.architectures.tabpfn_v2_sf import TabPFNV2Cache
 
 
-def _convert_state_dict_base_to_v2(
-    base_state_dict: dict[str, torch.Tensor],
-) -> dict[str, torch.Tensor]:
-    """Convert a base architecture state dict to a v2 architecture state dict."""
-    n_layers = len(
-        [k for k in base_state_dict if k.endswith("self_attn_between_features._w_qkv")]
-    )
-    base_to_v2_mapping = [
-        ("encoder.5.layer.weight", "encoder.5.layer.weight"),
-        ("y_encoder.2.layer.weight", "y_encoder.2.layer.weight"),
-        ("y_encoder.2.layer.bias", "y_encoder.2.layer.bias"),
-        ("decoder_dict.standard.0.weight", "output_projection.0.weight"),
-        ("decoder_dict.standard.0.bias", "output_projection.0.bias"),
-        ("decoder_dict.standard.2.weight", "output_projection.2.weight"),
-        ("decoder_dict.standard.2.bias", "output_projection.2.bias"),
-        (
-            "feature_positional_embedding_embeddings.weight",
-            "feature_positional_embedding_embeddings.weight",
-        ),
-        (
-            "feature_positional_embedding_embeddings.bias",
-            "feature_positional_embedding_embeddings.bias",
-        ),
-    ]
-    for i in range(n_layers):
-        base_to_v2_mapping.extend(
-            [
-                (
-                    f"transformer_encoder.layers.{i}.mlp.linear1.weight",
-                    f"blocks.{i}.mlp.0.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.mlp.linear2.weight",
-                    f"blocks.{i}.mlp.2.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_qkv",
-                    f"blocks.{i}.per_sample_attention_between_features.qkv_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_features._w_out",
-                    f"blocks.{i}.per_sample_attention_between_features.out_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_qkv",
-                    f"blocks.{i}.per_column_attention_between_cells.qkv_projection.weight",
-                ),
-                (
-                    f"transformer_encoder.layers.{i}.self_attn_between_items._w_out",
-                    f"blocks.{i}.per_column_attention_between_cells.out_projection.weight",
-                ),
-            ]
-        )
-
-    new_state_dict = {
-        v2_key: base_state_dict[base_key] for base_key, v2_key in base_to_v2_mapping
-    }
-    keys_to_delete = []
-    keys_to_add = {}
-    for key, weight in new_state_dict.items():
-        # QKV projection weight is 3, num_heads, output_size, input_size
-        if "qkv_projection.weight" in key:
-            q_key = key.replace("qkv_projection", "q_projection")
-            k_key = key.replace("qkv_projection", "k_projection")
-            v_key = key.replace("qkv_projection", "v_projection")
-            keys_to_add[q_key] = weight[0].flatten(0, 1)
-            keys_to_add[k_key] = weight[1].flatten(0, 1)
-            keys_to_add[v_key] = weight[2].flatten(0, 1)
-            keys_to_delete.append(key)
-        if "out_projection.weight" in key:
-            # Out projection is num_heads, head_size, output_size
-            # Note that this differs from torch linear weight format
-            # (output, input) and we need to transpose the output into the first
-            # dim.
-            new_state_dict[key] = new_state_dict[key].flatten(0, 1).T
-    for key in keys_to_delete:
-        new_state_dict.pop(key)
-    new_state_dict.update(keys_to_add)
-    return new_state_dict
-
-
 def _create_identical_small_v2_and_base() -> tuple[
     tabpfn_v2_sf.TabPFNV2, PerFeatureTransformer
 ]:
@@ -141,14 +60,31 @@ def _create_identical_small_v2_and_base() -> tuple[
         if param.abs().sum() < 1e-6:
             param.data += torch.randn_like(param) * 1e-1
 
-    arch_v2.load_state_dict(
-        _convert_state_dict_base_to_v2(arch_base.state_dict()), strict=True
-    )
+    # load_state_dict translates the base-architecture key names automatically.
+    arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
 
     arch_v2.to(torch.float64)
     arch_base.to(torch.float64)
 
     return arch_v2, arch_base
+
+
+@torch.no_grad()
+def test__load_state_dict__from_base_checkpoint_strict() -> None:
+    """A base-architecture state dict can be loaded strictly (all keys consumed)."""
+    arch_v2, arch_base = _create_identical_small_v2_and_base()
+    # Re-loading the (already translated) base state dict must succeed with strict=True,
+    # i.e. the translated keys exactly cover the single-file architecture's parameters.
+    result = arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
+    assert not result.missing_keys
+    assert not result.unexpected_keys
+
+
+@torch.no_grad()
+def test__load_state_dict__native_keys_still_work() -> None:
+    """A round-trip of the single-file architecture's own state dict still works."""
+    arch_v2, _ = _create_identical_small_v2_and_base()
+    arch_v2.load_state_dict(arch_v2.state_dict(), strict=True)
 
 
 class TestTabPFNv2NewVsOldImplementation:
@@ -180,9 +116,8 @@ class TestTabPFNv2NewVsOldImplementation:
             ),
             cache_trainset_representation=False,
         )
-        arch_v2.load_state_dict(
-            _convert_state_dict_base_to_v2(arch_base.state_dict()), strict=True
-        )
+        # load_state_dict translates the base-architecture key names automatically.
+        arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
 
         arch_v2.to(torch.float64)
         arch_base.to(torch.float64)
