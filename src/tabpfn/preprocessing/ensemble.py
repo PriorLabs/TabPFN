@@ -1197,6 +1197,7 @@ def scale_n_estimators_for_feature_coverage(
     n_estimators: int,
     n_total_features: int,
     preprocessor_configs: Sequence[PreprocessorConfig],
+    auto_scale_n_estimators: bool = True,
 ) -> int:
     """Scale up n_estimators so every feature is included in at least one estimator.
 
@@ -1206,8 +1207,12 @@ def scale_n_estimators_for_feature_coverage(
     are never sampled. Returns the smallest n_estimators that covers all features
     (using the smallest ``max_features_per_estimator`` across the supplied configs,
     which is the binding budget).
+
+    When ``auto_scale_n_estimators`` is False the scaling is skipped and
+    ``n_estimators`` is returned unchanged (this is the ``auto_scale_n_estimators``
+    constructor argument on the estimator); some features may then never be sampled.
     """
-    if not preprocessor_configs:
+    if not auto_scale_n_estimators or not preprocessor_configs:
         return n_estimators
     min_max_features = min(c.max_features_per_estimator for c in preprocessor_configs)
     if min_max_features <= 0:
@@ -1220,7 +1225,10 @@ def scale_n_estimators_for_feature_coverage(
         f"every feature is included in at least one ensemble member "
         f"(n_total_features={n_total_features}, "
         f"max_features_per_estimator={min_max_features}). "
-        f"Pass n_estimators >= {min_required} to silence this warning.",
+        f"Pass n_estimators >= {min_required} to silence this warning. "
+        f"If this scaling is not desired, set auto_scale_n_estimators=False "
+        f"in the estimator constructor to disable it (note: some features may "
+        f"then never be sampled).",
         UserWarning,
         stacklevel=2,
     )

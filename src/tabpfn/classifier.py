@@ -210,6 +210,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         *,
         n_estimators: int = 8,
+        auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -252,6 +253,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  predictions of `n_estimators`-many forward passes of TabPFN. Each
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
+
+            auto_scale_n_estimators:
+                Whether to automatically increase `n_estimators` when the dataset
+                has more features than a single estimator can see (i.e. more than
+                `max_features_per_estimator` features per estimator). When `True`
+                (default), `n_estimators` is raised to the smallest value that lets
+                every feature appear in at least one ensemble member, emitting a
+                warning when it does so. Set to `False` to keep `n_estimators`
+                exactly as provided; note that some features may then never be
+                sampled.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -468,6 +479,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -651,6 +663,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,
@@ -721,6 +734,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,

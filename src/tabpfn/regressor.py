@@ -222,6 +222,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         *,
         n_estimators: int = 8,
+        auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
@@ -261,6 +262,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 predictions of `n_estimators`-many forward passes of TabPFN.
                 Each forward pass has (slightly) different input data. Think of this
                 as an ensemble of `n_estimators`-many "prompts" of the input data.
+
+            auto_scale_n_estimators:
+                Whether to automatically increase `n_estimators` when the dataset
+                has more features than a single estimator can see (i.e. more than
+                `max_features_per_estimator` features per estimator). When `True`
+                (default), `n_estimators` is raised to the smallest value that lets
+                every feature appear in at least one ensemble member, emitting a
+                warning when it does so. Set to `False` to keep `n_estimators`
+                exactly as provided; note that some features may then never be
+                sampled.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -454,6 +465,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
@@ -707,6 +719,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_regression_ensemble_configs(
             num_estimators=self.n_estimators_,
