@@ -272,7 +272,7 @@ class LowerPrecisionLayerNorm(torch.nn.LayerNorm):
     @override
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         if input.dtype == torch.float16 and sum(self.normalized_shape) < 512:
-            with torch.amp.autocast("cuda" if input.is_cuda else "cpu", enabled=False):
+            with torch.amp.autocast(input.device.type, enabled=False):
                 return super().forward(input)
 
         return super().forward(input)
