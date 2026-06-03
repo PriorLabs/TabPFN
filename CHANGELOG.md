@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `auto_scale_n_estimators` constructor argument (default `True`) to auto-scale `n_estimators` for full feature coverage on wide datasets, capped at 32. ([#1000](https://github.com/PriorLabs/TabPFN/pull/1000))
 
+## [8.0.5] - 2026-06-03
+
+### Fixed
+
+- Fixed a `could not convert string to float` crash when a feature declared categorical via `categorical_features_indices` is all-missing during fit but has real string values at predict. Such columns are now kept categorical instead of being demoted to a constant numeric column, so they route through the ordinal encoder consistently between fit and predict. ([#1002](https://github.com/PriorLabs/TabPFN/pull/1002))
+
+
 ## [8.0.4] - 2026-06-03
 
 ### Added

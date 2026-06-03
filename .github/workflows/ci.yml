@@ -225,6 +225,27 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
 
+      # `tabpfn-time-series[benchmarking]` pulls autogluon-timeseries, which
+      # transitively pulls torch + the full CUDA wheel stack (cuBLAS, cuDNN,
+      # NCCL, etc.). Extracting torch's libtorch_cuda.so alone tips the
+      # ubuntu-latest runner over its ~14 GB free-space budget — see the
+      # `No space left on device` failure at
+      # https://github.com/PriorLabs/TabPFN-private/actions/runs/26626285966/job/78463753025.
+      # Reclaim ~30 GB by deleting Android SDK / Haskell / dotnet / large
+      # preinstalled toolchains we don't use. Skipped for tabpfn-extensions
+      # because its install footprint comfortably fits.
+      - name: Free runner disk space
+        if: matrix.repo-name == 'tabpfn-time-series'
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be # v1.3.1
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: true
+          swap-storage: false
+
       - name: Restore model cache
         id: restore-model-cache
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
