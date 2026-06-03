@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.6] - 2026-06-03
+
+### Added
+
+- Add `auto_scale_n_estimators` constructor argument (default `True`) to auto-scale `n_estimators` for full feature coverage on wide datasets, capped at 32. ([#1000](https://github.com/PriorLabs/TabPFN/pull/1000))
+
+
 ## [8.0.5] - 2026-06-03
 
 ### Fixed
