@@ -10,6 +10,12 @@ concurrency:
   group: pr-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
+  HF_HUB_CACHE: ${{ github.workspace }}/hf_cache
+  HF_TOKEN: ${{ secrets.HF_TOKEN }}
+  TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
+
 jobs:
   check_python_linting:
     name: Ruff Linting & Formatting
@@ -56,10 +62,6 @@ jobs:
             python-version: "3.14"
             dependency-set: highest
     runs-on: ${{ matrix.os }}
-    env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -86,9 +88,20 @@ jobs:
             --show-only-failing \
             -0
 
-      # We use a cache for the model checkpoints. This allows PRs from forks, which
-      # can't access the HF_TOKEN, to have access to the model files. It also speeds up
-      # PRs and avoids flakes.
+      # We use a persistent HuggingFace cache to avoid hitting rate limits.
+      - &hf-cache
+        name: HuggingFace cache
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ${{ github.workspace }}/hf_cache
+          key: hf-cache-${{ github.run_id }}
+          restore-keys: |
+            hf-cache-
+                enableCrossOsArchive: true
+
+      # We separately cache TabPFN model checkpoints. This is required so that PRs from
+      # forks, which can't access HF_TOKEN/TABPFN_TOKEN, already have the checkpoint
+      # files they need.
       - &restore-model-cache
         name: Restore model cache
         id: restore-model-cache
@@ -143,10 +156,6 @@ jobs:
     needs: check_python_linting
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -174,6 +183,7 @@ jobs:
             --show-only-failing \
             -0
 
+      - *hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
@@ -197,9 +207,6 @@ jobs:
           - tabpfn-extensions
           - tabpfn-time-series
     env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
       # Disable xet chunk cache to prevent disk exhaustion from 40+ model downloads.
       # Xet caches each downloaded file's chunks in ~/.cache/huggingface/xet/,
       # roughly doubling the effective disk footprint on the runner.
@@ -224,6 +231,8 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+
+      - *hf-cache
 
       - name: Restore model cache
         id: restore-model-cache
@@ -279,11 +288,6 @@ jobs:
             torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
-    env:
-      TABPFN_MODEL_CACHE_DIR: ${{ github.workspace }}/model_cache
-      HF_TOKEN: ${{ secrets.HF_TOKEN }}
-      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-
 
     steps:
       - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
@@ -309,6 +313,7 @@ jobs:
             --extra-index-url https://download.pytorch.org/whl/cu128 \
             --index-strategy unsafe-best-match
 
+      - *hf-cache
       - *restore-model-cache
       - *download-models
       - *save-model-cache
