@@ -33,6 +33,7 @@ from tabpfn.architectures.interface import (
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
+from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 
 if TYPE_CHECKING:
     from tabpfn.architectures.encoders import TorchPreprocessingPipeline
@@ -51,6 +52,14 @@ class TabPFNV2Config(ArchitectureConfig):
     features_per_group: Literal[1, 2] = 2
     """If > 1, the features will be grouped into groups of this size and the attention
     is across groups."""
+
+    seed: int = 42
+    """Seed used to generate the per-column positional embeddings.
+
+    When ``seed == 42`` and the embedding subspace size is 48 (i.e. ``emsize == 192``),
+    the first 2000 columns use the pre-generated embeddings loaded from disk, matching
+    the production checkpoints. For any other seed the embeddings are generated purely
+    from the random generator, which is what the comparison tests rely on."""
 
 
 class Attention(nn.Module, ABC):
@@ -532,6 +541,11 @@ class TabPFNV2(Architecture):
         self.feature_positional_embedding_embeddings = nn.Linear(
             self.input_size // 4, self.input_size
         )
+        self.seed = config.seed
+        # Pre-generated column embeddings, persisted to disk so they are consistent
+        # across platforms (random number generation varies between devices even with a
+        # fixed seed). Used for the first 2000 columns of the production checkpoints.
+        self.pre_generated_column_embeddings = load_column_embeddings()
         self._do_encoder_nan_check = True
         # TODO(Phil): This is here to not fail the memory computation. We should make
         # this a proper API.
@@ -554,10 +568,7 @@ class TabPFNV2(Architecture):
 
     def add_column_embeddings(self, x_BRCX: torch.Tensor) -> torch.Tensor:
         """Add a random embedding to each column to prevent feature collapse."""
-        # Note: Don't use 42 as seed here. Otherwise we cannot compare this
-        # implementation to the old multi-file implementation, because the
-        # multi-file implementation has a special treatment for seed=42.
-        generator = torch.Generator(device=x_BRCX.device).manual_seed(420)
+        generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
         num_cols, encoding_size = x_BRCX.shape[2], x_BRCX.shape[3]
         embs = torch.randn(
             (num_cols, encoding_size // 4),
@@ -565,6 +576,16 @@ class TabPFNV2(Architecture):
             dtype=x_BRCX.dtype,
             generator=generator,
         )
+        # Random numbers vary between devices, even with a fixed seed. Thus, for the
+        # production checkpoints (seed 42, embedding subspace size 48 == 192 // 4), we
+        # overwrite the first 2000 columns with the pre-generated embeddings loaded from
+        # disk to ensure they are consistent between pretraining and inference. Some
+        # tests use a smaller embedding size or a different seed, in which case we use
+        # the random embeddings.
+        if embs.shape[1] == 48 and self.seed == 42:
+            embs[:2000] = self.pre_generated_column_embeddings[: embs.shape[0]].to(
+                device=embs.device, dtype=embs.dtype
+            )
         embs = self.feature_positional_embedding_embeddings(embs)
         return x_BRCX + embs[None, None]
 

@@ -13,6 +13,7 @@ from tabpfn import model_loading
 from tabpfn.architectures import base, tabpfn_v2_sf
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 
 
 def _convert_state_dict_base_to_v2(
@@ -107,6 +108,10 @@ def _create_identical_small_v2_and_base() -> tuple[
         nlayers=1,
         nhead=6,
         features_per_group=2,
+        # Use 420 (not the production default 42) so the column embeddings are
+        # generated purely from the random generator rather than loaded from disk,
+        # matching the base architecture configured below.
+        seed=420,
     )
     config_base = base.ModelConfig(
         max_num_classes=10,
@@ -160,15 +165,17 @@ class TestTabPFNv2NewVsOldImplementation:
             download_if_not_exists=True,
         )
         arch_base = cast(PerFeatureTransformer, loaded_models[0])
-        # This is the seed used by the v2 implementation. It's important not to use 42,
-        # as the base has special handling for this seed.
-        arch_base.random_embedding_seed = 420
         config_base = loaded_configs[0]
+        # Force seed 42 on both implementations, which makes them load the
+        # pre-generated column embeddings from disk for the first 2000 columns. This
+        # exercises the single-file implementation's disk-loading path end-to-end.
+        arch_base.random_embedding_seed = 42
 
         arch_v2 = tabpfn_v2_sf.get_architecture(
             tabpfn_v2_sf.TabPFNV2Config(
                 max_num_classes=config_base.max_num_classes,
                 num_buckets=config_base.num_buckets,
+                seed=42,
             ),
             cache_trainset_representation=False,
         )
@@ -261,3 +268,64 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
         assert torch.allclose(
             output_with_recomputation[key], output_without_recomputation[key]
         ), f"Outputs for {key} do not match between implementations."
+
+
+def _build_small_arch(seed: int, emsize: int = 192) -> tabpfn_v2_sf.TabPFNV2:
+    return tabpfn_v2_sf.get_architecture(
+        tabpfn_v2_sf.TabPFNV2Config(
+            max_num_classes=10,
+            num_buckets=5,
+            emsize=emsize,
+            nlayers=1,
+            nhead=6,
+            features_per_group=2,
+            seed=seed,
+        ),
+        cache_trainset_representation=False,
+    )
+
+
+@torch.no_grad()
+def test__column_embeddings__seed_42_loaded_from_disk() -> None:
+    """With the production seed (42) and 48-d subspace, embeddings come from disk."""
+    arch = _build_small_arch(seed=42)
+    disk_embeddings = load_column_embeddings()
+
+    num_cols = 7
+    x = torch.zeros(2, 3, num_cols, 192)
+    out = arch.add_column_embeddings(x.clone())
+
+    # The first `num_cols` rows of the disk embeddings, projected, should have been
+    # added to every (batch, row) position.
+    expected_subspace = disk_embeddings[:num_cols].to(dtype=x.dtype)
+    expected = arch.feature_positional_embedding_embeddings(expected_subspace)
+    assert torch.allclose(out[0, 0], expected, atol=1e-6)
+
+
+@torch.no_grad()
+def test__column_embeddings__non_production_seed_does_not_use_disk() -> None:
+    """A non-42 seed (or non-48 subspace) ignores the disk embeddings."""
+    disk_embeddings = load_column_embeddings()
+
+    num_cols = 7
+    x = torch.zeros(2, 3, num_cols, 192)
+
+    arch_420 = _build_small_arch(seed=420)
+    out_420 = arch_420.add_column_embeddings(x.clone())
+    expected_disk = arch_420.feature_positional_embedding_embeddings(
+        disk_embeddings[:num_cols].to(dtype=x.dtype)
+    )
+    # The random (seed 420) embeddings must differ from the disk-based ones.
+    assert not torch.allclose(out_420[0, 0], expected_disk, atol=1e-6)
+
+    # A smaller emsize (subspace != 48) also bypasses the disk embeddings even for
+    # seed 42, falling back to the random generator.
+    arch_small = _build_small_arch(seed=42, emsize=96)
+    x_small = torch.zeros(2, 3, num_cols, 96)
+    generator = torch.Generator().manual_seed(42)
+    expected_random = torch.randn((num_cols, 96 // 4), generator=generator)
+    expected_random = arch_small.feature_positional_embedding_embeddings(
+        expected_random
+    )
+    out_small = arch_small.add_column_embeddings(x_small.clone())
+    assert torch.allclose(out_small[0, 0], expected_random, atol=1e-6)
