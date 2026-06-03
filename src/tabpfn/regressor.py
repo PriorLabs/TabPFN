@@ -270,7 +270,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 (default), `n_estimators` is raised to the smallest value that lets
                 every feature appear in at least one ensemble member, emitting a
                 warning when it does so. The auto-scaled value is capped at
-                `MAX_AUTO_SCALED_N_ESTIMATORS` (32); beyond that some features may
+                `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may
                 never be sampled unless you raise `n_estimators` yourself. Set to
                 `False` to keep `n_estimators` exactly as provided; note that some
                 features may then never be sampled.
