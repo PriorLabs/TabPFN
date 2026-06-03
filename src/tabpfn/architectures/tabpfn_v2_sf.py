@@ -556,10 +556,7 @@ class TabPFNV2(Architecture):
         """Load a state dict, translating old base-architecture key names if needed.
 
         Checkpoints trained with the multi-file ``base`` architecture use a different
-        naming convention (and layout) for the transformer blocks and the decoder. If
-        such keys are detected, they are remapped to this architecture's names before
-        loading. The encoder/y-encoder keys are shared between the two architectures and
-        pass through unchanged.
+        naming convention (and layout) for the transformer blocks and the decoder.
         """
         has_base_keys = any(
             k.startswith(("transformer_encoder.", "decoder_dict.")) for k in state_dict
