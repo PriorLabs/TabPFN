@@ -287,6 +287,7 @@ def create_inference_engine(  # noqa: PLR0913
     memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
     inference_mode: bool = True,
+    keep_cache_on_device: bool = True,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -308,6 +309,11 @@ def create_inference_engine(  # noqa: PLR0913
         use_autocast_: Whether we use torch.autocast for inference.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
+        keep_cache_on_device: Only relevant for ``fit_mode="fit_with_cache"``.
+            If True (default), each per-estimator KV cache stays on the
+            inference device. If False, caches are offloaded to CPU as they
+            are built and moved back on demand during inference, lowering
+            resident device memory at the cost of per-call transfers.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -349,6 +355,7 @@ def create_inference_engine(  # noqa: PLR0913
                 force_inference_dtype=forced_inference_dtype_,
                 save_peak_mem=memory_saving_mode,
                 autocast=use_autocast_,
+                keep_cache_on_device=keep_cache_on_device,
             )
         return InferenceEngineCacheKV(
             X_train=X_train,

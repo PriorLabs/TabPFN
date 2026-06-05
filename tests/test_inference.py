@@ -12,6 +12,7 @@ import torch
 from numpy.random import default_rng
 from torch import Tensor
 
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
 from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
@@ -28,6 +29,8 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
+
+from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 class _TestModel(Architecture):
@@ -527,9 +530,16 @@ def test__explicit_kv_cache__produces_outputs() -> None:
     assert model.cache_used_count == n_configs
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
-def test__explicit_kv_cache__keep_cache_on_device() -> None:
-    """keep_cache_on_device=True keeps caches on GPU across predict calls."""
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__explicit_kv_cache__keep_on_device_reuses_tensors(device: str) -> None:
+    """keep_cache_on_device=True reuses the on-device cache tensors across calls.
+
+    Placement for the True/False modes is covered via the public API in
+    ``test__public_keep_cache_on_device__controls_cache_placement``. This
+    engine-level test guards the distinct optimization that True buys: repeated
+    ``predict`` calls must not re-transfer the cache (``Tensor.to(device)`` is a
+    no-op when already on the device), so the underlying storage is unchanged.
+    """
     rng = default_rng(seed=0)
     n_train = 50
     n_features = 4
@@ -556,7 +566,7 @@ def test__explicit_kv_cache__keep_cache_on_device() -> None:
         y_train,
         ensemble_preprocessor=ensemble_preprocessor,
         models=[model],
-        devices=[torch.device("cuda")],
+        devices=[torch.device(device)],
         dtype_byte_size=4,
         force_inference_dtype=None,
         save_peak_mem="auto",
@@ -565,28 +575,18 @@ def test__explicit_kv_cache__keep_cache_on_device() -> None:
     )
     assert model.cache_build_count == n_configs
 
-    # First predict call — caches move to device and stay there
+    # First predict call — caches move to device and stay there.
     outputs_first = list(
         engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
     )
     assert len(outputs_first) == n_configs
-    # No rebuild during predict; each cache used exactly once.
     assert model.cache_build_count == n_configs
     assert model.cache_used_count == n_configs
 
-    # Verify caches are on CUDA after the first call
-    for cache in engine.kv_caches:
-        for entry in cache.icl_cache.kv.values():
-            assert entry.key is not None
-            assert entry.key.device.type == "cuda"
-
-    # Snapshot underlying tensor storage. With keep_cache_on_device=True the
-    # second predict should reuse the on-device tensors rather than transfer
-    # again — Tensor.to(device) is a no-op when already on the target device,
-    # so data_ptr() should be unchanged.
+    # Snapshot underlying tensor storage after the first predict.
     first_ptrs = [cache.icl_cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
 
-    # Second predict call — still no rebuild, caches reused.
+    # Second predict call — still no rebuild, caches reused in place.
     outputs_second = list(
         engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
     )
@@ -599,3 +599,52 @@ def test__explicit_kv_cache__keep_cache_on_device() -> None:
         "keep_cache_on_device=True must reuse on-device cache tensors, "
         "not re-transfer them on each predict call"
     )
+
+
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
+@pytest.mark.parametrize("keep_cache_on_device", [False, True])
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__public_keep_cache_on_device__controls_cache_placement(
+    estimator_cls: type, *, keep_cache_on_device: bool, device: str
+) -> None:
+    """The public keep_cache_on_device arg controls where KV caches are stored.
+
+    Exercises the full public path with the real model: constructor ->
+    ``fit`` -> ``create_inference_engine`` -> ``InferenceEngineExplicitKVCache``.
+    With ``keep_cache_on_device=True`` each cache stays on the build device;
+    with ``False`` each cache is offloaded to CPU. On the GPU CI job
+    (``TABPFN_EXCLUDE_DEVICES`` drops cpu/mps) ``device="cuda"`` so the True/False
+    placement is genuinely distinguished; on CPU jobs it is an end-to-end smoke
+    test. ``.key`` is the (int8) tensor on both the quantized and plain cache
+    entries, so the placement check holds either way.
+    """
+    rng = default_rng(seed=0)
+    n_samples, n_features = 30, 4
+    X = rng.standard_normal((n_samples, n_features))
+    if estimator_cls is TabPFNClassifier:
+        y = (X[:, 0] > 0).astype(int)  # guaranteed two classes
+    else:
+        y = rng.standard_normal(n_samples)
+
+    est = estimator_cls(
+        fit_mode="fit_with_cache",
+        keep_cache_on_device=keep_cache_on_device,
+        n_estimators=2,
+        device=device,
+    )
+    est.fit(X, y)
+
+    # The public arg reached the explicit-KV-cache engine.
+    assert isinstance(est.executor_, InferenceEngineExplicitKVCache)
+    assert est.executor_.keep_cache_on_device is keep_cache_on_device
+
+    # True keeps caches on the build device; False offloads them to CPU.
+    expected_device = device if keep_cache_on_device else "cpu"
+    for cache in est.executor_.kv_caches:
+        for entry in cache.icl_cache.kv.values():
+            assert entry.key is not None
+            assert entry.key.device.type == expected_device
+
+    # Prediction still works end-to-end (caches moved to device on demand).
+    preds = est.predict(X[:5])
+    assert len(preds) == 5
