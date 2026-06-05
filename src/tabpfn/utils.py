@@ -27,7 +27,6 @@ from tabpfn.constants import (
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
-    from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.interface import Architecture

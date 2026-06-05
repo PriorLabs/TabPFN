@@ -22,9 +22,6 @@ TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 XType: TypeAlias = Any
 YType: TypeAlias = Any
 
-SampleWeightType: TypeAlias = Any
-TODO_TYPE1: TypeAlias = str
-
 ModelPath: TypeAlias = Union[str, pathlib.Path]
 
 
