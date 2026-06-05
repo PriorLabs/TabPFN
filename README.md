@@ -73,7 +73,7 @@ Choose the right TabPFN implementation for your needs:
 
   -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
-  -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
+  -  **`embeddings`**: Extract and use TabPFN's internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
 
   To install:
@@ -93,7 +93,8 @@ The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-co
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
-```
+```python
+from tabpfn import TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
 tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
@@ -154,8 +155,8 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 
 @article{hollmann2025tabpfn,
  title={Accurate predictions on small data with a tabular foundation model},
- author={Hollmann, Noah and M{\"u}ller, Samuel and Purucker, Lennart and
-         Krishnakumar, Arjun and K{\"o}rfer, Max and Hoo, Shi Bin and
+ author={Hollmann, Noah and M{"u}ller, Samuel and Purucker, Lennart and
+         Krishnakumar, Arjun and K{"o}rfer, Max and Hoo, Shi Bin and
          Schirrmeister, Robin Tibor and Hutter, Frank},
  journal={Nature},
  year={2025},
@@ -168,7 +169,7 @@ You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586
 
 @inproceedings{hollmann2023tabpfn,
   title={TabPFN: A transformer that solves small tabular classification problems in a second},
-  author={Hollmann, Noah and M{\"u}ller, Samuel and Eggensperger, Katharina and Hutter, Frank},
+  author={Hollmann, Noah and M{"u}ller, Samuel and Eggensperger, Katharina and Hutter, Frank},
   booktitle={International Conference on Learning Representations 2023},
   year={2023}
 }
@@ -235,8 +236,8 @@ This script will download the main classifier and regressor models, as well as a
 **Manual Download**
 
 1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
-   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
+   - Classifier: [tabpfn-v3-classifier-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-v3_default.ckpt)
+   - Regressor: [tabpfn-v3-regressor-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-v3_default.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
@@ -345,7 +346,7 @@ Each TabPFN release publishes a default classification and regression checkpoint
 
 ## Anonymized Telemetry
 
-This project collects fully anonymous usage telemetry disabled by default.
+This project collects fully anonymous usage telemetry enabled by default.
 
 The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
@@ -355,10 +356,10 @@ The data is used exclusively to help us provide stability to the relevant produc
 
 For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
-**To opt in**, set the following environment variable:
+**To opt out**, set the following environment variable:
 
 ```bash
-export TABPFN_DISABLE_TELEMETRY=0
+export TABPFN_DISABLE_TELEMETRY=1
 ```
 ---
 
