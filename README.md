@@ -61,6 +61,32 @@ regressor = TabPFNRegressor.create_default_for_version(ModelVersion.V2_6)
 
 For complete examples, see the [tabpfn_for_binary_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_binary_classification.py), [tabpfn_for_multiclass_classification.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_multiclass_classification.py), and [tabpfn_for_regression.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_for_regression.py) files.
 
+### More Examples & Advanced Usage
+
+TabPFN goes beyond the basic `fit`/`predict` workflow. The runnable scripts in the
+[`examples/`](https://github.com/PriorLabs/TabPFN/tree/main/examples) directory cover:
+
+- **Faster repeated inference (KV cache)** — build the training-set representation once
+  during `fit` with `fit_mode="fit_with_cache"` to speed up subsequent `predict` calls.
+  See [kv_cache_fast_prediction.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/kv_cache_fast_prediction.py).
+- **Metric-aware tuning** — pass an `eval_metric` and `tuning_config` to calibrate the
+  temperature and tune decision thresholds (e.g. optimizing F1 on imbalanced data).
+  See [tabpfn_with_tuning.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/tabpfn_with_tuning.py).
+- **Fine-tuning** — adapt TabPFN to a single dataset with the `FinetunedTabPFNClassifier`
+  and `FinetunedTabPFNRegressor` wrappers (a CUDA GPU is recommended, and multi-GPU runs
+  are supported via `torchrun`). See
+  [finetune_classifier.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/finetune_classifier.py)
+  and [finetune_regressor.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/finetune_regressor.py).
+- **Embeddings** — extract TabPFN's learned representations for downstream tasks with
+  `tabpfn.base.get_embeddings`.
+- **Saving & loading fitted models** — persist and reload a fitted estimator (see also
+  the FAQ below). See [save_and_load_model.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/save_and_load_model.py).
+- **Visualizing regression distributions** — plot TabPFN's full predictive distribution
+  for a single point with `tabpfn.visualisation.plot_regression_distribution`. See
+  [plot_regression_distribution.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/plot_regression_distribution.py).
+- **Benchmarking** — compare TabPFN against XGBoost. See
+  [benchmarking_tabpfn.py](https://github.com/PriorLabs/TabPFN/tree/main/examples/benchmarking_tabpfn.py).
+
 ## TabPFN Ecosystem
 
 Choose the right TabPFN implementation for your needs:
@@ -235,8 +261,8 @@ This script will download the main classifier and regressor models, as well as a
 **Manual Download**
 
 1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
-   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
+   - Classifier: [tabpfn-v3-classifier-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-v3_default.ckpt)
+   - Regressor: [tabpfn-v3-regressor-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-v3_default.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`
@@ -268,9 +294,12 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 
 **Model Configuration:**
 - `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
+- `TABPFN_MODEL_VERSION`: Default model version to use (`v2`, `v2.5`, `v2.6`, or `v3`; default: `v3`)
 - `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
 
-**PyTorch Settings:**
+**Device & Memory Settings:**
+- `TABPFN_EXCLUDE_DEVICES`: Exclude device classes from `device="auto"` selection. One of `cuda`, `mps`, or `cuda,mps` (useful for forcing CPU in CI).
+- `TABPFN_MPS_MEMORY_FRACTION`: Fraction of recommended max MPS memory to allow on Apple Silicon (default: `0.7`). Lower it to avoid macOS system crashes; values above `1.0` are not recommended. Must be set before importing `tabpfn`.
 - `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`). See [PyTorch CUDA documentation](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) for more information.
 
 Example:
