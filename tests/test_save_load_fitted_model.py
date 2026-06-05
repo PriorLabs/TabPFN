@@ -16,6 +16,7 @@ from sklearn.datasets import make_classification, make_regression
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
 
@@ -264,19 +265,27 @@ def test_saving_and_loading_with_tuning_config(
 
 
 @pytest.mark.parametrize(
-    ("task_type", "saving_device", "loading_device"),
+    ("task_type", "saving_device", "loading_device", "model_version"),
     [
-        pytest.param(task_type, saving_device, loading_device, marks=pytest.mark.slow)
+        pytest.param(
+            task_type,
+            saving_device,
+            loading_device,
+            model_version,
+            marks=pytest.mark.slow,
+        )
         if "mps" in (saving_device, loading_device)
-        else (task_type, saving_device, loading_device)
+        else (task_type, saving_device, loading_device, model_version)
         for task_type in ["regression", "classification"]
         for (saving_device, loading_device) in device_pairs
+        for model_version in [ModelVersion.V2_5, ModelVersion.V3]
     ],
 )
 def test__save_and_load_fit_with_cache__predictions_equal(
     task_type: str,
     saving_device: str,
     loading_device: str,
+    model_version: ModelVersion,
     tmp_path: Path,
 ) -> None:
     """Test that save/load round-trip works for fit_mode='fit_with_cache'."""
@@ -287,8 +296,11 @@ def test__save_and_load_fit_with_cache__predictions_equal(
         estimator_class = TabPFNClassifier
         X, y = _make_classification_data_with_categoricals()
 
-    original = estimator_class(
-        device=saving_device, n_estimators=4, fit_mode="fit_with_cache"
+    original = estimator_class.create_default_for_version(
+        model_version,
+        device=saving_device,
+        n_estimators=4,
+        fit_mode="fit_with_cache",
     )
     original.fit(X, y)
     original_preds = original.predict(X)
@@ -308,19 +320,27 @@ def test__save_and_load_fit_with_cache__predictions_equal(
 
 
 @pytest.mark.parametrize(
-    ("task_type", "saving_device", "loading_device"),
+    ("task_type", "saving_device", "loading_device", "model_version"),
     [
-        pytest.param(task_type, saving_device, loading_device, marks=pytest.mark.slow)
+        pytest.param(
+            task_type,
+            saving_device,
+            loading_device,
+            model_version,
+            marks=pytest.mark.slow,
+        )
         if "mps" in (saving_device, loading_device)
-        else (task_type, saving_device, loading_device)
+        else (task_type, saving_device, loading_device, model_version)
         for task_type in ["regression", "classification"]
         for (saving_device, loading_device) in device_pairs
+        for model_version in [ModelVersion.V2_5, ModelVersion.V3]
     ],
 )
 def test__save_and_load_fit_with_cache_twice__predictions_equal(
     task_type: str,
     saving_device: str,
     loading_device: str,
+    model_version: ModelVersion,
     tmp_path: Path,
 ) -> None:
     """Test double save/load cycle for fit_with_cache stability."""
@@ -331,8 +351,11 @@ def test__save_and_load_fit_with_cache_twice__predictions_equal(
         estimator_class = TabPFNClassifier
         X, y = _make_classification_data_with_categoricals()
 
-    original = estimator_class(
-        device=saving_device, n_estimators=4, fit_mode="fit_with_cache"
+    original = estimator_class.create_default_for_version(
+        model_version,
+        device=saving_device,
+        n_estimators=4,
+        fit_mode="fit_with_cache",
     )
     original.fit(X, y)
     original_preds = original.predict(X)
