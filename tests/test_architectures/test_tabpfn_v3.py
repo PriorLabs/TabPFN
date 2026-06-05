@@ -144,6 +144,62 @@ def test__mem_eff_forward_matches_standard_forward() -> None:
         )
 
 
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__chunked_inference_recovers_from_oom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A recoverable OOM during chunked inference must not crash the forward.
+
+    The column-chunk handler reacts to an OOM by freeing memory, halving the
+    chunk and retrying. This used to call ``torch.mps.empty_cache()``
+    unconditionally, which raises ``Cannot execute emptyCache() without MPS
+    backend`` on any non-MPS device (CUDA GPUs, CPU-only Linux), turning a
+    recoverable OOM into a hard crash on the CI runners. The recovered output
+    must also match the standard forward pass.
+    """
+    arch = _get_model()
+    # Chunkwise inference (and hence the OOM recovery path) only runs in eval mode.
+    arch.eval()
+
+    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+
+    expected = arch(x, y, only_return_standard_out=False)
+
+    # Force chunking so the inducing-hidden (column) recovery path is exercised.
+    arch.inference_row_chunk_size = 50
+    arch.inference_col_chunk_size = 10
+
+    # Raise a single OOM the first time a column chunk is processed, so the
+    # handler must free memory, halve the column chunk and retry.
+    original_process_col_chunk = arch._process_col_chunk
+    calls = {"n": 0}
+
+    def _process_col_chunk_oom_once(*args: object, **kwargs: object) -> object:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("CUDA out of memory (simulated)")
+        return original_process_col_chunk(*args, **kwargs)
+
+    monkeypatch.setattr(arch, "_process_col_chunk", _process_col_chunk_oom_once)
+
+    recovered = arch(
+        x,
+        y,
+        only_return_standard_out=False,
+        performance_options=PerformanceOptions(use_chunkwise_inference=True),
+    )
+
+    assert calls["n"] > 1, "the simulated OOM never triggered a retry"
+    assert recovered.keys() == expected.keys()
+    for key in recovered:
+        assert torch.allclose(recovered[key], expected[key], atol=1e-10), (
+            f"Output '{key}' after OOM recovery differs from the standard "
+            "forward pass."
+        )
+
+
 def _get_regression_model() -> tabpfn_v3.TabPFNV3:
     config = tabpfn_v3.TabPFNV3Config(
         max_num_classes=-1,
