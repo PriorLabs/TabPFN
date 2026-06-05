@@ -26,7 +26,9 @@ device_combinations = [
 
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"])
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
 def test__to__before_fit__does_not_crash(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
@@ -42,7 +44,9 @@ def test__to__before_fit__does_not_crash(
 
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"])
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
 def test__to__between_fit_and_predict__does_not_crash(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
@@ -58,7 +62,9 @@ def test__to__between_fit_and_predict__does_not_crash(
 
 @pytest.mark.parametrize(("device_1", "device_2"), device_combinations)
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"])
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
 def test__to__between_fits__outputs_equal(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
@@ -108,7 +114,9 @@ def test__fit_with_cache__raises_error_for_v2_6(
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-@pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"])
+@pytest.mark.parametrize(
+    "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
+)
 def test__to__after_fit__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
     fit_mode: str,
