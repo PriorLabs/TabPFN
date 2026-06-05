@@ -173,16 +173,22 @@ def test__chunked_inference_recovers_from_oom(
 
     # Raise a single OOM the first time a column chunk is processed, so the
     # handler must free memory, halve the column chunk and retry.
-    original_process_col_chunk = arch._process_col_chunk
+    # Patch on the class (not the instance) so that, should torch.compile be
+    # enabled, the bound method still exposes ``__func__`` for ``_compiled``.
+    original_process_col_chunk = tabpfn_v3.TabPFNV3._process_col_chunk
     calls = {"n": 0}
 
-    def _process_col_chunk_oom_once(*args: object, **kwargs: object) -> object:
+    def _process_col_chunk_oom_once(
+        self: tabpfn_v3.TabPFNV3, *args: object, **kwargs: object
+    ) -> object:
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("CUDA out of memory (simulated)")
-        return original_process_col_chunk(*args, **kwargs)
+        return original_process_col_chunk(self, *args, **kwargs)
 
-    monkeypatch.setattr(arch, "_process_col_chunk", _process_col_chunk_oom_once)
+    monkeypatch.setattr(
+        tabpfn_v3.TabPFNV3, "_process_col_chunk", _process_col_chunk_oom_once
+    )
 
     recovered = arch(
         x,
