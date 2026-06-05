@@ -195,8 +195,7 @@ def test__chunked_inference_recovers_from_oom(
     assert recovered.keys() == expected.keys()
     for key in recovered:
         assert torch.allclose(recovered[key], expected[key], atol=1e-10), (
-            f"Output '{key}' after OOM recovery differs from the standard "
-            "forward pass."
+            f"Output '{key}' after OOM recovery differs from the standard forward pass."
         )
 
 
