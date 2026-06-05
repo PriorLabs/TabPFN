@@ -1013,20 +1013,20 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     def _set_models(self, models: list[Architecture]) -> None:
         # self.models contains weight-stripped shells from the pickle.
         # Inject fresh weights from the base models.
-        for model, ensemble_member in zip(self.models, self.ensemble_members):
+        for stripped_model, ensemble_member in zip(self.models, self.ensemble_members):
             fresh = models[ensemble_member.config._model_index]
             fresh_params = dict(fresh.named_parameters())
-            for name, param in model.named_parameters():
+            for name, stripped_param in stripped_model.named_parameters():
                 if name not in fresh_params:
                     raise RuntimeError(
                         f"Parameter '{name}' not found in the base model. "
                         "The saved fit state is incompatible with the current "
                         "model checkpoint."
                     )
-                param.data = fresh_params[name].data.clone()
+                stripped_param.data = fresh_params[name].data.clone()
             if self.force_inference_dtype is not None:
-                model.type(self.force_inference_dtype)
-            model.cpu()
+                stripped_model.type(self.force_inference_dtype)
+            stripped_model.cpu()
 
     @override
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
@@ -1370,17 +1370,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
-        # Temporarily detach heavy state before deepcopy to avoid a memory
-        # spike from copying model weights and GPU KV caches that we discard.
-        saved_model_caches = self.model_caches
+        # Temporarily detach KV caches before deepcopy to avoid a memory
+        # spike from copying GPU tensors that we discard.
         saved_kv_caches = self.kv_caches
-        self.model_caches = None  # type: ignore
         self.kv_caches = []  # type: ignore
         try:
-            state_copy = deepcopy(self)
+            state_copy = super()._create_copy_for_pickling()
         finally:
-            # Restore originals on self so the engine remains usable.
-            self.model_caches = saved_model_caches
             self.kv_caches = saved_kv_caches
 
         # Attach CPU copies of KV caches for portable serialization.
