@@ -12,9 +12,6 @@ from typing import TYPE_CHECKING, Literal, Union
 import numpy as np
 import numpy.typing as npt
 import torch
-from sklearn.base import (
-    TransformerMixin,
-)
 
 from tabpfn.architectures.encoders import (
     MulticlassClassificationTargetEncoderStep,
@@ -27,6 +24,7 @@ from tabpfn.constants import (
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 
 if TYPE_CHECKING:
+    from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
 
     from tabpfn.architectures.interface import Architecture
