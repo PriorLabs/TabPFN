@@ -13,6 +13,7 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.base import is_classifier
@@ -23,12 +24,14 @@ from tabpfn.misc._sklearn_compat import check_array, validate_data
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
-    import numpy as np
     import numpy.typing as npt
     import torch
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
+
+
+_LABEL_LEAKAGE_CORRELATION_THRESHOLD = 0.9999
 
 
 def ensure_compatible_fit_inputs(
@@ -82,7 +85,96 @@ def ensure_compatible_fit_inputs(
         devices=devices,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
+    _check_label_leakage(X, y, feature_names_in=feature_names_in)
     return X, y, feature_names_in, n_features_in, original_y_name
+
+
+def _check_label_leakage(
+    X: np.ndarray,
+    y: np.ndarray,
+    *,
+    feature_names_in: npt.NDArray[Any] | None = None,
+) -> None:
+    """Warn if any feature is identical to or perfectly correlated with the target."""
+    # Detection is best-effort: a failure to inspect the data must never block a
+    # fit. The warning emission itself is kept OUTSIDE this guard so that a
+    # `warnings.warn` raised as an error (e.g. `python -W error`) propagates
+    # normally instead of being swallowed by the broad except.
+    try:
+        y = np.asarray(y)
+        leaking_feature_indices = []
+
+        for feature_idx in range(X.shape[1]):
+            column = np.asarray(X[:, feature_idx])
+            valid_mask = ~(pd.isna(column) | pd.isna(y))
+
+            if np.any(valid_mask) and np.array_equal(
+                column[valid_mask],
+                y[valid_mask],
+            ):
+                leaking_feature_indices.append(feature_idx)
+                continue
+
+            if _is_perfectly_correlated(column[valid_mask], y[valid_mask]):
+                leaking_feature_indices.append(feature_idx)
+    except Exception:  # noqa: BLE001
+        return
+
+    if not leaking_feature_indices:
+        return
+
+    leaking_features = ", ".join(
+        _format_feature_identifier(feature_idx, feature_names_in)
+        for feature_idx in leaking_feature_indices
+    )
+    warnings.warn(
+        "Potential label leakage detected: feature column(s) "
+        f"{leaking_features} are identical to or perfectly correlated with the "
+        "target. This can lead to misleadingly high model performance.",
+        UserWarning,
+        stacklevel=3,
+    )
+
+
+def _is_perfectly_correlated(column: np.ndarray, y: np.ndarray) -> bool:
+    if len(column) < 2:
+        return False
+
+    try:
+        numeric_column = np.asarray(column, dtype=float)
+        numeric_y = np.asarray(y, dtype=float)
+    except (TypeError, ValueError):
+        return False
+
+    finite_mask = np.isfinite(numeric_column) & np.isfinite(numeric_y)
+    # Two points are always perfectly correlated (|r| == 1) for any non-constant
+    # pair, so require at least three valid pairs before trusting corrcoef as a
+    # leakage signal; otherwise small/clean datasets produce false positives.
+    if np.count_nonzero(finite_mask) < 3:
+        return False
+
+    numeric_column = numeric_column[finite_mask]
+    numeric_y = numeric_y[finite_mask]
+
+    if np.all(numeric_column == numeric_column[0]) or np.all(
+        numeric_y == numeric_y[0],
+    ):
+        return False
+
+    correlation = np.corrcoef(numeric_column, numeric_y)[0, 1]
+    return bool(
+        np.isfinite(correlation)
+        and abs(correlation) > _LABEL_LEAKAGE_CORRELATION_THRESHOLD
+    )
+
+
+def _format_feature_identifier(
+    feature_idx: int,
+    feature_names_in: npt.NDArray[Any] | None,
+) -> str:
+    if feature_names_in is not None and feature_idx < len(feature_names_in):
+        return f"'{feature_names_in[feature_idx]}'"
+    return str(feature_idx)
 
 
 def ensure_compatible_predict_input_sklearn(

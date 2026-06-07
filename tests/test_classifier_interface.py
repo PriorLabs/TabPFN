@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import itertools
 import os
+import warnings
 from itertools import product
 from typing import Any, Callable, Literal
 
@@ -21,7 +22,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
-from tabpfn import TabPFNClassifier
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures import base
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
@@ -36,6 +37,7 @@ from tabpfn.inference_tuning import (
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.utils import infer_devices
+from tabpfn.validation import _check_label_leakage, ensure_compatible_fit_inputs
 
 from .utils import (
     get_pytest_devices,
@@ -1302,6 +1304,151 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns() -> None:
         ),
     ):
         clf.fit(X, y)
+
+
+def test__ensure_compatible_fit_inputs__clean_features_do_not_warn() -> None:
+    X = np.array(
+        [
+            [0.2, 1.1],
+            [1.3, 0.4],
+            [0.8, 1.7],
+            [1.9, 0.2],
+            [2.2, 1.4],
+            [0.5, 0.9],
+        ]
+    )
+    y = np.array([0, 1, 0, 1, 0, 1])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _validate_fit_inputs(X, y, TabPFNClassifier(n_estimators=1))
+
+
+@pytest.mark.parametrize(
+    ("estimator", "y"),
+    [
+        pytest.param(
+            TabPFNClassifier(n_estimators=1),
+            np.array([0, 1, 0, 1, 0, 1]),
+            id="classifier",
+        ),
+        pytest.param(
+            TabPFNRegressor(n_estimators=1),
+            np.array([0.2, 1.7, 0.4, 1.9, 0.6, 2.1]),
+            id="regressor",
+        ),
+    ],
+)
+def test__ensure_compatible_fit_inputs__label_column_warns(
+    estimator: TabPFNClassifier | TabPFNRegressor,
+    y: np.ndarray,
+) -> None:
+    X = np.column_stack(
+        [
+            y,
+            np.array([1.2, 0.3, 2.1, 3.7, -0.5, 5.4]),
+        ]
+    )
+
+    with pytest.warns(UserWarning, match="0"):
+        _validate_fit_inputs(X, y, estimator)
+
+
+def test__ensure_compatible_fit_inputs__perfectly_correlated_feature_warns() -> None:
+    y = np.array([0, 1, 0, 1, 0, 1])
+    X = np.column_stack(
+        [
+            np.array([1.2, 0.3, 2.1, 3.7, -0.5, 5.4]),
+            (3 * y) + 5,
+        ]
+    )
+
+    with pytest.warns(UserWarning, match="1"):
+        _validate_fit_inputs(X, y, TabPFNClassifier(n_estimators=1))
+
+
+def test__ensure_compatible_fit_inputs__leakage_warning_uses_feature_name() -> None:
+    y = np.array([0, 1, 0, 1, 0, 1])
+    X = pd.DataFrame(
+        {
+            "target_copy": y,
+            "clean_feature": [1.2, 0.3, 2.1, 3.7, -0.5, 5.4],
+        }
+    )
+
+    with pytest.warns(UserWarning, match="target_copy"):
+        _validate_fit_inputs(X, y, TabPFNClassifier(n_estimators=1))
+
+
+def test__ensure_compatible_fit_inputs__near_perfect_correlation_no_warning() -> None:
+    rng = np.random.default_rng(seed=42)
+    y = np.linspace(0, 1, num=100)
+    near_leakage = y + rng.normal(scale=0.05, size=y.shape)
+    assert abs(np.corrcoef(near_leakage, y)[0, 1]) < 0.9999
+
+    X = np.column_stack([near_leakage, rng.random(size=y.shape)])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _validate_fit_inputs(X, y, TabPFNRegressor(n_estimators=1))
+
+
+def test__ensure_compatible_fit_inputs__label_leakage_check_errors_do_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    y = np.array([0, 1, 0, 1, 0, 1])
+    X = np.column_stack(
+        [
+            np.array([1.2, 0.3, 2.1, 3.7, -0.5, 5.4]),
+            np.array([0.7, 1.9, 0.2, 2.8, 1.1, 2.4]),
+        ]
+    )
+
+    def raise_corrcoef(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("corrcoef failed")
+
+    monkeypatch.setattr(np, "corrcoef", raise_corrcoef)
+
+    _validate_fit_inputs(X, y, TabPFNClassifier(n_estimators=1))
+
+
+def test__check_label_leakage__two_rows_do_not_warn() -> None:
+    # With only two valid pairs, any non-constant feature is perfectly
+    # correlated with the target by definition, so the correlation path must not
+    # fire on clean two-row data.
+    X = np.array([[1.0], [2.0]])
+    y = np.array([0.0, 1.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        _check_label_leakage(X, y)
+
+
+def test__check_label_leakage__warning_propagates_under_warnings_as_errors() -> None:
+    # A genuine leakage warning must surface even when warnings are errors; the
+    # best-effort detection guard must not swallow the emitted warning.
+    X = np.array([[0.0], [1.0], [0.0], [1.0]])
+    y = np.array([0.0, 1.0, 0.0, 1.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        with pytest.raises(UserWarning, match="label leakage"):
+            _check_label_leakage(X, y)
+
+
+def _validate_fit_inputs(
+    X: Any,
+    y: Any,
+    estimator: TabPFNClassifier | TabPFNRegressor,
+) -> None:
+    ensure_compatible_fit_inputs(
+        X,
+        y,
+        estimator=estimator,
+        max_num_samples=1_000,
+        max_num_features=100,
+        ignore_pretraining_limits=False,
+        ensure_y_numeric=isinstance(estimator, TabPFNRegressor),
+        devices=(torch.device("cpu"),),
+    )
 
 
 def _create_dummy_classifier_model_specs(
