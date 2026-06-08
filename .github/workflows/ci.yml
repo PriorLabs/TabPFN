@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
       - uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b # v4.0.0
         with:
           version-file: pyproject.toml
@@ -65,7 +65,7 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -173,7 +173,7 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
 
       - name: Set up Python 3.14
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -233,12 +233,12 @@ jobs:
 
     steps:
       - name: Checkout TabPFN at current ref
-        uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
         with:
           path: TabPFN
 
       - name: Checkout ${{ matrix.repo-name }}
-        uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
         with:
           repository: PriorLabs/${{ matrix.repo-name }}
           path: ${{ matrix.repo-name }}
@@ -335,7 +335,7 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@900f2210b1d28bbbd0bd22d17926b9e224e8f231 # v4.3.1
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
