@@ -36,7 +36,6 @@ from tabpfn.architectures.interface import (
 from tabpfn.architectures.kv_cache import (
     KVCache,
     KVCacheEntry,
-    QuantizedKVCacheEntry,
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
@@ -165,7 +164,7 @@ class AlongColumnAttention(Attention):
         x_BcRE: torch.Tensor,
         single_eval_pos: int | None = None,
         *,
-        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Forward pass for attention between cells of a single column.
@@ -205,8 +204,6 @@ class AlongColumnAttention(Attention):
         if cached_kv is not None:
             # Cache path: every row is a test row attending to the cached train K/V via
             # the single multi-query-attention head.
-            if isinstance(cached_kv, QuantizedKVCacheEntry):
-                cached_kv = cached_kv.dequantize(q_BcRHD.dtype)
             k_Bc1 = cached_kv.key
             v_Bc1 = cached_kv.value
             assert k_Bc1 is not None
@@ -438,7 +435,7 @@ class TabPFNBlock(nn.Module):
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
         *,
-        cached_kv: KVCacheEntry | QuantizedKVCacheEntry | None = None,
+        cached_kv: KVCacheEntry | None = None,
         return_kv: bool = False,
     ) -> tuple[torch.Tensor, KVCacheEntry | None]:
         """Compute one column-wise, one row-wise attention, and an MLP layer.
@@ -601,20 +598,6 @@ class TabPFNV2Cache:
                 if self.test_y_embedding is None
                 else self.test_y_embedding.to(device)
             ),
-            train_shape=self.train_shape,
-        )
-
-    def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV2Cache:
-        """Return a new cache with the ICL key/value entries quantized.
-
-        Only the attention key/value projections are quantized; the encoder state and
-        target embedding stay in full precision.
-        """
-        return TabPFNV2Cache(
-            icl_cache=self.icl_cache.quantize(dtype),
-            encoder_state=self.encoder_state,
-            y_encoder_state=self.y_encoder_state,
-            test_y_embedding=self.test_y_embedding,
             train_shape=self.train_shape,
         )
 

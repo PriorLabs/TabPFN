@@ -339,23 +339,3 @@ def test__kv_cache__x_is_test_only_requires_populated_cache() -> None:
     x_full, y_train, _ = _make_kv_cache_data()
     with pytest.raises(ValueError, match="requires a populated kv_cache"):
         arch(x_full, y_train, x_is_test_only=True)
-
-
-@torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__kv_cache__quantized_roundtrip_is_close() -> None:
-    """Quantizing the cache should still give predictions close to the standard."""
-    arch = _build_small_arch(seed=420)
-    arch.to(torch.float64)
-    x_full, y_train, num_train = _make_kv_cache_data()
-    x_test = x_full[num_train:]
-
-    out_standard = arch(x_full, y_train)
-    _, cache = arch(x_full, y_train, return_kv_cache=True)
-    quantized = cache.quantize()
-    assert not quantized.is_empty()
-
-    out_cached = arch(x_test, y_train, kv_cache=quantized, x_is_test_only=True)
-    assert torch.allclose(out_standard, out_cached, atol=1e-2), (
-        "quantized kv_cache inference differs too much from the standard forward."
-    )
