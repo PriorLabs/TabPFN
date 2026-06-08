@@ -20,6 +20,7 @@ from sklearn.utils.multiclass import check_classification_targets
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -93,6 +94,8 @@ def ensure_compatible_predict_input_sklearn(
 
     Note that this also changes the type of X to np.ndarray.
     """
+    if isinstance(X, pd.DataFrame):
+        X = coerce_nullable_dtypes_to_numpy(X)
     try:
         result = validate_data(
             estimator,
@@ -164,6 +167,8 @@ def ensure_compatible_fit_inputs_sklearn(
         A tuple of the validated input data X, target data y, feature names,
         and number of features.
     """
+    if isinstance(X, pd.DataFrame):
+        X = coerce_nullable_dtypes_to_numpy(X)
     try:
         X, y = validate_data(
             estimator,
