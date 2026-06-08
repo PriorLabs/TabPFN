@@ -500,11 +500,8 @@ class TabPFNBlock(nn.Module):
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
         kv_entry: KVCacheEntry | None = None
         if return_kv or cached_kv is not None:
-            # Build / cache paths: bypass chunking and compute the between-cells
-            # attention in one go. We either need to capture the K/V cache entry, or the
-            # cached K/V spans the full (batch * columns) dimension. The attention folds
-            # (batch, columns) into one batch dimension, so flatten and unflatten around
-            # the call.
+            # Build / cache paths: bypass chunking. This is consistent with the
+            # original behaviour.
             B, C = x_BCRE.shape[:2]
             attn_out, kv_entry = self.per_column_attention_between_cells(
                 x_BCRE.flatten(0, 1),
