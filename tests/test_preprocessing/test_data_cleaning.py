@@ -574,6 +574,41 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     assert np.isfinite(proba).all()
 
 
+def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
+    """Predicting with a numpy array (no column names) after a named-DataFrame fit.
+
+    ``validate_data`` converts both fit and predict inputs to numpy before
+    ``fix_dtypes`` wraps them into an integer-column DataFrame, so the frozen encoder's
+    columns are integer positions and match a numpy-array predict input. This guards
+    against a ``KeyError`` when aligning predict-time dtypes against the fit categories.
+    """
+    n, n_unique = 120, 60
+    y = np.array([0, 1] * (n // 2))
+
+    # Fit with *named* columns; 'code' is string-categorical.
+    X_fit = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": pd.array([f"s{i % n_unique}" for i in range(n)], dtype="string"),
+        }
+    )
+    # Predict with a bare numpy array; the 'code' position is now numeric.
+    X_pred = np.column_stack(
+        [
+            np.arange(n, dtype="float64"),
+            np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        ]
+    )
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X_fit, y)
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        proba = clf.predict_proba(X_pred)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
 def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> None:
     """The predict-time fix isolated to ``clean.process_text_na_dataframe`` (no model).
 
