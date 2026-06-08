@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.7] - 2026-06-08
+
+### Changed
+
+- At predict time, an encoded column whose dtype differs from fit is now coerced to its fit-time dtype (and warns). For a numeric-categorical column arriving as strings, numeric-looking strings (`"1.0"`) now match their fit category instead of all being treated as unseen. ([#1015](https://github.com/PriorLabs/TabPFN/pull/1015))
+
+### Fixed
+
+- Fix a crash in the chunked-inference OOM recovery path that called `torch.mps.empty_cache()` unconditionally, raising `Cannot execute emptyCache() without MPS backend` on non-MPS devices (CUDA GPUs, CPU-only Linux) and turning a recoverable out-of-memory into a hard failure. ([#1007](https://github.com/PriorLabs/TabPFN/pull/1007))
+- Fixed two crashes from inconsistent column dtypes: `fit` raising `Cannot cast object dtype to float64` when a nullable extension dtype (`Int64`/`Float64`/`boolean`) sits next to a string categorical column, and `predict` raising a `TypeError` when a column was string/categorical at fit but arrives numeric. ([#1015](https://github.com/PriorLabs/TabPFN/pull/1015))
+
+
 ## [8.0.6] - 2026-06-03
 
 ### Added
