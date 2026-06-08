@@ -415,12 +415,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             keep_cache_on_device:
                 Only relevant when `fit_mode="fit_with_cache"`. If True
-                (default), each per-estimator KV cache is kept on the inference
-                device (e.g. GPU) after it is built. This uses more device
-                memory but avoids CPU<->device transfers on every `.predict()`
-                call, giving lower latency. If False, each cache is moved to
-                CPU as soon as it is built and transferred back to the device
-                on demand during inference.
+                (default), the key-value cache is kept on the inference
+                device (e.g. GPU). Uses more device
+                memory but gives lower latency. If False, the cache is stored on CPU.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
