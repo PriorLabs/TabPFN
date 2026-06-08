@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 import torch
 
@@ -31,17 +29,16 @@ def _get_model() -> tabpfn_v3.TabPFNV3:
         feat_agg_num_heads=3,
     )
     model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
-    model.to(torch.float64)
+    model.to(torch.float32)
     return model
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> None:
     arch = _get_model()
 
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     output_without_memory_saving = arch(x, y, only_return_standard_out=False)
     output_with_memory_saving = arch(
@@ -55,17 +52,18 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> Non
     assert output_with_memory_saving.keys() == output_without_memory_saving.keys(), msg
     for key in output_with_memory_saving:
         assert torch.allclose(
-            output_with_memory_saving[key], output_without_memory_saving[key]
+            output_with_memory_saving[key],
+            output_without_memory_saving[key],
+            atol=1e-6,
         ), f"Outputs for {key} do not match between implementations."
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
     arch = _get_model()
 
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     output_without_recomputation = arch(x, y, only_return_standard_out=False)
     output_with_recomputation = arch(
@@ -79,44 +77,43 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
     assert output_with_recomputation.keys() == output_without_recomputation.keys(), msg
     for key in output_with_recomputation:
         assert torch.allclose(
-            output_with_recomputation[key], output_without_recomputation[key]
+            output_with_recomputation[key],
+            output_without_recomputation[key],
+            atol=1e-6,
         ), f"Outputs for {key} do not match between implementations."
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__batch_size_one__padding_still_works() -> None:
     arch = _get_model()
 
-    x = torch.randn(100, 1, 1, dtype=torch.float64) * 0.1
+    x = torch.randn(100, 1, 1, dtype=torch.float32) * 0.1
     x[10, 0] = float("nan")
     x[11, 0] = float("inf")
-    y = torch.randint(0, 10, [97, 1], dtype=torch.float64)
+    y = torch.randint(0, 10, [97, 1], dtype=torch.float32)
     output = arch(x, y)
 
     assert output.shape == (3, 1, 10)
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward__no_test_set_works_batch_size_one() -> None:
     arch = _get_model()
 
-    x = torch.randn(1, 1, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [1, 1], dtype=torch.float64)
+    x = torch.randn(1, 1, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [1, 1], dtype=torch.float32)
 
     out = arch(x, y, only_return_standard_out=False)
     assert out["standard"].shape == (0, 1, 10)
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__mem_eff_forward_matches_standard_forward() -> None:
     """Memory-efficient inference path must be numerically identical to standard."""
     arch = _get_model()
 
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     # Standard path: disable memory-efficient inference via forward argument.
     output_standard = arch(x, y, only_return_standard_out=False)
@@ -138,14 +135,13 @@ def test__mem_eff_forward_matches_standard_forward() -> None:
         "Output keys do not match between standard and memory-efficient paths."
     )
     for key in output_mem_eff:
-        assert torch.allclose(output_mem_eff[key], output_standard[key], atol=1e-10), (
+        assert torch.allclose(output_mem_eff[key], output_standard[key], atol=1e-5), (
             f"Outputs for '{key}' differ between standard and memory-efficient "
             "forward passes."
         )
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__chunked_inference_recovers_from_oom(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -162,8 +158,8 @@ def test__chunked_inference_recovers_from_oom(
     # Chunkwise inference (and hence the OOM recovery path) only runs in eval mode.
     arch.eval()
 
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     expected = arch(x, y, only_return_standard_out=False)
 
@@ -200,7 +196,7 @@ def test__chunked_inference_recovers_from_oom(
     assert calls["n"] > 1, "the simulated OOM never triggered a retry"
     assert recovered.keys() == expected.keys()
     for key in recovered:
-        assert torch.allclose(recovered[key], expected[key], atol=1e-10), (
+        assert torch.allclose(recovered[key], expected[key], atol=1e-5), (
             f"Output '{key}' after OOM recovery differs from the standard forward pass."
         )
 
@@ -220,20 +216,19 @@ def _get_regression_model() -> tabpfn_v3.TabPFNV3:
         dist_embed_num_inducing_points=8,
     )
     model = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
-    model.to(torch.float64)
+    model.to(torch.float32)
     return model
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 @pytest.mark.parametrize("use_chunkwise", [False, True])
 def test__kv_cache__matches_standard_forward(use_chunkwise: bool) -> None:
     """KV-cache inference must produce identical output to standard forward."""
     arch = _get_regression_model()
 
     torch.manual_seed(42)
-    x = torch.randn(20, 1, 5, dtype=torch.float64) * 0.1
-    y = torch.randn(10, dtype=torch.float64)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randn(10, dtype=torch.float32)
 
     perf = PerformanceOptions(use_chunkwise_inference=use_chunkwise)
 
@@ -249,27 +244,26 @@ def test__kv_cache__matches_standard_forward(use_chunkwise: bool) -> None:
     assert len(cache.icl_cache.kv) == 2  # nlayers=2
 
     # Store-mode output matches standard
-    assert torch.allclose(out_standard, out_store, atol=1e-10), (
+    assert torch.allclose(out_standard, out_store, atol=1e-6), (
         "return_kv_cache=True output differs from standard."
     )
 
     # Use cache for inference
     out_cached = arch(x, y, performance_options=perf, kv_cache=cache)
 
-    assert torch.allclose(out_standard, out_cached, atol=1e-10), (
+    assert torch.allclose(out_standard, out_cached, atol=1e-6), (
         "kv_cache inference output differs from standard."
     )
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__multiclass_matches_standard() -> None:
     """KV-cache inference for multiclass produces identical output."""
     arch = _get_model()
 
     torch.manual_seed(42)
-    x = torch.randn(20, 1, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, (10,), dtype=torch.float64)
+    x = torch.randn(20, 1, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, (10,), dtype=torch.float32)
 
     perf = PerformanceOptions(use_chunkwise_inference=False)
 
@@ -277,12 +271,11 @@ def test__kv_cache__multiclass_matches_standard() -> None:
     out_store, cache = arch(x, y, performance_options=perf, return_kv_cache=True)
     out_cached = arch(x, y, performance_options=perf, kv_cache=cache)
 
-    assert torch.allclose(out_standard, out_store, atol=1e-10)
-    assert torch.allclose(out_standard, out_cached, atol=1e-10)
+    assert torch.allclose(out_standard, out_store, atol=1e-6)
+    assert torch.allclose(out_standard, out_cached, atol=1e-6)
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__row_chunked_matches_unchunked() -> None:
     """Cached forward with a small inference_row_chunk_size must match unchunked.
 
@@ -294,8 +287,8 @@ def test__kv_cache__row_chunked_matches_unchunked() -> None:
     arch = _get_regression_model()
 
     torch.manual_seed(42)
-    x = torch.randn(20, 1, 5, dtype=torch.float64) * 0.1
-    y = torch.randn(10, dtype=torch.float64)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randn(10, dtype=torch.float32)
 
     perf = PerformanceOptions(use_chunkwise_inference=False)
 
@@ -307,13 +300,12 @@ def test__kv_cache__row_chunked_matches_unchunked() -> None:
     arch.inference_row_chunk_size = 3
     out_cached_chunked = arch(x, y, performance_options=perf, kv_cache=cache)
 
-    assert torch.allclose(out_standard, out_cached_chunked, atol=1e-10), (
+    assert torch.allclose(out_standard, out_cached_chunked, atol=1e-6), (
         "Row-chunked cached forward differs from unchunked."
     )
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__gqa_matches_standard() -> None:
     """KV-cache inference with GQA (num_kv_heads_test) produces identical output."""
     config = tabpfn_v3.TabPFNV3Config(
@@ -332,11 +324,11 @@ def test__kv_cache__gqa_matches_standard() -> None:
         dist_embed_num_inducing_points=8,
     )
     arch = tabpfn_v3.get_architecture(config, cache_trainset_representation=False)
-    arch.to(torch.float64)
+    arch.to(torch.float32)
 
     torch.manual_seed(42)
-    x = torch.randn(20, 1, 5, dtype=torch.float64) * 0.1
-    y = torch.randn(10, dtype=torch.float64)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randn(10, dtype=torch.float32)
 
     perf = PerformanceOptions(use_chunkwise_inference=False)
 
@@ -344,7 +336,7 @@ def test__kv_cache__gqa_matches_standard() -> None:
     _, cache = arch(x, y, performance_options=perf, return_kv_cache=True)
     out_cached = arch(x, y, performance_options=perf, kv_cache=cache)
 
-    assert torch.allclose(out_standard, out_cached, atol=1e-10)
+    assert torch.allclose(out_standard, out_cached, atol=1e-6)
 
 
 @torch.no_grad()
@@ -460,7 +452,6 @@ def test__kv_cache__quantize_passthrough_on_already_quantized() -> None:
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 @pytest.mark.parametrize("use_chunkwise", [False, True])
 def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> None:
     """Int8-quantized KV cache produces output close to standard forward.
@@ -472,8 +463,8 @@ def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> 
     arch = _get_regression_model()
 
     torch.manual_seed(42)
-    x = torch.randn(20, 1, 5, dtype=torch.float64) * 0.1
-    y = torch.randn(10, dtype=torch.float64)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randn(10, dtype=torch.float32)
 
     perf = PerformanceOptions(use_chunkwise_inference=use_chunkwise)
 
@@ -487,7 +478,7 @@ def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> 
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == torch.int8
     # Train embeddings stay in native dtype
-    assert q_cache.train_embeddings.dtype == torch.float64
+    assert q_cache.train_embeddings.dtype == torch.float32
 
     out_quantized = arch(x, y, performance_options=perf, kv_cache=q_cache)
 
@@ -504,14 +495,13 @@ def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> 
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
     """Int8-quantized KV cache produces output close to standard forward for mclass."""
     arch = _get_model()
 
     torch.manual_seed(42)
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     out_standard = arch(x, y)
     _, cache = arch(x, y, return_kv_cache=True)
@@ -524,7 +514,7 @@ def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
         assert entry.key.dtype == torch.int8
     # Train embeddings stay in full precision
     assert q_cache.train_embeddings is not None
-    assert q_cache.train_embeddings.dtype == torch.float64
+    assert q_cache.train_embeddings.dtype == torch.float32
 
     out_quantized = arch(x, y, kv_cache=q_cache)
 
