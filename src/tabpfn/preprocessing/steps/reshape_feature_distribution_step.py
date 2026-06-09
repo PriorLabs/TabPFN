@@ -242,6 +242,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             )
 
         # NOTE: No need to keep track of categoricals here, already done above
+        output_multiplier = _output_columns_per_input_column(self.transform_name)
         if self.transform_name != "per_feature":
             _transformer = all_preprocessors[self.transform_name]
             transformers.append(("feat_transform", _transformer, trans_ixs))
@@ -263,11 +264,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.transformer_ = transformer
 
         # Compute output feature count for modality update
-        # Include: base features + appended transformed (if append_to_original)
+        # Include: base features + appended transformed (if append_to_original).
+        # Multi-output transforms (e.g. the "norm_and_kdi" FeatureUnion) emit
+        # several columns per transformed input column.
         n_output_features = (
-            n_features + len(trans_ixs)
+            n_features + output_multiplier * len(trans_ixs)
             if self.append_to_original_decision_
-            else n_features
+            else n_features + (output_multiplier - 1) * len(trans_ixs)
         )
 
         # Build the new metadata with updated categorical indices
@@ -384,11 +387,29 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features=n_features,
             max_features_per_estimator=self.max_features_per_estimator,
         )
+        n_transformed = (
+            n_features
+            if self.apply_to_categorical
+            else len(feature_schema.indices_for(FeatureModality.NUMERICAL))
+        )
+        output_multiplier = _output_columns_per_input_column(self.transform_name)
         if append:
-            if self.apply_to_categorical:
-                return n_features
-            return len(feature_schema.indices_for(FeatureModality.NUMERICAL))
-        return 0
+            return output_multiplier * n_transformed
+        return (output_multiplier - 1) * n_transformed
+
+
+def _output_columns_per_input_column(transform_name: str) -> int:
+    """Output columns a registry preprocessor emits per transformed input column.
+
+    Every preprocessor in
+    :func:`get_all_reshape_feature_distribution_preprocessors` maps one input
+    column to one output column, except FeatureUnion-based ones, which emit
+    one block of columns per sub-transformer. The registry-wide schema
+    invariant test guards this mapping against new multi-output presets.
+    """
+    if transform_name == "norm_and_kdi":
+        return 2
+    return 1
 
 
 def get_adaptive_preprocessors(
