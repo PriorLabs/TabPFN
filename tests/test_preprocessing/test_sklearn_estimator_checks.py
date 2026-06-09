@@ -22,7 +22,10 @@ _KNOWN_DEVIATIONS = {
     ("KDITransformerWithNaN", "check_estimator_sparse_tag"),
     ("KDITransformerWithNaN", "check_estimator_sparse_array"),
     ("KDITransformerWithNaN", "check_estimator_sparse_matrix"),
+    ("KDITransformerWithNaN", "check_estimator_sparse_data"),  # sklearn < 1.5 name
     ("KDITransformerWithNaN", "check_transformer_data_not_an_array"),
+    # KDI's KDE bandwidth optimization cannot bracket on a single sample.
+    ("KDITransformerWithNaN", "check_fit2d_1sample"),
 }
 
 
