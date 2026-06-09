@@ -741,6 +741,8 @@ def _draw_balanced_from_pool(
 
     When the pool is exhausted it is refilled with ``range(pool_size)`` minus
     any slots already drawn for the current estimator (to avoid duplicates).
+    If every slot has already been drawn (``size > pool_size``), duplicates are
+    unavoidable and the pool is refilled with the full range instead.
 
     Returns:
         (drawn_slots, remaining_pool) so the caller can carry the pool across
@@ -753,6 +755,8 @@ def _draw_balanced_from_pool(
         if len(pool) == 0:
             already_selected = set(slots)
             available = [i for i in range(pool_size) if i not in already_selected]
+            if not available:
+                available = list(range(pool_size))
             rng.shuffle(available)
             pool = available
 

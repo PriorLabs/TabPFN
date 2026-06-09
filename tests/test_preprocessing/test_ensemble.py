@@ -18,6 +18,7 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
+    _draw_balanced_from_pool,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
     _resolve_feature_subsampling_method,
@@ -585,6 +586,48 @@ def test__subsample_rows_stratified__minority_class_always_included():
     for indices in result:
         assert len(indices) == 100
         assert 1 in set(y[indices]), "minority class must appear in every estimator"
+
+
+def test__subsample_rows_stratified__class_allocated_more_slots_than_rows():
+    """Oversampling a tiny class must terminate and reuse its rows.
+
+    Largest-remainder allocation can assign a class more slots than it has rows
+    (class sizes [2, 98] with subsample_size 99 -> target counts [3, 96]). This
+    used to spin forever in _draw_balanced_from_pool because the refill excluded
+    all already-drawn slots, leaving the pool permanently empty.
+    """
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 2 + [1] * 98)
+    num_estimators = 4
+
+    result = _subsample_rows_stratified(
+        subsample_size=99,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    for indices in result:
+        assert len(indices) == 99
+        y_sub = y[indices]
+        # 3 slots for class 0: both of its rows plus one duplicate.
+        assert (y_sub == 0).sum() == 3
+        assert set(indices[y_sub == 0]) == {0, 1}
+        assert (y_sub == 1).sum() == 96
+
+
+def test__draw_balanced_from_pool__size_exceeds_pool_size():
+    """Drawing more slots than the pool holds duplicates slots evenly."""
+    rng = np.random.default_rng(1)
+
+    slots, _ = _draw_balanced_from_pool(pool=[], size=5, pool_size=2, rng=rng)
+
+    assert len(slots) == 5
+    counts = np.bincount(slots, minlength=2)
+    # 5 draws over 2 slots split as evenly as possible.
+    assert sorted(counts.tolist()) == [2, 3]
 
 
 def test__subsample_rows_stratified__balanced_coverage():
