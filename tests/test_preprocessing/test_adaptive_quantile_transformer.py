@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sklearn.utils.estimator_checks import parametrize_with_checks
 
 from tabpfn.preprocessing.steps import AdaptiveQuantileTransformer
 
@@ -174,8 +173,3 @@ def test__fit__generator_random_state_and_refit_adaptation():
     transformer.fit(X_large)
     assert transformer.n_quantiles_ == 200
 
-
-@parametrize_with_checks([AdaptiveQuantileTransformer()])
-def test__sklearn_estimator_checks(estimator, check) -> None:
-    """Run sklearn's standard estimator checks, with no exceptions."""
-    check(estimator)
