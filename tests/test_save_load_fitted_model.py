@@ -113,8 +113,8 @@ def test__save_fit_state__does_not_move_live_estimator_to_cpu(
 
     model.save_fit_state(tmp_path / "model.tabpfn_fit")
 
-    assert model.znorm_space_bardist_.borders.device.type == device
-    assert model.raw_space_bardist_.borders.device.type == device
+    assert model.znorm_space_bardist_.borders.device.type == torch.device(device).type
+    assert model.raw_space_bardist_.borders.device.type == torch.device(device).type
     # These output types rely on the bar distributions living on the model device.
     model.predict(X, output_type="median")
     model.predict(X, output_type="quantiles")
