@@ -232,6 +232,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             "batched",
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
+        keep_cache_on_device: bool = True,
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -412,6 +413,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     This does not batch the original input data. We still recommend to
                     batch the test set as necessary if you run out of memory.
 
+            keep_cache_on_device:
+                Only relevant when `fit_mode="fit_with_cache"`. If True
+                (default), the key-value cache is kept on the inference
+                device (e.g. GPU). Uses more device
+                memory but gives lower latency. If False, the cache is stored on CPU.
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information. If
@@ -495,6 +502,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.fit_mode = fit_mode
         self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
+        self.keep_cache_on_device = keep_cache_on_device
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -856,6 +864,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
             inference_mode=True,
+            keep_cache_on_device=self.keep_cache_on_device,
         )
 
         return self
