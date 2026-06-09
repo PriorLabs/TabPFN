@@ -88,6 +88,7 @@ def test__safe_power_transformer__inverse_transform_float32__no_overflow_warning
     transformer = SafePowerTransformer(method="yeo-johnson", standardize=False)
     transformer.lambdas_ = np.array([lmbda])
     transformer._scaler = None
+    transformer.n_features_in_ = 1
 
     # Forward-transform a large value so the inverse must reconstruct it
     x_large = np.array([[1e30]], dtype=np.float32)

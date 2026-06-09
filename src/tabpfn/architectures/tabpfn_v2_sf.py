@@ -457,6 +457,7 @@ class TabPFNBlock(nn.Module):
         # Call .contiguous() so that _chunk() can operate on x_BCRE in-place, when
         # memory saving is enabled.
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
+        del x_BRCE
         kv_entry: KVCacheEntry | None = None
         if return_kv or cached_kv is not None:
             # Build / cache paths: bypass chunking. This is consistent with the
@@ -491,6 +492,7 @@ class TabPFNBlock(nn.Module):
         )
         # Again, call .contiguous() so that _chunk() can operate on x_BCRE in-place.
         x_BRCE = x_BCRE.transpose(1, 2).contiguous()
+        del x_BCRE
 
         # -- Third Block: MLP layer.
         x_BRCE = chunked_evaluate_maybe_inplace(
@@ -961,6 +963,7 @@ class TabPFNV2(Architecture):
             )
             test_y_BRY = test_y_BY[:, None, :].expand(batch_size, num_rows, -1)
             x_BRCD = torch.cat((embedded_x_BRGX, test_y_BRY[:, :, None]), dim=2)
+            del embedded_x_BRGX
             num_train_labels = kv_cache.train_shape[1]
             block_single_eval_pos = 0
         else:
@@ -982,6 +985,9 @@ class TabPFNV2(Architecture):
 
             # Add the targets as an additional column.
             x_BRCD = torch.cat((embedded_x_BRGX, embedded_y_BRY[:, :, None]), dim=2)
+            # Drop refs so the (full-size) embedded feature/target tensors are freed
+            # before the transformer blocks run.
+            del embedded_x_BRGX, embedded_y_BRY
             # This check results in a graph break with torch compile, so we only run it
             # once in the beginning and then disable it.
             if self._do_encoder_nan_check:
