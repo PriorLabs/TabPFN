@@ -19,7 +19,7 @@ from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.inference_tuning import ClassifierEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
 
-from .utils import get_pytest_devices
+from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 def _make_regression_data() -> tuple[np.ndarray, np.ndarray]:
@@ -95,6 +95,29 @@ def test__save_and_load_twice__predictions_equal_to_before_save(
         )
         np.testing.assert_array_equal(original_model.classes_, loaded_model_1.classes_)
         np.testing.assert_array_equal(original_model.classes_, loaded_model_2.classes_)
+
+
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
+def test__save_fit_state__does_not_move_live_estimator_to_cpu(
+    device: str, tmp_path: Path
+) -> None:
+    """Saving must not mutate the live estimator.
+
+    ``nn.Module.to`` moves modules in place, so a naive CPU snapshot of fitted
+    attributes used to relocate the estimator's bar distributions, breaking
+    subsequent predictions on non-CPU devices.
+    """
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device=device, n_estimators=1)
+    model.fit(X, y)
+
+    model.save_fit_state(tmp_path / "model.tabpfn_fit")
+
+    assert model.znorm_space_bardist_.borders.device.type == device
+    assert model.raw_space_bardist_.borders.device.type == device
+    # These output types rely on the bar distributions living on the model device.
+    model.predict(X, output_type="median")
+    model.predict(X, output_type="quantiles")
 
 
 # --- Error Handling Tests ---

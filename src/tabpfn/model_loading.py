@@ -1152,8 +1152,12 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         # move all tensors to "cpu" before saving, so if fitted & saved on cuda-device
         # and loading on cpu-device does not throw
         # "RuntimeError: Attempting to deserialize object on a CUDA device..."
+        # Tensor.to returns a copy, but nn.Module.to moves in place, so modules
+        # must be deep-copied to leave the live estimator on its device.
         fitted_attrs = {
-            k: v.to("cpu") if isinstance(v, (torch.nn.Module, torch.Tensor)) else v
+            k: copy.deepcopy(v).to("cpu")
+            if isinstance(v, torch.nn.Module)
+            else (v.to("cpu") if isinstance(v, torch.Tensor) else v)
             for k, v in fitted_attrs.items()
         }
 
