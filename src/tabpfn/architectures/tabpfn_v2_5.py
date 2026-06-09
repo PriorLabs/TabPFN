@@ -482,9 +482,9 @@ class TabPFNBlock(nn.Module):
             residual=False,
             batch_dims=3,
         )
-        # Again, call .contiguous() so that _chunk() can operate on x_BCRE in-place.
+        # Again, call .contiguous() so that _chunk() can operate on x_BRCE in-place.
         x_BRCE = x_BCRE.transpose(1, 2).contiguous()
-        del x_BRCE
+        del x_BCRE
 
         # -- Third Block: MLP layer.
         x_BRCE = chunked_evaluate_maybe_inplace(
