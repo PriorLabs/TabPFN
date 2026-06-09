@@ -9,6 +9,7 @@ from typing_extensions import override
 
 import numpy as np
 from sklearn.preprocessing import QuantileTransformer
+from sklearn.utils.validation import _num_samples
 
 _DEFAULT_SUBSAMPLE = 100_000
 
@@ -106,14 +107,6 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
             random_state=random_state,
             copy=copy,
         )
-        if extrapolate_ratio is not None:
-            if extrapolate_ratio < 0:
-                raise ValueError("extrapolate_ratio must be non-negative.")
-            if output_distribution != "uniform":
-                raise ValueError(
-                    "extrapolate_ratio is only supported for "
-                    "output_distribution='uniform'."
-                )
         self.extrapolate_ratio = extrapolate_ratio
 
     @override
@@ -122,11 +115,25 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         X: np.ndarray,
         y: np.ndarray | None = None,
     ) -> AdaptiveQuantileTransformer:
-        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+        # Validated here rather than in __init__: sklearn requires that the
+        # constructor and set_params accept any value and validation happens
+        # at fit time.
+        if self.extrapolate_ratio is not None:
+            if self.extrapolate_ratio < 0:
+                raise ValueError("extrapolate_ratio must be non-negative.")
+            if self.output_distribution != "uniform":
+                raise ValueError(
+                    "extrapolate_ratio is only supported for "
+                    "output_distribution='uniform'."
+                )
+
+        # Robust to array-likes without a .shape (lists, etc.); the parent's
+        # fit performs the full input validation/conversion.
+        n_samples = _num_samples(X)
+
+        if self.extrapolate_ratio is not None and n_samples > 0:
             self.x_min_ = np.nanmin(X, axis=0, keepdims=True)
             self.x_max_ = np.nanmax(X, axis=0, keepdims=True)
-
-        n_samples = X.shape[0]
 
         # Convert Generator to RandomState if needed for sklearn compatibility
         random_state = self.random_state
@@ -160,7 +167,8 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
     def transform(self, X: np.ndarray) -> np.ndarray:
         out = super().transform(X)
 
-        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+        if self.extrapolate_ratio is not None and out.shape[0] > 0:
+            X = np.asarray(X)
             x_range = self.x_max_ - self.x_min_
             # Skip constant features (matches the GPU path); also avoids a
             # divide-by-zero in the normalisation below.

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sklearn.base import clone
-from sklearn.compose import ColumnTransformer
 from sklearn.utils.estimator_checks import parametrize_with_checks
 
 from tabpfn.preprocessing.steps import AdaptiveQuantileTransformer
@@ -136,68 +134,35 @@ def test__no_extrapolation_when_unset__matches_baseline():
 
 
 def test__extrapolate_ratio__validation_guards():
-    """Invalid extrapolate_ratio configs are rejected at construction."""
+    """Invalid extrapolate_ratio configs are rejected at fit time.
+
+    (Fit time rather than construction: sklearn requires that __init__ and
+    set_params accept any value, with validation deferred to fit.)
+    """
+    X = np.random.default_rng(0).normal(size=(20, 2))
     with pytest.raises(ValueError, match="non-negative"):
         AdaptiveQuantileTransformer(
             output_distribution="uniform", extrapolate_ratio=-0.1
-        )
+        ).fit(X)
     with pytest.raises(ValueError, match="output_distribution='uniform'"):
-        AdaptiveQuantileTransformer(output_distribution="normal", extrapolate_ratio=0.1)
-    # Valid config still constructs.
-    AdaptiveQuantileTransformer(output_distribution="uniform", extrapolate_ratio=0.1)
+        AdaptiveQuantileTransformer(
+            output_distribution="normal", extrapolate_ratio=0.1
+        ).fit(X)
+    # Valid config fits.
+    AdaptiveQuantileTransformer(
+        output_distribution="uniform", extrapolate_ratio=0.1
+    ).fit(X)
 
 
-def test__sklearn_clone__preserves_all_params():
-    """clone() must preserve every constructor parameter.
+def test__fit__generator_random_state_and_refit_adaptation():
+    """Covers the sklearn battery's blind spots for this class.
 
-    Regression test: parameters passed through ``**kwargs`` were invisible to
-    ``get_params()``, so sklearn's ``clone`` silently reset them to defaults.
-    Sklearn clones transformers internally (e.g. ``ColumnTransformer.fit``),
-    which made every ``quantile_norm*`` preset produce uniform output.
-    """
-    transformer = AdaptiveQuantileTransformer(
-        n_quantiles=123,
-        output_distribution="normal",
-        ignore_implicit_zeros=True,
-        subsample=4_567,
-        random_state=42,
-        copy=False,
-    )
-    cloned = clone(transformer)
-    assert cloned.get_params() == transformer.get_params()
-    assert cloned.output_distribution == "normal"
-    assert cloned.ignore_implicit_zeros is True
-    assert cloned.random_state == 42
-    assert cloned.copy is False
-
-
-def test__inside_column_transformer__normal_output_distribution_is_kept():
-    """The live-bug symptom: ColumnTransformer clones its sub-transformers, so a
-    'normal' quantile transformer must still produce normally-distributed (not
-    uniform) output after the internal clone.
-    """
-    X = np.random.default_rng(0).normal(size=(300, 2))
-    ct = ColumnTransformer(
-        [
-            (
-                "q",
-                AdaptiveQuantileTransformer(
-                    n_quantiles=50, output_distribution="normal", random_state=0
-                ),
-                [0, 1],
-            )
-        ]
-    )
-    out = ct.fit_transform(X)
-    # Uniform output lives in [0, 1]; normal output has substantial mass outside.
-    assert out.min() < -1.0
-    assert out.max() > 1.0
-
-
-def test__fit__does_not_modify_hyperparameters():
-    """fit() adapts n_quantiles and converts Generator random_state internally,
-    but must not overwrite the constructor parameters: clones/refits would
-    otherwise be configured with the adapted values instead of the originals.
+    The battery never passes a np.random.Generator as random_state (a
+    permanent Generator-to-RandomState conversion in fit would go unnoticed)
+    and never refits on differently-sized data (a stale adapted n_quantiles
+    would go unnoticed). Clone safety itself is covered by the battery below
+    and by the registry-wide clone-equivalence test in
+    test_reshape_feature_distribution_step.py.
     """
     rng = np.random.default_rng(7)
     X = rng.normal(size=(50, 3))
@@ -207,9 +172,10 @@ def test__fit__does_not_modify_hyperparameters():
     )
     transformer.fit(X)
 
+    # Constructor parameters survive fit unchanged ...
     assert transformer.n_quantiles == 1_000
     assert transformer.random_state is rng
-    # The adapted value lives in the fitted attribute used by transform.
+    # ... while the adapted value lives in the fitted attribute.
     assert transformer.n_quantiles_ == 50
 
     # Refitting on more samples must adapt upwards from the user's bound,
@@ -219,27 +185,9 @@ def test__fit__does_not_modify_hyperparameters():
     assert transformer.n_quantiles_ == 200
 
 
-def _expected_failed_sklearn_checks(estimator: object) -> dict[str, str]:
-    del estimator
-    return {
-        "check_do_not_raise_errors_in_init_or_set_params": (
-            "extrapolate_ratio is deliberately validated at construction "
-            "(pinned by test__extrapolate_ratio__validation_guards); sklearn "
-            "wants validation deferred to fit."
-        ),
-        "check_transformer_data_not_an_array": (
-            "fit() reads X.shape for the adaptive n_quantiles and the "
-            "extrapolation bounds before converting array-likes."
-        ),
-    }
-
-
-@parametrize_with_checks(
-    [AdaptiveQuantileTransformer()],
-    expected_failed_checks=_expected_failed_sklearn_checks,
-)
+@parametrize_with_checks([AdaptiveQuantileTransformer()])
 def test__sklearn_estimator_checks(estimator, check) -> None:
-    """Run sklearn's standard estimator checks.
+    """Run sklearn's standard estimator checks, with no exceptions.
 
     These would have caught both halves of the clone bug fixed here:
     check_estimators_overwrite_params fails on fit() mutating n_quantiles,
