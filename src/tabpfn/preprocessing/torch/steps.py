@@ -396,6 +396,11 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         num_train_rows = x.shape[0]
         num_features = x.shape[-1]
 
+        # Mirror the CPU AddSVDFeaturesStep, which is a no-op for fewer than
+        # 2 features (TruncatedSVD needs n_components < n_features).
+        if num_features < 2:
+            return {"is_no_op": torch.tensor(data=True)}
+
         effective_n_components = get_svd_n_components(
             self.global_transformer_name,
             n_samples=num_train_rows,
@@ -437,6 +442,9 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         Returns:
             Tuple of (original_columns, svd_features, NUMERICAL modality).
         """
+        if "is_no_op" in fitted_cache:
+            return x, None, None
+
         num_rows, batch_size, num_features = x.shape
 
         # Extract caches
