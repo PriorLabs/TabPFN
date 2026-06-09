@@ -8,6 +8,7 @@ from typing import Literal
 
 import numpy as np
 import pytest
+from sklearn.base import clone
 
 from tabpfn.preprocessing.datamodel import (
     Feature,
@@ -16,6 +17,9 @@ from tabpfn.preprocessing.datamodel import (
     GPUTransformType,
 )
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
+from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
+    get_all_reshape_feature_distribution_preprocessors,
+)
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -523,3 +527,35 @@ def test__num_added_features():
     assert step.num_added_features(100, _get_schema(num_columns=10)) == 10
     assert step.num_added_features(100, _get_schema(num_columns=501)) == 0
     assert step.num_added_features(100, _get_schema(num_columns=250)) == 250
+
+
+def test__all_preprocessors__clone_equivalence():
+    """Every registry preprocessor must survive sklearn's clone unchanged.
+
+    sklearn clones transformers internally (e.g. ``ColumnTransformer.fit``), so
+    a transformer whose constructor hides parameters from ``get_params()``
+    (e.g. via ``**kwargs``) silently loses them on clone. Fitting a clone on
+    the same data must give the same output as fitting the original.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.uniform(0.5, 2.0, size=(100, 3))
+
+    preprocessors = get_all_reshape_feature_distribution_preprocessors(
+        num_examples=X.shape[0], random_state=0
+    )
+    for name, preprocessor in preprocessors.items():
+        if name == "adaptive":
+            # ColumnTransformer keyed on column-name patterns; needs a
+            # purpose-built DataFrame and is itself the cloning mechanism
+            # under test for its sub-transformers.
+            continue
+        out_original = preprocessor.fit_transform(X.copy())
+        out_clone = clone(preprocessor).fit_transform(X.copy())
+        np.testing.assert_allclose(
+            np.asarray(out_original, dtype=float),
+            np.asarray(out_clone, dtype=float),
+            err_msg=(
+                f"Preprocessor {name!r} behaves differently after clone(); "
+                "it likely hides constructor parameters from get_params()."
+            ),
+        )

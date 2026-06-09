@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from sklearn.base import clone
+from sklearn.compose import ColumnTransformer
 
 from tabpfn.preprocessing.steps import AdaptiveQuantileTransformer
 
@@ -142,3 +144,75 @@ def test__extrapolate_ratio__validation_guards():
         AdaptiveQuantileTransformer(output_distribution="normal", extrapolate_ratio=0.1)
     # Valid config still constructs.
     AdaptiveQuantileTransformer(output_distribution="uniform", extrapolate_ratio=0.1)
+
+
+def test__sklearn_clone__preserves_all_params():
+    """clone() must preserve every constructor parameter.
+
+    Regression test: parameters passed through ``**kwargs`` were invisible to
+    ``get_params()``, so sklearn's ``clone`` silently reset them to defaults.
+    Sklearn clones transformers internally (e.g. ``ColumnTransformer.fit``),
+    which made every ``quantile_norm*`` preset produce uniform output.
+    """
+    transformer = AdaptiveQuantileTransformer(
+        n_quantiles=123,
+        output_distribution="normal",
+        ignore_implicit_zeros=True,
+        subsample=4_567,
+        random_state=42,
+        copy=False,
+    )
+    cloned = clone(transformer)
+    assert cloned.get_params() == transformer.get_params()
+    assert cloned.output_distribution == "normal"
+    assert cloned.ignore_implicit_zeros is True
+    assert cloned.random_state == 42
+    assert cloned.copy is False
+
+
+def test__inside_column_transformer__normal_output_distribution_is_kept():
+    """The live-bug symptom: ColumnTransformer clones its sub-transformers, so a
+    'normal' quantile transformer must still produce normally-distributed (not
+    uniform) output after the internal clone.
+    """
+    X = np.random.default_rng(0).normal(size=(300, 2))
+    ct = ColumnTransformer(
+        [
+            (
+                "q",
+                AdaptiveQuantileTransformer(
+                    n_quantiles=50, output_distribution="normal", random_state=0
+                ),
+                [0, 1],
+            )
+        ]
+    )
+    out = ct.fit_transform(X)
+    # Uniform output lives in [0, 1]; normal output has substantial mass outside.
+    assert out.min() < -1.0
+    assert out.max() > 1.0
+
+
+def test__fit__does_not_modify_hyperparameters():
+    """fit() adapts n_quantiles and converts Generator random_state internally,
+    but must not overwrite the constructor parameters: clones/refits would
+    otherwise be configured with the adapted values instead of the originals.
+    """
+    rng = np.random.default_rng(7)
+    X = rng.normal(size=(50, 3))
+
+    transformer = AdaptiveQuantileTransformer(
+        n_quantiles=1_000, output_distribution="normal", random_state=rng
+    )
+    transformer.fit(X)
+
+    assert transformer.n_quantiles == 1_000
+    assert transformer.random_state is rng
+    # The adapted value lives in the fitted attribute used by transform.
+    assert transformer.n_quantiles_ == 50
+
+    # Refitting on more samples must adapt upwards from the user's bound,
+    # not stay capped at a previously adapted value.
+    X_large = np.random.default_rng(8).normal(size=(200, 3))
+    transformer.fit(X_large)
+    assert transformer.n_quantiles_ == 200

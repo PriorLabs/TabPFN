@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Literal
 from typing_extensions import override
 
 import numpy as np
@@ -85,18 +85,31 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         self,
         *,
         n_quantiles: int = 1_000,
+        output_distribution: Literal["uniform", "normal"] = "uniform",
+        ignore_implicit_zeros: bool = False,
         subsample: int = _DEFAULT_SUBSAMPLE,
+        random_state: int | np.random.RandomState | np.random.Generator | None = None,
+        copy: bool = True,
         extrapolate_ratio: float | None = None,
-        **kwargs: Any,
     ) -> None:
-        # Store the user's desired n_quantiles to use as an upper bound
-        self._user_n_quantiles = n_quantiles
-        # Initialize parent with this, but it will be adapted in fit
-        super().__init__(n_quantiles=n_quantiles, subsample=subsample, **kwargs)
+        # All parent parameters are declared explicitly (no **kwargs): sklearn's
+        # get_params() only discovers named constructor parameters, and clone()
+        # rebuilds from get_params(). Parameters hidden behind **kwargs would be
+        # silently dropped whenever sklearn clones this transformer (e.g. inside
+        # ColumnTransformer.fit), resetting output_distribution/random_state to
+        # their defaults.
+        super().__init__(
+            n_quantiles=n_quantiles,
+            output_distribution=output_distribution,
+            ignore_implicit_zeros=ignore_implicit_zeros,
+            subsample=subsample,
+            random_state=random_state,
+            copy=copy,
+        )
         if extrapolate_ratio is not None:
             if extrapolate_ratio < 0:
                 raise ValueError("extrapolate_ratio must be non-negative.")
-            if kwargs.get("output_distribution", "uniform") != "uniform":
+            if output_distribution != "uniform":
                 raise ValueError(
                     "extrapolate_ratio is only supported for "
                     "output_distribution='uniform'."
@@ -115,21 +128,33 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
 
         n_samples = X.shape[0]
 
-        self.n_quantiles = compute_effective_n_quantiles(
-            self._user_n_quantiles, n_samples, self.subsample
-        )
-
         # Convert Generator to RandomState if needed for sklearn compatibility
-        if isinstance(self.random_state, np.random.Generator):
-            seed = int(self.random_state.integers(0, 2**32))
-            self.random_state = np.random.RandomState(seed)
-        elif hasattr(self.random_state, "bit_generator"):
+        random_state = self.random_state
+        if isinstance(random_state, np.random.Generator):
+            seed = int(random_state.integers(0, 2**32))
+            random_state = np.random.RandomState(seed)
+        elif hasattr(random_state, "bit_generator"):
             raise ValueError(
-                f"Unsupported random state type: {type(self.random_state)}. "
+                f"Unsupported random state type: {type(random_state)}. "
                 "Please provide an integer seed or np.random.RandomState object."
             )
 
-        return super().fit(X, y)
+        # The parent reads n_quantiles/random_state from self, so set the
+        # adapted values only for the duration of the fit and restore the
+        # user-provided hyperparameters afterwards: fit() must not modify
+        # constructor parameters, or clones/refits of this transformer would
+        # be configured with the adapted values instead of the originals.
+        user_n_quantiles = self.n_quantiles
+        user_random_state = self.random_state
+        self.n_quantiles = compute_effective_n_quantiles(
+            user_n_quantiles, n_samples, self.subsample
+        )
+        self.random_state = random_state
+        try:
+            return super().fit(X, y)
+        finally:
+            self.n_quantiles = user_n_quantiles
+            self.random_state = user_random_state
 
     @override
     def transform(self, X: np.ndarray) -> np.ndarray:
