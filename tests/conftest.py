@@ -1,26 +1,14 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Pytest configuration for TabPFN tests.
-
-This module sets up global test configuration, including disabling telemetry
-for all tests to ensure consistent behavior and avoid external dependencies
-during testing.
-"""
+"""Pytest configuration for TabPFN tests."""
 
 from __future__ import annotations
 
-import os
 import random
 
 import numpy as np
 import pytest
 import torch
-
-
-def pytest_configure(config: pytest.Config) -> None:  # noqa: ARG001
-    """Configure pytest with global settings."""
-    # Disable telemetry for all tests to ensure consistent behavior
-    os.environ["TABPFN_DISABLE_TELEMETRY"] = "1"
 
 
 @pytest.fixture(autouse=True, scope="function")  # noqa: PT003
