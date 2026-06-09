@@ -530,12 +530,9 @@ def test__num_added_features():
 
 
 def test__all_preprocessors__clone_equivalence():
-    """Every registry preprocessor must survive sklearn's clone unchanged.
-
-    sklearn clones transformers internally (e.g. ``ColumnTransformer.fit``), so
-    a transformer whose constructor hides parameters from ``get_params()``
-    (e.g. via ``**kwargs``) silently loses them on clone. Fitting a clone on
-    the same data must give the same output as fitting the original.
+    """Fitting a clone of any registry preprocessor must give the same output
+    as fitting the original (sklearn clones internally, e.g. in
+    ColumnTransformer.fit, so parameters hidden from get_params are lost).
     """
     rng = np.random.default_rng(0)
     X = rng.uniform(0.5, 2.0, size=(100, 3))
@@ -545,9 +542,7 @@ def test__all_preprocessors__clone_equivalence():
     )
     for name, preprocessor in preprocessors.items():
         if name == "adaptive":
-            # ColumnTransformer keyed on column-name patterns; needs a
-            # purpose-built DataFrame and is itself the cloning mechanism
-            # under test for its sub-transformers.
+            # ColumnTransformer keyed on column-name patterns; needs a DataFrame.
             continue
         out_original = preprocessor.fit_transform(X.copy())
         out_clone = clone(preprocessor).fit_transform(X.copy())

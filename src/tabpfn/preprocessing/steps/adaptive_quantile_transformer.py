@@ -93,12 +93,8 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         copy: bool = True,
         extrapolate_ratio: float | None = None,
     ) -> None:
-        # All parent parameters are declared explicitly (no **kwargs): sklearn's
-        # get_params() only discovers named constructor parameters, and clone()
-        # rebuilds from get_params(). Parameters hidden behind **kwargs would be
-        # silently dropped whenever sklearn clones this transformer (e.g. inside
-        # ColumnTransformer.fit), resetting output_distribution/random_state to
-        # their defaults.
+        # All parent parameters must be explicit (no **kwargs): clone()
+        # rebuilds from get_params(), which only sees named parameters.
         super().__init__(
             n_quantiles=n_quantiles,
             output_distribution=output_distribution,
@@ -115,9 +111,7 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         X: np.ndarray,
         y: np.ndarray | None = None,
     ) -> AdaptiveQuantileTransformer:
-        # Validated here rather than in __init__: sklearn requires that the
-        # constructor and set_params accept any value and validation happens
-        # at fit time.
+        # sklearn contract: validate at fit time, not in __init__/set_params.
         if self.extrapolate_ratio is not None:
             if self.extrapolate_ratio < 0:
                 raise ValueError("extrapolate_ratio must be non-negative.")
@@ -127,8 +121,6 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
                     "output_distribution='uniform'."
                 )
 
-        # Robust to array-likes without a .shape (lists, etc.); the parent's
-        # fit performs the full input validation/conversion.
         n_samples = _num_samples(X)
 
         if self.extrapolate_ratio is not None and n_samples > 0:
@@ -146,11 +138,9 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
                 "Please provide an integer seed or np.random.RandomState object."
             )
 
-        # The parent reads n_quantiles/random_state from self, so set the
-        # adapted values only for the duration of the fit and restore the
-        # user-provided hyperparameters afterwards: fit() must not modify
-        # constructor parameters, or clones/refits of this transformer would
-        # be configured with the adapted values instead of the originals.
+        # The parent reads n_quantiles/random_state from self: set the adapted
+        # values only for the duration of the fit, since fit() must not modify
+        # constructor parameters (clone/refit contract).
         user_n_quantiles = self.n_quantiles
         user_random_state = self.random_state
         self.n_quantiles = compute_effective_n_quantiles(

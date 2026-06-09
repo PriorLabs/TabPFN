@@ -134,11 +134,7 @@ def test__no_extrapolation_when_unset__matches_baseline():
 
 
 def test__extrapolate_ratio__validation_guards():
-    """Invalid extrapolate_ratio configs are rejected at fit time.
-
-    (Fit time rather than construction: sklearn requires that __init__ and
-    set_params accept any value, with validation deferred to fit.)
-    """
+    """Invalid extrapolate_ratio configs are rejected at fit time."""
     X = np.random.default_rng(0).normal(size=(20, 2))
     with pytest.raises(ValueError, match="non-negative"):
         AdaptiveQuantileTransformer(
@@ -155,14 +151,8 @@ def test__extrapolate_ratio__validation_guards():
 
 
 def test__fit__generator_random_state_and_refit_adaptation():
-    """Covers the sklearn battery's blind spots for this class.
-
-    The battery never passes a np.random.Generator as random_state (a
-    permanent Generator-to-RandomState conversion in fit would go unnoticed)
-    and never refits on differently-sized data (a stale adapted n_quantiles
-    would go unnoticed). Clone safety itself is covered by the battery below
-    and by the registry-wide clone-equivalence test in
-    test_reshape_feature_distribution_step.py.
+    """Blind spots of the sklearn battery: it never passes a
+    np.random.Generator as random_state and never refits on a different size.
     """
     rng = np.random.default_rng(7)
     X = rng.normal(size=(50, 3))
@@ -187,11 +177,5 @@ def test__fit__generator_random_state_and_refit_adaptation():
 
 @parametrize_with_checks([AdaptiveQuantileTransformer()])
 def test__sklearn_estimator_checks(estimator, check) -> None:
-    """Run sklearn's standard estimator checks, with no exceptions.
-
-    These would have caught both halves of the clone bug fixed here:
-    check_estimators_overwrite_params fails on fit() mutating n_quantiles,
-    and check_do_not_raise_errors_in_init_or_set_params fails on the
-    **kwargs constructor signature.
-    """
+    """Run sklearn's standard estimator checks, with no exceptions."""
     check(estimator)
