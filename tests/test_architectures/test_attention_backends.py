@@ -210,3 +210,68 @@ def test__fa3_matches_sdpa_within_tolerance(
 
     # 5e-3 abs matches the contributor's test_fa3.py for the same shapes.
     torch.testing.assert_close(out_fa3, out_sdpa, atol=5e-3, rtol=5e-3)
+
+
+def _gqa_inputs(
+    num_q_heads: int, num_kv_heads: int
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    torch.manual_seed(0)
+    batch, seq, head_dim = 2, 5, 8
+    q = torch.randn(batch, seq, num_q_heads, head_dim)
+    k = torch.randn(batch, seq, num_kv_heads, head_dim)
+    v = torch.randn(batch, seq, num_kv_heads, head_dim)
+    return q, k, v
+
+
+def test__torch_mps_branch__enable_gqa_parity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The torch-MPS branch must request GQA exactly when head counts differ.
+
+    Regression test: the parity was inverted (enable_gqa=True when the head
+    counts were EQUAL, where it is a no-op, and False when they differed,
+    where it is required) — which would crash every forward of the default v3
+    checkpoint (8 query heads vs 1 test KV head) on MPS once torch satisfies
+    the is_torch_mps_preferred version gate. The gate is version- and
+    device-gated to environments CI does not have, so it is mocked here to pin
+    the branch's logic on any platform.
+    """
+    monkeypatch.setattr(_sdpa_mod, "is_torch_mps_preferred", lambda *_: True)
+    captured = []
+
+    def fake_mps_sdpa(
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        *,
+        enable_gqa: bool = False,
+    ) -> torch.Tensor:
+        del k, v
+        captured.append(enable_gqa)
+        return torch.zeros_like(q)
+
+    monkeypatch.setattr(_sdpa_mod, "torch_mps_sdpa", fake_mps_sdpa)
+
+    q, k, v = _gqa_inputs(num_q_heads=8, num_kv_heads=1)
+    _sdpa_mod.scaled_dot_product_attention(q, k, v)
+    q, k, v = _gqa_inputs(num_q_heads=4, num_kv_heads=4)
+    _sdpa_mod.scaled_dot_product_attention(q, k, v)
+
+    assert captured == [True, False]
+
+
+@pytest.mark.skipif(
+    torch.__version__ < "2.5", reason="enable_gqa requires torch >= 2.5"
+)
+def test__torch_mps_sdpa__gqa_matches_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Force the torch-MPS branch (on CPU) with mismatched head counts: the
+    real torch_mps_sdpa must not crash and must match the default path's
+    repeat_interleave GQA reference.
+    """
+    q, k, v = _gqa_inputs(num_q_heads=8, num_kv_heads=2)
+    reference = _sdpa_mod.scaled_dot_product_attention(q, k, v)
+
+    monkeypatch.setattr(_sdpa_mod, "is_torch_mps_preferred", lambda *_: True)
+    out = _sdpa_mod.scaled_dot_product_attention(q, k, v)
+
+    torch.testing.assert_close(out, reference, atol=1e-5, rtol=1e-5)
