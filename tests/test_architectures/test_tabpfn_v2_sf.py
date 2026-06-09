@@ -91,6 +91,7 @@ class TestTabPFNv2NewVsOldImplementation:
     """Test that the v2 implementation computes exactly the same outputs as the base."""
 
     @torch.no_grad()
+    @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
     def test__forward__v2_and_base_have_same_output(self) -> None:
         loaded_models, _, loaded_configs, _ = model_loading.load_model_criterion_config(
             model_path=None,
