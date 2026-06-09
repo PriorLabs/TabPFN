@@ -73,7 +73,7 @@ Choose the right TabPFN implementation for your needs:
 
   -  **`interpretability`**: Gain insights with SHAP-based explanations, feature importance, and selection tools.
   -  **`unsupervised`**: Tools for outlier detection and synthetic tabular data generation.
-  -  **`embeddings`**: Extract and use TabPFN’s internal learned embeddings for downstream tasks or analysis.
+  -  **`embeddings`**: Extract and use TabPFN's internal learned embeddings for downstream tasks or analysis.
   -  **`many_class`**: Handle multi-class classification problems that exceed TabPFN's built-in class limit.
 
   To install:
@@ -93,7 +93,8 @@ The TabPFN-2.5, TabPFN-2.6, and TabPFN-3 model weights are released under non-co
 
 The code and TabPFN-2 model weights are licensed under Prior Labs License (Apache 2.0 with additional attribution requirement): [here](LICENSE). To use the v2 model weights, instantiate your model as follows:
 
-```
+```python
+from tabpfn import TabPFNRegressor
 from tabpfn.constants import ModelVersion
 
 tabpfn_v2 = TabPFNRegressor.create_default_for_version(ModelVersion.V2)
@@ -235,8 +236,8 @@ This script will download the main classifier and regressor models, as well as a
 **Manual Download**
 
 1. Download the model files manually from HuggingFace:
-   - Classifier: [tabpfn-v3-classifier-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-20260506.ckpt)
-   - Regressor: [tabpfn-v3-regressor-20260506.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-20260506.ckpt)
+   - Classifier: [tabpfn-v3-classifier-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-classifier-v3_default.ckpt)
+   - Regressor: [tabpfn-v3-regressor-v3_default.ckpt](https://huggingface.co/Prior-Labs/tabpfn_3/blob/main/tabpfn-v3-regressor-v3_default.ckpt)
 
 2. Place the file in one of these locations:
    - Specify directly: `TabPFNClassifier(model_path="/path/to/model.ckpt")`

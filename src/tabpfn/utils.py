@@ -12,9 +12,6 @@ from typing import TYPE_CHECKING, Literal, Union
 import numpy as np
 import numpy.typing as npt
 import torch
-from sklearn.base import (
-    TransformerMixin,
-)
 
 from tabpfn.architectures.encoders import (
     MulticlassClassificationTargetEncoderStep,
