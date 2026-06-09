@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
 import warnings
@@ -1135,7 +1136,10 @@ def generate_regression_ensemble_configs(
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
             feature_shift_decoder=feature_shift_decoder,
-            target_transform=target_transform,
+            # Each config gets its own copy: the transform is later fitted in
+            # place per ensemble member (see _transform_labels_one), so a
+            # shared instance would end up with the last member's fitted state.
+            target_transform=copy.deepcopy(target_transform),
             outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
         )
