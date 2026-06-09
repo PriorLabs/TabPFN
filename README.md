@@ -346,7 +346,7 @@ Each TabPFN release publishes a default classification and regression checkpoint
 
 ## Anonymized Telemetry
 
-This project collects fully anonymous usage telemetry enabled by default.
+This project collects fully anonymous usage telemetry disabled by default.
 
 The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
 
@@ -356,10 +356,10 @@ The data is used exclusively to help us provide stability to the relevant produc
 
 For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
 
-**To opt out**, set the following environment variable:
+**To opt in**, set the following environment variable:
 
 ```bash
-export TABPFN_DISABLE_TELEMETRY=1
+export TABPFN_DISABLE_TELEMETRY=0
 ```
 ---
 
