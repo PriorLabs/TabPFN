@@ -88,6 +88,9 @@ dev = [
 # The idea is to be as close to the deployment environment as possible.
 ci = [
   "licensecheck>=2025.1.0",
+  # Weirdly licensecheck is pulling in an old version of uv. We need at least
+  # this version to support syntax in this file.
+  "uv>=0.11.7",
   "onnx>=1.19.0",  # We run onnx export in the tests, but not in the production package.
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
