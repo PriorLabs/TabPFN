@@ -141,10 +141,12 @@ class TestTabPFNv2NewVsOldImplementation:
         # Doing a forward and backward pass is more expensive, so use a smaller model.
         arch_v2, arch_base = _create_identical_small_v2_and_base()
 
-        # Create dummy input data
-        x_v2 = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+        # Use float64 (like the forward comparison tests): the functional preprocessing
+        # is mathematically equivalent to the base encoder steps but not bit-identical,
+        # so float32 gradients differ at rounding level (~1e-7) while float64 matches.
+        x_v2 = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
         x_base = x_v2.clone().detach()
-        y_v2 = torch.randint(0, 10, [97, 2], dtype=torch.float32)
+        y_v2 = torch.randint(0, 10, [97, 2], dtype=torch.float64)
         y_base = y_v2.clone().detach()
 
         x_v2.requires_grad = True
@@ -156,6 +158,121 @@ class TestTabPFNv2NewVsOldImplementation:
 
         msg = "Gradients for input x do not match between implementations."
         assert torch.allclose(x_v2.grad, x_base.grad), msg
+
+
+def _handler_inputs() -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
+    """Return ``(x, y)`` pairs that each exercise one preprocessing handler.
+
+    Every case must produce identical outputs in the single-file and base
+    architectures, validating the functional reimplementation of each encoder step
+    (NaN/Inf handling, constant-feature removal, feature-group normalization and the
+    multiclass target densification).
+    """
+    torch.manual_seed(0)
+    num_train, num_test, num_features, batch = 40, 13, 8, 2
+    num_rows = num_train + num_test
+
+    def make_x() -> torch.Tensor:
+        return torch.randn(num_rows, batch, num_features, dtype=torch.float64) * 0.5
+
+    def make_y() -> torch.Tensor:
+        return torch.randint(0, 10, (num_train, batch), dtype=torch.float64)
+
+    cases: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
+
+    # Baseline: clean, well-behaved data (no handler is actually triggered).
+    cases["plain"] = (make_x(), make_y())
+
+    # NaNs scattered through the features, including a fully-NaN feature column.
+    x = make_x()
+    x[5, 0, 2] = float("nan")
+    x[20, 1, 4] = float("nan")
+    x[:, 0, 6] = float("nan")
+    cases["feature_nans"] = (x, make_y())
+
+    # +Inf / -Inf in the features (distinct indicator values from NaN).
+    x = make_x()
+    x[3, 0, 1] = float("inf")
+    x[7, 1, 5] = float("-inf")
+    x[11, 0, 5] = float("inf")
+    cases["feature_infs"] = (x, make_y())
+
+    # Constant feature columns -> exercises remove-empty + feature-group normalization.
+    x = make_x()
+    x[:, :, 0] = 3.14
+    x[:, :, 3] = 0.0
+    cases["constant_features"] = (x, make_y())
+
+    # Duplicated feature columns and duplicated rows (kept as-is; no dedup step).
+    x = make_x()
+    x[:, :, 1] = x[:, :, 2]
+    x[10] = x[3]
+    x[25] = x[3]
+    cases["duplicate_features_and_rows"] = (x, make_y())
+
+    # NaNs in the training targets -> exercises the target NaN handler.
+    y = make_y()
+    y[2, 0] = float("nan")
+    y[10, 1] = float("nan")
+    cases["target_nans"] = (make_x(), y)
+
+    # Non-contiguous / sparse classes -> exercises the multiclass densification.
+    y = torch.randint(0, 10, (num_train, batch), dtype=torch.float64)
+    y[y == 5] = 7
+    y[y == 2] = 9
+    cases["sparse_classes"] = (make_x(), y)
+
+    # Everything at once.
+    x = make_x()
+    x[4, 0, 2] = float("nan")
+    x[8, 1, 5] = float("inf")
+    x[:, :, 0] = 1.0
+    y = make_y()
+    y[1, 0] = float("nan")
+    cases["combined"] = (x, y)
+
+    return cases
+
+
+@pytest.mark.parametrize("case", list(_handler_inputs()))
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__forward__handlers_match_base(case: str) -> None:
+    """Each preprocessing handler produces the same output as the base architecture."""
+    arch_v2, arch_base = _create_identical_small_v2_and_base()
+    x, y = _handler_inputs()[case]
+
+    output_v2 = arch_v2(x, y, only_return_standard_out=False)
+    output_base = arch_base(x, y, only_return_standard_out=False)
+
+    assert output_v2.keys() == output_base.keys()
+    for key in output_v2:
+        assert torch.allclose(output_v2[key], output_base[key]), (
+            f"Outputs for {key} do not match between implementations for case {case!r}."
+        )
+
+
+@pytest.mark.parametrize("case", ["feature_nans", "feature_infs", "constant_features"])
+@torch.no_grad()
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+def test__kv_cache__matches_standard_forward_with_handlers(case: str) -> None:
+    """The cached feature statistics reproduce the standard forward on tricky inputs."""
+    arch = _build_small_arch(seed=420)
+    arch.to(torch.float64)
+    x_full, y_train = _handler_inputs()[case]
+    num_train = y_train.shape[0]
+    x_test = x_full[num_train:]
+
+    out_standard = arch(x_full, y_train)
+
+    out_store, cache = arch(x_full, y_train, return_kv_cache=True)
+    assert cache.feature_cache is not None
+    assert torch.allclose(out_standard, out_store, atol=1e-10)
+
+    out_cached = arch(x_test, y_train, kv_cache=cache, x_is_test_only=True)
+    assert torch.allclose(out_standard, out_cached, atol=1e-10), (
+        f"kv_cache inference differs from the standard forward for case {case!r}."
+    )
 
 
 @torch.no_grad()
@@ -187,8 +304,8 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> Non
 def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
     arch, _ = _create_identical_small_v2_and_base()
 
-    x = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float64)
+    x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
 
     output_without_recomputation = arch(x, y, only_return_standard_out=False)
     output_with_recomputation = arch(
@@ -271,18 +388,17 @@ def _make_kv_cache_data() -> tuple[torch.Tensor, torch.Tensor, int]:
     """Return ``(x_full, y_train, num_train)`` for the KV-cache tests."""
     torch.manual_seed(0)
     num_train, num_test, num_features = 30, 7, 5
-    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float64)
+    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float32)
     x_full = x_full * 0.5
-    y_train = torch.randint(0, 10, (num_train, 1), dtype=torch.float64)
+    y_train = torch.randint(0, 10, (num_train, 1), dtype=torch.float32)
     return x_full, y_train, num_train
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__matches_standard_forward() -> None:
     """KV-cache inference must match the standard (full train+test) forward."""
     arch = _build_small_arch(seed=420)
-    arch.to(torch.float64)
+    arch.to(torch.float32)
     x_full, y_train, num_train = _make_kv_cache_data()
     x_test = x_full[num_train:]
 
@@ -294,7 +410,7 @@ def test__kv_cache__matches_standard_forward() -> None:
     assert not cache.is_empty()
     assert len(cache.icl_cache.kv) == 1  # nlayers=1
     assert cache.train_shape == (1, num_train)
-    assert cache.encoder_state is not None
+    assert cache.feature_cache is not None
     assert torch.allclose(out_standard, out_store, atol=1e-10), (
         "return_kv_cache=True output differs from the standard forward."
     )
@@ -308,11 +424,10 @@ def test__kv_cache__matches_standard_forward() -> None:
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__non_standard_out_matches() -> None:
     """The cache path also returns matching embeddings dicts."""
     arch = _build_small_arch(seed=420)
-    arch.to(torch.float64)
+    arch.to(torch.float32)
     x_full, y_train, num_train = _make_kv_cache_data()
     x_test = x_full[num_train:]
 
@@ -332,10 +447,9 @@ def test__kv_cache__non_standard_out_matches() -> None:
 
 
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__kv_cache__x_is_test_only_requires_populated_cache() -> None:
     arch = _build_small_arch(seed=420)
-    arch.to(torch.float64)
+    arch.to(torch.float32)
     x_full, y_train, _ = _make_kv_cache_data()
     with pytest.raises(ValueError, match="requires a populated kv_cache"):
         arch(x_full, y_train, x_is_test_only=True)
