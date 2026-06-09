@@ -18,7 +18,7 @@ from __future__ import annotations
 import dataclasses
 from abc import ABC
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, cast
 from typing_extensions import override
 
 import pydantic
@@ -27,7 +27,10 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from tabpfn.architectures.base import get_encoder, get_y_encoder
+from tabpfn.architectures.encoders.steps._ops import (
+    select_features,
+    torch_nanmean,
+)
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
@@ -40,9 +43,17 @@ from tabpfn.architectures.kv_cache import (
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
+from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
-if TYPE_CHECKING:
-    from tabpfn.architectures.encoders import TorchPreprocessingPipeline
+# Indicator values appended to the feature/target encodings to flag the original
+# location of NaN / +Inf / -Inf cells (these match the base architecture's encoder).
+NAN_INDICATOR = -2.0
+INFINITY_INDICATOR = 2.0
+NEG_INFINITY_INDICATOR = 4.0
+
+# The feature/target encodings are concatenated with their NaN/Inf indicators before
+# the linear projection, doubling the number of features fed into the projection.
+ENCODING_SIZE_MULTIPLIER = 2
 
 
 @pydantic.dataclasses.dataclass
@@ -328,55 +339,6 @@ class LowerPrecisionLayerNorm(torch.nn.LayerNorm):
         return super().forward(input)
 
 
-def prepare_targets(
-    y: dict[str, torch.Tensor], num_rows: int, batch_size: int
-) -> dict[str, torch.Tensor]:
-    """Verify target shapes and nan-pad to the number of rows in x if necessary.
-
-    More specifically, we ensure that:
-    1. there are test rows (i.e. y["main"] is shorter than num_rows),
-    2. other keys in y are of length num_train_labels or num_rows,
-    3. all keys are nan-padded to the number of rows in x["main"].
-
-    Args:
-        y: A dictionary containing the target data, where each key corresponds to a
-            different target variable. Must contain the key "main".
-        num_rows: The number of rows in x["main"].
-        batch_size: The batch size of the input data.
-
-    Returns:
-        A dictionary with the same keys as `y`, but with all tensors nan-padded to
-        the number of rows in `x["main"]`.
-    """
-    num_train_labels = y["main"].shape[0]
-
-    # Check that the number of training labels is not greater than
-    # the total number of rows.
-    # Note: we allow `num_train_labels == num_rows` (i.e., no test data) to support
-    # use cases like KV-caching and for consistency with the OOM check script
-    # (`src/fomo_fitting/scripts/check_oom.py`).
-    if num_train_labels > num_rows:
-        raise ValueError("No test rows provided.")
-
-    prepared_y = {}
-    for key, target in y.items():
-        target_rows = target.shape[0]
-        if target_rows not in (num_train_labels, num_rows):
-            raise ValueError(
-                f"y[{key}] must have either {num_train_labels} or "
-                f"{num_rows} rows, but has {target_rows}."
-            )
-        # Make sure the target is 3-dimensional.
-        target_RBY = target.view(target_rows, 1 if target.ndim == 1 else batch_size, -1)
-        # Pad the rows to the number of rows in x["main"].
-        target_RBY = torch.nn.functional.pad(
-            target_RBY, (0, 0, 0, 0, 0, num_rows - target_rows), value=float("nan")
-        )
-        prepared_y[key] = target_RBY
-
-    return prepared_y
-
-
 class TabPFNBlock(nn.Module):
     """A block of one column-wise, one row-wise attention layer and an MLP layer."""
 
@@ -560,9 +522,10 @@ class TabPFNV2Cache:
     Attributes:
         icl_cache: Per-block train key/value projections for the between-cells
             attention (only the first multi-query-attention head is stored).
-        encoder_state: Snapshot of the (non-persistent) fitted buffers of the feature
-            encoder, so test rows can be normalised using the training statistics.
-        y_encoder_state: Snapshot of the fitted buffers of the target encoder.
+        feature_cache: The fitted feature-preprocessing statistics (constant-feature
+            mask, imputation means, standard-scaler mean/std and feature-group scaling),
+            so test rows can be preprocessed using the training statistics without
+            refitting. See :meth:`TabPFNV2._embed_features`.
         test_y_embedding: The embedded all-NaN target column for a single test row,
             of shape ``(batch_size, num_targets)``. Broadcast across all test rows to
             form the target column of the transformer input.
@@ -570,8 +533,7 @@ class TabPFNV2Cache:
     """
 
     icl_cache: KVCache = dataclasses.field(default_factory=KVCache)
-    encoder_state: dict[str, torch.Tensor] | None = None
-    y_encoder_state: dict[str, torch.Tensor] | None = None
+    feature_cache: dict[str, torch.Tensor] | None = None
     test_y_embedding: torch.Tensor | None = None
     train_shape: tuple[int, int] = (0, 0)
 
@@ -591,8 +553,7 @@ class TabPFNV2Cache:
         """Move all cached tensors to the given device. Returns a new cache."""
         return TabPFNV2Cache(
             icl_cache=self.icl_cache.to(device),
-            encoder_state=self._state_to(self.encoder_state, device),
-            y_encoder_state=self._state_to(self.y_encoder_state, device),
+            feature_cache=self._state_to(self.feature_cache, device),
             test_y_embedding=(
                 None
                 if self.test_y_embedding is None
@@ -609,8 +570,6 @@ class TabPFNV2(Architecture):
         self,
         *,
         config: TabPFNV2Config,
-        encoder: TorchPreprocessingPipeline,
-        y_encoder: TorchPreprocessingPipeline,
         n_out: int = 1,
         feature_positional_embedding: Literal["subspace"] | None = "subspace",
         device: torch.device | str | None = None,
@@ -618,15 +577,16 @@ class TabPFNV2(Architecture):
     ):
         """Initializes the PerFeatureTransformer module.
 
+        The feature and target preprocessing (NaN/Inf handling, standard scaling,
+        constant-feature removal, feature-group normalization and the optional
+        multiclass target densification) is implemented functionally in
+        :meth:`_embed_features` / :meth:`_embed_targets`, matching the base
+        architecture's encoder pipeline. The only learnable parts are the two linear
+        projections into the embedding space (``feature_group_embedder`` and
+        ``target_embedder``).
+
         Args:
             config: The model hyperparameters.
-            encoder: An InputEncoder, which takes a dictionary with tensors of shape
-                [num_rows, batch_size, num_cols, features] and returns a single tensor
-                of shape [num_rows, batch_size, input_size].
-            y_encoder:
-                An InputEncoder, which takes a dictionary with tensors of shape
-                [num_rows, batch_size, num_cols, features] and returns a single tensor
-                of shape [num_rows, batch_size, num_targets].
             n_out: The number of outputs the model should produce.
             feature_positional_embedding: The positional embedding type to use.
                 The  positional embedding is added to the features to help the model
@@ -635,14 +595,28 @@ class TabPFNV2(Architecture):
             dtype: The data type to use for the layer parameters.
         """
         super().__init__()
-        self.encoder = encoder
-        self.y_encoder = y_encoder
         if feature_positional_embedding != "subspace":
             raise ValueError("Currently only 'subspace' is supported.")
         self.input_size = config.emsize
         self.hidden_size = self.input_size * 4
         self.features_per_group = config.features_per_group
         self.n_out = n_out
+        # The (ordinal) classification targets are densified with the unique training
+        # labels iff the base architecture would have added a multiclass target encoder
+        # step, i.e. for classification (max_num_classes >= 2).
+        self.use_multiclass_target_encoding = config.max_num_classes >= 2
+
+        device_and_dtype = {"device": device, "dtype": dtype}
+        self.feature_group_embedder = nn.Linear(
+            ENCODING_SIZE_MULTIPLIER * config.features_per_group,
+            config.emsize,
+            bias=False,
+            **device_and_dtype,
+        )
+        self.target_embedder = nn.Linear(
+            ENCODING_SIZE_MULTIPLIER, config.emsize, **device_and_dtype
+        )
+        self.standard_scaler = TorchStandardScaler()
         self.blocks = nn.ModuleList(
             TabPFNBlock(
                 emsize=config.emsize,
@@ -728,68 +702,164 @@ class TabPFNV2(Architecture):
         embs = self.feature_positional_embedding_embeddings(embs)
         return x_BRCX + embs[None, None]
 
-    @staticmethod
-    def _snapshot_buffers(module: nn.Module) -> dict[str, torch.Tensor]:
-        """Snapshot the (possibly non-persistent) fitted buffers of a module."""
-        return {
-            name: buf.detach().clone()
-            for name, buf in module.named_buffers()
-            if buf is not None
-        }
-
-    @staticmethod
-    def _restore_buffers(
-        module: nn.Module, state: dict[str, torch.Tensor] | None
-    ) -> None:
-        """Restore buffers previously captured with :meth:`_snapshot_buffers`."""
-        if state is None:
-            return
-        for name, value in state.items():
-            *path, attr = name.split(".")
-            submodule = module
-            for part in path:
-                submodule = getattr(submodule, part)
-            setattr(submodule, attr, value)
-
-    def _preprocess_features(
+    def _pad_and_group_features(
         self, x_RBC: torch.Tensor
     ) -> tuple[torch.Tensor, int, int, int]:
-        """Pad and group the raw feature tensor for the encoder.
+        """Pad and group the raw feature tensor for preprocessing.
 
-        Returns ``(x_RSF, num_feature_groups, num_rows, batch_size)``.
+        Returns ``(x_RSF, num_feature_groups, num_rows, batch_size)`` where
+        ``S = batch_size * num_feature_groups`` and ``F = features_per_group``.
         """
-        num_features = x_RBC.shape[2]  # Number of columns.
-        padding = -num_features % self.features_per_group
-        # C is now padded.
-        x_RBC = torch.nn.functional.pad(x_RBC, (0, padding), value=0)
-        num_features += padding
-        # num_feature_groups corresponds to the number of columns the model will see.
-        num_feature_groups = num_features // self.features_per_group
         num_rows, batch_size = x_RBC.shape[:2]
-        # Fold the feature groups into the batch size for pre-processing.
-        # S = batch size * number of feature groups.
-        unflattened_shape = [num_feature_groups, self.features_per_group]
-        x_RSF = x_RBC.unflatten(-1, unflattened_shape).flatten(1, 2)
+        x_RSF, num_feature_groups = _pad_and_reshape_feature_groups(
+            x_RBC, self.features_per_group
+        )
         return x_RSF, num_feature_groups, num_rows, batch_size
 
     def _embed_features(
         self,
-        x: dict[str, torch.Tensor],
+        x_RSF: torch.Tensor,
         *,
-        single_eval_pos: int,
+        num_train_labels: int,
         num_feature_groups: int,
         batch_size: int,
-        cache_trainset_representation: bool,
-    ) -> torch.Tensor:
-        """Encode the features and add the per-column positional embeddings."""
-        embedded_x_RSX = self.encoder(
-            x,
-            single_eval_pos=single_eval_pos,
-            cache_trainset_representation=cache_trainset_representation,
+        feature_cache: dict[str, torch.Tensor] | None = None,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Preprocess and embed the (grouped) features, adding column embeddings.
+
+        Feature encoder pipeline:
+        remove-constant-features -> NaN/Inf indicator -> impute -> standard-scale ->
+        feature-group normalization -> linear projection. The constant-feature mask and
+        the feature-group statistics are fitted over all rows; the imputation means and
+        the standard-scaler statistics are fitted on the training rows only (both
+        matching the original architecture).
+
+        When ``feature_cache`` is provided (the cached-inference path), the fitted
+        statistics are reused instead of being refitted, so test rows are preprocessed
+        with the training statistics.
+
+        Returns ``(embedded_x_BRGX, feature_cache)``.
+        """
+        fitting = feature_cache is None
+
+        column_selection_mask = (
+            _constant_feature_mask(x_RSF)
+            if fitting
+            else feature_cache["column_selection_mask"]
         )
+        x_RSF = _remove_constant_features(x_RSF, column_selection_mask)
+
+        # The NaN/Inf indicators must be captured before imputation.
+        nan_indicator_RSF = _generate_nan_and_inf_indicator(x_RSF)
+
+        # Impute, then standard-scale. The imputation mean ignores NaN/Inf, while the
+        # standard-scaler statistics are computed on the (imputed) training rows.
+        feature_means = None if fitting else feature_cache["feature_means"]
+        x_RSF, feature_means = _impute_nan_and_inf_with_mean(
+            x_RSF, num_train_labels, feature_means
+        )
+        if fitting:
+            scaler_stats = self.standard_scaler.fit(x_RSF[:num_train_labels])
+        else:
+            scaler_stats = {
+                "mean": feature_cache["scaler_mean"],
+                "std": feature_cache["scaler_std"],
+            }
+        x_RSF = self.standard_scaler.transform(x_RSF, fitted_cache=scaler_stats)
+
+        # Feature-group normalization (fit over all rows, matching the base).
+        if fitting:
+            ng_non_constant_mask, ng_num_used_features = _fit_feature_group_scaling(
+                x_RSF
+            )
+        else:
+            ng_non_constant_mask = feature_cache["ng_non_constant_mask"]
+            ng_num_used_features = feature_cache["ng_num_used_features"]
+        x_RSF = _normalize_feature_groups(
+            x_RSF,
+            self.features_per_group,
+            ng_non_constant_mask,
+            ng_num_used_features,
+        )
+
+        x_concat_RSF = torch.cat([x_RSF, nan_indicator_RSF], dim=-1)
+        x_concat_RSF = x_concat_RSF.to(self.feature_group_embedder.weight.dtype)
+        embedded_x_RSX = self.feature_group_embedder(x_concat_RSF)
         embedded_x_RBGX = embedded_x_RSX.unflatten(1, [batch_size, num_feature_groups])
-        embedded_x_BRGX = embedded_x_RBGX.transpose(0, 1)
-        return self.add_column_embeddings(embedded_x_BRGX)
+        embedded_x_BRGX = self.add_column_embeddings(embedded_x_RBGX.transpose(0, 1))
+
+        if fitting:
+            feature_cache = {
+                "column_selection_mask": column_selection_mask,
+                "feature_means": feature_means,
+                "scaler_mean": scaler_stats["mean"],
+                "scaler_std": scaler_stats["std"],
+                "ng_non_constant_mask": ng_non_constant_mask,
+                "ng_num_used_features": ng_num_used_features,
+            }
+        return embedded_x_BRGX, feature_cache
+
+    def _embed_targets(
+        self,
+        y: torch.Tensor,
+        *,
+        num_rows: int,
+        num_train_labels: int,
+        batch_size: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, list[torch.Tensor]]:
+        """Preprocess and embed the targets (matches the base architecture's y-encoder).
+
+        NaN-pads the test rows, captures NaN/Inf indicators, imputes with the training
+        mean, optionally densifies the (multiclass) labels and projects into the
+        embedding space.
+
+        Returns ``(embedded_y_BRX, feature_means, unique_ys)`` where ``feature_means``
+        and ``unique_ys`` are the fitted statistics needed to embed the all-NaN target
+        column for the KV cache (see `_embed_nan_target`).
+        """
+        y_RB1 = _prepare_targets(y, num_rows, batch_size)
+        nan_indicator_RB1 = _generate_nan_and_inf_indicator(y_RB1)
+        y_RB1, feature_means = _impute_nan_and_inf_with_mean(y_RB1, num_train_labels)
+
+        unique_ys: list[torch.Tensor] = []
+        if self.use_multiclass_target_encoding:
+            unique_ys = [
+                torch.unique(y_RB1[:num_train_labels, b]) for b in range(batch_size)
+            ]
+            y_RB1 = _flatten_multiclass_targets(y_RB1, unique_ys)
+
+        y_concat_RB1 = torch.cat([y_RB1, nan_indicator_RB1], dim=-1)
+        y_concat_RB1 = y_concat_RB1.to(self.target_embedder.weight.dtype)
+        embedded_y_RBX = self.target_embedder(y_concat_RB1)
+        return embedded_y_RBX.transpose(0, 1), feature_means, unique_ys
+
+    def _embed_nan_target(
+        self,
+        feature_means_B1: torch.Tensor,
+        unique_ys: list[torch.Tensor],
+        batch_size: int,
+    ) -> torch.Tensor:
+        """Embed the all-NaN target column for the KV cache.
+
+        Every test row carries an all-NaN target (it is what we predict), so after
+        imputation/densification its embedding is identical across test rows. This
+        reproduces ``y_encoder(all_nan_target)`` with the fitted training statistics.
+
+        Returns the embedded target of shape ``(batch_size, num_targets)``.
+        """
+        # An all-NaN target imputes to the training mean and carries a NaN indicator.
+        y_1B1 = feature_means_B1.unsqueeze(0)
+        if self.use_multiclass_target_encoding:
+            y_1B1 = _flatten_multiclass_targets(y_1B1, unique_ys)
+        nan_indicator_1B1 = torch.full(
+            (1, batch_size, 1),
+            NAN_INDICATOR,
+            device=y_1B1.device,
+            dtype=y_1B1.dtype,
+        )
+        y_concat_1B1 = torch.cat([y_1B1, nan_indicator_1B1], dim=-1)
+        y_concat_1B1 = y_concat_1B1.to(self.target_embedder.weight.dtype)
+        return self.target_embedder(y_concat_1B1)[0]
 
     def _decode(
         self, x_BRCD: torch.Tensor, start: int, *, only_return_standard_out: bool
@@ -851,38 +921,39 @@ class TabPFNV2(Architecture):
                 "forward needs the full train+test tensor."
             )
 
-        if isinstance(x, torch.Tensor):
-            x = {"main": x}
-        if isinstance(y, torch.Tensor):
-            y = {"main": y}
+        if isinstance(x, dict):
+            if len(x) != 1:
+                raise NotImplementedError(
+                    f"Multiple keys in x not implemented yet ({x.keys()})."
+                )
+            x = x["main"]
+        if isinstance(y, dict):
+            if len(y) != 1:
+                raise NotImplementedError(
+                    f"Multiple keys in y not implemented yet ({y.keys()})."
+                )
+            y = y["main"]
         elif y is None:
-            y = {"main": torch.zeros(0, device=x["main"].device, dtype=x["main"].dtype)}
+            y = torch.zeros(0, device=x.device, dtype=x.dtype)
 
-        # TODO(Phil): Remove.
-        if len(x) != 1:
-            raise NotImplementedError(
-                f"Reshaping for multiple keys in x not implemented yet. ({x.keys()})"
-            )
-        if len(y) != 1:
-            raise NotImplementedError(
-                f"Reshaping for multiple keys in y not implemented yet. ({y.keys()})"
-            )
-
-        x_RSF, num_feature_groups, num_rows, batch_size = self._preprocess_features(
-            x["main"]
+        x_RSF, num_feature_groups, num_rows, batch_size = self._pad_and_group_features(
+            x
         )
-        x = {"main": x_RSF}
+
+        # Populated on the cache-build path so we can store the fitted feature-
+        # preprocessing statistics and the embedded all-NaN target in the cache.
+        feature_cache: dict[str, torch.Tensor] | None = None
+        test_y_embedding: torch.Tensor | None = None
 
         if using_cache:
             # Cache path: every row in x is a test row attending to the cached train
-            # K/V. Restore the encoder's fitted normalisation state from the cache.
-            self._restore_buffers(self.encoder, kv_cache.encoder_state)
-            embedded_x_BRGX = self._embed_features(
-                x,
-                single_eval_pos=0,
+            # K/V. Reuse the fitted feature-preprocessing statistics from the cache.
+            embedded_x_BRGX, _ = self._embed_features(
+                x_RSF,
+                num_train_labels=0,
                 num_feature_groups=num_feature_groups,
                 batch_size=batch_size,
-                cache_trainset_representation=True,
+                feature_cache=kv_cache.feature_cache,
             )
             # The target column is the embedded all-NaN target, broadcast to all rows.
             test_y_BY = kv_cache.test_y_embedding.to(
@@ -894,25 +965,19 @@ class TabPFNV2(Architecture):
             block_single_eval_pos = 0
         else:
             # Standard / cache-build path: x contains train (+ optionally test) rows.
-            num_train_labels = y["main"].shape[0]
-            # All tensors in y targets now have shape (num_rows, batch_size, 1).
-            y = prepare_targets(y, num_rows=num_rows, batch_size=batch_size)
-            # The encoder converts the y dict to a single target tensor.
-            embedded_y_RBY = self.y_encoder(
+            num_train_labels = y.shape[0]
+            embedded_y_BRY, y_feature_means, unique_ys = self._embed_targets(
                 y,
-                single_eval_pos=num_train_labels,
-                cache_trainset_representation=return_kv_cache,
+                num_rows=num_rows,
+                num_train_labels=num_train_labels,
+                batch_size=batch_size,
             )
-            embedded_y_BRY = embedded_y_RBY.transpose(0, 1)
 
-            # Unfold S = B * G into batch and feature groups.
-            # G: number of feature groups (number of columns the model will see).
-            embedded_x_BRGX = self._embed_features(
-                x,
-                single_eval_pos=num_train_labels,
+            embedded_x_BRGX, feature_cache = self._embed_features(
+                x_RSF,
+                num_train_labels=num_train_labels,
                 num_feature_groups=num_feature_groups,
                 batch_size=batch_size,
-                cache_trainset_representation=return_kv_cache,
             )
 
             # Add the targets as an additional column.
@@ -927,6 +992,14 @@ class TabPFNV2(Architecture):
                     )
                 self._do_encoder_nan_check = False
             block_single_eval_pos = num_train_labels
+
+            if return_kv_cache:
+                # The all-NaN target column is shared by every test row; embed it once
+                # here so the cache path can broadcast it without re-running the
+                # (fitted) target preprocessing.
+                test_y_embedding = self._embed_nan_target(
+                    y_feature_means, unique_ys, batch_size
+                ).detach()
 
         # This model is really heavy on memory but light on compute. On an A100,
         # we are completely CPU-bound. Using checkpointing, we can save a lot of
@@ -973,22 +1046,11 @@ class TabPFNV2(Architecture):
             return output, kv_cache
 
         # Build the cache for later test-only inference.
-        nan_y = {
-            "main": torch.full(
-                (1, batch_size, 1),
-                float("nan"),
-                device=x_RSF.device,
-                dtype=x_RSF.dtype,
-            )
-        }
-        nan_y_RBY = self.y_encoder(
-            nan_y, single_eval_pos=0, cache_trainset_representation=True
-        )
+        assert icl_cache_out is not None
         built_cache = TabPFNV2Cache(
             icl_cache=icl_cache_out,
-            encoder_state=self._snapshot_buffers(self.encoder),
-            y_encoder_state=self._snapshot_buffers(self.y_encoder),
-            test_y_embedding=nan_y_RBY[0].detach(),
+            feature_cache=feature_cache,
+            test_y_embedding=test_y_embedding,
             train_shape=(batch_size, num_train_labels),
         )
         return output, built_cache
@@ -999,13 +1061,20 @@ def _replace_keys_from_base_architecture(
 ) -> dict[str, torch.Tensor]:
     """Translate a base-architecture state dict to the single-file v2 key names.
 
-    Only the transformer blocks and the decoder are renamed/restructured; the
-    encoder and y-encoder share their naming with the base architecture, so their keys
-    (and any other keys not in the mapping) are passed through unchanged.
+    The transformer blocks and the decoder are renamed/restructured, and the base
+    encoder's / y-encoder's final linear projection (which is now implemented directly
+    on the model as ``feature_group_embedder`` / ``target_embedder``) is renamed. The
+    remaining base encoder steps only held non-persistent buffers, so they contribute no
+    keys. Any keys not in the mapping are passed through unchanged.
     """
     n_layers = sum(k.endswith("self_attn_between_features._w_qkv") for k in state_dict)
 
     base_to_v2_mapping = [
+        # The base encoder's final linear projection (``encoder.5.layer``) and target
+        # projection (``y_encoder.2.layer``) are now plain ``nn.Linear`` attributes.
+        ("encoder.5.layer.weight", "feature_group_embedder.weight"),
+        ("y_encoder.2.layer.weight", "target_embedder.weight"),
+        ("y_encoder.2.layer.bias", "target_embedder.bias"),
         ("decoder_dict.standard.0.weight", "output_projection.0.weight"),
         ("decoder_dict.standard.0.bias", "output_projection.0.bias"),
         ("decoder_dict.standard.2.weight", "output_projection.2.weight"),
@@ -1094,6 +1163,160 @@ def parse_config(config: dict[str, Any]) -> tuple[TabPFNV2Config, dict[str, Any]
     return parsed_config, unused_config
 
 
+def _pad_and_reshape_feature_groups(
+    x_RiBC: torch.Tensor, num_features_per_group: int
+) -> tuple[torch.Tensor, int]:
+    """Pad the columns to a multiple of the group size and fold groups into the batch.
+
+    Returns:
+        A tuple of the reshaped tensor of shape ``(Ri, B * G, F)`` and the number of
+        feature groups ``G``, where:
+        - Ri = number of input rows (train + test),
+        - B = batch size,
+        - G = number of feature groups,
+        - F = number of features per group.
+    """
+    num_columns = x_RiBC.shape[-1]
+    num_padding_features = -num_columns % num_features_per_group
+    x_RiBC = torch.nn.functional.pad(x_RiBC, pad=(0, num_padding_features), value=0)
+    num_rows, batch_size, num_padded_columns = x_RiBC.shape
+    num_feature_groups = num_padded_columns // num_features_per_group
+    x_RiBgF = x_RiBC.reshape(
+        num_rows, batch_size * num_feature_groups, num_features_per_group
+    )
+    return x_RiBgF, num_feature_groups
+
+
+def _constant_feature_mask(x_RSF: torch.Tensor) -> torch.Tensor:
+    """Return a ``(S, F)`` mask that is True for non-constant features.
+
+    A feature is constant if every row equals the first row. Padding columns (all
+    zeros) are therefore flagged as constant. Matches the base architecture's
+    ``RemoveEmptyFeaturesEncoderStep`` (the mask is computed over all rows).
+    """
+    return (x_RSF[1:] == x_RSF[0]).sum(0) != (x_RSF.shape[0] - 1)
+
+
+def _remove_constant_features(
+    x_RSF: torch.Tensor, non_constant_mask: torch.Tensor
+) -> torch.Tensor:
+    """Move non-constant features to the front and zero-pad back to the group size.
+
+    Matches the base architecture's ``RemoveEmptyFeaturesEncoderStep._transform``:
+    constant features are dropped (then re-padded with zeros so the group size stays
+    constant), which also re-orders the features within each group.
+    """
+    orig_num_features = x_RSF.shape[-1]
+    x_RSF = select_features(x_RSF, non_constant_mask.to(torch.bool))
+    padding = -x_RSF.shape[-1] % orig_num_features
+    return torch.nn.functional.pad(x_RSF, pad=(0, padding), value=0)
+
+
+def _generate_nan_and_inf_indicator(x: torch.Tensor) -> torch.Tensor:
+    """Generate the NaN/+Inf/-Inf indicator features for ``x`` (matches the base)."""
+    return (
+        torch.isnan(x) * NAN_INDICATOR
+        + torch.logical_and(torch.isinf(x), torch.sign(x) == 1) * INFINITY_INDICATOR
+        + torch.logical_and(torch.isinf(x), torch.sign(x) == -1)
+        * NEG_INFINITY_INDICATOR
+    ).to(x.dtype)
+
+
+def _impute_nan_and_inf_with_mean(
+    x: torch.Tensor,
+    num_train_rows: int,
+    feature_means: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Replace NaN/Inf cells with the per-feature mean of the (finite) training rows.
+
+    When ``feature_means`` is given (the cached-inference path) it is used directly
+    instead of being recomputed from the training rows.
+
+    Returns:
+        A tuple of ``(imputed tensor, feature_means)``.
+    """
+    if feature_means is None:
+        feature_means = torch_nanmean(x[:num_train_rows], axis=0, include_inf=True)
+    nan_mask = torch.logical_or(torch.isnan(x), torch.isinf(x))
+    imputed = torch.where(nan_mask, feature_means.unsqueeze(0).expand_as(x), x)
+    return imputed, feature_means
+
+
+def _fit_feature_group_scaling(
+    x_RSF: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute the per-group scaling statistics used by ``_normalize_feature_groups``.
+
+    Returns:
+        A tuple of ``(non_constant_mask, number_of_used_features)`` of shapes ``(S, F)``
+        and ``(S, 1)`` respectively.
+    """
+    non_constant_mask = _constant_feature_mask(x_RSF)
+    number_of_used_features = torch.clip(non_constant_mask.sum(-1, keepdim=True), min=1)
+    return non_constant_mask, number_of_used_features
+
+
+def _normalize_feature_groups(
+    x_RSF: torch.Tensor,
+    num_features_per_group: int,
+    non_constant_mask: torch.Tensor,
+    number_of_used_features: torch.Tensor,
+) -> torch.Tensor:
+    """Scale feature groups so padding/constant columns do not change the variance.
+
+    Each group is scaled by ``sqrt(num_features_per_group / num_used_features)`` and
+    constant features are zeroed out. Matches the base architecture's
+    ``NormalizeFeatureGroupsEncoderStep`` (with ``normalize_by_sqrt=True``).
+    """
+    scale = num_features_per_group / number_of_used_features.to(x_RSF.device)
+    x_RSF = x_RSF * torch.sqrt(scale)
+    return torch.where(
+        non_constant_mask.unsqueeze(0).expand_as(x_RSF),
+        x_RSF,
+        torch.zeros_like(x_RSF),
+    )
+
+
+def _flatten_multiclass_targets(
+    y_RB1: torch.Tensor, unique_ys: list[torch.Tensor]
+) -> torch.Tensor:
+    """Map each target to the count of smaller unique training values, per batch item.
+
+    Matches the base architecture's ``MulticlassClassificationTargetEncoderStep``: it
+    densifies the (ordinal) class labels using the unique training labels.
+    """
+    y_new = y_RB1.clone()
+    for b in range(y_RB1.shape[1]):
+        y_new[:, b, :] = (y_RB1[:, b, :].unsqueeze(-1) > unique_ys[b]).sum(dim=-1)
+    return y_new
+
+
+def _prepare_targets(y: torch.Tensor, num_rows: int, batch_size: int) -> torch.Tensor:
+    """Reshape ``y`` to ``(num_rows, B, 1)`` and NaN-pad the missing (test) rows.
+
+    Args:
+        y: Target values of shape ``[Rt]``, ``[Rt, B]``, or ``[Rt, B, 1]`` where
+            ``Rt`` is the number of train rows.
+        num_rows: The total number of rows in ``x`` (train + test).
+        batch_size: The batch size used to reshape ``y``.
+
+    Returns:
+        A tensor of shape ``(num_rows, B, 1)`` with the test rows set to NaN.
+    """
+    num_train_labels = y.shape[0]
+    # Note: we allow `num_train_labels == num_rows` (i.e., no test data) to support
+    # use cases like KV-caching and for consistency with the OOM check script
+    # (`src/fomo_fitting/scripts/check_oom.py`).
+    if num_train_labels > num_rows:
+        raise ValueError("No test rows provided.")
+    target_RB1 = y.view(num_train_labels, 1 if y.ndim == 1 else batch_size, -1)
+    return torch.nn.functional.pad(
+        target_RB1,
+        (0, 0, 0, 0, 0, num_rows - num_train_labels),
+        value=float("nan"),
+    )
+
+
 def get_architecture(
     config: ArchitectureConfig,
     *,
@@ -1120,27 +1343,4 @@ def get_architecture(
     # return_kv_cache arguments, so the model does not need configuring here.
     del cache_trainset_representation
     n_out = config.max_num_classes or config.num_buckets
-    return TabPFNV2(
-        config=config,
-        # Note: The encoders currently break torch.compile.
-        encoder=get_encoder(
-            num_features_per_group=config.features_per_group,
-            embedding_size=config.emsize,
-            remove_empty_features=True,
-            remove_duplicate_features=False,
-            nan_handling_enabled=True,
-            normalize_on_train_only=True,
-            normalize_to_ranking=False,
-            normalize_x=True,
-            remove_outliers=False,
-            normalize_by_used_features=True,
-            encoder_use_bias=False,
-        ),
-        y_encoder=get_y_encoder(
-            num_inputs=1,
-            embedding_size=config.emsize,
-            nan_handling_y_encoder=True,
-            max_num_classes=config.max_num_classes,
-        ),
-        n_out=n_out,
-    )
+    return TabPFNV2(config=config, n_out=n_out)
