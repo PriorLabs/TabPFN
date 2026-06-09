@@ -4,9 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "8.0.3"
+version = "8.0.7"
 dependencies = [
   "torch>=2.5",
+  "safetensors>=0.4.0",
   "numpy>=1.21.6",
   "scikit-learn>=1.2.0",
   "typing_extensions>=4.12.0",
@@ -52,6 +53,7 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 wandb = ["wandb>=0.25.1"]
+viz = ["matplotlib>=3.5"]
 
 [project.urls]
 documentation = "https://priorlabs.ai/docs"

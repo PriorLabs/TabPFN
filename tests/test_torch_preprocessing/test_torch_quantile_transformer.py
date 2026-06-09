@@ -318,6 +318,83 @@ class TestTorchQuantileTransformer:
         assert torch.isnan(result[:, 1]).all()
 
 
+class TestTorchQuantileTransformerExtrapolation:
+    """Tests for the optional extrapolate_ratio mode."""
+
+    def test__extrapolate_ratio__matches_sklearn_adaptive_inside_range(self):
+        """In-range values match the CPU AdaptiveQuantileTransformer."""
+        rng = np.random.default_rng(42)
+        x_np = rng.standard_normal((300, 5)).astype(np.float32)
+
+        cpu_qt = AdaptiveQuantileTransformer(
+            output_distribution="uniform",
+            n_quantiles=100,
+            extrapolate_ratio=1.0,
+            random_state=42,
+        )
+        cpu_result = cpu_qt.fit_transform(x_np)
+
+        torch_qt = TorchQuantileTransformer(n_quantiles=100, extrapolate_ratio=1.0)
+        torch_result = torch_qt(torch.from_numpy(x_np))
+
+        assert torch.allclose(
+            torch_result, torch.from_numpy(cpu_result), atol=1e-4, rtol=1e-4
+        )
+
+    def test__extrapolate_ratio__extends_beyond_training_range(self):
+        """Out-of-range inputs map to <0 or >1, clipped at the ratio bound."""
+        rng = np.random.default_rng(0)
+        x_train_np = rng.uniform(0.0, 1.0, size=(200, 1)).astype(np.float32)
+        x_train = torch.from_numpy(x_train_np)
+
+        torch_qt = TorchQuantileTransformer(n_quantiles=50, extrapolate_ratio=1.0)
+        cache = torch_qt.fit(x_train)
+
+        x_test = torch.tensor(
+            [[-0.1], [-2.0], [0.5], [1.1], [3.0]], dtype=torch.float32
+        )
+        out = torch_qt.transform(x_test, fitted_cache=cache).flatten()
+
+        assert out[0].item() < 0.0
+        assert out[1].item() == pytest.approx(-1.0, abs=1e-5)  # clipped
+        assert 0.0 <= out[2].item() <= 1.0
+        assert out[3].item() > 1.0
+        assert out[4].item() == pytest.approx(2.0, abs=1e-5)  # clipped
+
+    def test__extrapolate_ratio__matches_cpu_on_out_of_range_inputs(self):
+        """End-to-end CPU/GPU agreement for out-of-range inputs."""
+        rng = np.random.default_rng(0)
+        x_train_np = rng.normal(size=(200, 3)).astype(np.float32)
+        x_test_np = np.concatenate(
+            [
+                rng.normal(size=(50, 3)).astype(np.float32),
+                # rows that fall outside training range
+                (x_train_np.max(axis=0) + 2.0)[None, :],
+                (x_train_np.min(axis=0) - 2.0)[None, :],
+            ],
+            axis=0,
+        )
+
+        cpu_qt = AdaptiveQuantileTransformer(
+            output_distribution="uniform",
+            n_quantiles=50,
+            extrapolate_ratio=1.0,
+            random_state=42,
+        )
+        cpu_qt.fit(x_train_np)
+        cpu_result = cpu_qt.transform(x_test_np)
+
+        torch_qt = TorchQuantileTransformer(n_quantiles=50, extrapolate_ratio=1.0)
+        cache = torch_qt.fit(torch.from_numpy(x_train_np))
+        torch_result = torch_qt.transform(
+            torch.from_numpy(x_test_np), fitted_cache=cache
+        )
+
+        assert torch.allclose(
+            torch_result, torch.from_numpy(cpu_result), atol=1e-4, rtol=1e-4
+        )
+
+
 def _make_schema(
     *,
     num_numericals: int = 0,
@@ -460,3 +537,9 @@ class TestTorchQuantileTransformerCategoricalBoundary:
             rtol=1e-5,
             err_msg=f"Boundary mismatch with n_quantiles={n_quantiles}",
         )
+
+
+def test__torch_extrapolate_ratio__rejects_negative():
+    """Negative extrapolate_ratio is rejected at construction."""
+    with pytest.raises(ValueError, match="non-negative"):
+        TorchQuantileTransformer(n_quantiles=10, extrapolate_ratio=-1.0)

@@ -38,7 +38,7 @@ jobs:
     steps:
       - name: Checkout repository
         # Pinned to v4 commit SHA to mitigate moving-tag supply-chain risk.
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -48,7 +48,7 @@ jobs:
         # Pinned to v1 commit SHA to mitigate moving-tag supply-chain risk.
         # When updating, resolve the new tag's underlying commit via
         #   gh api /repos/anthropics/claude-code-action/git/refs/tags/<tag>
-        uses: anthropics/claude-code-action@476e359e6203e73dad705c8b322e333fabbd7416  # v1
+        uses: anthropics/claude-code-action@fbda2eb1bdc90d319b8d853f5deb53bca199a7c1  # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 

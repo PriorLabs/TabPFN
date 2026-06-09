@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.7] - 2026-06-08
+
+### Changed
+
+- At predict time, an encoded column whose dtype differs from fit is now coerced to its fit-time dtype (and warns). For a numeric-categorical column arriving as strings, numeric-looking strings (`"1.0"`) now match their fit category instead of all being treated as unseen. ([#1015](https://github.com/PriorLabs/TabPFN/pull/1015))
+
+### Fixed
+
+- Fix a crash in the chunked-inference OOM recovery path that called `torch.mps.empty_cache()` unconditionally, raising `Cannot execute emptyCache() without MPS backend` on non-MPS devices (CUDA GPUs, CPU-only Linux) and turning a recoverable out-of-memory into a hard failure. ([#1007](https://github.com/PriorLabs/TabPFN/pull/1007))
+- Fixed two crashes from inconsistent column dtypes: `fit` raising `Cannot cast object dtype to float64` when a nullable extension dtype (`Int64`/`Float64`/`boolean`) sits next to a string categorical column, and `predict` raising a `TypeError` when a column was string/categorical at fit but arrives numeric. ([#1015](https://github.com/PriorLabs/TabPFN/pull/1015))
+
+
+## [8.0.6] - 2026-06-03
+
+### Added
+
+- Add `auto_scale_n_estimators` constructor argument (default `True`) to auto-scale `n_estimators` for full feature coverage on wide datasets, capped at 32. ([#1000](https://github.com/PriorLabs/TabPFN/pull/1000))
+
+
+## [8.0.5] - 2026-06-03
+
+### Fixed
+
+- Fixed a `could not convert string to float` crash when a feature declared categorical via `categorical_features_indices` is all-missing during fit but has real string values at predict. Such columns are now kept categorical instead of being demoted to a constant numeric column, so they route through the ordinal encoder consistently between fit and predict. ([#1002](https://github.com/PriorLabs/TabPFN/pull/1002))
+
+
+## [8.0.4] - 2026-06-03
+
+### Added
+
+- Add SafeTensors checkpoint loading. TabPFN can now load model checkpoints from `.safetensors` files in addition to the legacy `.ckpt` format, with non-tensor metadata (architecture name, model config, inference config) embedded in the safetensors header. ([#981](https://github.com/PriorLabs/TabPFN/pull/981))
+- Register `tabpfn-v3-classifier-v3_20260506_ood.ckpt` and `tabpfn-v3-regressor-v3_20260506_ood.ckpt` so they can be loaded from Hugging Face by filename. ([#982](https://github.com/PriorLabs/TabPFN/pull/982))
+- Add a visualisation utility to plot the predicted distribution (regression) in `tabpfn.visualization` ([#987](https://github.com/PriorLabs/TabPFN/pull/987))
+
+### Changed
+
+- Remove the feature selection cell from the TabPFN_Demo_Local example notebook. ([#978](https://github.com/PriorLabs/TabPFN/pull/978))
+- Quantize KV cache to int8 for `fit_mode="fit_with_cache"` on TabPFN-3 models. Reduces ICL KV cache memory ~2 with no accuracy loss. ([#983](https://github.com/PriorLabs/TabPFN/pull/983))
+
+### Fixed
+
+- Fixed a `could not convert string to float` crash when a categorical/string feature is all-missing during fit but has real string values at predict, caused by a fit/predict dtype-routing asymmetry in the ordinal encoder. ([#992](https://github.com/PriorLabs/TabPFN/pull/992))
+
+
 ## [8.0.3] - 2026-05-16
 
 ### Changed

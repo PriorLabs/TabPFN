@@ -12,7 +12,9 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
+from tabpfn.preprocessing.clean import process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.validation import ensure_compatible_fit_inputs
 
 
@@ -427,3 +429,257 @@ class TestTagFeaturesAndSanitizeData:
         # min_unique_for_numerical, the modalities may be different if
         # auto-detecting them on an ordinally encoded data frame.
         assert feature_schema_first.features == feature_schema_second.features
+
+
+def test__classifier_fit_predict__all_missing_categorical_then_strings() -> None:
+    """End-to-end regression for the ordinal-encoder fit/predict dtype asymmetry.
+
+    A categorical column that is all-missing at fit but has real string values at
+    predict used to crash with `could not convert string to float`.
+    """
+    rng = np.random.default_rng(0)
+    n = 30
+    X_train = pd.DataFrame(
+        {
+            "num0": rng.normal(size=n),
+            "num1": rng.normal(size=n),
+            "cat": pd.Series([None] * n, dtype="object"),  # all-missing at fit
+        }
+    )
+    y = (X_train["num0"] > 0).astype(int).to_numpy()
+
+    X_test = pd.DataFrame(
+        {
+            "num0": rng.normal(size=10),
+            "num1": rng.normal(size=10),
+            "cat": rng.choice(["normal", "high", "low"], size=10),  # strings at predict
+        }
+    )
+
+    model = TabPFNClassifier(n_estimators=2, random_state=42)
+    model.fit(X_train, y)
+
+    assert model.predict(X_test).shape == (X_test.shape[0],)
+    assert model.predict_proba(X_test).shape == (X_test.shape[0], len(np.unique(y)))
+
+
+def test__classifier_fit_predict__all_missing_declared_categorical_then_strings() -> (
+    None
+):
+    """End-to-end regression for a *declared* categorical column that is all-missing."""
+    rng = np.random.RandomState(0)
+    n = 40
+    X_fit = pd.DataFrame(
+        {
+            "a": rng.rand(n),
+            "c": pd.Series([np.nan] * n, dtype="category"),  # all-missing at fit
+        }
+    )
+    y = pd.Series((rng.rand(n) > 0.5).astype(int))
+
+    X_pred = pd.DataFrame(
+        {
+            "a": rng.rand(6),
+            "c": pd.Series(
+                ["normal", "abn", "normal", "abn", "normal", "abn"], dtype="category"
+            ),
+        }
+    )
+
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        ignore_pretraining_limits=True,
+        categorical_features_indices=[1],  # "c" explicitly declared categorical
+        random_state=0,
+    )
+    clf.fit(X_fit, y)
+
+    proba = clf.predict_proba(X_pred)
+    assert proba.shape == (len(X_pred), 2)
+    assert np.isfinite(proba).all()
+
+
+def test__classifier_fit__string_category_plus_nullable_dtype() -> None:
+    """A string category alongside a pandas nullable dtype must not crash at fit.
+
+    Regression for a fit-time crash (seen on the `home_credit` dataset): a pandas
+    *nullable* extension dtype column (``Float64``/``Int64``/``boolean``) makes
+    sklearn's ``check_array`` perform an early whole-frame ``astype`` during
+    ``validate_data(..., dtype=None)``. That cast then tries to push a string-valued
+    category column (e.g. the hash-like ``'0e63c0f0'``) to float64 and raises
+    ``could not convert string to float``, surfaced as a ``TabPFNValidationError``.
+    A plain string-category column on its own is fine; it only breaks once a
+    nullable column forces the early conversion.
+    """
+    n = 20
+    X = pd.DataFrame(
+        {
+            # pandas *nullable* extension dtype -> triggers the early whole-frame
+            # conversion in sklearn check_array (Int64 / boolean reproduce this too).
+            "nullable_num": pd.array(np.arange(n, dtype=float), dtype="Float64"),
+            # string-valued category, like the hash-ish '0e63c0f0' in the data.
+            "str_cat": pd.Categorical(["0e63c0f0", "xx"] * (n // 2)),
+        }
+    )
+    y = np.array([0, 1] * (n // 2))
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X, y)
+
+    proba = clf.predict_proba(X)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
+def test__classifier_predict__numeric_against_string_fit_categories() -> None:
+    """A column that is string at fit but numeric at predict must not crash.
+
+    Regression for a predict-time crash (seen on the `anes_voting` dataset). TabPFN
+    builds an ``OrdinalEncoder`` at fit time and *freezes* the columns it applies to.
+    If a column is string-typed at fit, its ``categories_`` are stored as a
+    string/object array. When the *same* column position is numeric (float) at
+    predict, ``OrdinalEncoder._transform`` used to compare float values against string
+    categories and raise a ``TypeError`` (``'<' not supported between 'float' and
+    'str'`` / ``ufunc 'isnan' not supported``).
+
+    The fit/predict dtype drift now coerces the column to string and warns, treating its
+    values as unseen categories instead of crashing.
+    """
+    n, n_unique = 120, 60
+    y = np.array([0, 1] * (n // 2))
+
+    # Fit: 'code' is string-typed -> encoder.categories_ become strings.
+    X_fit = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": pd.array([f"s{i % n_unique}" for i in range(n)], dtype="string"),
+        }
+    )
+    # Predict: the *same* column is now numeric float (a later time-split fold
+    # codes the same field as numbers) -> float values vs string categories_.
+    X_pred = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        }
+    )
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X_fit, y)
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        proba = clf.predict_proba(X_pred)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
+def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
+    """Predicting with a numpy array (no column names) after a named-DataFrame fit.
+
+    ``validate_data`` converts both fit and predict inputs to numpy before
+    ``fix_dtypes`` wraps them into an integer-column DataFrame, so the frozen encoder's
+    columns are integer positions and match a numpy-array predict input. This guards
+    against a ``KeyError`` when aligning predict-time dtypes against the fit categories.
+    """
+    n, n_unique = 120, 60
+    y = np.array([0, 1] * (n // 2))
+
+    # Fit with *named* columns; 'code' is string-categorical.
+    X_fit = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": pd.array([f"s{i % n_unique}" for i in range(n)], dtype="string"),
+        }
+    )
+    # Predict with a bare numpy array; the 'code' position is now numeric.
+    X_pred = np.column_stack(
+        [
+            np.arange(n, dtype="float64"),
+            np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        ]
+    )
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X_fit, y)
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        proba = clf.predict_proba(X_pred)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
+def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> None:
+    """The predict-time fix isolated to ``clean.process_text_na_dataframe`` (no model).
+
+    Same root cause as
+    ``test__classifier_predict__numeric_against_string_fit_categories``, narrowed to the
+    component that owns predict-time cleaning: fit the ordinal encoder on string
+    categories, then transform a frame whose ``code`` column arrives numeric. The
+    mismatched column must be coerced to string (with a warning) and its unseen values
+    encoded as the unknown code (``-1``), instead of crashing.
+    """
+    n, n_unique = 120, 60
+    X_fit = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": pd.array([f"s{i % n_unique}" for i in range(n)], dtype="string"),
+        }
+    )
+    X_pred = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        }
+    )
+
+    encoder = get_ordinal_encoder()
+    # Fit freezes the 'code' column -> string categories_.
+    process_text_na_dataframe(X_fit.copy(), ord_encoder=encoder, fit_encoder=True)
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        out = process_text_na_dataframe(X_pred.copy(), ord_encoder=encoder)
+
+    # Column order is preserved: out[:, 1] is 'code', all unseen -> unknown code -1.
+    assert out.shape == (n, 2)
+    assert (out[:, 1] == -1).all()
+
+
+def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> None:
+    """Reverse direction: numeric at fit, string at predict -> coerce to fit (numeric).
+
+    A column that was numeric-categorical at fit is interpreted as that fit dtype at
+    predict: numeric-looking strings (``"1"``) now match their fit category (previously
+    they were all treated as unseen). A non-numeric string (``"abc"``) is coerced to
+    ``NaN``; for a column with no missing values at fit that encodes to the unknown
+    code, as before. A warning is emitted for the dtype change.
+    """
+    n, n_unique = 120, 4
+    X_fit = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            # numeric categorical -> encoder.categories_ are numeric (int64).
+            "code": pd.Categorical([i % n_unique for i in range(n)]),
+        }
+    )
+    # Predict: same field now arrives as strings; index 0 is non-numeric.
+    codes = [str(i % n_unique) for i in range(n)]
+    codes[0] = "abc"
+    X_pred = pd.DataFrame(
+        {
+            "num": np.arange(n, dtype="float64"),
+            "code": pd.array(codes, dtype="string"),
+        }
+    )
+
+    encoder = get_ordinal_encoder()
+    process_text_na_dataframe(X_fit.copy(), ord_encoder=encoder, fit_encoder=True)
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        out = process_text_na_dataframe(X_pred.copy(), ord_encoder=encoder)
+
+    assert out.shape == (n, 2)
+    # 'code' is column index 1. Numeric-looking strings now match a fit category and
+    # encode to a valid (non-negative) code; the non-numeric "abc" -> NaN -> unknown.
+    assert out[0, 1] == -1
+    assert (out[1:, 1] >= 0).all()

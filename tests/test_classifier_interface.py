@@ -6,7 +6,7 @@ import io
 import itertools
 import os
 from itertools import product
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,7 @@ from tabpfn.architectures import base
 from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.inference import InferenceEngineExplicitKVCache
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
@@ -534,7 +535,10 @@ def test_balance_probabilities_alters_proba_output() -> None:
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
 def test__fit_preprocessors_and_with_cache_produce_equal_results(
-    X_y: tuple[np.ndarray, np.ndarray], model_version: ModelVersion, device: str
+    X_y: tuple[np.ndarray, np.ndarray],
+    model_version: ModelVersion,
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kwargs = {
         "version": model_version,
@@ -553,6 +557,18 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
 
+    original_init = InferenceEngineExplicitKVCache.__init__
+
+    def _init_without_kv_quantization(
+        self: InferenceEngineExplicitKVCache, *args: Any, **kwargs: Any
+    ) -> None:
+        kwargs.setdefault("maybe_quantize_kv_cache", False)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        InferenceEngineExplicitKVCache, "__init__", _init_without_kv_quantization
+    )
+
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier.create_default_for_version(
         fit_mode="fit_with_cache", **kwargs
@@ -560,6 +576,36 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
     np.testing.assert_array_equal(preds, tabpfn.predict(X))
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
+    X_y: tuple[np.ndarray, np.ndarray], device: str
+) -> None:
+    kwargs = {
+        "version": ModelVersion.V3,
+        "n_estimators": 2,
+        "inference_precision": torch.float32,
+        "random_state": 0,
+        "device": device,
+    }
+    X, y = X_y
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_preprocessors", **kwargs
+    )
+    tabpfn.fit(X, y)
+    probs = tabpfn.predict_proba(X)
+    preds = tabpfn.predict(X)
+
+    torch.random.manual_seed(0)
+    tabpfn = TabPFNClassifier.create_default_for_version(
+        fit_mode="fit_with_cache", **kwargs
+    )
+    tabpfn.fit(X, y)
+    np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X), decimal=2)
+    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.1)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))

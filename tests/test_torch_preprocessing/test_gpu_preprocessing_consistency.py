@@ -233,6 +233,7 @@ class TestGpuQuantileEligibility:
         assert is_gpu_quantile_eligible("quantile_uni")
         assert is_gpu_quantile_eligible("quantile_uni_coarse")
         assert is_gpu_quantile_eligible("quantile_uni_fine")
+        assert is_gpu_quantile_eligible("quantile_uni_extrapolate")
 
     def test_not_eligible(self) -> None:
         assert not is_gpu_quantile_eligible("squashing_scaler_default")
@@ -283,6 +284,12 @@ class TestPipelineConsistency:
         categorical_name="onehot",
         max_features_per_estimator=680,
     )
+    # Extrapolating quantile (uses the optional extrapolate_ratio path).
+    V26_QUANTILE_EXTRAPOLATE = PreprocessorConfig(
+        "quantile_uni_extrapolate",
+        categorical_name="numeric",
+        max_features_per_estimator=680,
+    )
     # v2.5 classifier configs (non-quantile)
     V25_SQUASHING_SVD = PreprocessorConfig(
         name="squashing_scaler_default",
@@ -315,6 +322,7 @@ class TestPipelineConsistency:
             V26_QUANTILE_NUMERIC,
             V26_QUANTILE_NUMERIC_APPEND_ORIGINAL,
             V26_QUANTILE_ONEHOT,
+            V26_QUANTILE_EXTRAPOLATE,
             pytest.param(
                 V26_QUANTILE_SVD,
                 marks=pytest.mark.skipif(
@@ -327,6 +335,7 @@ class TestPipelineConsistency:
             "v26_quantile_numeric",
             "v26_quantile_numeric_append_original",
             "v26_quantile_onehot",
+            "v26_quantile_extrapolate",
             "v26_quantile_svd",
         ],
     )

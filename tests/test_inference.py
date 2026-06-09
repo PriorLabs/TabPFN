@@ -12,8 +12,15 @@ import torch
 from numpy.random import default_rng
 from torch import Tensor
 
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
-from tabpfn.inference import InferenceEngineCachePreprocessing, InferenceEngineOnDemand
+from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
+from tabpfn.inference import (
+    InferenceEngineCachePreprocessing,
+    InferenceEngineExplicitKVCache,
+    InferenceEngineOnDemand,
+)
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
     EnsembleConfig,
@@ -22,6 +29,8 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
+
+from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
 
 class _TestModel(Architecture):
@@ -117,6 +126,85 @@ class _TestModelLegacy(Architecture):
         n_train, _ = y.shape
         test_rows = n_train_test - n_train
         return x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+
+    @property
+    @override
+    def embedding_dim(self) -> int:
+        return 2
+
+    @property
+    def features_per_group(self) -> int:
+        return 2
+
+    def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
+        pass
+
+
+class _TestModelWithKVCache(Architecture):
+    """A test model that supports explicit KV cache forward kwargs.
+
+    Counters track how often each path runs so tests can assert that the
+    engine builds caches exactly once and reuses them on predict.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.parameter = torch.nn.Parameter(torch.tensor(1.0))
+        self.cache_build_count = 0
+        self.cache_used_count = 0
+
+    @override
+    def forward(
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
+        return_kv_cache: bool = False,
+        kv_cache: TabPFNV3Cache | None = None,
+        x_is_test_only: bool = False,
+    ) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
+        assert isinstance(x, Tensor)
+        assert isinstance(y, Tensor)
+        n_rows = x.shape[0]
+        n_train = y.shape[0]
+        if x_is_test_only:
+            # Test-only path: x carries only test rows
+            test_rows = n_rows
+            output = (
+                x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+            )
+        else:
+            test_rows = n_rows - n_train
+            if test_rows > 0:
+                output = (
+                    x.sum(-2, keepdim=True).sum(-1, keepdim=True).reshape(-1, test_rows)
+                )
+            else:
+                # Train-only call (e.g. _build_cache) — output is discarded
+                output = x.new_zeros(1, 1)
+
+        if return_kv_cache:
+            self.cache_build_count += 1
+            # Build a dummy cache with a single KVCacheEntry
+            dummy_kv = KVCacheEntry(
+                key=torch.zeros(1, n_train, 1, 1, device=x.device),
+                value=torch.zeros(1, n_train, 1, 1, device=x.device),
+            )
+            cache = TabPFNV3Cache(
+                icl_cache=KVCache(kv={0: dummy_kv}),
+                train_embeddings=torch.zeros(1, n_train, 1, device=x.device),
+                train_shape=(1, n_train),
+            )
+            return output, cache
+
+        if kv_cache is not None:
+            self.cache_used_count += 1
+
+        return output
 
     @property
     @override
@@ -392,3 +480,171 @@ def _find_seq_output(
             return output
 
     return pytest.fail(f"Parallel config was not found in sequential configs: {config}")
+
+
+def test__explicit_kv_cache__produces_outputs() -> None:
+    """Engine builds one cache per ensemble member and reuses each on predict."""
+    rng = default_rng(seed=0)
+    n_train = 50
+    n_features = 4
+    n_classes = 3
+    n_configs = 3
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
+
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=n_configs,
+            n_classes=n_classes,
+            num_models=1,
+        ),
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    model = _TestModelWithKVCache()
+    engine = InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[model],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem="auto",
+        autocast=False,
+    )
+    # _build_cache runs once per ensemble member during engine construction.
+    assert model.cache_build_count == n_configs
+    assert model.cache_used_count == 0
+    assert len(engine.kv_caches) == n_configs
+
+    outputs = list(engine.iter_outputs(X_test, autocast=False, task_type="multiclass"))
+    assert len(outputs) == n_configs
+    for output, _config in outputs:
+        assert isinstance(output, Tensor)
+    # Predict consumed each cache once and did not rebuild any of them.
+    assert model.cache_build_count == n_configs
+    assert model.cache_used_count == n_configs
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__explicit_kv_cache__keep_on_device_reuses_tensors(device: str) -> None:
+    """keep_cache_on_device=True reuses the on-device cache tensors across calls.
+
+    Placement for the True/False modes is covered via the public API in
+    ``test__public_keep_cache_on_device__controls_cache_placement``. This
+    engine-level test guards the distinct optimization that True buys: repeated
+    ``predict`` calls must not re-transfer the cache (``Tensor.to(device)`` is a
+    no-op when already on the device), so the underlying storage is unchanged.
+    """
+    rng = default_rng(seed=0)
+    n_train = 50
+    n_features = 4
+    n_classes = 3
+    n_configs = 2
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+    X_test = rng.standard_normal(size=(2, n_features))
+
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=n_configs,
+            n_classes=n_classes,
+            num_models=1,
+        ),
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    model = _TestModelWithKVCache()
+    engine = InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[model],
+        devices=[torch.device(device)],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem="auto",
+        autocast=False,
+        keep_cache_on_device=True,
+    )
+    assert model.cache_build_count == n_configs
+
+    # First predict call — caches move to device and stay there.
+    outputs_first = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
+    assert len(outputs_first) == n_configs
+    assert model.cache_build_count == n_configs
+    assert model.cache_used_count == n_configs
+
+    # Snapshot underlying tensor storage after the first predict.
+    first_ptrs = [cache.icl_cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
+
+    # Second predict call — still no rebuild, caches reused in place.
+    outputs_second = list(
+        engine.iter_outputs(X_test, autocast=False, task_type="multiclass")
+    )
+    assert len(outputs_second) == n_configs
+    assert model.cache_build_count == n_configs
+    assert model.cache_used_count == 2 * n_configs
+
+    second_ptrs = [cache.icl_cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
+    assert first_ptrs == second_ptrs, (
+        "keep_cache_on_device=True must reuse on-device cache tensors, "
+        "not re-transfer them on each predict call"
+    )
+
+
+@pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
+@pytest.mark.parametrize("keep_cache_on_device", [False, True])
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__public_keep_cache_on_device__controls_cache_placement(
+    estimator_cls: type, *, keep_cache_on_device: bool, device: str
+) -> None:
+    """The public keep_cache_on_device arg controls where KV caches are stored.
+
+    Exercises the full public path with the real model: constructor ->
+    ``fit`` -> ``create_inference_engine`` -> ``InferenceEngineExplicitKVCache``.
+    With ``keep_cache_on_device=True`` each cache stays on the build device;
+    with ``False`` each cache is offloaded to CPU. On the GPU CI job
+    (``TABPFN_EXCLUDE_DEVICES`` drops cpu/mps) ``device="cuda"`` so the True/False
+    placement is genuinely distinguished; on CPU jobs it is an end-to-end smoke
+    test. ``.key`` is the (int8) tensor on both the quantized and plain cache
+    entries, so the placement check holds either way.
+    """
+    rng = default_rng(seed=0)
+    n_samples, n_features = 30, 4
+    X = rng.standard_normal((n_samples, n_features))
+    if estimator_cls is TabPFNClassifier:
+        y = (X[:, 0] > 0).astype(int)  # guaranteed two classes
+    else:
+        y = rng.standard_normal(n_samples)
+
+    est = estimator_cls(
+        fit_mode="fit_with_cache",
+        keep_cache_on_device=keep_cache_on_device,
+        n_estimators=2,
+        device=device,
+    )
+    est.fit(X, y)
+
+    # The public arg reached the explicit-KV-cache engine.
+    assert isinstance(est.executor_, InferenceEngineExplicitKVCache)
+    assert est.executor_.keep_cache_on_device is keep_cache_on_device
+
+    # True keeps caches on the build device; False offloads them to CPU.
+    expected_device = device if keep_cache_on_device else "cpu"
+    for cache in est.executor_.kv_caches:
+        for entry in cache.icl_cache.kv.values():
+            assert entry.key is not None
+            assert entry.key.device.type == expected_device
+
+    # Prediction still works end-to-end (caches moved to device on demand).
+    preds = est.predict(X[:5])
+    assert len(preds) == 5

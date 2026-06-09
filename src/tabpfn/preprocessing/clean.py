@@ -9,6 +9,7 @@ e.g. NaN mapping and dtype conversion.
 from __future__ import annotations
 
 import typing
+import warnings
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -20,7 +21,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Literal
+    from typing import Any, Literal
 
     from sklearn.compose import ColumnTransformer
 
@@ -65,7 +66,31 @@ def clean_data(
     return X_numpy, ord_encoder, feature_schema
 
 
-def fix_dtypes(  # noqa: D103
+def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
+    """Convert pandas nullable numeric/boolean extension columns to float64.
+
+    This is meant to run *before* sklearn's ``validate_data``. A nullable extension
+    dtype (``Int64``/``Float64``/``boolean``) makes sklearn's ``check_array`` perform a
+    whole-frame ``astype`` even with ``dtype=None``, which crashes when another column
+    is a string-valued category (it cannot cast e.g. ``'0e63c0f0'`` to float). Coercing
+    the nullable columns up front removes that trigger.
+
+    Only masked numeric/boolean extension columns are touched; ``category``/``string``/
+    ``object`` columns are left untouched.
+    """
+    cols = [
+        col
+        for col in X.columns
+        if pd.api.types.is_extension_array_dtype(X[col].dtype)
+        and X[col].dtype.kind in "iufb"
+    ]
+    if cols:
+        X = X.copy()
+        X[cols] = X[cols].astype("float64")
+    return X
+
+
+def fix_dtypes(  # noqa: D103, C901, PLR0912
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -127,10 +152,80 @@ def fix_dtypes(  # noqa: D103
     #
     if convert_dtype:
         X = X.convert_dtypes()
+        # Columns still `object` after convert_dtypes (e.g. all-missing columns) are
+        # typed as `string` so the ordinal encoder's dtype-based column selection is
+        # consistent between fit and predict. Otherwise an all-missing column is
+        # `object` at fit (-> passthrough) but `string` at predict; the frozen
+        # passthrough then lets raw strings reach the float cast below and crash.
+        object_columns = X.select_dtypes(include=["object"]).columns
+        if len(object_columns) > 0:
+            X[object_columns] = X[object_columns].astype("string")
 
     numerical_columns = X.select_dtypes(include=["number"]).columns
     if len(numerical_columns) > 0:
         X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
+    return X
+
+
+def _column_kind(dtype: Any) -> str:
+    """Return a column's scalar dtype kind, unwrapping categorical dtypes."""
+    if isinstance(dtype, pd.CategoricalDtype):
+        return dtype.categories.dtype.kind
+    return dtype.kind
+
+
+def _align_columns_to_fitted_dtypes(
+    X: pd.DataFrame, ord_encoder: ColumnTransformer
+) -> pd.DataFrame:
+    """Coerce each encoded column to the scalar dtype it had when the encoder was fit.
+
+    Only the dtypes seen at fit are authoritative: the frozen ``OrdinalEncoder`` stored
+    its ``categories_`` (and their dtype) at fit, so an incoming column is interpreted
+    as that fit-time dtype at predict. Two mismatches are handled:
+
+    * string at fit, numeric at predict -> the column is cast to ``string``. Otherwise
+      sklearn's ``_check_unknown`` takes its numeric branch and compares float values
+      against the string ``categories_``, raising a ``TypeError``.
+    * numeric at fit, string at predict -> the column is cast to numeric via
+      ``pd.to_numeric(..., errors="coerce")``. Numeric-looking strings match their fit
+      category; non-numeric strings become ``NaN`` (treated as missing).
+
+    Either way, values that do not match a fit category map to the encoder's unknown
+    code. A dtype change between fit and predict usually signals an inconsistent feature
+    pipeline, so we warn.
+    """
+    encoder = ord_encoder.named_transformers_.get("encoder")
+    if encoder is None or not hasattr(encoder, "categories_"):
+        return X
+    selected = next(
+        (cols for name, _, cols in ord_encoder.transformers_ if name == "encoder"),
+        [],
+    )
+    to_string, to_numeric = [], []
+    for col, categories in zip(selected, encoder.categories_):
+        fit_kind = categories.dtype.kind
+        values_kind = _column_kind(X[col].dtype)
+        if fit_kind in "OUS" and values_kind in "iufcb":
+            to_string.append(col)
+        elif fit_kind in "iuf" and values_kind in "OUS":
+            to_numeric.append(col)
+
+    if not to_string and not to_numeric:
+        return X
+
+    warnings.warn(
+        f"Column(s) {to_string + to_numeric} have a dtype at predict time that differs "
+        f"from fit time; only the fit-time dtype is treated as correct, so they are "
+        f"coerced to it and values that don't match a fitted category are treated as "
+        f"unseen or missing. This usually indicates an inconsistent feature pipeline "
+        f"between fit and predict.",
+        stacklevel=2,
+    )
+    X = X.copy()
+    if to_string:
+        X[to_string] = X[to_string].astype("string")
+    for col in to_numeric:
+        X[col] = pd.to_numeric(X[col].astype("object"), errors="coerce")
     return X
 
 
@@ -150,6 +245,13 @@ def process_text_na_dataframe(
     """
     # TODO: Check if this step needs to be done as early as it is done here, or whether
     # it can be done later and include it in a main preprocessor object.
+
+    # When transforming with a fitted encoder, coerce columns whose dtype drifted
+    # between fit and predict back to their fit-time dtype, so the OrdinalEncoder is
+    # consistent and does not crash. This must run before `string_cols` is computed so
+    # the coerced columns get NA handling.
+    if not fit_encoder and ord_encoder is not None:
+        X = _align_columns_to_fitted_dtypes(X, ord_encoder)
 
     # Replace NAN values in X, for dtypes, which the OrdinalEncoder cannot handle
     # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
