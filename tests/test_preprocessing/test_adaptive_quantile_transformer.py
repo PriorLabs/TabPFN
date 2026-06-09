@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
+from sklearn.utils.estimator_checks import parametrize_with_checks
 
 from tabpfn.preprocessing.steps import AdaptiveQuantileTransformer
 
@@ -216,3 +217,33 @@ def test__fit__does_not_modify_hyperparameters():
     X_large = np.random.default_rng(8).normal(size=(200, 3))
     transformer.fit(X_large)
     assert transformer.n_quantiles_ == 200
+
+
+def _expected_failed_sklearn_checks(estimator: object) -> dict[str, str]:
+    del estimator
+    return {
+        "check_do_not_raise_errors_in_init_or_set_params": (
+            "extrapolate_ratio is deliberately validated at construction "
+            "(pinned by test__extrapolate_ratio__validation_guards); sklearn "
+            "wants validation deferred to fit."
+        ),
+        "check_transformer_data_not_an_array": (
+            "fit() reads X.shape for the adaptive n_quantiles and the "
+            "extrapolation bounds before converting array-likes."
+        ),
+    }
+
+
+@parametrize_with_checks(
+    [AdaptiveQuantileTransformer()],
+    expected_failed_checks=_expected_failed_sklearn_checks,
+)
+def test__sklearn_estimator_checks(estimator, check) -> None:
+    """Run sklearn's standard estimator checks.
+
+    These would have caught both halves of the clone bug fixed here:
+    check_estimators_overwrite_params fails on fit() mutating n_quantiles,
+    and check_do_not_raise_errors_in_init_or_set_params fails on the
+    **kwargs constructor signature.
+    """
+    check(estimator)
