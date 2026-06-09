@@ -172,4 +172,3 @@ def test__fit__generator_random_state_and_refit_adaptation():
     X_large = np.random.default_rng(8).normal(size=(200, 3))
     transformer.fit(X_large)
     assert transformer.n_quantiles_ == 200
-
