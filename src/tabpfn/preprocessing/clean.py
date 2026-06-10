@@ -67,22 +67,25 @@ def clean_data(
 
 
 def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
-    """Convert pandas nullable numeric/boolean extension columns to float64.
+    """Convert numpy/nullable boolean and nullable numeric columns to float64.
 
-    This is meant to run *before* sklearn's ``validate_data``. A nullable extension
-    dtype (``Int64``/``Float64``/``boolean``) makes sklearn's ``check_array`` perform a
-    whole-frame ``astype`` even with ``dtype=None``, which crashes when another column
-    is a string-valued category (it cannot cast e.g. ``'0e63c0f0'`` to float). Coercing
-    the nullable columns up front removes that trigger.
+    Runs *before* sklearn's ``validate_data``. Any boolean column (numpy ``bool`` or
+    nullable ``boolean``) and any nullable numeric extension dtype
+    (``Int64``/``Float64``) makes sklearn's ``check_array`` perform a whole-frame
+    ``astype`` even with ``dtype=None``, which crashes when another column is a
+    string-valued category (it cannot cast e.g. ``'0e63c0f0'`` to float). Coercing
+    these columns up front removes that trigger.
 
-    Only masked numeric/boolean extension columns are touched; ``category``/``string``/
-    ``object`` columns are left untouched.
+    ``category``/``string``/``object`` columns are left untouched.
     """
     cols = [
         col
         for col in X.columns
-        if pd.api.types.is_extension_array_dtype(X[col].dtype)
-        and X[col].dtype.kind in "iufb"
+        if pd.api.types.is_bool_dtype(X[col].dtype)
+        or (
+            pd.api.types.is_extension_array_dtype(X[col].dtype)
+            and X[col].dtype.kind in "iuf"
+        )
     ]
     if cols:
         X = X.copy()
