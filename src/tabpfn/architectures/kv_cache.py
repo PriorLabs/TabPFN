@@ -13,6 +13,7 @@ symmetric quantization.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import torch
@@ -142,7 +143,7 @@ class QuantizedKVCacheEntry:
 
 
 @dataclass
-class KVCache:
+class KVCache(ABC):
     """Maps layer indices to KVCacheEntry or QuantizedKVCacheEntry objects.
 
     This is the base class for the architecture-specific caches. These
@@ -163,6 +164,7 @@ class KVCache:
         """True when the cache has not been populated yet."""
         return not self.is_populated()
 
+    @abstractmethod
     def to(self, device: torch.device | str) -> KVCache:
         """Move all entries to the given device. Returns a new KVCache."""
         return KVCache(kv=self._kv_to(device))

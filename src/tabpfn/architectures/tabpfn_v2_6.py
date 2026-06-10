@@ -764,7 +764,7 @@ class TabPFNV2p6(Architecture):
         return {
             "standard": test_output_MB1,
             "train_embeddings": train_embeddings_BND.transpose(0, 1),
-            "test_embeddings": test_embeddings_BMD,
+            "test_embeddings": test_embeddings_MBD,
         }
 
     @override
@@ -900,7 +900,7 @@ class TabPFNV2p6(Architecture):
                 x_BRiCD, single_eval_pos=num_train_labels
             )
 
-        icl_cache_out = KVCache() if (return_kv_cache and not using_cache) else None
+        kv_out: dict[int, KVCacheEntry] = {}
         for layer_idx, block in enumerate(self.blocks):
             if return_kv_cache and not using_cache:
                 x_BRCD, kv_entry = block(
@@ -909,7 +909,7 @@ class TabPFNV2p6(Architecture):
                     save_peak_memory_factor,
                     return_kv=True,
                 )
-                icl_cache_out.kv[layer_idx] = kv_entry
+                kv_out[layer_idx] = kv_entry
             elif using_cache:
                 x_BRCD, _ = block(
                     x_BRCD,
@@ -965,9 +965,9 @@ class TabPFNV2p6(Architecture):
             num_train_labels=num_train_labels,
             batch_size=batch_size,
         )[:, -1].detach()
-        assert icl_cache_out is not None
+        assert kv_out
         built_cache = TabPFNV2p6Cache(
-            kv=icl_cache_out.kv,
+            kv=kv_out,
             scaler_cache=scaler_cache,
             feature_state=feature_state,
             test_y_embedding=test_y_embedding_BX,

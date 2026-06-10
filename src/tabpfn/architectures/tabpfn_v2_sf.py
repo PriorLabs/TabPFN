@@ -996,7 +996,9 @@ class TabPFNV2(Architecture):
         # we are completely CPU-bound. Using checkpointing, we can save a lot of
         # memory, which we can invest into increasing the compute via increased batch
         # size.
-        icl_cache_out = KVCache() if (return_kv_cache and not using_cache) else None
+        kv_out: dict[int, KVCacheEntry] | None = (
+            {} if (return_kv_cache and not using_cache) else None
+        )
         for layer_idx, block in enumerate(self.blocks):
             if return_kv_cache and not using_cache:
                 x_BRCD, kv_entry = block(
@@ -1005,7 +1007,7 @@ class TabPFNV2(Architecture):
                     save_peak_memory_factor,
                     return_kv=True,
                 )
-                icl_cache_out.kv[layer_idx] = kv_entry
+                kv_out[layer_idx] = kv_entry
             elif using_cache:
                 x_BRCD, _ = block(
                     x_BRCD,
@@ -1037,9 +1039,9 @@ class TabPFNV2(Architecture):
             return output, kv_cache
 
         # Build the cache for later test-only inference.
-        assert icl_cache_out is not None
+        assert kv_out is not None
         built_cache = TabPFNV2Cache(
-            kv=icl_cache_out.kv,
+            kv=kv_out,
             feature_cache=feature_cache,
             test_y_embedding=test_y_embedding,
             train_shape=(batch_size, num_train_labels),

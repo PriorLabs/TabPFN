@@ -1697,7 +1697,8 @@ class TabPFNV3(Architecture):
         x_BRiD = x_BRiClE.flatten(-2)
         del x_BRiClE
 
-        icl_cache_out: KVCache | None = None  # Populated if return_kv_cache is True.
+        # Per-layer KV entries collected when return_kv_cache is True.
+        kv_out: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
 
         if kv_cache is not None and not kv_cache.is_empty():
             # Cache path: no y_icl embedding; use cached K/V pairs
@@ -1715,7 +1716,6 @@ class TabPFNV3(Architecture):
                 x_BRiD[:, :num_train] = x_BRiD[:, :num_train] + y_icl_emb
 
             if return_kv_cache:
-                icl_cache_out = KVCache()
                 for layer_idx, block in enumerate(self.icl_blocks):
                     x_BRiD, kv_entry = block(
                         x_BRiD,
@@ -1723,7 +1723,7 @@ class TabPFNV3(Architecture):
                         performance_options.save_peak_memory_factor,
                         return_kv=True,
                     )
-                    icl_cache_out.kv[layer_idx] = kv_entry
+                    kv_out[layer_idx] = kv_entry
             else:
                 for block in self.icl_blocks:
                     if performance_options.force_recompute_layer:
@@ -1758,10 +1758,11 @@ class TabPFNV3(Architecture):
                 built_cache = kv_cache  # pass through unchanged
             else:
                 scaler_stats = self.standard_scaler.fit(x_RiBC[:num_train])
+                assert kv_out
                 # Store train_embeddings at the ICL KV cache dtype.
-                cache_dtype = next(iter(icl_cache_out.kv.values())).key.dtype
+                cache_dtype = next(iter(kv_out.values())).key.dtype
                 built_cache = TabPFNV3Cache(
-                    kv=icl_cache_out.kv,
+                    kv=kv_out,
                     train_embeddings=train_emb.detach().to(cache_dtype),
                     train_shape=(B, num_train),
                     scaler_cache={k: v.detach() for k, v in scaler_stats.items()},
