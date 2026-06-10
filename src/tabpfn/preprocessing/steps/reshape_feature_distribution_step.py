@@ -161,8 +161,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 features the downstream estimator should see. Used by the
                 ``"auto"`` decision for ``append_to_original``.
             random_state: Random state used by stochastic transforms (e.g.
-                quantile transformers) and the ``"per_feature"`` random
-                selection.
+                quantile transformers).
             schedule_gpu_transform: When set, marks the output numerical
                 columns with this :class:`GPUTransformType` so the GPU
                 preprocessing pipeline picks them up. The CPU transform
@@ -191,7 +190,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
-        static_seed, rng = infer_random_state(self.random_state)
+        static_seed, _ = infer_random_state(self.random_state)
         categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
@@ -243,17 +242,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
 
         # NOTE: No need to keep track of categoricals here, already done above
         output_multiplier = _output_columns_per_input_column(self.transform_name)
-        if self.transform_name != "per_feature":
-            _transformer = all_preprocessors[self.transform_name]
-            transformers.append(("feat_transform", _transformer, trans_ixs))
-        else:
-            preprocessors = list(all_preprocessors.values())
-            transformers.extend(
-                [
-                    (f"transformer_{i}", rng.choice(preprocessors), [i])  # type: ignore
-                    for i in trans_ixs
-                ],
-            )
+        _transformer = all_preprocessors[self.transform_name]
+        transformers.append(("feat_transform", _transformer, trans_ixs))
 
         transformer = ColumnTransformer(
             transformers,
