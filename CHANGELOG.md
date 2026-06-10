@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.8] - 2026-06-10
+
+### Breaking Changes
+
+- Dropped support for Python 3.9; the minimum required version is now Python 3.10. The `eval-type-backport` dependency (only needed on 3.9) has been removed. ([#1038](https://github.com/PriorLabs/TabPFN/pull/1038))
+
+### Added
+
+- Add a single file implementation of TabPFNv2. Not activated by default yet. ([#995](https://github.com/PriorLabs/TabPFN/pull/995))
+- Add a `keep_cache_on_device` option to `TabPFNClassifier`/`TabPFNRegressor` (defaults to `True`). When `fit_mode="fit_with_cache"`, setting it to `False` offloads each per-estimator KV cache to CPU as it is built and moves it back to the device on demand, lowering resident device memory at the cost of per-call transfers. ([#1009](https://github.com/PriorLabs/TabPFN/pull/1009))
+- Added official support for Python 3.14 (already exercised by the CI test matrix). ([#1038](https://github.com/PriorLabs/TabPFN/pull/1038))
+
+### Changed
+
+- Improve peak memory of single file model implementations. ([#1019](https://github.com/PriorLabs/TabPFN/pull/1019))
+- Removed the `per_feature` option from `PreprocessorConfig.name`. ([#1036](https://github.com/PriorLabs/TabPFN/pull/1036))
+
+### Fixed
+
+- Fixed regressor ensemble members sharing a single mutable `target_transform` instance. With in-process preprocessing (`n_preprocessing_jobs=1`), each member's in-place fit clobbered the fitted state of the others, silently corrupting predictions whenever members were fitted on different targets (e.g. with row subsampling active). Each ensemble config now owns a deep copy of the transform. ([#1029](https://github.com/PriorLabs/TabPFN/pull/1029))
+- Fixed two GPU-preprocessing divergences from the CPU reference: `TorchSoftClipOutliers` silently skipped outlier clipping when predicting a single sample in KV-cache mode (predictions depended on test batch size), and `TorchAddSVDFeaturesStep` added an SVD column for single-feature datasets where the CPU pipeline adds none (predictions differed between `ENABLE_GPU_PREPROCESSING` on and off). ([#1033](https://github.com/PriorLabs/TabPFN/pull/1033))
+- Fixed a fit-time crash when a DataFrame mixed a plain numpy `bool` column with a non-numeric string column (string-valued `category` or pandas `string` dtype). `coerce_nullable_dtypes_to_numpy` now coerces numpy `bool` columns to float64, not only nullable extension dtypes. ([#1040](https://github.com/PriorLabs/TabPFN/pull/1040))
+
+
 ## [8.0.7] - 2026-06-08
 
 ### Changed
