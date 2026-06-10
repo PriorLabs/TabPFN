@@ -425,7 +425,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         )
 
         for config, output in zip(
-            self.ensemble_preprocessor.configs, timed_outputs, strict=False
+            self.ensemble_preprocessor.configs, timed_outputs, strict=True
         ):
             yield _move_and_squeeze_output(output, devices[0]), config
 
@@ -736,7 +736,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         )
 
         for output, ensemble_member in zip(
-            timed_outputs, self.ensemble_members, strict=False
+            timed_outputs, self.ensemble_members, strict=True
         ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
@@ -944,7 +944,7 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
         preprocess_time = 0.0
         forward_time = 0.0
         for ensemble_member, model in zip(
-            self.ensemble_members, self.models, strict=False
+            self.ensemble_members, self.models, strict=True
         ):
             preprocess_start = time.perf_counter()
             model.to(self.device)
@@ -1250,7 +1250,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         for output, ensemble_member in zip(
-            timed_outputs, self.ensemble_members, strict=False
+            timed_outputs, self.ensemble_members, strict=True
         ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 

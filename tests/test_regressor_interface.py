@@ -551,7 +551,7 @@ def test_dict_vs_object_preprocessor_config(X_y: tuple[np.ndarray, np.ndarray]) 
     quant_dict = model_dict.predict(X, output_type="quantiles", quantiles=quantiles)
     quant_obj = model_obj.predict(X, output_type="quantiles", quantiles=quantiles)
 
-    for q_dict, q_obj in zip(quant_dict, quant_obj, strict=False):
+    for q_dict, q_obj in zip(quant_dict, quant_obj, strict=True):
         np.testing.assert_array_almost_equal(
             q_dict,
             q_obj,

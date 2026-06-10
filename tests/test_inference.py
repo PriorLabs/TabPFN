@@ -317,7 +317,7 @@ def test__cache_preprocessing__with_outlier_removal() -> None:
 
     assert len(outputs_outlier_removed) == len(outputs_outlier_not_removed)
     for outlier_removed_output, outlier_not_removed_output in zip(
-        outputs_outlier_removed, outputs_outlier_not_removed, strict=False
+        outputs_outlier_removed, outputs_outlier_not_removed, strict=True
     ):
         assert isinstance(outlier_removed_output[0], Tensor)
         assert isinstance(outlier_not_removed_output[0], Tensor)

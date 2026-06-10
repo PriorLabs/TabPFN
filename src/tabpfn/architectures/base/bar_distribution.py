@@ -140,7 +140,7 @@ class BarDistribution(nn.Module):
             [
                 bar_dist.get_probs_for_different_borders(logits, self.borders)
                 for bar_dist, logits in zip(
-                    list_of_bar_distributions, list_of_logits, strict=False
+                    list_of_bar_distributions, list_of_logits, strict=True
                 )
             ],
             dim=0,

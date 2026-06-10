@@ -39,7 +39,7 @@ def main(
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
     fig.suptitle("TabPFN predicted distributions — diabetes dataset", fontsize=13)
 
-    for i, (ax, idx, title) in enumerate(zip(axes, selected, titles, strict=False)):
+    for i, (ax, idx, title) in enumerate(zip(axes, selected, titles, strict=True)):
         plot_regression_distribution(out, sample_idx=i, ax=ax)
         true_val = y_test[idx]
         true_line = ax.axvline(

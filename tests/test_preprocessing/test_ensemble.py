@@ -66,7 +66,7 @@ def test__get_subsample_indices_for_estimators():
     )
     assert len(subsample_indices) == 3
     for subsample_index, expected_subsample_index in zip(
-        subsample_indices, expected_subsample_indices, strict=False
+        subsample_indices, expected_subsample_indices, strict=True
     ):
         assert subsample_index is not None
         assert (subsample_index == expected_subsample_index).all()
@@ -466,14 +466,14 @@ def test__get_subsample_feature_indices__balanced_reproducibility():
     # Same seed -> identical output.
     result_a = _get_subsample_feature_indices(rng=np.random.default_rng(42), **kwargs)
     result_b = _get_subsample_feature_indices(rng=np.random.default_rng(42), **kwargs)
-    for a, b in zip(result_a, result_b, strict=False):
+    for a, b in zip(result_a, result_b, strict=True):
         np.testing.assert_array_equal(a, b)
 
     # Different seed -> different output.
     result_c = _get_subsample_feature_indices(rng=np.random.default_rng(99), **kwargs)
     any_different = any(
         not np.array_equal(a, c)
-        for a, c in zip(result_a, result_c, strict=False)
+        for a, c in zip(result_a, result_c, strict=True)
         if a is not None and c is not None
     )
     assert any_different, "Different seeds should produce different distributions"

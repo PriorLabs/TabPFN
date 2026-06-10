@@ -72,7 +72,7 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
                     else [arg] * save_peak_mem_factor
                     for arg in (x, *args)
                 ],
-                strict=False,
+                strict=True,
             )
 
             for x_, *args_ in split_args:

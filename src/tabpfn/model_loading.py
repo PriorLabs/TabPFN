@@ -1085,7 +1085,7 @@ def save_tabpfn_model(
         models,
         configs,
         save_paths,
-        strict=False,
+        strict=True,
     ):
         model_state = ens_model.state_dict()
 

@@ -312,7 +312,7 @@ def variable_synthetic_dataset_collection() -> list[tuple[np.ndarray, np.ndarray
     dataset_sizes = [10, 20, 30]
     class_counts = [2, 4, 6]
     n_features = 3
-    for size, n_classes in zip(dataset_sizes, class_counts, strict=False):
+    for size, n_classes in zip(dataset_sizes, class_counts, strict=True):
         X = rng.normal(size=(size, n_features)).astype(np.float32)
         y = rng.integers(0, n_classes, size=size)
         datasets.append((X, y))

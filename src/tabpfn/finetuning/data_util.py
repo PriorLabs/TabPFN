@@ -773,7 +773,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
         calling_instance._initialize_model_variables()
 
     X_split, y_split = [], []
-    for X_item, y_item in zip(X_raw, y_raw, strict=False):
+    for X_item, y_item in zip(X_raw, y_raw, strict=True):
         if max_data_size is not None:
             Xparts, yparts = shuffle_and_chunk_data(
                 X_item,
@@ -792,7 +792,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
     dataset_config_collection: list[
         RegressorDatasetConfig | ClassifierDatasetConfig
     ] = []
-    for X_item, y_item in zip(X_split, y_split, strict=False):
+    for X_item, y_item in zip(X_split, y_split, strict=True):
         if model_type == "classifier":
             ensemble_configs, X_mod, y_mod = (
                 calling_instance._initialize_dataset_preprocessing(

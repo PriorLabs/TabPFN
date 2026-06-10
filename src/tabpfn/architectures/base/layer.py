@@ -407,7 +407,7 @@ class PerFeatureEncoderLayer(Module):
                 ),
             )
 
-        for sublayer, layer_norm in zip(sublayers, self.layer_norms, strict=False):
+        for sublayer, layer_norm in zip(sublayers, self.layer_norms, strict=True):
             if self.pre_norm:
                 raise AssertionError(
                     "Pre-norm implementation is wrong, as the residual should never"

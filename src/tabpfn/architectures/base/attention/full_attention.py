@@ -115,7 +115,7 @@ class MultiHeadAttention(Attention):
             err = f"Tensor {actual_shape=} does not match {expected_shape=}."
             assert len(actual_shape) == len(expected_shape), err
             for actual_dim, expected_dim in zip(
-                actual_shape, expected_shape, strict=False
+                actual_shape, expected_shape, strict=True
             ):
                 if expected_dim is not None:
                     assert actual_dim == expected_dim, err
