@@ -19,9 +19,10 @@ import json
 import logging
 import pathlib
 import platform
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Literal
+from typing import Literal
 
 import numpy as np
 import pytest

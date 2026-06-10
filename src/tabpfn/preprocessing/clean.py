@@ -202,7 +202,7 @@ def _align_columns_to_fitted_dtypes(
         [],
     )
     to_string, to_numeric = [], []
-    for col, categories in zip(selected, encoder.categories_):
+    for col, categories in zip(selected, encoder.categories_, strict=True):
         fit_kind = categories.dtype.kind
         values_kind = _column_kind(X[col].dtype)
         if fit_kind in "OUS" and values_kind in "iufcb":
