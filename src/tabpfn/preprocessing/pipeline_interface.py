@@ -7,7 +7,7 @@ from __future__ import annotations
 import dataclasses
 import time
 from abc import abstractmethod
-from typing_extensions import TypeAlias
+from typing import TypeAlias
 
 import numpy as np
 import torch

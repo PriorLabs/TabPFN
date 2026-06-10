@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from copy import deepcopy
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from typing_extensions import Self
 
 import pydantic
@@ -15,9 +15,9 @@ from tabpfn.architectures.interface import ArchitectureConfig
 
 logger = logging.getLogger(__name__)
 
-FeaturePositionalEmbedding = Optional[
-    Literal["normal_rand_vec", "uni_rand_vec", "learned", "subspace"]
-]
+FeaturePositionalEmbedding = (
+    Literal["normal_rand_vec", "uni_rand_vec", "learned", "subspace"] | None
+)
 
 
 @dataclass

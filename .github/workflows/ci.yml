@@ -42,16 +42,16 @@ jobs:
         # it, which requires a separate workflow.
         include:
           - os: ubuntu-latest
-            python-version: "3.9"
+            python-version: "3.10"
             dependency-set: lowest-direct
           # Note that new pytorch versions >= 2.5 don't support x86 on mac anymore,
-          # but python 3.9 only works on x86, so we disable this runner.
+          # and macos-latest (ARM) is python >= 3.11 only, so we disable this runner.
           # https://github.com/actions/setup-python/issues/855
           # - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
-          #  python-version: "3.9"
+          #  python-version: "3.10"
           #  dependency-set: lowest-direct
           - os: windows-latest
-            python-version: "3.9"
+            python-version: "3.10"
             dependency-set: lowest-direct
           - os: macos-latest
             python-version: "3.14"
@@ -316,18 +316,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - python-version: "3.9"
+          - python-version: "3.10"
             dependency-set: lowest-direct
-            torch-override: ""
           - python-version: "3.14"
             dependency-set: highest
-            # Pin torch to 2.10.0 for now, otherwise the runner raises a
-            # `The NVIDIA driver on your system is too old` error.
-            # TODO: Update the runner
-            # We install torch separately (post-sync) to avoid uv trying to
-            # re-resolve the lock for all requires-python versions (>=3.9),
-            # which fails because torch>=2.10.0 only supports Python>=3.10.
-            torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
@@ -350,13 +342,6 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --group ci --resolution ${{ matrix.dependency-set }}
-
-      - name: Override torch for GPU compatibility
-        if: ${{ matrix.torch-override != '' }}
-        run: |
-          uv pip install "${{ matrix.torch-override }}" \
-            --extra-index-url https://download.pytorch.org/whl/cu128 \
-            --index-strategy unsafe-best-match
 
       - *restore-hf-cache
       - *restore-model-cache
