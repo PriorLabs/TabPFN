@@ -273,4 +273,4 @@ def process_text_na_dataframe(
         np.nan,
         X_encoded[:, string_cols_ix],
     )
-    return typing.cast("np.ndarray", X_encoded.astype(np.float64))
+    return typing.cast("np.ndarray", X_encoded.astype(np.float32))
