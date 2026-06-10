@@ -80,12 +80,9 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     """
     cols = [
         col
-        for col in X.columns
-        if pd.api.types.is_bool_dtype(X[col].dtype)
-        or (
-            pd.api.types.is_extension_array_dtype(X[col].dtype)
-            and X[col].dtype.kind in "iuf"
-        )
+        for col, dtype in X.dtypes.items()
+        if pd.api.types.is_bool_dtype(dtype)
+        or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
     ]
     if cols:
         X = X.copy()
