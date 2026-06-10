@@ -102,7 +102,7 @@ def scaled_dot_product_attention(
 
     if is_torch_mps_preferred(q_BHSD, k_BJSD, v_BJSD):
         return torch_mps_sdpa(
-            q_BHSD, k_BJSD, v_BJSD, enable_gqa=(num_q_heads == num_kv_heads)
+            q_BHSD, k_BJSD, v_BJSD, enable_gqa=(num_q_heads != num_kv_heads)
         ).permute(0, 2, 1, 3)
     if is_mlx_preferred(q_BHSD, k_BJSD, v_BJSD):
         # Note: MLX supports GQA and doesn't seem to have a max grid batch size issue.

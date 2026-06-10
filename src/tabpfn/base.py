@@ -8,14 +8,13 @@ import pathlib
 import typing
 from collections.abc import Sequence
 from inspect import signature
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
 from sklearn.base import (
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry.interactive import capture_session, ping
 
 # --- TabPFN imports ---
 from tabpfn.constants import (
@@ -88,7 +87,7 @@ class RegressorModelSpecs(BaseModelSpecs):
         self.norm_criterion = norm_criterion
 
 
-ModelSpecs = Union[RegressorModelSpecs, ClassifierModelSpecs]
+ModelSpecs = RegressorModelSpecs | ClassifierModelSpecs
 
 
 def initialize_tabpfn_model(
@@ -430,16 +429,6 @@ def estimator_to_device(
         )
 
     return byte_size
-
-
-def initialize_telemetry() -> None:
-    """Initialize telemetry and acknowledge anonymous session.
-
-    If user opted out of telemetry using `TABPFN_DISABLE_TELEMETRY`,
-    no action is taken.
-    """
-    ping()
-    capture_session()
 
 
 def get_embeddings(

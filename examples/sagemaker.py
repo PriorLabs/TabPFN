@@ -35,7 +35,7 @@ usage, import `invoke_tabpfn` and pass your own NumPy arrays.
 
 import json
 import os
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 import boto3
 import numpy as np
@@ -167,8 +167,8 @@ def invoke_tabpfn(
     y_train: np.ndarray,
     x_test: np.ndarray,
     task: Literal["classification", "regression"],
-    model_params: Optional[dict[str, Any]] = None,
-    predict_params: Optional[dict[str, Any]] = None,
+    model_params: dict[str, Any] | None = None,
+    predict_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Invoke the TabPFN SageMaker endpoint with tabular data.
 

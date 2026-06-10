@@ -24,8 +24,8 @@ import warnings
 from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
-from typing_extensions import Self, TypedDict, deprecated, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
+from typing_extensions import Self, TypedDict, deprecated
 
 import numpy as np
 import torch
@@ -36,7 +36,6 @@ from sklearn.base import (
     TransformerMixin,
     check_is_fitted,
 )
-from tabpfn_common_utils.telemetry import track_model_call
 from tqdm.auto import tqdm
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
@@ -47,7 +46,6 @@ from tabpfn.base import (
     estimator_to_device,
     get_embeddings,
     initialize_model_variables_helper,
-    initialize_telemetry,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -58,7 +56,6 @@ from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocess
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
-    log_model_init_params,
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
@@ -145,9 +142,7 @@ class FullOutputDict(MainOutputDict):
     logits: torch.Tensor
 
 
-RegressionResultType = Union[
-    np.ndarray, list[np.ndarray], MainOutputDict, FullOutputDict
-]
+RegressionResultType = np.ndarray | list[np.ndarray] | MainOutputDict | FullOutputDict
 """The type hint for the return value of the `predict` method."""
 
 
@@ -506,10 +501,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
-        initialize_telemetry()
-
-        # Only anonymously record `fit_mode` usage
-        log_model_init_params(self, {"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -751,7 +742,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
 
-    @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -817,7 +807,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         return self
 
     @config_context(transform_output="default")  # type: ignore
-    @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
 
@@ -959,7 +948,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
-    @track_model_call(model_method="predict", param_names=["X"])
     def predict(  # noqa: C901, PLR0912
         self,
         X: XType,
