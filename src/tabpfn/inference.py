@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from tabpfn.architectures.interface import Architecture
+    from tabpfn.architectures.kv_cache import KVCache
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
         TabPFNEnsembleMember,
@@ -1135,7 +1136,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         gpu_preprocessor: TorchPreprocessingPipeline | None,
         autocast: bool,
         save_peak_mem: bool,
-    ) -> object:
+    ) -> KVCache:
         """Build KV cache for one ensemble member on the given device.
 
         Called via :func:`parallel_execute` — may run on different devices

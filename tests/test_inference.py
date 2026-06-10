@@ -14,7 +14,7 @@ from torch import Tensor
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
-from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry
+from tabpfn.architectures.kv_cache import KVCacheEntry
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
@@ -195,7 +195,7 @@ class _TestModelWithKVCache(Architecture):
                 value=torch.zeros(1, n_train, 1, 1, device=x.device),
             )
             cache = TabPFNV3Cache(
-                icl_cache=KVCache(kv={0: dummy_kv}),
+                kv={0: dummy_kv},
                 train_embeddings=torch.zeros(1, n_train, 1, device=x.device),
                 train_shape=(1, n_train),
             )
@@ -584,7 +584,7 @@ def test__explicit_kv_cache__keep_on_device_reuses_tensors(device: str) -> None:
     assert model.cache_used_count == n_configs
 
     # Snapshot underlying tensor storage after the first predict.
-    first_ptrs = [cache.icl_cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
+    first_ptrs = [cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
 
     # Second predict call — still no rebuild, caches reused in place.
     outputs_second = list(
@@ -594,7 +594,7 @@ def test__explicit_kv_cache__keep_on_device_reuses_tensors(device: str) -> None:
     assert model.cache_build_count == n_configs
     assert model.cache_used_count == 2 * n_configs
 
-    second_ptrs = [cache.icl_cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
+    second_ptrs = [cache.kv[0].key.data_ptr() for cache in engine.kv_caches]
     assert first_ptrs == second_ptrs, (
         "keep_cache_on_device=True must reuse on-device cache tensors, "
         "not re-transfer them on each predict call"
@@ -641,7 +641,7 @@ def test__public_keep_cache_on_device__controls_cache_placement(
     # True keeps caches on the build device; False offloads them to CPU.
     expected_device = device if keep_cache_on_device else "cpu"
     for cache in est.executor_.kv_caches:
-        for entry in cache.icl_cache.kv.values():
+        for entry in cache.kv.values():
             assert entry.key is not None
             assert entry.key.device.type == expected_device
 
