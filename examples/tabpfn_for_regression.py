@@ -37,7 +37,7 @@ quantile_predictions = reg.predict(
     output_type="quantiles",
     quantiles=quantiles,
 )
-for q, q_pred in zip(quantiles, quantile_predictions):
+for q, q_pred in zip(quantiles, quantile_predictions, strict=False):
     print(f"Quantile {q} MAE:", mean_absolute_error(y_test, q_pred))
 # Predict with mode
 mode_predictions = reg.predict(X_test, output_type="mode")

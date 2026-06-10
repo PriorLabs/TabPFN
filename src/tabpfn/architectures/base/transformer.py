@@ -810,5 +810,5 @@ def _add_pos_emb(
         pe *= sign
 
         # TODO(old) Double check the ordering is right
-        for n, pe_ in zip(graph.nodes(), pe):
+        for n, pe_ in zip(graph.nodes(), pe, strict=False):
             graph.nodes[n]["positional_encoding"] = pe_

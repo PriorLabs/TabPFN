@@ -424,7 +424,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             )
         )
 
-        for config, output in zip(self.ensemble_preprocessor.configs, timed_outputs):
+        for config, output in zip(
+            self.ensemble_preprocessor.configs, timed_outputs, strict=False
+        ):
             yield _move_and_squeeze_output(output, devices[0]), config
 
         self._speed_metrics["predict_model_forward_seconds"] = (
@@ -733,7 +735,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             )
         )
 
-        for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
+        for output, ensemble_member in zip(
+            timed_outputs, self.ensemble_members, strict=False
+        ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
         self._speed_metrics["predict_model_forward_seconds"] = (
@@ -939,7 +943,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         preprocess_time = 0.0
         forward_time = 0.0
-        for ensemble_member, model in zip(self.ensemble_members, self.models):
+        for ensemble_member, model in zip(
+            self.ensemble_members, self.models, strict=False
+        ):
             preprocess_start = time.perf_counter()
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
@@ -1243,7 +1249,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
         )
 
-        for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
+        for output, ensemble_member in zip(
+            timed_outputs, self.ensemble_members, strict=False
+        ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
         self._speed_metrics["predict_model_forward_seconds"] = (

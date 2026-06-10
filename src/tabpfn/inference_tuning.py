@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import dataclasses
 import warnings
+from collections.abc import Callable
 from enum import Enum
-from typing import TYPE_CHECKING, Callable, Literal
+from typing import TYPE_CHECKING, Literal
 from typing_extensions import Self
 
 import numpy as np

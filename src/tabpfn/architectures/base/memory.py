@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Sequence
 from types import MethodType
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 import torch
 
@@ -72,6 +72,7 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
                     else [arg] * save_peak_mem_factor
                     for arg in (x, *args)
                 ],
+                strict=False,
             )
 
             for x_, *args_ in split_args:
@@ -89,7 +90,7 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
     return method_
 
 
-MemorySavingMode = Union[bool, Literal["auto"], float, int]
+MemorySavingMode = bool | Literal["auto"] | float | int
 
 
 def should_save_peak_mem(

@@ -16,7 +16,8 @@ only *applying* it does, so ``import torch`` at module scope here is safe.
 from __future__ import annotations
 
 import functools
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import torch
 

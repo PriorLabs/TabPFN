@@ -139,7 +139,9 @@ class BarDistribution(nn.Module):
         probs = torch.stack(
             [
                 bar_dist.get_probs_for_different_borders(logits, self.borders)
-                for bar_dist, logits in zip(list_of_bar_distributions, list_of_logits)
+                for bar_dist, logits in zip(
+                    list_of_bar_distributions, list_of_logits, strict=False
+                )
             ],
             dim=0,
         )

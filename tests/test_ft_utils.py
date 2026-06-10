@@ -55,7 +55,7 @@ def test_chunk_data():
     assert len(y_chunks) == expected_num_chunks, "Incorrect y chunk count"
 
     # Check that each chunk size is <= max_chunk
-    for x_chunk, y_chunk in zip(x_chunks, y_chunks):
+    for x_chunk, y_chunk in zip(x_chunks, y_chunks, strict=False):
         assert len(x_chunk) <= max_chunk, "X chunk size exceeds max"
         assert len(y_chunk) <= max_chunk, "y chunk size exceeds max"
         assert len(x_chunk) == len(y_chunk), "X/y chunk length mismatch"
