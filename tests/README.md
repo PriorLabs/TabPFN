@@ -42,7 +42,7 @@ For this reason:
 
 We test against specific CI platform configurations:
 - Linux, Windows, and macOS
-- Python 3.9 and 3.13
+- Python 3.10 and 3.14
 
 To ensure reliable CI testing:
 1. Reference values should be generated on a CI-compatible platform

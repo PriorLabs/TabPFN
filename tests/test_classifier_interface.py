@@ -5,8 +5,9 @@ from __future__ import annotations
 import io
 import itertools
 import os
+from collections.abc import Callable
 from itertools import product
-from typing import Any, Callable, Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
