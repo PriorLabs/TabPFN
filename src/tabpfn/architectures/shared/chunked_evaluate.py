@@ -8,8 +8,7 @@ This reduces the memory required for inference.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Concatenate
-from typing_extensions import ParamSpec
+from typing import Concatenate, ParamSpec
 
 import torch
 

@@ -24,8 +24,8 @@ import warnings
 from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal
-from typing_extensions import Self, TypedDict, deprecated, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
+from typing_extensions import Self, TypedDict, deprecated
 
 import numpy as np
 import torch
