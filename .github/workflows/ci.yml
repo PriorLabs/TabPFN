@@ -321,12 +321,6 @@ jobs:
             torch-override: ""
           - python-version: "3.14"
             dependency-set: highest
-            # Pin torch to 2.10.0 for now, otherwise the runner raises a
-            # `The NVIDIA driver on your system is too old` error.
-            # TODO: Update the runner
-            # We install torch separately (post-sync) so the cu128 GPU wheel can
-            # be forced without re-resolving the rest of the locked dependencies.
-            torch-override: "torch==2.10.0+cu128"
 
     runs-on: ubuntu-22.04-4core-gpu
     env:
