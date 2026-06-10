@@ -554,3 +554,70 @@ def test__all_preprocessors__clone_equivalence():
                 "it likely hides constructor parameters from get_params()."
             ),
         )
+
+
+def test__all_preprocessors__schema_matches_output_columns():
+    """The returned FeatureSchema must match the actual output column count.
+
+    Regression test: ``n_output_features`` assumed every preprocessor emits
+    one column per input column, but FeatureUnion-based presets (e.g.
+    ``norm_and_kdi``) emit one block per sub-transformer. The schema then
+    undercounted, and ``num_added_features`` under-reported to the ensemble's
+    feature-budget planning. This sweeps the whole registry so any future
+    multi-output preset fails here instead of silently corrupting the schema.
+    """
+    rng = np.random.default_rng(0)
+    n_features = 4
+    X = rng.uniform(0.5, 2.0, size=(60, n_features))
+    schema = _get_schema(num_columns=n_features)
+
+    names = get_all_reshape_feature_distribution_preprocessors(
+        num_examples=X.shape[0], random_state=0
+    ).keys()
+    for name in names:
+        if name == "adaptive":
+            continue  # raw "adaptive" preprocessing was removed; the step raises
+        for append in (False, True):
+            step = ReshapeFeatureDistributionsStep(
+                transform_name=name,
+                apply_to_categorical=False,
+                append_to_original=append,
+                random_state=0,
+            )
+            result = step.fit_transform(X.copy(), schema)
+            assert result.X.shape[1] == result.feature_schema.num_columns, (
+                f"{name!r} (append={append}): X has {result.X.shape[1]} columns "
+                f"but the schema claims {result.feature_schema.num_columns}"
+            )
+            assert (
+                step.num_added_features(X.shape[0], schema)
+                == result.X.shape[1] - n_features
+            ), f"{name!r} (append={append}): num_added_features mismatch"
+
+
+def test__norm_and_kdi__output_schema_column_count():
+    """norm_and_kdi emits 2 columns per transformed input column."""
+    rng = np.random.default_rng(1)
+    n_features = 4
+    X = rng.uniform(0.5, 2.0, size=(60, n_features))
+    schema = _get_schema(num_columns=n_features)
+
+    step = ReshapeFeatureDistributionsStep(
+        transform_name="norm_and_kdi",
+        apply_to_categorical=False,
+        append_to_original=False,
+        random_state=0,
+    )
+    result = step.fit_transform(X, schema)
+    assert result.X.shape[1] == 2 * n_features
+    assert result.feature_schema.num_columns == 2 * n_features
+
+    step_append = ReshapeFeatureDistributionsStep(
+        transform_name="norm_and_kdi",
+        apply_to_categorical=False,
+        append_to_original=True,
+        random_state=0,
+    )
+    result_append = step_append.fit_transform(X, schema)
+    assert result_append.X.shape[1] == 3 * n_features
+    assert result_append.feature_schema.num_columns == 3 * n_features

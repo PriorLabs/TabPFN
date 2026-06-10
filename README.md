@@ -344,23 +344,6 @@ Each TabPFN release publishes a default classification and regression checkpoint
 
 </details>
 
-## Anonymized Telemetry
-
-This project collects fully anonymous usage telemetry disabled by default.
-
-The data is used exclusively to help us provide stability to the relevant products and compute environments and guide future improvements.
-
-- **No personal data is collected**
-- **No code, model inputs, or outputs are ever sent**
-- **Data is strictly anonymous and cannot be linked to individuals**
-
-For details on telemetry, please see our [Telemetry Reference](https://github.com/PriorLabs/TabPFN/blob/main/TELEMETRY.md) and our [Privacy Policy](https://priorlabs.ai/privacy-policy/).
-
-**To opt in**, set the following environment variable:
-
-```bash
-export TABPFN_DISABLE_TELEMETRY=0
-```
 ---
 
 Built with ❤️ by [Prior Labs](https://priorlabs.ai) - Copyright (c) 2026 Prior Labs GmbH

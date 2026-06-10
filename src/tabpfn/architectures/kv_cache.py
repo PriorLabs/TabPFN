@@ -13,6 +13,7 @@ symmetric quantization.
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
 import torch
@@ -142,8 +143,12 @@ class QuantizedKVCacheEntry:
 
 
 @dataclass
-class KVCache:
+class KVCache(ABC):
     """Maps layer indices to KVCacheEntry or QuantizedKVCacheEntry objects.
+
+    This is the base class for the architecture-specific caches. These
+    store the per-layer key/value projections in ``kv`` and add their own fitted
+    preprocessing / embedding state as extra fields.
 
     Attributes:
         kv: Maps layer/block index to cached key-value projections.
@@ -155,19 +160,35 @@ class KVCache:
         """True when the cache contains valid data."""
         return any(entry.is_valid() for entry in self.kv.values())
 
+    def is_empty(self) -> bool:
+        """True when the cache has not been populated yet."""
+        return not self.is_populated()
+
+    @abstractmethod
     def to(self, device: torch.device | str) -> KVCache:
         """Move all entries to the given device. Returns a new KVCache."""
-        return KVCache(kv={idx: entry.to(device) for idx, entry in self.kv.items()})
+        return KVCache(kv=self._kv_to(device))
 
-    def quantize(self, dtype: torch.dtype = torch.int8) -> KVCache:
-        """Return a new KVCache with all entries quantized.
+    def _kv_to(
+        self, device: torch.device | str
+    ) -> dict[int, KVCacheEntry | QuantizedKVCacheEntry]:
+        """Move the per-layer KV entries to the given device."""
+        return {idx: entry.to(device) for idx, entry in self.kv.items()}
 
-        Args:
-            dtype: Target integer dtype (default ``torch.int8``).
-        """
-        return KVCache(
-            kv={
-                idx: entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry
-                for idx, entry in self.kv.items()
-            }
-        )
+    @staticmethod
+    def _dict_of_tensors_to(
+        state: dict[str, Tensor] | None, device: torch.device | str
+    ) -> dict[str, Tensor] | None:
+        """Move a dict of tensors to the given device (passing through ``None``)."""
+        if state is None:
+            return None
+        return {k: v.to(device) for k, v in state.items()}
+
+    @staticmethod
+    def _list_of_tensors_to(
+        tensors: list[Tensor] | None, device: torch.device | str
+    ) -> list[Tensor] | None:
+        """Move a list of tensors to the given device (passing through ``None``)."""
+        if tensors is None:
+            return None
+        return [t.to(device) for t in tensors]

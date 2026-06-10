@@ -408,7 +408,7 @@ def test__kv_cache__matches_standard_forward() -> None:
     out_store, cache = arch(x_full, y_train, return_kv_cache=True)
     assert isinstance(cache, TabPFNV2Cache)
     assert not cache.is_empty()
-    assert len(cache.icl_cache.kv) == 1  # nlayers=1
+    assert len(cache.kv) == 1  # nlayers=1
     assert cache.train_shape == (1, num_train)
     assert cache.feature_cache is not None
     assert torch.allclose(out_standard, out_store, atol=1e-10), (

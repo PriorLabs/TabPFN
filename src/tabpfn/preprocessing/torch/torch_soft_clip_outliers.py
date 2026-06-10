@@ -101,9 +101,6 @@ class TorchSoftClipOutliers:
         lower = fitted_cache["lower"]
         upper = fitted_cache["upper"]
 
-        if x.shape[0] == 1:
-            return x
-
         clamped_lower = torch.maximum(-torch.log(1 + torch.abs(x)) + lower, x)
         return torch.minimum(
             torch.log(1 + torch.abs(clamped_lower)) + upper, clamped_lower
