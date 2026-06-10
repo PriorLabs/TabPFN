@@ -532,6 +532,47 @@ def test__classifier_fit__string_category_plus_nullable_dtype() -> None:
     assert np.isfinite(proba).all()
 
 
+def test__classifier_fit__string_category_plus_numpy_bool() -> None:
+    """A string cat alongside a plain numpy ``bool`` column must not crash at fit."""
+    n = 20
+    X = pd.DataFrame(
+        {
+            "bool_feat": np.array([True, False] * (n // 2), dtype=bool),
+            "str_cat": pd.Categorical(["0e63c0f0", "xx"] * (n // 2)),
+        }
+    )
+    assert X["bool_feat"].dtype == np.dtype("bool")
+    y = np.array([0, 1] * (n // 2))
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X, y)
+
+    proba = clf.predict_proba(X)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
+def test__classifier_fit__string_dtype_plus_numpy_bool() -> None:
+    """A pandas ``string`` column alongside a numpy ``bool`` must not crash at fit."""
+    n = 20
+    X = pd.DataFrame(
+        {
+            "bool_feat": np.array([True, False] * (n // 2), dtype=bool),
+            "txt": pd.array(["0e63c0f0", "xx"] * (n // 2), dtype="string"),
+        }
+    )
+    assert X["bool_feat"].dtype == np.dtype("bool")
+    assert isinstance(X["txt"].dtype, pd.StringDtype)
+    y = np.array([0, 1] * (n // 2))
+
+    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf.fit(X, y)
+
+    proba = clf.predict_proba(X)
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
+
+
 def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     """A column that is string at fit but numeric at predict must not crash.
 
