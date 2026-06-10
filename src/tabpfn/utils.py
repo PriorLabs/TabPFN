@@ -7,7 +7,7 @@ from __future__ import annotations
 import contextlib
 import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import numpy.typing as npt
@@ -105,9 +105,9 @@ def _cancel_nan_borders(
     return borders, logit_cancel_mask
 
 
-DevicesSpecification = Union[
-    torch.device, str, Sequence[Union[torch.device, str]], Literal["auto"]
-]
+DevicesSpecification = (
+    torch.device | str | Sequence[torch.device | str] | Literal["auto"]
+)
 
 
 def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:

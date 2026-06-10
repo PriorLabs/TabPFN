@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeVar, Union, cast, overload
+from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from urllib.error import URLError
 
 import joblib
@@ -557,7 +557,7 @@ def _download_model(
     return errors
 
 
-P = TypeVar("P", bound=Union[str, list[str]])
+P = TypeVar("P", bound=str | list[str])
 
 
 def prepend_cache_path(model_path: P) -> P:
@@ -1085,6 +1085,7 @@ def save_tabpfn_model(
         models,
         configs,
         save_paths,
+        strict=True,
     ):
         model_state = ens_model.state_dict()
 

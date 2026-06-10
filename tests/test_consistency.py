@@ -19,9 +19,10 @@ import json
 import logging
 import pathlib
 import platform
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
-from typing import Callable, Union
+from typing import TypeAlias
 
 import numpy as np
 import pytest
@@ -96,7 +97,7 @@ def _add_extra_devices(
     return model
 
 
-TensorOrArray = Union[np.ndarray, torch.Tensor]
+TensorOrArray: TypeAlias = np.ndarray | torch.Tensor
 
 
 @dataclass(frozen=True)
