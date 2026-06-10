@@ -65,6 +65,9 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
             assert save_peak_mem_factor > 1
             split_size = (x.size(0) + save_peak_mem_factor - 1) // save_peak_mem_factor
 
+            # strict=False: torch.split can yield fewer than save_peak_mem_factor
+            # chunks for small tensors, which wouldn't match the
+            # `[arg] * save_peak_mem_factor` replication for non-tensor args.
             split_args = zip(
                 *[
                     torch.split(arg, split_size)
@@ -72,7 +75,7 @@ def support_save_peak_mem_factor(method: MethodType) -> Callable:
                     else [arg] * save_peak_mem_factor
                     for arg in (x, *args)
                 ],
-                strict=True,
+                strict=False,
             )
 
             for x_, *args_ in split_args:
