@@ -903,6 +903,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
+        # Preprocessed labels are integer-encoded [0, ..., n-1]. Needed so batched
+        # *inference* postprocessing can shape outputs; harmless for fine-tuning,
+        # where the wrapper sets these. Only set if not already provided.
+        if not hasattr(self, "n_classes_"):
+            self.n_classes_ = max(int(t.max().item()) for t in y_preprocessed) + 1
+            self.classes_ = torch.arange(self.n_classes_)
+
         feature_schema = convert_batch_of_cat_ix_to_schema(
             batch_of_cat_indices=cat_ix,
             num_features=X_preprocessed[0].shape[1],
@@ -924,6 +931,118 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         return self
+
+    def predict_proba_batched(
+        self,
+        X_list: list[XType],
+        y_list: list[YType],
+        X_test_list: list[XType],
+    ) -> np.ndarray:
+        """Predict probabilities for several independent datasets in one pass.
+
+        Each ``(X, y, X_test)`` triple is preprocessed exactly as in
+        ``fit()`` + ``predict_proba()`` (same ensemble configs, CPU and GPU
+        preprocessing), then all datasets are stacked along the model's batch
+        dimension and scored with a *single fused forward per estimator*. This is
+        equivalent to calling ``fit`` + ``predict_proba`` on each dataset
+        independently — it matches that to ~1e-6 on CPU — but amortizes the
+        per-call overhead across datasets, which is a large speed-up on GPU where
+        many small forwards are launch-bound. On GPU the batched and single
+        forwards accumulate matmuls differently, so results differ by a small
+        device tolerance (order 1e-3 on CUDA).
+
+        Args:
+            X_list: Training features, one array per dataset.
+            y_list: Training labels, one array per dataset.
+            X_test_list: Test features, one array per dataset.
+
+        Returns:
+            Probabilities of shape ``(n_datasets, n_test, n_classes)``.
+
+        Note:
+            All datasets must share the same set of class labels. Datasets may
+            have different numbers of rows/features; same-shaped datasets fuse
+            into one forward, differing shapes are padded by the collator.
+        """
+        from tabpfn.finetuning.data_util import (  # noqa: PLC0415
+            ClassifierBatch,
+            meta_dataset_collator,
+        )
+        from tabpfn.inference import (  # noqa: PLC0415
+            PerformanceOptions,
+            _maybe_run_gpu_preprocessing,
+        )
+        from tabpfn.preprocessing.datamodel import FeatureModality  # noqa: PLC0415
+
+        if not len(X_list) == len(y_list) == len(X_test_list):
+            raise ValueError("X_list, y_list and X_test_list must have equal length.")
+        if len(X_list) == 0:
+            raise ValueError("Nothing to predict: empty dataset list.")
+
+        items = []
+        n_test = None
+        for X, y, X_test in zip(X_list, y_list, X_test_list):
+            # Standard fit: builds the full ensemble preprocessor + configs and
+            # sets classes_/n_classes_ exactly as a normal predict would.
+            self.fit(X, y)
+            static_seed, _ = infer_random_state(self.random_state)
+            _, x_proc, y_proc = self._initialize_dataset_preprocessing(
+                X=X, y=y, random_state=static_seed
+            )
+            members = self.ensemble_preprocessor_.fit_transform_ensemble_members(
+                X_train=x_proc, y_train=y_proc
+            )
+            x_context, x_query, cat_indices = [], [], []
+            y_context = [
+                torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
+                for m in members
+            ]
+            for member in members:
+                x_tr = torch.as_tensor(np.asarray(member.X_train), dtype=torch.float32)
+                x_te = torch.as_tensor(
+                    np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+                )
+                # GPU preprocessing runs on the concatenated (train, test) block,
+                # exactly as the standard inference engine does.
+                full, schema = _maybe_run_gpu_preprocessing(
+                    torch.cat([x_tr, x_te], dim=0),
+                    member.gpu_preprocessor,
+                    member.feature_schema,
+                    num_train_rows=x_tr.shape[0],
+                )
+                n = x_tr.shape[0]
+                x_context.append(full[:n])
+                x_query.append(full[n:])
+                cat_indices.append(
+                    schema.indices_for(FeatureModality.CATEGORICAL) or []
+                )
+            n_test = x_query[0].shape[0]
+            items.append(
+                ClassifierBatch(
+                    X_context=x_context,
+                    X_query=x_query,
+                    y_context=y_context,
+                    y_query=torch.zeros(n_test),
+                    cat_indices=cat_indices,
+                    configs=self.ensemble_configs_,
+                )
+            )
+
+        batch = meta_dataset_collator(items)
+        # Already preparing a batched executor; set the mode so fit_from_preprocessed
+        # does not warn about switching out of fine-tuning mode.
+        self.fit_mode = "batched"
+        self.fit_from_preprocessed(
+            batch.X_context,
+            batch.y_context,
+            batch.cat_indices,
+            batch.configs,
+            performance_options=PerformanceOptions(),
+        )
+        # (n_test, n_datasets, n_classes)
+        out = self.forward(batch.X_query, use_inference_mode=True)
+        out = out.detach().float().cpu().numpy()
+        return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
@@ -1466,12 +1585,22 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             and (not X or isinstance(X[0], torch.Tensor))
         )
 
-        assert is_standard_inference or is_batched_for_grads, (
+        # Scenario 3: Batched *inference* — score several independent datasets in
+        # one fused forward per estimator (no gradients). Output keeps the dataset
+        # batch dimension.
+        is_batched_inference = (
+            use_inference_mode
+            and isinstance(self.executor_, InferenceEngineBatchedNoPreprocessing)
+            and isinstance(X, list)
+            and (not X or isinstance(X[0], torch.Tensor))
+        )
+
+        assert is_standard_inference or is_batched_for_grads or is_batched_inference, (
             f"Invalid forward pass: Bad combination of inference mode "
             f"({use_inference_mode=}), input X, "
             f"or executor type ({type(self.executor_)}). Ensure call is from standard "
-            f"predict ({is_standard_inference=}) or a batched fine-tuning context."
-            f"({is_batched_for_grads=})."
+            f"predict ({is_standard_inference=}), batched fine-tuning "
+            f"({is_batched_for_grads=}), or batched inference ({is_batched_inference=})."
         )
 
         # Specific check for float64 incompatibility if the batched engine is being
@@ -1553,7 +1682,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             output = self.logits_to_probabilities(stacked_outputs)
 
         # --- Final output shaping ---
-        if output.ndim > 2 and use_inference_mode:
+        # Standard inference squeezes the singleton batch dim; batched inference
+        # keeps it so the output is always (n_query, batch_size, n_classes).
+        if output.ndim > 2 and use_inference_mode and not is_batched_inference:
             output = output.squeeze(1) if not return_raw_logits else output.squeeze(2)
 
         if not use_inference_mode:

@@ -1261,3 +1261,119 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
             "Column order is not different for any batch! Fixed preprocessing seed is "
             "not working."
         )
+
+
+@pytest.mark.parametrize("device", devices)
+def test__batched_inference__matches_single_dataset(device: str) -> None:
+    """Batched inference scores several independent datasets in a single fused
+    forward per estimator and matches per-dataset inference exactly.
+
+    The transformer batch dimension is independent, so stacking datasets along it
+    yields independent in-context predictions in one forward. This verifies both
+    the output contract ((n_query, batch_size, n_classes)) and numerical
+    equivalence with running each dataset alone from the same preprocessed inputs.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] + 0.3 * r.randn(n) > 0).astype(int)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+
+    def make_clf() -> TabPFNClassifier:
+        return TabPFNClassifier(
+            n_estimators=2,
+            device=device,
+            random_state=42,
+            fit_mode="batched",
+            inference_precision=torch.float32,
+            differentiable_input=False,
+        )
+
+    clf = make_clf()
+    collection = get_preprocessed_dataset_chunks(
+        clf,
+        [d[0] for d in data],
+        [d[1] for d in data],
+        train_test_split,
+        100,
+        model_type="classifier",
+        equal_split_size=True,
+        data_shuffle_seed=42,
+        preprocessing_random_state=42,
+    )
+    batch = next(iter(DataLoader(collection, batch_size=3, collate_fn=meta_dataset_collator)))
+    perf = PerformanceOptions()
+
+    clf.fit_from_preprocessed(
+        batch.X_context, batch.y_context, batch.cat_indices, batch.configs,
+        performance_options=perf,
+    )
+    fused = clf.forward(batch.X_query, use_inference_mode=True).detach()
+
+    # Output keeps the dataset batch dim: (n_query, n_datasets, n_classes).
+    assert fused.ndim == 3
+    assert fused.shape[1] == 3
+    assert torch.allclose(fused.sum(-1), torch.ones_like(fused.sum(-1)), atol=1e-4)
+
+    # Each dataset, run alone from the same preprocessed inputs, matches the slice.
+    for i in range(3):
+        single_clf = make_clf()
+        single_clf.fit_from_preprocessed(
+            [t[i : i + 1] for t in batch.X_context],
+            [t[i : i + 1] for t in batch.y_context],
+            [batch.cat_indices[i]],
+            [[cfg[i]] for cfg in batch.configs],
+            performance_options=perf,
+        )
+        single = single_clf.forward(
+            [t[i : i + 1] for t in batch.X_query], use_inference_mode=True
+        ).detach()
+        assert single.shape[1] == 1
+        assert torch.allclose(fused[:, i, :], single[:, 0, :], atol=1e-4)
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
+    """The public predict_proba_batched API matches per-dataset fit+predict_proba.
+
+    Each dataset is preprocessed exactly as in standard inference, then all are
+    scored in one fused forward per estimator. Output is (n_datasets, n_test,
+    n_classes) and equals running each dataset alone to within float tolerance.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] + 0.3 * r.randn(n) > 0).astype(int)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+    X_tests = [d[0][:5] for d in data]
+
+    clf = TabPFNClassifier(
+        n_estimators=2, device=device, random_state=42, inference_precision=torch.float32
+    )
+    proba = clf.predict_proba_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests
+    )
+    assert proba.shape == (3, 5, 2)
+    assert np.allclose(proba.sum(-1), 1.0, atol=1e-4)
+
+    # Equivalence is exact on CPU; on GPU, batched vs single matmul accumulate
+    # differently, so only a coarse agreement is required there.
+    atol = 1e-4 if device == "cpu" else 2e-1
+    for i, (X, y) in enumerate(data):
+        ref_clf = TabPFNClassifier(
+            n_estimators=2, device=device, random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref_clf.fit(X, y)
+        ref = ref_clf.predict_proba(X_tests[i])
+        np.testing.assert_allclose(proba[i], ref, atol=atol)

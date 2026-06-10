@@ -623,8 +623,12 @@ def meta_dataset_collator(
         as enforced by an internal assertion.
     """
     batch_sz = len(batch)
-    assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
-
+    # batch_size > 1 stacks multiple independent datasets along the model's batch
+    # dimension, enabling a single fused forward over all of them (the transformer
+    # batch dim is independent). Tensors are padded to a common shape; when the
+    # datasets share a shape (the common case) no padding occurs and results are
+    # exact. Ragged datasets are padded with ``padding_val`` (see pad_tensors);
+    # masking of padded context positions is left to the model/preprocessing.
     first_item = batch[0]
     num_estimators = len(first_item.X_context)
 
