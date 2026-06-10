@@ -73,8 +73,13 @@ class KDITransformerWithNaN(KDITransformer):
                 copy=copy,
             )
 
-    def _more_tags(self) -> dict:
+    def _more_tags(self) -> dict:  # sklearn < 1.6
         return {"allow_nan": True}
+
+    def __sklearn_tags__(self):  # sklearn >= 1.6
+        tags = super().__sklearn_tags__()
+        tags.input_tags.allow_nan = True
+        return tags
 
     def fit(
         self,

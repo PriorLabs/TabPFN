@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Literal
 from typing_extensions import override
 
 import numpy as np
 from sklearn.preprocessing import QuantileTransformer
+from sklearn.utils.validation import _num_samples
 
 _DEFAULT_SUBSAMPLE = 100_000
 
@@ -85,22 +86,23 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         self,
         *,
         n_quantiles: int = 1_000,
+        output_distribution: Literal["uniform", "normal"] = "uniform",
+        ignore_implicit_zeros: bool = False,
         subsample: int = _DEFAULT_SUBSAMPLE,
+        random_state: int | np.random.RandomState | np.random.Generator | None = None,
+        copy: bool = True,
         extrapolate_ratio: float | None = None,
-        **kwargs: Any,
     ) -> None:
-        # Store the user's desired n_quantiles to use as an upper bound
-        self._user_n_quantiles = n_quantiles
-        # Initialize parent with this, but it will be adapted in fit
-        super().__init__(n_quantiles=n_quantiles, subsample=subsample, **kwargs)
-        if extrapolate_ratio is not None:
-            if extrapolate_ratio < 0:
-                raise ValueError("extrapolate_ratio must be non-negative.")
-            if kwargs.get("output_distribution", "uniform") != "uniform":
-                raise ValueError(
-                    "extrapolate_ratio is only supported for "
-                    "output_distribution='uniform'."
-                )
+        # All parent parameters must be explicit (no **kwargs): clone()
+        # rebuilds from get_params(), which only sees named parameters.
+        super().__init__(
+            n_quantiles=n_quantiles,
+            output_distribution=output_distribution,
+            ignore_implicit_zeros=ignore_implicit_zeros,
+            subsample=subsample,
+            random_state=random_state,
+            copy=copy,
+        )
         self.extrapolate_ratio = extrapolate_ratio
 
     @override
@@ -109,33 +111,54 @@ class AdaptiveQuantileTransformer(QuantileTransformer):
         X: np.ndarray,
         y: np.ndarray | None = None,
     ) -> AdaptiveQuantileTransformer:
-        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+        # sklearn contract: validate at fit time, not in __init__/set_params.
+        if self.extrapolate_ratio is not None:
+            if self.extrapolate_ratio < 0:
+                raise ValueError("extrapolate_ratio must be non-negative.")
+            if self.output_distribution != "uniform":
+                raise ValueError(
+                    "extrapolate_ratio is only supported for "
+                    "output_distribution='uniform'."
+                )
+
+        n_samples = _num_samples(X)
+
+        if self.extrapolate_ratio is not None and n_samples > 0:
             self.x_min_ = np.nanmin(X, axis=0, keepdims=True)
             self.x_max_ = np.nanmax(X, axis=0, keepdims=True)
 
-        n_samples = X.shape[0]
-
-        self.n_quantiles = compute_effective_n_quantiles(
-            self._user_n_quantiles, n_samples, self.subsample
-        )
-
         # Convert Generator to RandomState if needed for sklearn compatibility
-        if isinstance(self.random_state, np.random.Generator):
-            seed = int(self.random_state.integers(0, 2**32))
-            self.random_state = np.random.RandomState(seed)
-        elif hasattr(self.random_state, "bit_generator"):
+        random_state = self.random_state
+        if isinstance(random_state, np.random.Generator):
+            seed = int(random_state.integers(0, 2**32))
+            random_state = np.random.RandomState(seed)
+        elif hasattr(random_state, "bit_generator"):
             raise ValueError(
-                f"Unsupported random state type: {type(self.random_state)}. "
+                f"Unsupported random state type: {type(random_state)}. "
                 "Please provide an integer seed or np.random.RandomState object."
             )
 
-        return super().fit(X, y)
+        # The parent reads n_quantiles/random_state from self: set the adapted
+        # values only for the duration of the fit, since fit() must not modify
+        # constructor parameters (clone/refit contract).
+        user_n_quantiles = self.n_quantiles
+        user_random_state = self.random_state
+        self.n_quantiles = compute_effective_n_quantiles(
+            user_n_quantiles, n_samples, self.subsample
+        )
+        self.random_state = random_state
+        try:
+            return super().fit(X, y)
+        finally:
+            self.n_quantiles = user_n_quantiles
+            self.random_state = user_random_state
 
     @override
     def transform(self, X: np.ndarray) -> np.ndarray:
         out = super().transform(X)
 
-        if self.extrapolate_ratio is not None and X.shape[0] > 0:
+        if self.extrapolate_ratio is not None and out.shape[0] > 0:
+            X = np.asarray(X)
             x_range = self.x_max_ - self.x_min_
             # Skip constant features (matches the GPU path); also avoids a
             # divide-by-zero in the normalisation below.

@@ -204,6 +204,14 @@ class SquashingScaler(OneToOneFeatureMixin, TransformerMixin, BaseEstimator):
         self.max_absolute_value = max_absolute_value
         self.quantile_range = quantile_range
 
+    def _more_tags(self) -> dict:  # sklearn < 1.6
+        return {"allow_nan": True}
+
+    def __sklearn_tags__(self):  # sklearn >= 1.6
+        tags = super().__sklearn_tags__()
+        tags.input_tags.allow_nan = True
+        return tags
+
     def fit(self, X: np.ndarray, y: None | np.ndarray = None) -> SquashingScaler:
         """Fit the transformer to a column.
 
