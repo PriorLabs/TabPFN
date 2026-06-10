@@ -217,6 +217,7 @@ def fit_preprocessing(
                 pipelines,
                 subsample_feature_indices,
                 subsample_row_indices,
+                strict=True,
             )  # type: ignore[arg-type]
         )
     )
