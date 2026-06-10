@@ -8,7 +8,7 @@ import pathlib
 import typing
 from collections.abc import Sequence
 from inspect import signature
-from typing import TYPE_CHECKING, Literal, Union
+from typing import TYPE_CHECKING, Literal
 
 import numpy as np
 import torch
@@ -87,7 +87,7 @@ class RegressorModelSpecs(BaseModelSpecs):
         self.norm_criterion = norm_criterion
 
 
-ModelSpecs = Union[RegressorModelSpecs, ClassifierModelSpecs]
+ModelSpecs = RegressorModelSpecs | ClassifierModelSpecs
 
 
 def initialize_tabpfn_model(

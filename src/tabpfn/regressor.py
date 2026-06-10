@@ -24,8 +24,8 @@ import warnings
 from collections.abc import Iterator, Sequence
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union
-from typing_extensions import Self, TypedDict, deprecated, overload
+from typing import TYPE_CHECKING, Annotated, Any, Literal, overload
+from typing_extensions import Self, TypedDict, deprecated
 
 import numpy as np
 import torch
@@ -142,9 +142,7 @@ class FullOutputDict(MainOutputDict):
     logits: torch.Tensor
 
 
-RegressionResultType = Union[
-    np.ndarray, list[np.ndarray], MainOutputDict, FullOutputDict
-]
+RegressionResultType = np.ndarray | list[np.ndarray] | MainOutputDict | FullOutputDict
 """The type hint for the return value of the `predict` method."""
 
 
