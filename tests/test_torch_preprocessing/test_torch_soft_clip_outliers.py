@@ -117,3 +117,38 @@ def test__call__3d_tensor():
     assert x_transformed.shape == x.shape
     assert not torch.isnan(x_transformed).any()
     assert not torch.isinf(x_transformed).any()
+
+
+def test__transform__single_row_clipped_like_batch():
+    """A single test row must be clipped exactly like the same row in a batch.
+
+    Regression test: transform() used to return single-row inputs unchanged,
+    so in the KV-cache predict paths (which transform only X_test) predicting
+    one sample bypassed outlier clipping while predicting two or more applied
+    it, making predictions depend on the test batch size.
+    """
+    torch.manual_seed(0)
+    clipper = TorchSoftClipOutliers(n_sigma=2.0)
+    fitted_cache = clipper.fit(torch.randn(100, 1, 3))
+
+    outlier_row = torch.full((1, 1, 3), 50.0)
+    batch = torch.cat([outlier_row, torch.zeros(1, 1, 3)], dim=0)
+
+    single = clipper.transform(outlier_row, fitted_cache=fitted_cache)
+    batched = clipper.transform(batch, fitted_cache=fitted_cache)
+
+    # The outlier must actually be clipped, and identically in both cases.
+    assert single[0, 0, 0] < 50.0
+    torch.testing.assert_close(single[0], batched[0])
+
+
+def test__transform__single_row_after_single_row_fit_is_noop():
+    """Degenerate single-row *fit* yields +-inf bounds, so transform stays
+    a no-op for any input - the old transform-side guard was redundant there.
+    """
+    clipper = TorchSoftClipOutliers(n_sigma=2.0)
+    fitted_cache = clipper.fit(torch.randn(1, 1, 3))
+
+    x = torch.full((1, 1, 3), 50.0)
+    out = clipper.transform(x, fitted_cache=fitted_cache)
+    torch.testing.assert_close(out, x)
