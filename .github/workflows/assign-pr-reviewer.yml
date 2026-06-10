@@ -1,0 +1,41 @@
+# When a PR is opened from a fork or by dependabot, request a review from the
+# opensource-review-team so a reviewer is randomly assigned.
+#
+# We use this workflow instead of GitHub's built-in auto-assignment system because we
+# want to avoid auto assigning reviewers to PRs from Prior Labs team members, and GitHub
+# does not support this.
+name: Assign reviewer to external+dependabot PRs
+
+on:
+  # pull_request_target so the workflow has write permissions for PRs from forks.
+  # We do not check out PR code, so this is safe.
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  assign-reviewer:
+    # Assign only when the PR is from a fork or from dependabot, isn't a draft, and
+    # doesn't already have a reviewer (some files are covered by CODEOWNERS and
+    # automatically get a reviewer).
+    if: >
+      !github.event.pull_request.draft &&
+      github.event.pull_request.requested_reviewers[0] == null &&
+      github.event.pull_request.requested_teams[0] == null &&
+      (
+        github.event.pull_request.head.repo.full_name != github.repository ||
+        github.event.pull_request.user.login == 'dependabot[bot]'
+      )
+    runs-on: ubuntu-slim
+    steps:
+      - name: Request review from opensource-review-team
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api \
+            --method POST \
+            "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
+            -f 'team_reviewers[]=opensource-review-team'
