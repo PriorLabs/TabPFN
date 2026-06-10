@@ -515,15 +515,12 @@ class TabPFNBlock(nn.Module):
 
 
 @dataclasses.dataclass
-class TabPFNV2Cache:
+class TabPFNV2Cache(KVCache):
     """Explicit KV cache for the single-file TabPFN v2 architecture.
 
-    Stores everything derived from the training data that is needed to make
-    predictions for test rows without the training rows being present:
-
     Attributes:
-        icl_cache: Per-block train key/value projections for the between-cells
-            attention (only the first multi-query-attention head is stored).
+        kv: Per-block train key/value projections for the between-cells attention
+            (only the first multi-query-attention head is stored).
         feature_cache: The fitted feature-preprocessing statistics (constant-feature
             mask, imputation means, standard-scaler mean/std and feature-group scaling),
             so test rows can be preprocessed using the training statistics without
@@ -534,28 +531,16 @@ class TabPFNV2Cache:
         train_shape: ``(batch_size, num_train)``.
     """
 
-    icl_cache: KVCache = dataclasses.field(default_factory=KVCache)
     feature_cache: dict[str, torch.Tensor] | None = None
     test_y_embedding: torch.Tensor | None = None
     train_shape: tuple[int, int] = (0, 0)
 
-    def is_empty(self) -> bool:
-        """Return True if the cache has not been populated yet."""
-        return not self.icl_cache.is_populated()
-
-    @staticmethod
-    def _state_to(
-        state: dict[str, torch.Tensor] | None, device: torch.device | str
-    ) -> dict[str, torch.Tensor] | None:
-        if state is None:
-            return None
-        return {k: v.to(device) for k, v in state.items()}
-
+    @override
     def to(self, device: torch.device | str) -> TabPFNV2Cache:
         """Move all cached tensors to the given device. Returns a new cache."""
         return TabPFNV2Cache(
-            icl_cache=self.icl_cache.to(device),
-            feature_cache=self._state_to(self.feature_cache, device),
+            kv=self._kv_to(device),
+            feature_cache=self._dict_of_tensors_to(self.feature_cache, device),
             test_y_embedding=(
                 None
                 if self.test_y_embedding is None
@@ -1026,7 +1011,7 @@ class TabPFNV2(Architecture):
                     x_BRCD,
                     block_single_eval_pos,
                     save_peak_memory_factor,
-                    cached_kv=kv_cache.icl_cache.kv[layer_idx],
+                    cached_kv=kv_cache.kv[layer_idx],
                 )
             elif force_recompute_layer:
                 x_BRCD = torch.utils.checkpoint.checkpoint(
@@ -1054,7 +1039,7 @@ class TabPFNV2(Architecture):
         # Build the cache for later test-only inference.
         assert icl_cache_out is not None
         built_cache = TabPFNV2Cache(
-            icl_cache=icl_cache_out,
+            kv=icl_cache_out.kv,
             feature_cache=feature_cache,
             test_y_embedding=test_y_embedding,
             train_shape=(batch_size, num_train_labels),

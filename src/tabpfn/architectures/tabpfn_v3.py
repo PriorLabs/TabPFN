@@ -190,14 +190,14 @@ class TabPFNV3Config(ArchitectureConfig):
 
 
 @dataclasses.dataclass
-class TabPFNV3Cache:
+class TabPFNV3Cache(KVCache):
     """Top-level cache container for TabPFN v3 explicit KV cache.
 
     Stores everything needed to skip stages 0-2 for train rows and reuse
-    cached K/V in the ICL transformer.
+    the cached K/V in the ICL transformer.
 
     Attributes:
-        icl_cache: Per-layer KV cache for the ICL transformer blocks.
+        kv: Per-layer KV cache for the ICL transformer blocks.
         train_embeddings: Post-ICL, post-norm train embeddings of shape
             ``(B, N_train, D)``. Needed by the multiclass decoder.
         train_shape: ``(batch_size, num_train)`` for validation.
@@ -209,36 +209,24 @@ class TabPFNV3Cache:
             recomputing ``cross_attn_block1`` from train rows.
     """
 
-    icl_cache: KVCache = dataclasses.field(default_factory=KVCache)
     train_embeddings: torch.Tensor | None = None
     train_shape: tuple[int, int] = (0, 0)
     scaler_cache: dict[str, torch.Tensor] | None = None
     inducing_hidden: list[torch.Tensor] | None = None
 
-    def is_empty(self) -> bool:
-        """Check if the cache is empty."""
-        return not self.icl_cache.is_populated()
-
+    @override
     def to(self, device: torch.device | str) -> TabPFNV3Cache:
         """Move all cached tensors to the given device."""
         return TabPFNV3Cache(
-            icl_cache=self.icl_cache.to(device),
+            kv=self._kv_to(device),
             train_embeddings=(
                 self.train_embeddings.to(device)
                 if self.train_embeddings is not None
                 else None
             ),
             train_shape=self.train_shape,
-            scaler_cache=(
-                {k: v.to(device) for k, v in self.scaler_cache.items()}
-                if self.scaler_cache is not None
-                else None
-            ),
-            inducing_hidden=(
-                [h.to(device) for h in self.inducing_hidden]
-                if self.inducing_hidden is not None
-                else None
-            ),
+            scaler_cache=self._dict_of_tensors_to(self.scaler_cache, device),
+            inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
         )
 
     def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV3Cache:
@@ -250,36 +238,17 @@ class TabPFNV3Cache:
         Args:
             dtype: Target integer dtype (default ``torch.int8``).
         """
+        quantized_kv = {
+            idx: (entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry)
+            for idx, entry in self.kv.items()
+        }
         return TabPFNV3Cache(
-            icl_cache=self.icl_cache.quantize(dtype),
+            kv=quantized_kv,
             train_embeddings=self.train_embeddings,
             train_shape=self.train_shape,
             scaler_cache=self.scaler_cache,
             inducing_hidden=self.inducing_hidden,
         )
-
-    def cache_size_mb(self) -> int:
-        """Return the memory occupied by cached tensors in MB.
-
-        Uses integer division, so returns 0 for caches smaller than 1 MB.
-        """
-        total = 0
-        for entry in self.icl_cache.kv.values():
-            if entry.key is not None:
-                total += entry.key.numel() * entry.key.element_size()
-            if entry.value is not None:
-                total += entry.value.numel() * entry.value.element_size()
-        if self.train_embeddings is not None:
-            total += (
-                self.train_embeddings.numel() * self.train_embeddings.element_size()
-            )
-        if self.scaler_cache is not None:
-            for v in self.scaler_cache.values():
-                total += v.numel() * v.element_size()
-        if self.inducing_hidden is not None:
-            for h in self.inducing_hidden:
-                total += h.numel() * h.element_size()
-        return total // (1024 * 1024)
 
 
 # ---------------------------------------------------------------------------
@@ -1737,7 +1706,7 @@ class TabPFNV3(Architecture):
                     x_BRiD,
                     0,
                     performance_options.save_peak_memory_factor,
-                    cached_kv=kv_cache.icl_cache.kv[layer_idx],
+                    cached_kv=kv_cache.kv[layer_idx],
                 )
         else:
             if num_train > 0:
@@ -1792,7 +1761,7 @@ class TabPFNV3(Architecture):
                 # Store train_embeddings at the ICL KV cache dtype.
                 cache_dtype = next(iter(icl_cache_out.kv.values())).key.dtype
                 built_cache = TabPFNV3Cache(
-                    icl_cache=icl_cache_out,
+                    kv=icl_cache_out.kv,
                     train_embeddings=train_emb.detach().to(cache_dtype),
                     train_shape=(B, num_train),
                     scaler_cache={k: v.detach() for k, v in scaler_stats.items()},
