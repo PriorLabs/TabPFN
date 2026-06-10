@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import queue
 import threading
-from collections.abc import Generator, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from multiprocessing.pool import ThreadPool
-from typing import Callable, Generic, Protocol, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 import torch
 

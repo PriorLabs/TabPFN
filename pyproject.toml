@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tabpfn"
-version = "8.0.7"
+version = "8.0.8"
 dependencies = [
   "torch>=2.5",
   "safetensors>=0.4.0",
@@ -17,18 +17,13 @@ dependencies = [
   "huggingface-hub>=0.23.0",
   "pydantic>=2.8.0",
   "pydantic-settings>=2.10.1",
-  # eval-type-backport is required on Python 3.9 to enable support for "X | Y" notation
-  # for union types in Pydantic.
-  # Once Python 3.10 is the minimum version, this can be removed.
-  "eval-type-backport>=0.2.2",
   "joblib>=1.2.0",
   "tqdm>=4.66.0",
-  "tabpfn-common-utils[telemetry-interactive]>=0.2.13",
   "filelock>=3.11.0",
   "lightgbm>=3.0",
   "mlx>=0.29.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 authors = [{ name = "Prior Labs", email = "opensource@priorlabs.ai" }]
 
 readme = "README.md"
@@ -43,11 +38,11 @@ classifiers = [
   'Operating System :: Unix',
   'Operating System :: MacOS',
   'Programming Language :: Python :: 3',
-  'Programming Language :: Python :: 3.9',
   'Programming Language :: Python :: 3.10',
   'Programming Language :: Python :: 3.11',
   'Programming Language :: Python :: 3.12',
   'Programming Language :: Python :: 3.13',
+  'Programming Language :: Python :: 3.14',
 ]
 license = { file = "LICENSE" }
 
@@ -115,7 +110,7 @@ markers = [
 
 # https://github.com/charliermarsh/ruff
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 88
 output-format = "full"
 src = ["src", "tests", "examples"]
@@ -323,7 +318,7 @@ ignore-decorators = ["typing.override", "typing_extensions.override", "typing.ov
 max-args = 10 # Changed from default of 5
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 packages = ["src/tabpfn", "tests"]
 
 show_error_codes = true
@@ -379,7 +374,7 @@ ignore_missing_imports = true
 [tool.pyright]
 include = ["src", "tests"]
 
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 typeCheckingMode = "strict"
 
 strictListInference = true

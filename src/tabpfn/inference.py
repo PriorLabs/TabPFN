@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     import numpy as np
 
     from tabpfn.architectures.interface import Architecture
+    from tabpfn.architectures.kv_cache import KVCache
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
         TabPFNEnsembleMember,
@@ -424,7 +425,9 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             )
         )
 
-        for config, output in zip(self.ensemble_preprocessor.configs, timed_outputs):
+        for config, output in zip(
+            self.ensemble_preprocessor.configs, timed_outputs, strict=True
+        ):
             yield _move_and_squeeze_output(output, devices[0]), config
 
         self._speed_metrics["predict_model_forward_seconds"] = (
@@ -733,7 +736,9 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
             )
         )
 
-        for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
+        for output, ensemble_member in zip(
+            timed_outputs, self.ensemble_members, strict=True
+        ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
         self._speed_metrics["predict_model_forward_seconds"] = (
@@ -939,7 +944,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
         preprocess_time = 0.0
         forward_time = 0.0
-        for ensemble_member, model in zip(self.ensemble_members, self.models):
+        for ensemble_member, model in zip(
+            self.ensemble_members, self.models, strict=True
+        ):
             preprocess_start = time.perf_counter()
             model.to(self.device)
             X_test = ensemble_member.transform_X_test(X)
@@ -1129,7 +1136,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         gpu_preprocessor: TorchPreprocessingPipeline | None,
         autocast: bool,
         save_peak_mem: bool,
-    ) -> object:
+    ) -> KVCache:
         """Build KV cache for one ensemble member on the given device.
 
         Called via :func:`parallel_execute` — may run on different devices
@@ -1243,7 +1250,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
         )
 
-        for output, ensemble_member in zip(timed_outputs, self.ensemble_members):
+        for output, ensemble_member in zip(
+            timed_outputs, self.ensemble_members, strict=True
+        ):
             yield _move_and_squeeze_output(output, devices[0]), ensemble_member.config
 
         self._speed_metrics["predict_model_forward_seconds"] = (

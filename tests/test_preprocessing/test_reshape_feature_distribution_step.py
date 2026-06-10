@@ -8,6 +8,7 @@ from typing import Literal
 
 import numpy as np
 import pytest
+from sklearn.base import clone
 
 from tabpfn.preprocessing.datamodel import (
     Feature,
@@ -16,6 +17,9 @@ from tabpfn.preprocessing.datamodel import (
     GPUTransformType,
 )
 from tabpfn.preprocessing.steps import ReshapeFeatureDistributionsStep
+from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
+    get_all_reshape_feature_distribution_preprocessors,
+)
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -523,3 +527,97 @@ def test__num_added_features():
     assert step.num_added_features(100, _get_schema(num_columns=10)) == 10
     assert step.num_added_features(100, _get_schema(num_columns=501)) == 0
     assert step.num_added_features(100, _get_schema(num_columns=250)) == 250
+
+
+def test__all_preprocessors__clone_equivalence():
+    """Fitting a clone of any registry preprocessor must give the same output
+    as fitting the original (sklearn clones internally, e.g. in
+    ColumnTransformer.fit, so parameters hidden from get_params are lost).
+    """
+    rng = np.random.default_rng(0)
+    X = rng.uniform(0.5, 2.0, size=(100, 3))
+
+    preprocessors = get_all_reshape_feature_distribution_preprocessors(
+        num_examples=X.shape[0], random_state=0
+    )
+    for name, preprocessor in preprocessors.items():
+        if name == "adaptive":
+            # ColumnTransformer keyed on column-name patterns; needs a DataFrame.
+            continue
+        out_original = preprocessor.fit_transform(X.copy())
+        out_clone = clone(preprocessor).fit_transform(X.copy())
+        np.testing.assert_allclose(
+            np.asarray(out_original, dtype=float),
+            np.asarray(out_clone, dtype=float),
+            err_msg=(
+                f"Preprocessor {name!r} behaves differently after clone(); "
+                "it likely hides constructor parameters from get_params()."
+            ),
+        )
+
+
+def test__all_preprocessors__schema_matches_output_columns():
+    """The returned FeatureSchema must match the actual output column count.
+
+    Regression test: ``n_output_features`` assumed every preprocessor emits
+    one column per input column, but FeatureUnion-based presets (e.g.
+    ``norm_and_kdi``) emit one block per sub-transformer. The schema then
+    undercounted, and ``num_added_features`` under-reported to the ensemble's
+    feature-budget planning. This sweeps the whole registry so any future
+    multi-output preset fails here instead of silently corrupting the schema.
+    """
+    rng = np.random.default_rng(0)
+    n_features = 4
+    X = rng.uniform(0.5, 2.0, size=(60, n_features))
+    schema = _get_schema(num_columns=n_features)
+
+    names = get_all_reshape_feature_distribution_preprocessors(
+        num_examples=X.shape[0], random_state=0
+    ).keys()
+    for name in names:
+        if name == "adaptive":
+            continue  # raw "adaptive" preprocessing was removed; the step raises
+        for append in (False, True):
+            step = ReshapeFeatureDistributionsStep(
+                transform_name=name,
+                apply_to_categorical=False,
+                append_to_original=append,
+                random_state=0,
+            )
+            result = step.fit_transform(X.copy(), schema)
+            assert result.X.shape[1] == result.feature_schema.num_columns, (
+                f"{name!r} (append={append}): X has {result.X.shape[1]} columns "
+                f"but the schema claims {result.feature_schema.num_columns}"
+            )
+            assert (
+                step.num_added_features(X.shape[0], schema)
+                == result.X.shape[1] - n_features
+            ), f"{name!r} (append={append}): num_added_features mismatch"
+
+
+def test__norm_and_kdi__output_schema_column_count():
+    """norm_and_kdi emits 2 columns per transformed input column."""
+    rng = np.random.default_rng(1)
+    n_features = 4
+    X = rng.uniform(0.5, 2.0, size=(60, n_features))
+    schema = _get_schema(num_columns=n_features)
+
+    step = ReshapeFeatureDistributionsStep(
+        transform_name="norm_and_kdi",
+        apply_to_categorical=False,
+        append_to_original=False,
+        random_state=0,
+    )
+    result = step.fit_transform(X, schema)
+    assert result.X.shape[1] == 2 * n_features
+    assert result.feature_schema.num_columns == 2 * n_features
+
+    step_append = ReshapeFeatureDistributionsStep(
+        transform_name="norm_and_kdi",
+        apply_to_categorical=False,
+        append_to_original=True,
+        random_state=0,
+    )
+    result_append = step_append.fit_transform(X, schema)
+    assert result_append.X.shape[1] == 3 * n_features
+    assert result_append.feature_schema.num_columns == 3 * n_features

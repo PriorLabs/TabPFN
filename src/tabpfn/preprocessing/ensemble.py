@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import math
 import warnings
@@ -164,7 +165,7 @@ class TabPFNEnsemblePreprocessor:
                 random_state=int(seed),
                 enable_gpu_preprocessing=enable_gpu_preprocessing,
             )
-            for config, seed in zip(self.configs, self.pipeline_seeds)
+            for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]
 
         n_total_features = feature_schema.num_columns
@@ -675,7 +676,7 @@ def _get_subsample_feature_indices(
     # For one-hot encoding, num_added_features returns 0 as an approximation
     # because the true count depends on data cardinality (see warning below).
     subsample_sizes = []
-    for pipeline, max_feats in zip(pipelines, max_features_per_estimator):
+    for pipeline, max_feats in zip(pipelines, max_features_per_estimator, strict=True):
         subsample_sizes.append(
             _find_max_input_features(
                 pipeline=pipeline,
@@ -741,6 +742,8 @@ def _draw_balanced_from_pool(
 
     When the pool is exhausted it is refilled with ``range(pool_size)`` minus
     any slots already drawn for the current estimator (to avoid duplicates).
+    If every slot has already been drawn (``size > pool_size``), duplicates are
+    unavoidable and the pool is refilled with the full range instead.
 
     Returns:
         (drawn_slots, remaining_pool) so the caller can carry the pool across
@@ -753,6 +756,8 @@ def _draw_balanced_from_pool(
         if len(pool) == 0:
             already_selected = set(slots)
             available = [i for i in range(pool_size) if i not in already_selected]
+            if not available:
+                available = list(range(pool_size))
             rng.shuffle(available)
             pool = available
 
@@ -1082,6 +1087,7 @@ def generate_classification_ensemble_configs(
             configs_,
             class_permutations,
             model_indices,
+            strict=True,
         )
     ]
 
@@ -1135,7 +1141,10 @@ def generate_regression_ensemble_configs(
             add_fingerprint_feature=add_fingerprint_feature,
             polynomial_features=polynomial_features,
             feature_shift_decoder=feature_shift_decoder,
-            target_transform=target_transform,
+            # Each config gets its own copy: the transform is later fitted in
+            # place per ensemble member (see _transform_labels_one), so a
+            # shared instance would end up with the last member's fitted state.
+            target_transform=copy.deepcopy(target_transform),
             outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
         )
@@ -1146,6 +1155,7 @@ def generate_regression_ensemble_configs(
             featshifts,
             configs_,
             model_indices,
+            strict=True,
         )
     ]
 

@@ -10,7 +10,6 @@ import torch
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.kv_cache import (
-    KVCache,
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
@@ -241,7 +240,7 @@ def test__kv_cache__matches_standard_forward(use_chunkwise: bool) -> None:
     assert isinstance(cache, TabPFNV3Cache)
     assert not cache.is_empty()
     assert cache.train_embeddings is not None
-    assert len(cache.icl_cache.kv) == 2  # nlayers=2
+    assert len(cache.kv) == 2  # nlayers=2
 
     # Store-mode output matches standard
     assert torch.allclose(out_standard, out_store, atol=1e-6), (
@@ -435,13 +434,13 @@ def test__kv_cache_entry__quantize_unsupported_dtype_raises() -> None:
 
 
 def test__kv_cache__quantize_passthrough_on_already_quantized() -> None:
-    """KVCache.quantize must not re-quantize existing QuantizedKVCacheEntry values."""
+    """quantize() must not re-quantize existing QuantizedKVCacheEntry values."""
     torch.manual_seed(0)
     entry = KVCacheEntry(
         key=torch.randn(1, 4, 1, 2),
         value=torch.randn(1, 4, 1, 2),
     )
-    cache = KVCache(kv={0: entry})
+    cache = TabPFNV3Cache(kv={0: entry})
     q1 = cache.quantize()
     q2 = q1.quantize()
     e1 = q1.kv[0]
@@ -474,7 +473,7 @@ def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> 
 
     q_cache = cache.quantize()
     # Verify quantization happened
-    for entry in q_cache.icl_cache.kv.values():
+    for entry in q_cache.kv.values():
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == torch.int8
     # Train embeddings stay in native dtype
@@ -509,7 +508,7 @@ def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
 
     q_cache = cache.quantize()
     # Verify quantization happened
-    for entry in q_cache.icl_cache.kv.values():
+    for entry in q_cache.kv.values():
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == torch.int8
     # Train embeddings stay in full precision

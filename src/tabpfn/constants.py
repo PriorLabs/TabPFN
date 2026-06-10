@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import pathlib
 from enum import Enum
-from typing import Any, Literal, Union
-from typing_extensions import TypeAlias
+from typing import Any, Literal, TypeAlias
 
 import joblib
 import numpy as np
@@ -22,10 +21,7 @@ TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 XType: TypeAlias = Any
 YType: TypeAlias = Any
 
-SampleWeightType: TypeAlias = Any
-TODO_TYPE1: TypeAlias = str
-
-ModelPath: TypeAlias = Union[str, pathlib.Path]
+ModelPath: TypeAlias = str | pathlib.Path
 
 
 class ModelVersion(str, Enum):

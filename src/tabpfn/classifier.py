@@ -30,7 +30,6 @@ import numpy as np
 import torch
 from sklearn import config_context
 from sklearn.base import BaseEstimator, ClassifierMixin, check_is_fitted
-from tabpfn_common_utils.telemetry import track_model_call
 from tqdm.auto import tqdm
 
 from tabpfn.base import (
@@ -40,7 +39,6 @@ from tabpfn.base import (
     estimator_to_device,
     get_embeddings,
     initialize_model_variables_helper,
-    initialize_telemetry,
     reject_categoricals_for_differentiable_input,
 )
 from tabpfn.constants import (
@@ -67,7 +65,6 @@ from tabpfn.inference_tuning import (
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
-    log_model_init_params,
     prepend_cache_path,
     save_fitted_tabpfn_model,
 )
@@ -519,10 +516,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
-        initialize_telemetry()
-
-        # Only anonymously record `fit_mode` usage
-        log_model_init_params(self, {"fit_mode": self.fit_mode})
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -787,7 +780,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return TabPFNClassifier(**params)
 
     @config_context(transform_output="default")  # type: ignore
-    @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit(self, X: XType, y: YType) -> Self:
         """Fit the model.
 
@@ -864,7 +856,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    @track_model_call("fit", param_names=["X_preprocessed", "y_preprocessed"])
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -929,7 +920,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    @track_model_call(model_method="fit", param_names=["X", "y"])
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
 
@@ -1180,7 +1170,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 return_raw_logits=return_raw_logits,
             )
 
-    @track_model_call(model_method="predict", param_names=["X"])
     def predict(self, X: XType) -> np.ndarray:
         """Predict the class labels for the provided input samples.
 
@@ -1198,7 +1187,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return y_pred
 
     @config_context(transform_output="default")
-    @track_model_call(model_method="predict", param_names=["X"])
     def predict_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
@@ -1215,7 +1203,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         return logits_tensor.float().detach().cpu().numpy()
 
     @config_context(transform_output="default")
-    @track_model_call(model_method="predict", param_names=["X"])
     def predict_raw_logits(self, X: XType) -> np.ndarray:
         """Predict the raw logits for the provided input samples.
 
@@ -1238,7 +1225,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         return logits_tensor.float().detach().cpu().numpy()
 
-    @track_model_call(model_method="predict", param_names=["X"])
     def predict_proba(self, X: XType) -> np.ndarray:
         """Predict the probabilities of the classes for the provided input samples.
 

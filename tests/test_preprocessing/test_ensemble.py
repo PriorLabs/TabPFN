@@ -8,8 +8,12 @@ from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+from sklearn.preprocessing import PowerTransformer
 
-from tabpfn.preprocessing import generate_classification_ensemble_configs
+from tabpfn.preprocessing import (
+    generate_classification_ensemble_configs,
+    generate_regression_ensemble_configs,
+)
 from tabpfn.preprocessing.configs import (
     FeatureSubsamplingMethod,
     PreprocessorConfig,
@@ -18,6 +22,7 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
+    _draw_balanced_from_pool,
     _get_subsample_feature_indices,
     _get_subsample_indices_for_estimators,
     _resolve_feature_subsampling_method,
@@ -62,7 +67,7 @@ def test__get_subsample_indices_for_estimators():
     )
     assert len(subsample_indices) == 3
     for subsample_index, expected_subsample_index in zip(
-        subsample_indices, expected_subsample_indices
+        subsample_indices, expected_subsample_indices, strict=True
     ):
         assert subsample_index is not None
         assert (subsample_index == expected_subsample_index).all()
@@ -462,14 +467,14 @@ def test__get_subsample_feature_indices__balanced_reproducibility():
     # Same seed -> identical output.
     result_a = _get_subsample_feature_indices(rng=np.random.default_rng(42), **kwargs)
     result_b = _get_subsample_feature_indices(rng=np.random.default_rng(42), **kwargs)
-    for a, b in zip(result_a, result_b):
+    for a, b in zip(result_a, result_b, strict=True):
         np.testing.assert_array_equal(a, b)
 
     # Different seed -> different output.
     result_c = _get_subsample_feature_indices(rng=np.random.default_rng(99), **kwargs)
     any_different = any(
         not np.array_equal(a, c)
-        for a, c in zip(result_a, result_c)
+        for a, c in zip(result_a, result_c, strict=True)
         if a is not None and c is not None
     )
     assert any_different, "Different seeds should produce different distributions"
@@ -585,6 +590,48 @@ def test__subsample_rows_stratified__minority_class_always_included():
     for indices in result:
         assert len(indices) == 100
         assert 1 in set(y[indices]), "minority class must appear in every estimator"
+
+
+def test__subsample_rows_stratified__class_allocated_more_slots_than_rows():
+    """Oversampling a tiny class must terminate and reuse its rows.
+
+    Largest-remainder allocation can assign a class more slots than it has rows
+    (class sizes [2, 98] with subsample_size 99 -> target counts [3, 96]). This
+    used to spin forever in _draw_balanced_from_pool because the refill excluded
+    all already-drawn slots, leaving the pool permanently empty.
+    """
+    rng = np.random.default_rng(0)
+    y = np.array([0] * 2 + [1] * 98)
+    num_estimators = 4
+
+    result = _subsample_rows_stratified(
+        subsample_size=99,
+        y=y,
+        num_estimators=num_estimators,
+        rng=rng,
+    )
+
+    assert result is not None
+    assert len(result) == num_estimators
+    for indices in result:
+        assert len(indices) == 99
+        y_sub = y[indices]
+        # 3 slots for class 0: both of its rows plus one duplicate.
+        assert (y_sub == 0).sum() == 3
+        assert set(indices[y_sub == 0]) == {0, 1}
+        assert (y_sub == 1).sum() == 96
+
+
+def test__draw_balanced_from_pool__size_exceeds_pool_size():
+    """Drawing more slots than the pool holds duplicates slots evenly."""
+    rng = np.random.default_rng(1)
+
+    slots, _ = _draw_balanced_from_pool(pool=[], size=5, pool_size=2, rng=rng)
+
+    assert len(slots) == 5
+    counts = np.bincount(slots, minlength=2)
+    # 5 draws over 2 slots split as evenly as possible.
+    assert sorted(counts.tolist()) == [2, 3]
 
 
 def test__subsample_rows_stratified__balanced_coverage():
@@ -1346,3 +1393,39 @@ def test___compute_feature_importance_order__handles_nan():
     for order in orderings:
         assert len(order) > 0
         assert not np.isnan(order).any()
+
+
+def test__generate_regression_ensemble_configs__target_transforms_not_shared():
+    """Members must not share a target_transform instance.
+
+    The transform is fitted in place per member (`_transform_labels_one`), so a
+    shared instance would hold only the last member's fitted state, corrupting
+    the inverse transform of every other member's predictions at predict time
+    whenever members see different training targets (e.g. row subsampling).
+    """
+    configs = generate_regression_ensemble_configs(
+        num_estimators=8,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig("none", categorical_name="numeric"),
+            PreprocessorConfig("power", categorical_name="numeric"),
+        ],
+        target_transforms=[None, PowerTransformer()],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+
+    transforms = [
+        config.target_transform
+        for config in configs
+        if config.target_transform is not None
+    ]
+    assert len(transforms) == 4
+    ids = {id(transform) for transform in transforms}
+    assert len(ids) == len(transforms), (
+        "Ensemble configs share target_transform instances; fitting one member "
+        "would clobber the fitted state of the others."
+    )

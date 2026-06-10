@@ -133,12 +133,42 @@ def test__no_extrapolation_when_unset__matches_baseline():
 
 
 def test__extrapolate_ratio__validation_guards():
-    """Invalid extrapolate_ratio configs are rejected at construction."""
+    """Invalid extrapolate_ratio configs are rejected at fit time."""
+    X = np.random.default_rng(0).normal(size=(20, 2))
     with pytest.raises(ValueError, match="non-negative"):
         AdaptiveQuantileTransformer(
             output_distribution="uniform", extrapolate_ratio=-0.1
-        )
+        ).fit(X)
     with pytest.raises(ValueError, match="output_distribution='uniform'"):
-        AdaptiveQuantileTransformer(output_distribution="normal", extrapolate_ratio=0.1)
-    # Valid config still constructs.
-    AdaptiveQuantileTransformer(output_distribution="uniform", extrapolate_ratio=0.1)
+        AdaptiveQuantileTransformer(
+            output_distribution="normal", extrapolate_ratio=0.1
+        ).fit(X)
+    # Valid config fits.
+    AdaptiveQuantileTransformer(
+        output_distribution="uniform", extrapolate_ratio=0.1
+    ).fit(X)
+
+
+def test__fit__generator_random_state_and_refit_adaptation():
+    """Blind spots of the sklearn battery: it never passes a
+    np.random.Generator as random_state and never refits on a different size.
+    """
+    rng = np.random.default_rng(7)
+    X = rng.normal(size=(50, 3))
+
+    transformer = AdaptiveQuantileTransformer(
+        n_quantiles=1_000, output_distribution="normal", random_state=rng
+    )
+    transformer.fit(X)
+
+    # Constructor parameters survive fit unchanged ...
+    assert transformer.n_quantiles == 1_000
+    assert transformer.random_state is rng
+    # ... while the adapted value lives in the fitted attribute.
+    assert transformer.n_quantiles_ == 50
+
+    # Refitting on more samples must adapt upwards from the user's bound,
+    # not stay capped at a previously adapted value.
+    X_large = np.random.default_rng(8).normal(size=(200, 3))
+    transformer.fit(X_large)
+    assert transformer.n_quantiles_ == 200
