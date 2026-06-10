@@ -54,7 +54,6 @@ class PreprocessorConfig:
     """
 
     name: Literal[
-        "per_feature",  # a different transformation for each feature
         "power",  # a standard sklearn power transformer
         "safepower",  # a power transformer that prevents some numerical issues
         "power_box",
