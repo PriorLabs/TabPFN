@@ -990,68 +990,74 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         items = []
         n_test = None
-        for X, y, X_test in zip(X_list, y_list, X_test_list, strict=False):
-            # Standard fit: builds the full ensemble preprocessor + configs and
-            # sets classes_/n_classes_ exactly as a normal predict would.
-            self.fit(X, y)
-            static_seed, _ = infer_random_state(self.random_state)
-            _, x_proc, y_proc = self._initialize_dataset_preprocessing(
-                X=X, y=y, random_state=static_seed
-            )
-            members = self.ensemble_preprocessor_.fit_transform_ensemble_members(
-                X_train=x_proc, y_train=y_proc
-            )
-            x_context, x_query, cat_indices = [], [], []
-            y_context = [
-                torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
-                for m in members
-            ]
-            for member in members:
-                x_tr = torch.as_tensor(np.asarray(member.X_train), dtype=torch.float32)
-                x_te = torch.as_tensor(
-                    np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+        # Run each per-dataset fit in "fit_preprocessors" mode so the fitted
+        # ensemble members are cached on the executor and reused directly (no
+        # redundant re-preprocessing), and restore the caller's fit_mode at the end
+        # so this prediction method leaves no side effect on the estimator.
+        original_fit_mode = self.fit_mode
+        self.fit_mode = "fit_preprocessors"
+        try:
+            for X, y, X_test in zip(X_list, y_list, X_test_list, strict=False):
+                # Standard fit: builds the ensemble preprocessor + configs, caches
+                # the fitted members on the executor, and sets classes_/n_classes_
+                # exactly as a normal predict would.
+                self.fit(X, y)
+                members = self.executor_.ensemble_members
+                x_context, x_query, cat_indices = [], [], []
+                y_context = [
+                    torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
+                    for m in members
+                ]
+                for member in members:
+                    x_tr = torch.as_tensor(
+                        np.asarray(member.X_train), dtype=torch.float32
+                    )
+                    x_te = torch.as_tensor(
+                        np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+                    )
+                    # GPU preprocessing runs on the concatenated (train, test) block,
+                    # exactly as the standard inference engine does.
+                    full, schema = _maybe_run_gpu_preprocessing(
+                        torch.cat([x_tr, x_te], dim=0),
+                        member.gpu_preprocessor,
+                        member.feature_schema,
+                        num_train_rows=x_tr.shape[0],
+                    )
+                    n = x_tr.shape[0]
+                    x_context.append(full[:n])
+                    x_query.append(full[n:])
+                    cat_indices.append(
+                        schema.indices_for(FeatureModality.CATEGORICAL) or []
+                    )
+                n_test = x_query[0].shape[0]
+                items.append(
+                    ClassifierBatch(
+                        X_context=x_context,
+                        X_query=x_query,
+                        y_context=y_context,
+                        y_query=torch.zeros(n_test),
+                        cat_indices=cat_indices,
+                        configs=self.ensemble_configs_,
+                    )
                 )
-                # GPU preprocessing runs on the concatenated (train, test) block,
-                # exactly as the standard inference engine does.
-                full, schema = _maybe_run_gpu_preprocessing(
-                    torch.cat([x_tr, x_te], dim=0),
-                    member.gpu_preprocessor,
-                    member.feature_schema,
-                    num_train_rows=x_tr.shape[0],
-                )
-                n = x_tr.shape[0]
-                x_context.append(full[:n])
-                x_query.append(full[n:])
-                cat_indices.append(
-                    schema.indices_for(FeatureModality.CATEGORICAL) or []
-                )
-            n_test = x_query[0].shape[0]
-            items.append(
-                ClassifierBatch(
-                    X_context=x_context,
-                    X_query=x_query,
-                    y_context=y_context,
-                    y_query=torch.zeros(n_test),
-                    cat_indices=cat_indices,
-                    configs=self.ensemble_configs_,
-                )
-            )
 
-        batch = meta_dataset_collator(items)
-        # Already preparing a batched executor; set the mode so fit_from_preprocessed
-        # does not warn about switching out of fine-tuning mode.
-        self.fit_mode = "batched"
-        self.fit_from_preprocessed(
-            batch.X_context,
-            batch.y_context,
-            batch.cat_indices,
-            batch.configs,
-            performance_options=PerformanceOptions(),
-        )
-        # (n_test, n_datasets, n_classes)
-        out = self.forward(batch.X_query, use_inference_mode=True)
-        out = out.detach().float().cpu().numpy()
-        return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
+            batch = meta_dataset_collator(items)
+            # Preparing a batched executor; set the mode so fit_from_preprocessed
+            # does not warn about switching out of fine-tuning mode.
+            self.fit_mode = "batched"
+            self.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            # (n_test, n_datasets, n_classes)
+            out = self.forward(batch.X_query, use_inference_mode=True)
+            out = out.detach().float().cpu().numpy()
+            return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
+        finally:
+            self.fit_mode = original_fit_mode
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
