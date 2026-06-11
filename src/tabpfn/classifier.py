@@ -52,6 +52,8 @@ from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCachePreprocessing,
+    PerformanceOptions,
+    _maybe_run_gpu_preprocessing,
 )
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
@@ -945,11 +947,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         preprocessing), then all datasets are stacked along the model's batch
         dimension and scored with a *single fused forward per estimator*. This is
         equivalent to calling ``fit`` + ``predict_proba`` on each dataset
-        independently — it matches that to ~1e-6 on CPU — but amortizes the
-        per-call overhead across datasets, which is a large speed-up on GPU where
-        many small forwards are launch-bound. On GPU the batched and single
-        forwards accumulate matmuls differently, so results differ by a small
-        device tolerance (order 1e-3 on CUDA).
+        independently.
 
         Args:
             X_list: Training features, one array per dataset.
@@ -959,25 +957,39 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         Returns:
             Probabilities of shape ``(n_datasets, n_test, n_classes)``.
 
+        Raises:
+            ValueError: If the datasets do not all share the same set of classes
+                (they are scored together with a single ``n_classes_``), or if the
+                input lists have unequal/zero length.
+
         Note:
-            All datasets must share the same set of class labels. Datasets may
-            have different numbers of rows/features; same-shaped datasets fuse
-            into one forward, differing shapes are padded by the collator.
+            Datasets may have different numbers of rows/features; same-shaped
+            datasets fuse into one forward, differing shapes are padded by the
+            collator.
         """
+        # Lazy import: the `finetuning` package imports TabPFNClassifier, so
+        # importing it at module load time would be circular.
         from tabpfn.finetuning.data_util import (  # noqa: PLC0415
             ClassifierBatch,
             meta_dataset_collator,
         )
-        from tabpfn.inference import (  # noqa: PLC0415
-            PerformanceOptions,
-            _maybe_run_gpu_preprocessing,
-        )
-        from tabpfn.preprocessing.datamodel import FeatureModality  # noqa: PLC0415
 
         if not len(X_list) == len(y_list) == len(X_test_list):
             raise ValueError("X_list, y_list and X_test_list must have equal length.")
         if len(X_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+
+        # All datasets are scored with a single, shared n_classes_ (one fused
+        # forward over the batch), so they must share the same set of classes.
+        class_sets = [
+            tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_list
+        ]
+        if len(set(class_sets)) > 1:
+            raise ValueError(
+                "predict_proba_batched requires all datasets to share the same "
+                "set of classes (they are scored together with one n_classes_); "
+                f"got differing class sets across datasets: {sorted(set(class_sets))}"
+            )
 
         items = []
         n_test = None

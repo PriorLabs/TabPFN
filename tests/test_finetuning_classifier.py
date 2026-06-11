@@ -1377,3 +1377,18 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
         ref_clf.fit(X, y)
         ref = ref_clf.predict_proba(X_tests[i])
         np.testing.assert_allclose(proba[i], ref, atol=atol)
+
+
+def test__predict_proba_batched__rejects_mismatched_classes() -> None:
+    """predict_proba_batched raises if datasets do not share the same classes."""
+    r = np.random.RandomState(0)
+    X_bin = r.randn(40, 4).astype(np.float32)
+    y_bin = (X_bin[:, 0] > 0).astype(int)  # classes {0, 1}
+    X_multi = r.randn(40, 4).astype(np.float32)
+    y_multi = (X_multi[:, 0] * 2).astype(int) % 3  # classes {0, 1, 2}
+
+    clf = TabPFNClassifier(n_estimators=2, device="cpu", random_state=42)
+    with pytest.raises(ValueError, match="same.*set of classes"):
+        clf.predict_proba_batched(
+            [X_bin, X_multi], [y_bin, y_multi], [X_bin[:3], X_multi[:3]]
+        )
