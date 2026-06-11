@@ -622,7 +622,6 @@ def meta_dataset_collator(
         Currently only implemented and tested for `batch_size = 1`,
         as enforced by an internal assertion.
     """
-    batch_sz = len(batch)
     # batch_size > 1 stacks multiple independent datasets along the model's batch
     # dimension, enabling a single fused forward over all of them (the transformer
     # batch dim is independent). Tensors are padded to a common shape; when the

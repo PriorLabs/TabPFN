@@ -1306,11 +1306,16 @@ def test__batched_inference__matches_single_dataset(device: str) -> None:
         data_shuffle_seed=42,
         preprocessing_random_state=42,
     )
-    batch = next(iter(DataLoader(collection, batch_size=3, collate_fn=meta_dataset_collator)))
+    batch = next(
+        iter(DataLoader(collection, batch_size=3, collate_fn=meta_dataset_collator))
+    )
     perf = PerformanceOptions()
 
     clf.fit_from_preprocessed(
-        batch.X_context, batch.y_context, batch.cat_indices, batch.configs,
+        batch.X_context,
+        batch.y_context,
+        batch.cat_indices,
+        batch.configs,
         performance_options=perf,
     )
     fused = clf.forward(batch.X_query, use_inference_mode=True).detach()
@@ -1358,7 +1363,10 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
     X_tests = [d[0][:5] for d in data]
 
     clf = TabPFNClassifier(
-        n_estimators=2, device=device, random_state=42, inference_precision=torch.float32
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
     )
     proba = clf.predict_proba_batched(
         [d[0] for d in data], [d[1] for d in data], X_tests
@@ -1371,7 +1379,9 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
     atol = 1e-4 if device == "cpu" else 2e-1
     for i, (X, y) in enumerate(data):
         ref_clf = TabPFNClassifier(
-            n_estimators=2, device=device, random_state=42,
+            n_estimators=2,
+            device=device,
+            random_state=42,
             inference_precision=torch.float32,
         )
         ref_clf.fit(X, y)
@@ -1388,7 +1398,7 @@ def test__predict_proba_batched__rejects_mismatched_classes() -> None:
     y_multi = (X_multi[:, 0] * 2).astype(int) % 3  # classes {0, 1, 2}
 
     clf = TabPFNClassifier(n_estimators=2, device="cpu", random_state=42)
-    with pytest.raises(ValueError, match="same.*set of classes"):
+    with pytest.raises(ValueError, match=r"same.*set of classes"):
         clf.predict_proba_batched(
             [X_bin, X_multi], [y_bin, y_multi], [X_bin[:3], X_multi[:3]]
         )

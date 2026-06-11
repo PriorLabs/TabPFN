@@ -108,7 +108,6 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
-        PerformanceOptions,
     )
     from tabpfn.inference_config import InferenceConfig
 
@@ -981,9 +980,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         # All datasets are scored with a single, shared n_classes_ (one fused
         # forward over the batch), so they must share the same set of classes.
-        class_sets = [
-            tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_list
-        ]
+        class_sets = [tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_list]
         if len(set(class_sets)) > 1:
             raise ValueError(
                 "predict_proba_batched requires all datasets to share the same "
@@ -993,7 +990,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         items = []
         n_test = None
-        for X, y, X_test in zip(X_list, y_list, X_test_list):
+        for X, y, X_test in zip(X_list, y_list, X_test_list, strict=False):
             # Standard fit: builds the full ensemble preprocessor + configs and
             # sets classes_/n_classes_ exactly as a normal predict would.
             self.fit(X, y)
@@ -1612,7 +1609,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             f"({use_inference_mode=}), input X, "
             f"or executor type ({type(self.executor_)}). Ensure call is from standard "
             f"predict ({is_standard_inference=}), batched fine-tuning "
-            f"({is_batched_for_grads=}), or batched inference ({is_batched_inference=})."
+            f"({is_batched_for_grads=}), or batched inference "
+            f"({is_batched_inference=})."
         )
 
         # Specific check for float64 incompatibility if the batched engine is being
