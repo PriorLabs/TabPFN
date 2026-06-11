@@ -448,3 +448,66 @@ def test_regressor_dataset_and_collator_batches_type(
         assert batch.y_query_raw.shape[0] == 1
         assert batch.y_query.shape[0] == 1
         break
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_batched__matches_per_dataset(device: str) -> None:
+    """The public predict_batched API matches per-dataset fit+predict.
+
+    Each dataset is preprocessed exactly as in standard inference (including its
+    own target standardisation and per-estimator border transforms), then all are
+    scored in one fused forward per estimator. Results are returned in input order
+    and equal running each dataset alone to within float tolerance.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] * 2.0 + 0.5 * X[:, 1] + 0.1 * r.randn(n)).astype(np.float32)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+    X_tests = [mkds(s + 100, n=8)[0] for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+
+    reg = TabPFNRegressor(
+        n_estimators=4, device=device, random_state=42,
+        inference_precision=torch.float32,
+    )
+    batched_mean = reg.predict_batched(X_list, y_list, X_tests, output_type="mean")
+    batched_q = reg.predict_batched(X_list, y_list, X_tests, output_type="quantiles")
+
+    assert len(batched_mean) == 3
+    assert batched_mean[0].shape == (8,)
+    assert len(batched_q[0]) == 9  # default quantiles
+
+    # Equivalence is exact on CPU; on GPU, batched vs single matmul accumulate
+    # differently, so only a coarse agreement is required there.
+    atol = 1e-3 if device == "cpu" else 1e-1
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(
+            n_estimators=4, device=device, random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        np.testing.assert_allclose(
+            batched_mean[i], ref.predict(X_tests[i], output_type="mean"), atol=atol
+        )
+        ref_q = ref.predict(X_tests[i], output_type="quantiles")
+        for bq, rq in zip(batched_q[i], ref_q, strict=False):
+            np.testing.assert_allclose(bq, rq, atol=atol)
+
+
+def test__predict_batched__rejects_unequal_lengths() -> None:
+    """predict_batched raises on unequal/zero-length input lists."""
+    r = np.random.RandomState(0)
+    X = r.randn(40, 4).astype(np.float32)
+    y = (X[:, 0] * 1.5).astype(np.float32)
+    reg = TabPFNRegressor(n_estimators=2, device="cpu", random_state=42)
+    with pytest.raises(ValueError, match="equal length"):
+        reg.predict_batched([X, X], [y], [X[:3], X[:3]])
+    with pytest.raises(ValueError, match="Nothing to predict"):
+        reg.predict_batched([], [], [])

@@ -39,6 +39,9 @@ from sklearn.base import (
 from tqdm.auto import tqdm
 
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.interface import (
+    PerformanceOptions,
+)
 from tabpfn.base import (
     RegressorModelSpecs,
     create_inference_engine,
@@ -52,7 +55,11 @@ from tabpfn.constants import (
     ModelVersion,
 )
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
-from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference import (
+    InferenceEngine,
+    InferenceEngineBatchedNoPreprocessing,
+    _maybe_run_gpu_preprocessing,
+)
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -98,7 +105,6 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
-        PerformanceOptions,
     )
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
@@ -1093,6 +1099,269 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             return main_outputs
 
         return logit_to_output(output_type=output_type)
+
+    def predict_batched(
+        self,
+        X_list: list[XType],
+        y_list: list[YType],
+        X_test_list: list[XType],
+        *,
+        output_type: Literal["mean", "median", "mode", "quantiles"] = "mean",
+        quantiles: list[float] | None = None,
+    ) -> list[np.ndarray] | list[list[np.ndarray]]:
+        """Predict for several independent datasets in one fused forward.
+
+        Each ``(X, y, X_test)`` triple is preprocessed exactly as in ``fit()`` +
+        ``predict()`` (same ensemble configs, target transforms, CPU and GPU
+        preprocessing, per-dataset target standardisation), then all datasets are
+        stacked along the model's batch dimension and scored with a *single fused
+        forward per estimator*. This is equivalent to calling ``fit`` + ``predict``
+        on each dataset independently.
+
+        Unlike the classifier's ``predict_proba_batched``, the datasets need not
+        share anything: the regression output space is the model's fixed bar
+        distribution, so each dataset is decoded with its own target
+        standardisation and per-estimator border transforms.
+
+        Args:
+            X_list: Training features, one array per dataset.
+            y_list: Training targets, one array per dataset.
+            X_test_list: Test features, one array per dataset.
+            output_type: One of ``"mean"``, ``"median"``, ``"mode"`` (point
+                estimates, as in :meth:`predict`) or ``"quantiles"``.
+            quantiles: Quantiles to return when ``output_type="quantiles"``.
+
+        Returns:
+            A list with one entry per dataset, in input order. For point estimates
+            each entry is a ``(n_test,)`` array; for ``output_type="quantiles"``
+            each entry is a list of ``(n_test,)`` arrays (one per quantile).
+
+        Raises:
+            ValueError: If the input lists have unequal or zero length.
+
+        Note:
+            Datasets may have different numbers of rows/features; same-shaped
+            datasets fuse into one forward, differing shapes are padded by the
+            collator. Constant-target datasets are handled analytically (no
+            forward) and stitched back in input order.
+        """
+        # Lazy import: the `finetuning` package imports TabPFNRegressor, so
+        # importing it at module load time would be circular.
+        from tabpfn.finetuning.data_util import (  # noqa: PLC0415
+            RegressorBatch,
+            meta_dataset_collator,
+        )
+
+        if not len(X_list) == len(y_list) == len(X_test_list):
+            raise ValueError("X_list, y_list and X_test_list must have equal length.")
+        if len(X_list) == 0:
+            raise ValueError("Nothing to predict: empty dataset list.")
+
+        if quantiles is None:
+            quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+
+        # Results are stitched back in input order. Constant-target datasets carry
+        # no fused item; every other dataset records the raw-space bar distribution
+        # used to turn its logits back into target values.
+        results: list[Any] = [None] * len(X_list)
+        items: list[RegressorBatch] = []
+        fused_index: list[int] = []  # input index for each fused item
+        raw_space_bardists: list[FullSupportBarDistribution] = []
+        znorm_borders: torch.Tensor | None = None
+
+        for idx, (X, y, X_test) in enumerate(
+            zip(X_list, y_list, X_test_list, strict=False)
+        ):
+            # Standard fit: sets y_train_mean_/std_, the (model-fixed) z-norm bar
+            # distribution and the per-dataset raw-space bar distribution, and
+            # detects constant targets exactly as a normal predict would.
+            self.fit(X, y)
+
+            if self.is_constant_target_:
+                results[idx] = self._handle_constant_target(
+                    len(X_test), output_type, quantiles
+                )
+                continue
+
+            raw_space_bardists.append(self.raw_space_bardist_)
+            # The z-norm bar distribution is model-fixed (identical across
+            # datasets); capture it once from a non-constant dataset.
+            if znorm_borders is None:
+                znorm_borders = self.znorm_space_bardist_.borders.clone()
+
+            static_seed, _ = infer_random_state(self.random_state)
+            configs, x_proc, y_raw, _ = self._initialize_dataset_preprocessing(
+                X=X, y=y, random_state=static_seed
+            )
+            # Standardise the target exactly as fit() does before preprocessing.
+            y_std = (y_raw - self.y_train_mean_) / self.y_train_std_
+            ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+                configs=configs,
+                n_samples=x_proc.shape[0],
+                feature_schema=self.inferred_feature_schema_,
+                random_state=static_seed,
+                n_preprocessing_jobs=self.n_preprocessing_jobs,
+                keep_fitted_cache=False,
+                enable_gpu_preprocessing=self.inference_config_.ENABLE_GPU_PREPROCESSING,
+                feature_subsampling_method=FeatureSubsamplingMethod(
+                    self.inference_config_.FEATURE_SUBSAMPLING_METHOD
+                ),
+                constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
+                subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+                importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+                X_train=x_proc,
+                y_train=y_std,
+                task_type=self.estimator_type,
+            )
+            # Fitting the members also fits each config's target_transform in place,
+            # which the decode below relies on to map the borders per estimator.
+            members = ensemble_preprocessor.fit_transform_ensemble_members(
+                X_train=x_proc, y_train=y_std
+            )
+
+            x_context, x_query, cat_indices = [], [], []
+            y_context = [
+                torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
+                for m in members
+            ]
+            for member in members:
+                x_tr = torch.as_tensor(np.asarray(member.X_train), dtype=torch.float32)
+                x_te = torch.as_tensor(
+                    np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+                )
+                # GPU preprocessing runs on the concatenated (train, test) block,
+                # exactly as the standard inference engine does.
+                full, schema = _maybe_run_gpu_preprocessing(
+                    torch.cat([x_tr, x_te], dim=0),
+                    member.gpu_preprocessor,
+                    member.feature_schema,
+                    num_train_rows=x_tr.shape[0],
+                )
+                n = x_tr.shape[0]
+                x_context.append(full[:n])
+                x_query.append(full[n:])
+                cat_indices.append(
+                    schema.indices_for(FeatureModality.CATEGORICAL) or []
+                )
+            n_test = x_query[0].shape[0]
+            items.append(
+                RegressorBatch(
+                    X_context=x_context,
+                    X_query=x_query,
+                    y_context=y_context,
+                    y_query=torch.zeros(n_test),
+                    cat_indices=cat_indices,
+                    configs=configs,
+                    raw_space_bardist=self.raw_space_bardist_,
+                    znorm_space_bardist=self.znorm_space_bardist_,
+                    X_query_raw=torch.zeros(n_test, 1),
+                    y_query_raw=torch.zeros(n_test),
+                )
+            )
+            fused_index.append(idx)
+
+        if items:
+            batch = meta_dataset_collator(items)
+            # Already preparing a batched executor; set the mode so
+            # fit_from_preprocessed does not warn about switching modes.
+            self.fit_mode = "batched"
+            self.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            # One fused forward per estimator; each output is
+            # (n_test, n_fused_datasets, n_buckets) with per-dataset configs.
+            raw_outputs = list(
+                self.executor_.iter_outputs(
+                    batch.X_query, autocast=self.use_autocast_, task_type="regression"
+                )
+            )
+            assert znorm_borders is not None
+            for fused_pos, idx in enumerate(fused_index):
+                results[idx] = self._decode_batched_dataset(
+                    raw_outputs=raw_outputs,
+                    dataset_pos=fused_pos,
+                    znorm_borders=znorm_borders,
+                    raw_space_bardist=raw_space_bardists[fused_pos],
+                    output_type=output_type,
+                    quantiles=quantiles,
+                )
+
+        return results
+
+    def _decode_batched_dataset(
+        self,
+        *,
+        raw_outputs: list[tuple[torch.Tensor, list[RegressorEnsembleConfig]]],
+        dataset_pos: int,
+        znorm_borders: torch.Tensor,
+        raw_space_bardist: FullSupportBarDistribution,
+        output_type: str,
+        quantiles: list[float],
+    ) -> np.ndarray | list[np.ndarray]:
+        """Decode one dataset's slice of the fused forward.
+
+        Mirrors the per-estimator border translation and averaging in
+        :meth:`predict`, but reads the dataset's slice out of the fused output and
+        uses that dataset's own raw-space bar distribution as the criterion.
+        """
+        std_borders = znorm_borders.cpu().numpy()
+        accumulated_logits: torch.Tensor | None = None
+        n_estimators = 0
+        for output, configs_for_est in raw_outputs:
+            out_d = output[:, dataset_pos, :].float()
+            if self.softmax_temperature != 1:
+                out_d = out_d / self.softmax_temperature
+            config = configs_for_est[dataset_pos]
+            if config.target_transform is None:
+                borders_t = std_borders.copy()
+                logit_cancel_mask = None
+                descending_borders = False
+            else:
+                logit_cancel_mask, descending_borders, borders_t = (
+                    transform_borders_one(
+                        std_borders,
+                        target_transform=config.target_transform,
+                        repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
+                    )
+                )
+                if descending_borders:
+                    borders_t = borders_t.flip(-1)
+            if logit_cancel_mask is not None:
+                out_d = out_d.clone()
+                out_d[..., logit_cancel_mask] = float("-inf")
+            transformed = translate_probs_across_borders(
+                out_d,
+                frm=torch.as_tensor(borders_t, device=out_d.device),
+                to=znorm_borders.to(out_d.device),
+            )
+            if self.average_before_softmax:
+                transformed = transformed.log()
+            accumulated_logits = (
+                transformed
+                if accumulated_logits is None
+                else accumulated_logits + transformed
+            )
+            n_estimators += 1
+
+        assert accumulated_logits is not None
+        assert n_estimators > 0
+        if self.average_before_softmax:
+            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
+        else:
+            logits = accumulated_logits / n_estimators
+        logits = logits.log()
+        if logits.dtype == torch.float16:
+            logits = logits.float()
+        return _logits_to_output(
+            output_type=output_type,
+            logits=logits,
+            criterion=raw_space_bardist,
+            quantiles=quantiles,
+        )
 
     def _iter_forward_executor(
         self,
