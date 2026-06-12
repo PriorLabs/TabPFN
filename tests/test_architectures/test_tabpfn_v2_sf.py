@@ -20,13 +20,7 @@ from tabpfn.architectures.tabpfn_v2_sf import TabPFNV2Cache
 def _create_identical_small_v2_and_base(
     max_num_classes: int = 10,
 ) -> tuple[tabpfn_v2_sf.TabPFNV2, PerFeatureTransformer]:
-    """Construct the v2 and base architectures such that they have the same outputs.
-
-    ``max_num_classes`` controls the y-encoder layout: a classification config
-    (``>= 2``) adds the multiclass target step, shifting the y-encoder's linear
-    projection to ``y_encoder.2``, while a regression config (e.g. ``0``) keeps it at
-    ``y_encoder.1``.
-    """
+    """Construct the v2 and base architectures such that they have the same outputs."""
     configv2 = tabpfn_v2_sf.TabPFNV2Config(
         max_num_classes=max_num_classes,
         num_buckets=5,
