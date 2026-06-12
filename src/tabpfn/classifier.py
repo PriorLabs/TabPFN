@@ -935,36 +935,46 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     def predict_proba_batched(
         self,
-        X_list: list[XType],
-        y_list: list[YType],
+        X_train_list: list[XType],
+        y_train_list: list[YType],
         X_test_list: list[XType],
     ) -> np.ndarray:
         """Predict probabilities for several independent datasets in one pass.
 
-        Each ``(X, y, X_test)`` triple is preprocessed exactly as in
-        ``fit()`` + ``predict_proba()`` (same ensemble configs, CPU and GPU
-        preprocessing), then all datasets are stacked along the model's batch
-        dimension and scored with a *single fused forward per estimator*. This is
-        equivalent to calling ``fit`` + ``predict_proba`` on each dataset
-        independently.
+        Each ``(X_train, y_train, X_test)`` triple is preprocessed exactly as in
+        ``fit()`` + ``predict_proba()`` (input validation, CPU and GPU
+        preprocessing, same ensemble configs), then all datasets are stacked along
+        the model's batch dimension and scored with a *single fused forward per
+        estimator*. For the supported cases below this is equivalent to calling
+        ``fit`` + ``predict_proba`` on each dataset independently.
+
+        All datasets must share the same set of classes (they are scored together
+        with a single ``n_classes_``) and the same array shapes: the fused forward
+        stacks them on the batch dimension, and ragged batches are rejected rather
+        than padded (padding would feed the model fake context/query rows and
+        silently corrupt results). Group datasets by shape upstream if needed.
+
+        This method refits the estimator internally; on return it is left fitted to
+        the *last* dataset in ``X_train_list`` with a batched executor. Call
+        ``fit()`` again before using ``predict``/``predict_proba`` on a single
+        dataset.
 
         Args:
-            X_list: Training features, one array per dataset.
-            y_list: Training labels, one array per dataset.
-            X_test_list: Test features, one array per dataset.
+            X_train_list: Training features, one array per dataset (all same shape).
+            y_train_list: Training labels, one array per dataset.
+            X_test_list: Test features, one array per dataset (all same shape).
 
         Returns:
             Probabilities of shape ``(n_datasets, n_test, n_classes)``.
 
         Raises:
-            ValueError: If the datasets do not all share the same set of classes
-                (they are scored together with a single ``n_classes_``), or if the
-                input lists have unequal/zero length.
-
-        Note:
-            Datasets may have different numbers of rows/features; same-shaped
-            datasets fuse into one forward, differing shapes are padded by the
-            collator.
+            ValueError: If the input lists have unequal or zero length, the
+                datasets do not all share the same set of classes, or the training
+                (or test) arrays do not all share one shape.
+            NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
+                is configured on the estimator — their state is per-dataset and
+                cannot be applied correctly across a shared batch. Score those
+                datasets individually with ``predict_proba``.
         """
         # Lazy import: the `finetuning` package imports TabPFNClassifier, so
         # importing it at module load time would be circular.
@@ -973,14 +983,34 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             meta_dataset_collator,
         )
 
-        if not len(X_list) == len(y_list) == len(X_test_list):
-            raise ValueError("X_list, y_list and X_test_list must have equal length.")
-        if len(X_list) == 0:
+        if not len(X_train_list) == len(y_train_list) == len(X_test_list):
+            raise ValueError(
+                "X_train_list, y_train_list and X_test_list must have equal length."
+            )
+        if len(X_train_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+
+        # These per-prediction post-processing steps are configured globally on the
+        # estimator but their fitted state (thresholds, class counts, calibrated
+        # temperature) is per-dataset; applying the last dataset's state across the
+        # whole batch would be wrong, so they are not supported here.
+        if self.balance_probabilities:
+            raise NotImplementedError(
+                "predict_proba_batched does not support balance_probabilities=True; "
+                "score datasets individually with predict_proba."
+            )
+        if self.tuning_config is not None:
+            raise NotImplementedError(
+                "predict_proba_batched does not support tuning_config (tuned "
+                "decision thresholds / temperature calibration); score datasets "
+                "individually with predict_proba."
+            )
 
         # All datasets are scored with a single, shared n_classes_ (one fused
         # forward over the batch), so they must share the same set of classes.
-        class_sets = [tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_list]
+        class_sets = [
+            tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_train_list
+        ]
         if len(set(class_sets)) > 1:
             raise ValueError(
                 "predict_proba_batched requires all datasets to share the same "
@@ -988,20 +1018,57 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 f"got differing class sets across datasets: {sorted(set(class_sets))}"
             )
 
+        # The fused forward stacks datasets on the model's batch dimension, which
+        # requires identical shapes. Padding ragged datasets would feed the model
+        # fake (zero) context/query rows and leave padded query rows untrimmed in
+        # the output, silently corrupting results — so reject ragged batches.
+        train_shapes = {
+            tuple(X.shape) if hasattr(X, "shape") else np.asarray(X).shape
+            for X in X_train_list
+        }
+        test_shapes = {
+            tuple(X.shape) if hasattr(X, "shape") else np.asarray(X).shape
+            for X in X_test_list
+        }
+        if len(train_shapes) > 1 or len(test_shapes) > 1:
+            raise ValueError(
+                "predict_proba_batched requires all training arrays to share one "
+                "shape and all test arrays to share one shape (ragged batches are "
+                f"not supported); got train shapes {sorted(train_shapes)} and test "
+                f"shapes {sorted(test_shapes)}. Group datasets by shape and call "
+                "once per group."
+            )
+
         items = []
-        n_test = None
-        # Run each per-dataset fit in "fit_preprocessors" mode so the fitted
-        # ensemble members are cached on the executor and reused directly (no
-        # redundant re-preprocessing), and restore the caller's fit_mode at the end
-        # so this prediction method leaves no side effect on the estimator.
+        # Fit each dataset in "fit_preprocessors" mode so the fitted ensemble
+        # members are cached on the executor and reused directly (no redundant
+        # preprocessing). This refits the estimator; on return it is left fitted to
+        # the last dataset (see the docstring). The caller's fit_mode is restored.
         original_fit_mode = self.fit_mode
         self.fit_mode = "fit_preprocessors"
         try:
-            for X, y, X_test in zip(X_list, y_list, X_test_list, strict=False):
+            for X, y, X_test in zip(
+                X_train_list, y_train_list, X_test_list, strict=True
+            ):
                 # Standard fit: builds the ensemble preprocessor + configs, caches
                 # the fitted members on the executor, and sets classes_/n_classes_
                 # exactly as a normal predict would.
                 self.fit(X, y)
+                # Validate/clean X_test exactly as the standard predict path does
+                # (_raw_predict) before the per-member preprocessors run, so
+                # non-numeric inputs (DataFrames, categoricals, NaNs) are handled
+                # identically and the equivalence claim holds.
+                X_test = ensure_compatible_predict_input_sklearn(X_test, self)  # noqa: PLW2901
+                X_test = fix_dtypes(  # noqa: PLW2901
+                    X_test,
+                    cat_indices=self.inferred_feature_schema_.indices_for(
+                        FeatureModality.CATEGORICAL
+                    ),
+                )
+                X_test = process_text_na_dataframe(  # noqa: PLW2901
+                    X=X_test,
+                    ord_encoder=getattr(self, "ordinal_encoder_", None),
+                )
                 members = self.executor_.ensemble_members
                 x_context, x_query, cat_indices = [], [], []
                 y_context = [
