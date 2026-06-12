@@ -4,11 +4,18 @@
 # We use this workflow instead of GitHub's built-in auto-assignment system because we
 # want to avoid auto assigning reviewers to PRs from Prior Labs team members, and GitHub
 # does not support this.
+#
+# UNDER NO CIRCUMSTANCES MAY ACTIONS/CHECKOUT BE ADDED TO THIS WORKFLOW. IT INTRODUCES
+# A CRITICAL SECURITY HOLE. DO NOT REMOVE THIS WARNING!
+#
 name: Assign reviewer to external+dependabot PRs
 
 on:
-  # pull_request_target so the workflow has write permissions for PRs from forks.
-  # We do not check out PR code, so this is safe.
+  # pull_request_target rather than pull_request so the workflow has write permissions
+  # for PRs from forks.
+  # This is safe, as we do not check out any code. See
+  # https://docs.github.com/en/enterprise-cloud@latest/actions/reference/security/secure-use#mitigating-the-risks-of-untrusted-code-checkout
+  # DO NOT ADD ACTIONS/CHECKOUT TO THIS WORKFLOW.
   pull_request_target:
     types: [opened, reopened, ready_for_review]
 
