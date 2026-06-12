@@ -52,6 +52,8 @@ from tabpfn.inference import (
     InferenceEngine,
     InferenceEngineBatchedNoPreprocessing,
     InferenceEngineCachePreprocessing,
+    PerformanceOptions,
+    _maybe_run_gpu_preprocessing,
 )
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
@@ -106,7 +108,6 @@ if TYPE_CHECKING:
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
-        PerformanceOptions,
     )
     from tabpfn.inference_config import InferenceConfig
 
@@ -903,6 +904,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 self.inference_precision, self.devices_
             )
 
+        # Preprocessed labels are integer-encoded [0, ..., n-1]. Needed so batched
+        # *inference* postprocessing can shape outputs; harmless for fine-tuning,
+        # where the wrapper sets these. Only set if not already provided.
+        if not hasattr(self, "n_classes_"):
+            self.n_classes_ = max(int(t.max().item()) for t in y_preprocessed) + 1
+            self.classes_ = torch.arange(self.n_classes_)
+
         feature_schema = convert_batch_of_cat_ix_to_schema(
             batch_of_cat_indices=cat_ix,
             num_features=X_preprocessed[0].shape[1],
@@ -924,6 +932,199 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         return self
+
+    def predict_proba_batched(
+        self,
+        X_train_list: list[XType],
+        y_train_list: list[YType],
+        X_test_list: list[XType],
+    ) -> np.ndarray:
+        """Predict probabilities for several independent datasets in one pass.
+
+        Each ``(X_train, y_train, X_test)`` triple is preprocessed exactly as in
+        ``fit()`` + ``predict_proba()`` (input validation, CPU and GPU
+        preprocessing, same ensemble configs), then all datasets are stacked along
+        the model's batch dimension and scored with a *single fused forward per
+        estimator*. For the supported cases below this is equivalent to calling
+        ``fit`` + ``predict_proba`` on each dataset independently.
+
+        All datasets must share the same set of classes (they are scored together
+        with a single ``n_classes_``) and the same array shapes: the fused forward
+        stacks them on the batch dimension, and ragged batches are rejected rather
+        than padded (padding would feed the model fake context/query rows and
+        silently corrupt results). Group datasets by shape upstream if needed.
+
+        This method refits the estimator internally; on return it is left fitted to
+        the *last* dataset in ``X_train_list`` with a batched executor. Call
+        ``fit()`` again before using ``predict``/``predict_proba`` on a single
+        dataset.
+
+        Args:
+            X_train_list: Training features, one array per dataset (all same shape).
+            y_train_list: Training labels, one array per dataset.
+            X_test_list: Test features, one array per dataset (all same shape).
+
+        Returns:
+            Probabilities of shape ``(n_datasets, n_test, n_classes)``.
+
+        Raises:
+            ValueError: If the input lists have unequal or zero length, the
+                datasets do not all share the same set of classes, or the training
+                (or test) arrays do not all share one shape.
+            NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
+                is configured on the estimator — their state is per-dataset and
+                cannot be applied correctly across a shared batch. Score those
+                datasets individually with ``predict_proba``.
+        """
+        # Lazy import: the `finetuning` package imports TabPFNClassifier, so
+        # importing it at module load time would be circular.
+        from tabpfn.finetuning.data_util import (  # noqa: PLC0415
+            ClassifierBatch,
+            meta_dataset_collator,
+        )
+
+        if not len(X_train_list) == len(y_train_list) == len(X_test_list):
+            raise ValueError(
+                "X_train_list, y_train_list and X_test_list must have equal length."
+            )
+        if len(X_train_list) == 0:
+            raise ValueError("Nothing to predict: empty dataset list.")
+
+        # These per-prediction post-processing steps are configured globally on the
+        # estimator but their fitted state (thresholds, class counts, calibrated
+        # temperature) is per-dataset; applying the last dataset's state across the
+        # whole batch would be wrong, so they are not supported here.
+        if self.balance_probabilities:
+            raise NotImplementedError(
+                "predict_proba_batched does not support balance_probabilities=True; "
+                "score datasets individually with predict_proba."
+            )
+        if self.tuning_config is not None:
+            raise NotImplementedError(
+                "predict_proba_batched does not support tuning_config (tuned "
+                "decision thresholds / temperature calibration); score datasets "
+                "individually with predict_proba."
+            )
+
+        # All datasets are scored with a single, shared n_classes_ (one fused
+        # forward over the batch), so they must share the same set of classes.
+        class_sets = [
+            tuple(sorted(np.unique(np.asarray(y)).tolist())) for y in y_train_list
+        ]
+        if len(set(class_sets)) > 1:
+            raise ValueError(
+                "predict_proba_batched requires all datasets to share the same "
+                "set of classes (they are scored together with one n_classes_); "
+                f"got differing class sets across datasets: {sorted(set(class_sets))}"
+            )
+
+        # The fused forward stacks datasets on the model's batch dimension, which
+        # requires identical shapes. Padding ragged datasets would feed the model
+        # fake (zero) context/query rows and leave padded query rows untrimmed in
+        # the output, silently corrupting results — so reject ragged batches.
+        train_shapes = {
+            tuple(X.shape) if hasattr(X, "shape") else np.asarray(X).shape
+            for X in X_train_list
+        }
+        test_shapes = {
+            tuple(X.shape) if hasattr(X, "shape") else np.asarray(X).shape
+            for X in X_test_list
+        }
+        if len(train_shapes) > 1 or len(test_shapes) > 1:
+            raise ValueError(
+                "predict_proba_batched requires all training arrays to share one "
+                "shape and all test arrays to share one shape (ragged batches are "
+                f"not supported); got train shapes {sorted(train_shapes)} and test "
+                f"shapes {sorted(test_shapes)}. Group datasets by shape and call "
+                "once per group."
+            )
+
+        items = []
+        # Fit each dataset in "fit_preprocessors" mode so the fitted ensemble
+        # members are cached on the executor and reused directly (no redundant
+        # preprocessing). This refits the estimator; on return it is left fitted to
+        # the last dataset (see the docstring). The caller's fit_mode is restored.
+        original_fit_mode = self.fit_mode
+        self.fit_mode = "fit_preprocessors"
+        try:
+            for X, y, X_test in zip(
+                X_train_list, y_train_list, X_test_list, strict=True
+            ):
+                # Standard fit: builds the ensemble preprocessor + configs, caches
+                # the fitted members on the executor, and sets classes_/n_classes_
+                # exactly as a normal predict would.
+                self.fit(X, y)
+                # Validate/clean X_test exactly as the standard predict path does
+                # (_raw_predict) before the per-member preprocessors run, so
+                # non-numeric inputs (DataFrames, categoricals, NaNs) are handled
+                # identically and the equivalence claim holds.
+                X_test = ensure_compatible_predict_input_sklearn(X_test, self)  # noqa: PLW2901
+                X_test = fix_dtypes(  # noqa: PLW2901
+                    X_test,
+                    cat_indices=self.inferred_feature_schema_.indices_for(
+                        FeatureModality.CATEGORICAL
+                    ),
+                )
+                X_test = process_text_na_dataframe(  # noqa: PLW2901
+                    X=X_test,
+                    ord_encoder=getattr(self, "ordinal_encoder_", None),
+                )
+                members = self.executor_.ensemble_members
+                x_context, x_query, cat_indices = [], [], []
+                y_context = [
+                    torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
+                    for m in members
+                ]
+                for member in members:
+                    x_tr = torch.as_tensor(
+                        np.asarray(member.X_train), dtype=torch.float32
+                    )
+                    x_te = torch.as_tensor(
+                        np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+                    )
+                    # GPU preprocessing runs on the concatenated (train, test) block,
+                    # exactly as the standard inference engine does.
+                    full, schema = _maybe_run_gpu_preprocessing(
+                        torch.cat([x_tr, x_te], dim=0),
+                        member.gpu_preprocessor,
+                        member.feature_schema,
+                        num_train_rows=x_tr.shape[0],
+                    )
+                    n = x_tr.shape[0]
+                    x_context.append(full[:n])
+                    x_query.append(full[n:])
+                    cat_indices.append(
+                        schema.indices_for(FeatureModality.CATEGORICAL) or []
+                    )
+                n_test = x_query[0].shape[0]
+                items.append(
+                    ClassifierBatch(
+                        X_context=x_context,
+                        X_query=x_query,
+                        y_context=y_context,
+                        y_query=torch.zeros(n_test),
+                        cat_indices=cat_indices,
+                        configs=self.ensemble_configs_,
+                    )
+                )
+
+            batch = meta_dataset_collator(items)
+            # Preparing a batched executor; set the mode so fit_from_preprocessed
+            # does not warn about switching out of fine-tuning mode.
+            self.fit_mode = "batched"
+            self.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            # (n_test, n_datasets, n_classes)
+            out = self.forward(batch.X_query, use_inference_mode=True)
+            out = out.detach().float().cpu().numpy()
+            return np.transpose(out, (1, 0, 2))  # -> (n_datasets, n_test, n_classes)
+        finally:
+            self.fit_mode = original_fit_mode
 
     def fit_with_differentiable_input(self, X: torch.Tensor, y: torch.Tensor) -> Self:
         """Fit the model with differentiable input.
@@ -1466,12 +1667,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             and (not X or isinstance(X[0], torch.Tensor))
         )
 
-        assert is_standard_inference or is_batched_for_grads, (
+        # Scenario 3: Batched *inference* — score several independent datasets in
+        # one fused forward per estimator (no gradients). Output keeps the dataset
+        # batch dimension.
+        is_batched_inference = (
+            use_inference_mode
+            and isinstance(self.executor_, InferenceEngineBatchedNoPreprocessing)
+            and isinstance(X, list)
+            and (not X or isinstance(X[0], torch.Tensor))
+        )
+
+        assert is_standard_inference or is_batched_for_grads or is_batched_inference, (
             f"Invalid forward pass: Bad combination of inference mode "
             f"({use_inference_mode=}), input X, "
             f"or executor type ({type(self.executor_)}). Ensure call is from standard "
-            f"predict ({is_standard_inference=}) or a batched fine-tuning context."
-            f"({is_batched_for_grads=})."
+            f"predict ({is_standard_inference=}), batched fine-tuning "
+            f"({is_batched_for_grads=}), or batched inference "
+            f"({is_batched_inference=})."
         )
 
         # Specific check for float64 incompatibility if the batched engine is being
@@ -1553,7 +1765,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             output = self.logits_to_probabilities(stacked_outputs)
 
         # --- Final output shaping ---
-        if output.ndim > 2 and use_inference_mode:
+        # Standard inference squeezes the singleton batch dim; batched inference
+        # keeps it so the output is always (n_query, batch_size, n_classes).
+        if output.ndim > 2 and use_inference_mode and not is_batched_inference:
             output = output.squeeze(1) if not return_raw_logits else output.squeeze(2)
 
         if not use_inference_mode:

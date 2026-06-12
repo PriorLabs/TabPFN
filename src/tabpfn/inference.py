@@ -528,11 +528,15 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             performance_options: Performance and memory options forwarded to
                 the model on each forward call.
         """
+        # Each entry of ``ensemble_configs`` is one estimator slot holding one
+        # config per dataset in the batch (length == batch size). A single fused
+        # forward is run per estimator over the whole dataset batch, so all
+        # datasets in a batch must use the same underlying model.
         for ensemble_config in ensemble_configs:
-            if len(ensemble_config) > 1:
+            if len({cfg._model_index for cfg in ensemble_config}) > 1:
                 raise ValueError(
-                    "Batched inference does not support multiple ensemble"
-                    " configurations because no preprocessing is applied."
+                    "Batched inference requires all datasets in a batch to use the"
+                    " same model; got multiple model indices in one estimator slot."
                 )
 
         super().__init__(
