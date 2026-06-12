@@ -1383,3 +1383,149 @@ def test__create_default_for_version__passes_through_overrides() -> None:
 
     assert estimator.n_estimators == 16
     assert estimator.softmax_temperature == 0.9
+
+
+# =============================================================================
+# predict_proba_batched: batched multi-dataset inference (public API)
+# =============================================================================
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
+    """The public predict_proba_batched API matches per-dataset fit+predict_proba.
+
+    Each dataset is preprocessed exactly as in standard inference, then all are
+    scored in one fused forward per estimator. Output is (n_datasets, n_test,
+    n_classes) and equals running each dataset alone to within float tolerance.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] + 0.3 * r.randn(n) > 0).astype(int)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+    X_tests = [d[0][:5] for d in data]
+
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    )
+    proba = clf.predict_proba_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests
+    )
+    assert proba.shape == (3, 5, 2)
+    assert np.allclose(proba.sum(-1), 1.0, atol=1e-4)
+
+    # Equivalence is exact on CPU; on GPU, batched vs single matmul accumulate
+    # differently, so only a coarse agreement is required there.
+    atol = 1e-4 if device == "cpu" else 2e-1
+    for i, (X, y) in enumerate(data):
+        ref_clf = TabPFNClassifier(
+            n_estimators=2,
+            device=device,
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref_clf.fit(X, y)
+        ref = ref_clf.predict_proba(X_tests[i])
+        np.testing.assert_allclose(proba[i], ref, atol=atol)
+
+
+def test__predict_proba_batched__rejects_mismatched_classes() -> None:
+    """predict_proba_batched raises if datasets do not share the same classes."""
+    r = np.random.RandomState(0)
+    X_bin = r.randn(40, 4).astype(np.float32)
+    y_bin = (X_bin[:, 0] > 0).astype(int)  # classes {0, 1}
+    X_multi = r.randn(40, 4).astype(np.float32)
+    y_multi = (X_multi[:, 0] * 2).astype(int) % 3  # classes {0, 1, 2}
+
+    clf = TabPFNClassifier(n_estimators=2, device="cpu", random_state=42)
+    with pytest.raises(ValueError, match=r"same.*set of classes"):
+        clf.predict_proba_batched(
+            [X_bin, X_multi], [y_bin, y_multi], [X_bin[:3], X_multi[:3]]
+        )
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_proba_batched__matches_per_dataset_dataframe(device: str) -> None:
+    """Batched prediction matches per-dataset on DataFrame inputs with categoricals.
+
+    Exercises the predict-time input validation (fix_dtypes / NaN+text handling /
+    ordinal encoding) that the standard path applies to X_test; without it,
+    non-numeric inputs would diverge from predict_proba.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    def mkdf(seed: int, n: int = 60) -> tuple[pd.DataFrame, np.ndarray]:
+        r = np.random.RandomState(seed)
+        num = r.randn(n, 3).astype(np.float32)
+        cat = r.choice(["a", "b", "c"], size=n)
+        df = pd.DataFrame(
+            {
+                "f0": num[:, 0],
+                "f1": num[:, 1],
+                "f2": num[:, 2],
+                "cat": pd.Categorical(cat),
+            }
+        )
+        # Median split guarantees both classes are present in every dataset.
+        y = (num[:, 0] > np.median(num[:, 0])).astype(int)
+        return df, y
+
+    data = [mkdf(s) for s in range(3)]
+    X_tests = [d[0].iloc[:5] for d in data]
+
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    )
+    proba = clf.predict_proba_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests
+    )
+    assert proba.shape == (3, 5, 2)
+
+    atol = 1e-4 if device == "cpu" else 2e-1
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNClassifier(
+            n_estimators=2,
+            device=device,
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        np.testing.assert_allclose(proba[i], ref.predict_proba(X_tests[i]), atol=atol)
+
+
+def test__predict_proba_batched__rejects_ragged() -> None:
+    """Ragged batches are rejected (padding would corrupt the fused forward)."""
+    r = np.random.RandomState(0)
+    X_a = r.randn(40, 4).astype(np.float32)
+    y_a = (X_a[:, 0] > 0).astype(int)
+    X_b = r.randn(30, 4).astype(np.float32)  # different number of training rows
+    y_b = (X_b[:, 0] > 0).astype(int)
+
+    clf = TabPFNClassifier(n_estimators=2, device="cpu", random_state=42)
+    with pytest.raises(ValueError, match=r"ragged"):
+        clf.predict_proba_batched([X_a, X_b], [y_a, y_b], [X_a[:3], X_b[:3]])
+
+
+def test__predict_proba_batched__rejects_balance_probabilities() -> None:
+    """balance_probabilities uses per-dataset class counts → unsupported, raises."""
+    r = np.random.RandomState(0)
+    X = r.randn(40, 4).astype(np.float32)
+    y = (X[:, 0] > 0).astype(int)
+
+    clf = TabPFNClassifier(
+        n_estimators=2, device="cpu", random_state=42, balance_probabilities=True
+    )
+    with pytest.raises(NotImplementedError, match=r"balance_probabilities"):
+        clf.predict_proba_batched([X, X], [y, y], [X[:3], X[:3]])
