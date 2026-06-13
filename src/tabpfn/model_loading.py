@@ -1088,8 +1088,10 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         )
 
         # 4. Create the final zip archive
-        shutil.make_archive(str(path).replace(".tabpfn_fit", ""), "zip", tmp)
-        shutil.move(str(path).replace(".tabpfn_fit", "") + ".zip", path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        archive_base = path.with_suffix("")
+        archive_path = shutil.make_archive(str(archive_base), "zip", tmp)
+        shutil.move(archive_path, path)
 
 
 def _extract_archive(path: Path, tmp: Path) -> None:
