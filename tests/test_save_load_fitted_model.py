@@ -16,6 +16,7 @@ from sklearn.datasets import make_classification, make_regression
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
+from tabpfn.constants import ModelVersion
 from tabpfn.inference_tuning import ClassifierEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
 
@@ -281,3 +282,119 @@ def test_saving_and_loading_with_tuning_config(
     assert loaded_estimator.tuned_classification_thresholds_ is not None
     assert loaded_estimator.softmax_temperature_ is not None
     assert loaded_estimator.eval_metric_ is ClassifierEvalMetrics.F1
+
+
+# --- fit_with_cache save/load tests ---
+
+
+@pytest.mark.parametrize(
+    ("task_type", "saving_device", "loading_device", "model_version"),
+    [
+        pytest.param(
+            task_type,
+            saving_device,
+            loading_device,
+            model_version,
+            marks=pytest.mark.slow,
+        )
+        if "mps" in (saving_device, loading_device)
+        else (task_type, saving_device, loading_device, model_version)
+        for task_type in ["regression", "classification"]
+        for (saving_device, loading_device) in device_pairs
+        for model_version in [ModelVersion.V2_5, ModelVersion.V3]
+    ],
+)
+def test__save_and_load_fit_with_cache__predictions_equal(
+    task_type: str,
+    saving_device: str,
+    loading_device: str,
+    model_version: ModelVersion,
+    tmp_path: Path,
+) -> None:
+    """Test that save/load round-trip works for fit_mode='fit_with_cache'."""
+    if task_type == "regression":
+        estimator_class = TabPFNRegressor
+        X, y = _make_regression_data()
+    else:
+        estimator_class = TabPFNClassifier
+        X, y = _make_classification_data_with_categoricals()
+
+    original = estimator_class.create_default_for_version(
+        model_version,
+        device=saving_device,
+        n_estimators=4,
+        fit_mode="fit_with_cache",
+    )
+    original.fit(X, y)
+    original_preds = original.predict(X)
+
+    path = tmp_path / "model.tabpfn_fit"
+    original.save_fit_state(path)
+    loaded = estimator_class.load_from_fit_state(path, device=loading_device)
+
+    assert isinstance(loaded, estimator_class)
+    np.testing.assert_array_almost_equal(original_preds, loaded.predict(X))
+
+    if isinstance(original, TabPFNClassifier):
+        np.testing.assert_array_almost_equal(
+            original.predict_proba(X), loaded.predict_proba(X)
+        )
+        np.testing.assert_array_equal(original.classes_, loaded.classes_)
+
+
+@pytest.mark.parametrize(
+    ("task_type", "saving_device", "loading_device", "model_version"),
+    [
+        pytest.param(
+            task_type,
+            saving_device,
+            loading_device,
+            model_version,
+            marks=pytest.mark.slow,
+        )
+        if "mps" in (saving_device, loading_device)
+        else (task_type, saving_device, loading_device, model_version)
+        for task_type in ["regression", "classification"]
+        for (saving_device, loading_device) in device_pairs
+        for model_version in [ModelVersion.V2_5, ModelVersion.V3]
+    ],
+)
+def test__save_and_load_fit_with_cache_twice__predictions_equal(
+    task_type: str,
+    saving_device: str,
+    loading_device: str,
+    model_version: ModelVersion,
+    tmp_path: Path,
+) -> None:
+    """Test double save/load cycle for fit_with_cache stability."""
+    if task_type == "regression":
+        estimator_class = TabPFNRegressor
+        X, y = _make_regression_data()
+    else:
+        estimator_class = TabPFNClassifier
+        X, y = _make_classification_data_with_categoricals()
+
+    original = estimator_class.create_default_for_version(
+        model_version,
+        device=saving_device,
+        n_estimators=4,
+        fit_mode="fit_with_cache",
+    )
+    original.fit(X, y)
+    original_preds = original.predict(X)
+
+    path_1 = tmp_path / "model_1.tabpfn_fit"
+    original.save_fit_state(path_1)
+    loaded_1 = estimator_class.load_from_fit_state(path_1, device=loading_device)
+
+    path_2 = tmp_path / "model_2.tabpfn_fit"
+    loaded_1.save_fit_state(path_2)
+    loaded_2 = estimator_class.load_from_fit_state(path_2, device=loading_device)
+
+    np.testing.assert_array_almost_equal(original_preds, loaded_2.predict(X))
+
+    if isinstance(original, TabPFNClassifier):
+        np.testing.assert_array_almost_equal(
+            original.predict_proba(X), loaded_2.predict_proba(X)
+        )
+        np.testing.assert_array_equal(original.classes_, loaded_2.classes_)
