@@ -1003,8 +1003,8 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
             state_copy = deepcopy(self)
         finally:
             # Restore original parameter data so the engine remains usable.
-            for model, params in zip(self.models, saved_param_data):
-                for param, data in zip(model.parameters(), params):
+            for model, params in zip(self.models, saved_param_data, strict=True):
+                for param, data in zip(model.parameters(), params, strict=True):
                     param.data = data
 
         return state_copy
@@ -1013,7 +1013,9 @@ class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
     def _set_models(self, models: list[Architecture]) -> None:
         # self.models contains weight-stripped shells from the pickle.
         # Inject fresh weights from the base models.
-        for stripped_model, ensemble_member in zip(self.models, self.ensemble_members):
+        for stripped_model, ensemble_member in zip(
+            self.models, self.ensemble_members, strict=True
+        ):
             fresh = models[ensemble_member.config._model_index]
             fresh_params = dict(fresh.named_parameters())
             for name, stripped_param in stripped_model.named_parameters():
