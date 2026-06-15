@@ -52,7 +52,6 @@ def create_preprocessing_pipeline(  # noqa: C901
     *,
     random_state: int | np.random.Generator | None,
     enable_gpu_preprocessing: bool = False,
-    passthrough_inf: bool = False,
 ) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline.
 
@@ -62,14 +61,11 @@ def create_preprocessing_pipeline(  # noqa: C901
         enable_gpu_preprocessing: When True, the quantile transform (if GPU-
             eligible), SVD, and shuffle steps are omitted from the CPU pipeline
             because they will run on GPU instead.
-        passthrough_inf: When True, wrap the pipeline with an :class:`InfToNanStep`
-            at the start and a :class:`RestoreInfStep` at the end so infinities
-            survive preprocessing and reach the model. Defaults to False.
     """
     steps: list[PreprocessingStep | StepWithModalities] = []
 
     pconfig = config.preprocess_config
-    if passthrough_inf:
+    if config.passthrough_inf:
         steps.append(InfToNanStep())
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
@@ -147,6 +143,6 @@ def create_preprocessing_pipeline(  # noqa: C901
                 random_state=random_state,
             ),
         )
-    if passthrough_inf:
+    if config.passthrough_inf:
         steps.append(RestoreInfStep())
     return PreprocessingPipeline(steps)

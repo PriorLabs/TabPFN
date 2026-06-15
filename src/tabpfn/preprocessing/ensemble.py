@@ -102,7 +102,6 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
-        passthrough_inf: bool = False,
     ) -> None:
         """Init.
 
@@ -138,9 +137,6 @@ class TabPFNEnsemblePreprocessor:
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used.
                 Only used when feature_subsampling_method is "feature_importance".
-            passthrough_inf: Whether to pass infinite values through to the model.
-                When True, each pipeline replaces infinities with NaN before
-                preprocessing and restores them afterwards. Defaults to False.
         """
         super().__init__()
         self.configs = configs
@@ -168,7 +164,6 @@ class TabPFNEnsemblePreprocessor:
                 config,
                 random_state=int(seed),
                 enable_gpu_preprocessing=enable_gpu_preprocessing,
-                passthrough_inf=passthrough_inf,
             )
             for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]
@@ -1021,7 +1016,7 @@ def _compute_feature_importance_order(
     )
 
 
-def generate_classification_ensemble_configs(
+def generate_classification_ensemble_configs(  # noqa: PLR0913
     *,
     num_estimators: int,
     add_fingerprint_feature: bool,
@@ -1033,6 +1028,7 @@ def generate_classification_ensemble_configs(
     random_state: int | np.random.Generator | None,
     num_models: int,
     outlier_removal_std: float | None,
+    passthrough_inf: bool = False,
 ) -> list[ClassifierEnsembleConfig]:
     """Generate ensemble configurations for classification.
 
@@ -1047,6 +1043,7 @@ def generate_classification_ensemble_configs(
         random_state: Random number generator.
         num_models: Number of models to use.
         outlier_removal_std: The standard deviation to remove outliers.
+        passthrough_inf: Whether to pass infinite values through to the model.
 
     Returns:
         List of ensemble configurations.
@@ -1081,6 +1078,7 @@ def generate_classification_ensemble_configs(
             feature_shift_decoder=feature_shift_decoder,
             _model_index=model_index,
             outlier_removal_std=outlier_removal_std,
+            passthrough_inf=passthrough_inf,
         )
         for (
             featshift,
@@ -1108,6 +1106,7 @@ def generate_regression_ensemble_configs(
     random_state: int | np.random.Generator | None,
     num_models: int,
     outlier_removal_std: float | None,
+    passthrough_inf: bool = False,
 ) -> list[RegressorEnsembleConfig]:
     """Generate ensemble configurations for regression.
 
@@ -1121,6 +1120,7 @@ def generate_regression_ensemble_configs(
         random_state: Random number generator.
         num_models: Number of models to use.
         outlier_removal_std: The standard deviation to remove outliers.
+        passthrough_inf: Whether to pass infinite values through to the model.
 
     Returns:
         List of ensemble configurations.
@@ -1152,6 +1152,7 @@ def generate_regression_ensemble_configs(
             target_transform=copy.deepcopy(target_transform),
             outlier_removal_std=outlier_removal_std,
             _model_index=model_index,
+            passthrough_inf=passthrough_inf,
         )
         for featshift, (
             preprocess_config,

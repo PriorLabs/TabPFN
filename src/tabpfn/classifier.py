@@ -688,6 +688,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.passthrough_inf,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -759,6 +760,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.passthrough_inf,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -849,7 +851,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
-            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = create_inference_engine(
@@ -981,7 +982,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
-            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(

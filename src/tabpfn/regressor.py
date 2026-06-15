@@ -741,6 +741,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.passthrough_inf,
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -899,7 +900,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
-            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = create_inference_engine(

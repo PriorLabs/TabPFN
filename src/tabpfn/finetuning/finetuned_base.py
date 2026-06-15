@@ -592,6 +592,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             "device": self.device,
             "random_state": self.random_state,
             "inference_config": inference_config,
+            "passthrough_inf": self.passthrough_inf,
         }
 
         # Config used for the finetuning loop.
@@ -780,7 +781,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 equal_split_size=False,
                 data_shuffle_seed=epoch_random_state,
                 preprocessing_random_state=preprocessing_random_state,
-                passthrough_inf=self.passthrough_inf,
             )
 
             if using_ddp:
