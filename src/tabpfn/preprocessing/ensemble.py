@@ -102,6 +102,7 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
+        passthrough_inf: bool = False,
     ) -> None:
         """Init.
 
@@ -137,6 +138,9 @@ class TabPFNEnsemblePreprocessor:
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used.
                 Only used when feature_subsampling_method is "feature_importance".
+            passthrough_inf: Whether to pass infinite values through to the model.
+                When True, each pipeline replaces infinities with NaN before
+                preprocessing and restores them afterwards. Defaults to False.
         """
         super().__init__()
         self.configs = configs
@@ -164,6 +168,7 @@ class TabPFNEnsemblePreprocessor:
                 config,
                 random_state=int(seed),
                 enable_gpu_preprocessing=enable_gpu_preprocessing,
+                passthrough_inf=passthrough_inf,
             )
             for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]

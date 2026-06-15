@@ -273,6 +273,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
         experiment_logger: FinetuningLogger | None = None,
+        passthrough_inf: bool = False,
     ):
         super().__init__()
         self.experiment_logger = experiment_logger
@@ -300,6 +301,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
         self._ddp_module_: DistributedDataParallel | None = None
+        self.passthrough_inf = passthrough_inf
 
         if self.use_fixed_preprocessing_seed and not (
             self.n_estimators_finetune
@@ -778,6 +780,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 equal_split_size=False,
                 data_shuffle_seed=epoch_random_state,
                 preprocessing_random_state=preprocessing_random_state,
+                passthrough_inf=self.passthrough_inf,
             )
 
             if using_ddp:

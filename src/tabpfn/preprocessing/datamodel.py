@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    import numpy as np
+
 
 class FeatureModality(str, Enum):
     """The modality of a feature.
@@ -49,11 +51,15 @@ class Feature:
             needs the specified GPU transform.  Set by CPU preprocessing
             steps (e.g. :class:`ReshapeFeatureDistributionsStep`) and
             cleared by the GPU pipeline after the transform has been applied.
+        inf_mask (np.ndarray, optional): Per-feature record of +/-infinite values
+            in the input, with finite entries set to 0. Used to restore infinities
+            after preprocessing when ``passthrough_inf`` is enabled. Defaults to None.
     """
 
     name: str | None
     modality: FeatureModality
     scheduled_gpu_transform: GPUTransformType | None = None
+    inf_mask: np.ndarray | None = None
 
 
 @dataclasses.dataclass

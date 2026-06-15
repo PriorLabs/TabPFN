@@ -245,6 +245,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
         show_progress_bar: bool = False,
+        passthrough_inf: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -466,6 +467,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             show_progress_bar:
                 Whether to show a progress bar during inference. Defaults to False.
+
+            passthrough_inf:
+                Whether to pass infinite values through to the model instead of
+                rejecting them. When True, infinities are replaced with NaN for
+                preprocessing and restored afterwards. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -501,6 +507,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
+        self.passthrough_inf = passthrough_inf
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -892,6 +899,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
+            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = create_inference_engine(

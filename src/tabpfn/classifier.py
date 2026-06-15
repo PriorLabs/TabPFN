@@ -238,6 +238,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         eval_metric: str | ClassifierEvalMetrics | None = None,
         tuning_config: dict | ClassifierTuningConfig | None = None,
         show_progress_bar: bool = False,
+        passthrough_inf: bool = False,
     ) -> None:
         """Construct a TabPFN classifier.
 
@@ -482,6 +483,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
             show_progress_bar:
                 Whether to show a progress bar during inference. Defaults to False.
+
+            passthrough_inf:
+                Whether to pass infinite values through to the model instead of
+                rejecting them. When True, infinities are replaced with NaN for
+                preprocessing and restored afterwards. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -515,6 +521,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.eval_metric = eval_metric
         self.tuning_config = tuning_config
+        self.passthrough_inf = passthrough_inf
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -842,6 +849,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
+            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = create_inference_engine(
@@ -973,6 +981,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             ),
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
+            passthrough_inf=self.passthrough_inf,
         )
 
         self.executor_ = InferenceEngineCachePreprocessing(

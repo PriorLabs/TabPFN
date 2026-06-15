@@ -325,12 +325,14 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
         n_preprocessing_jobs: int = 1,
         *,
         stratify: bool = False,
+        passthrough_inf: bool = False,
     ) -> None:
         self.configs = dataset_config_collection
         self.split_fn = split_fn
         self.random_state = random_state
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.stratify = stratify
+        self.passthrough_inf = passthrough_inf
 
     def __len__(self) -> int:
         return len(self.configs)
@@ -442,6 +444,7 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
             feature_schema=feature_schema,
             random_state=self.random_state,
             n_preprocessing_jobs=self.n_preprocessing_jobs,
+            passthrough_inf=self.passthrough_inf,
         )
         ensemble_members = ensemble_preprocessor.fit_transform_ensemble_members(
             X_train=x_train_raw,
@@ -734,6 +737,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
     preprocessing_random_state: int | np.random.Generator,
     shuffle: bool = True,
     force_no_stratify: bool = False,
+    passthrough_inf: bool = False,
 ) -> DatasetCollectionWithPreprocessing:
     """Helper function to create a DatasetCollectionWithPreprocessing.
 
@@ -759,6 +763,9 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
         force_no_stratify: If True, do not stratify the data even if the model
             type is classification. If None, use the model type to determine whether
             to stratify.
+        passthrough_inf: If True, pass infinite values through to the model by
+            replacing them with NaN for preprocessing and restoring them
+            afterwards. Defaults to False.
     """
     # TODO: This will become very expensive for large datasets.
     # We need to change this strategy and do the preprocessing in a
@@ -838,4 +845,5 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
         random_state=preprocessing_random_state,
         dataset_config_collection=dataset_config_collection,
         stratify=False if force_no_stratify else (model_type == "classifier"),
+        passthrough_inf=passthrough_inf,
     )

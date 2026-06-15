@@ -346,6 +346,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         mae_loss_weight: float = 0.0,
         mae_loss_clip: float | None = None,
         eval_metric: Literal["mse"] | None = None,
+        passthrough_inf: bool = False,
     ):
         super().__init__(
             device=device,
@@ -371,6 +372,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
             experiment_logger=experiment_logger,
+            passthrough_inf=passthrough_inf,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.eval_metric = eval_metric

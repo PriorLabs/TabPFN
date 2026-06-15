@@ -157,6 +157,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         experiment_logger: FinetuningLogger | None = None,
         extra_classifier_kwargs: dict[str, Any] | None = None,
         eval_metric: Literal["roc_auc", "log_loss"] | None = None,
+        passthrough_inf: bool = False,
     ):
         super().__init__(
             device=device,
@@ -182,6 +183,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
             experiment_logger=experiment_logger,
+            passthrough_inf=passthrough_inf,
         )
         self.extra_classifier_kwargs = extra_classifier_kwargs
         self.eval_metric = eval_metric
