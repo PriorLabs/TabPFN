@@ -70,13 +70,8 @@ class TabPFNV2Config(ArchitectureConfig):
     """If > 1, the features will be grouped into groups of this size and the attention
     is across groups."""
 
-    seed: int = 42
-    """Seed used to generate the per-column positional embeddings.
-
-    When ``seed == 42`` and the embedding subspace size is 48 (i.e. ``emsize == 192``),
-    the first 2000 columns use the pre-generated embeddings loaded from disk, matching
-    the production checkpoints. For any other seed the embeddings are generated purely
-    from the random generator, which is what the comparison tests rely on."""
+    seed: int = 0
+    """Seed used to generate the per-column positional embeddings."""
 
 
 class Attention(nn.Module, ABC):
@@ -676,16 +671,6 @@ class TabPFNV2(Architecture):
             dtype=x_BRCX.dtype,
             generator=generator,
         )
-        # Random numbers vary between devices, even with a fixed seed. Thus, for the
-        # production checkpoints (seed 42, embedding subspace size 48 == 192 // 4), we
-        # overwrite the first 2000 columns with the pre-generated embeddings loaded from
-        # disk to ensure they are consistent between pretraining and inference. Some
-        # tests use a smaller embedding size or a different seed, in which case we use
-        # the random embeddings.
-        if embs.shape[1] == 48 and self.seed == 42:
-            embs[:2000] = self.pre_generated_column_embeddings[: embs.shape[0]].to(
-                device=embs.device, dtype=embs.dtype
-            )
         embs = self.feature_positional_embedding_embeddings(embs)
         return x_BRCX + embs[None, None]
 
