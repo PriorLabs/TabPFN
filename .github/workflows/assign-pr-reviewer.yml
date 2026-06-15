@@ -16,8 +16,10 @@ on:
   # This is safe, as we do not check out any code. See
   # https://docs.github.com/en/enterprise-cloud@latest/actions/reference/security/secure-use#mitigating-the-risks-of-untrusted-code-checkout
   # DO NOT ADD ACTIONS/CHECKOUT TO THIS WORKFLOW.
-  pull_request_target:
-    types: [opened, reopened, ready_for_review]
+  # pull_request_target:
+  #   types: [opened, reopened, ready_for_review]
+  # Disable the workflow while we fix it.
+  workflow_dispatch:
 
 permissions:
   pull-requests: write
