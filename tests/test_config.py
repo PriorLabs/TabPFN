@@ -18,7 +18,7 @@ from tabpfn.architectures.interface import (
 )
 
 
-@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["base"]])
+@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["tabpfn_v2"]])
 def test__parse_config__no_unused_keys__returns_empty_dict(
     architecture: ArchitectureModule,
 ) -> None:
@@ -29,7 +29,7 @@ def test__parse_config__no_unused_keys__returns_empty_dict(
     assert unused_config == {}
 
 
-@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["base"]])
+@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["tabpfn_v2"]])
 def test__parse_config__unused_keys__returns_unused_config(
     architecture: ArchitectureModule,
 ) -> None:

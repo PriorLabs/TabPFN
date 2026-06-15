@@ -10,18 +10,18 @@ import pytest
 import torch
 
 from tabpfn import model_loading
-from tabpfn.architectures import base, tabpfn_v2_sf
+from tabpfn.architectures import base, tabpfn_v2
 from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
-from tabpfn.architectures.tabpfn_v2_sf import TabPFNV2Cache
+from tabpfn.architectures.tabpfn_v2 import TabPFNV2Cache
 
 
 def _create_identical_small_v2_and_base(
     max_num_classes: int = 10,
-) -> tuple[tabpfn_v2_sf.TabPFNV2, PerFeatureTransformer]:
+) -> tuple[tabpfn_v2.TabPFNV2, PerFeatureTransformer]:
     """Construct the v2 and base architectures such that they have the same outputs."""
-    configv2 = tabpfn_v2_sf.TabPFNV2Config(
+    configv2 = tabpfn_v2.TabPFNV2Config(
         max_num_classes=max_num_classes,
         num_buckets=5,
         emsize=192,
@@ -50,9 +50,7 @@ def _create_identical_small_v2_and_base(
     )
 
     # Get the architectures
-    arch_v2 = tabpfn_v2_sf.get_architecture(
-        configv2, cache_trainset_representation=False
-    )
+    arch_v2 = tabpfn_v2.get_architecture(configv2, cache_trainset_representation=False)
     arch_base = base.get_architecture(config_base, cache_trainset_representation=False)
     # Overwrite zero-initialized outputs to make sure we catch differences in
     # attention outputs.
@@ -126,8 +124,8 @@ class TestTabPFNv2NewVsOldImplementation:
         # exercises the single-file implementation's disk-loading path end-to-end.
         arch_base.random_embedding_seed = 42
 
-        arch_v2 = tabpfn_v2_sf.get_architecture(
-            tabpfn_v2_sf.TabPFNV2Config(
+        arch_v2 = tabpfn_v2.get_architecture(
+            tabpfn_v2.TabPFNV2Config(
                 max_num_classes=config_base.max_num_classes,
                 num_buckets=config_base.num_buckets,
                 seed=42,
@@ -341,9 +339,9 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
         ), f"Outputs for {key} do not match between implementations."
 
 
-def _build_small_arch(seed: int, emsize: int = 192) -> tabpfn_v2_sf.TabPFNV2:
-    return tabpfn_v2_sf.get_architecture(
-        tabpfn_v2_sf.TabPFNV2Config(
+def _build_small_arch(seed: int, emsize: int = 192) -> tabpfn_v2.TabPFNV2:
+    return tabpfn_v2.get_architecture(
+        tabpfn_v2.TabPFNV2Config(
             max_num_classes=10,
             num_buckets=5,
             emsize=emsize,

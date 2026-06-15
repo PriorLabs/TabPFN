@@ -210,6 +210,25 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
     )
 
 
+def test__get_inference_config_from_checkpoint__tabpfn_v2_name__uses_v2_config() -> (
+    None
+):
+    """The single-file v2 re-implementation must resolve to the v2 config."""
+    checkpoint = {"state_dict": {}, "config": {}, "architecture_name": "tabpfn_v2"}
+
+    clf_config = model_loading._get_inference_config_from_checkpoint(
+        checkpoint, torch.nn.CrossEntropyLoss()
+    )
+    assert clf_config == InferenceConfig.get_default("multiclass", ModelVersion.V2)
+    assert clf_config.PREPROCESS_TRANSFORMS[0].name == "quantile_uni_coarse"
+
+    bar_distribution = FullSupportBarDistribution(torch.linspace(-1.0, 1.0, 6))
+    reg_config = model_loading._get_inference_config_from_checkpoint(
+        checkpoint, bar_distribution
+    )
+    assert reg_config == InferenceConfig.get_default("regression", ModelVersion.V2)
+
+
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
 def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
     tmp_path: Path,
