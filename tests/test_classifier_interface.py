@@ -1422,9 +1422,7 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
     assert proba.shape == (3, 5, 2)
     assert np.allclose(proba.sum(-1), 1.0, atol=1e-4)
 
-    # Equivalence is exact on CPU; on GPU, batched vs single matmul accumulate
-    # differently, so only a coarse agreement is required there.
-    atol = 1e-4 if device == "cpu" else 2e-1
+    atol = 1e-4 if device == "cpu" else 1e-2
     for i, (X, y) in enumerate(data):
         ref_clf = TabPFNClassifier(
             n_estimators=2,
@@ -1493,7 +1491,7 @@ def test__predict_proba_batched__matches_per_dataset_dataframe(device: str) -> N
     )
     assert proba.shape == (3, 5, 2)
 
-    atol = 1e-4 if device == "cpu" else 2e-1
+    atol = 1e-4 if device == "cpu" else 1e-2
     for i, (X, y) in enumerate(data):
         ref = TabPFNClassifier(
             n_estimators=2,

@@ -1075,6 +1075,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
                     for m in members
                 ]
+                device = self.devices_[0]
                 for member in members:
                     x_tr = torch.as_tensor(
                         np.asarray(member.X_train), dtype=torch.float32
@@ -1082,10 +1083,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     x_te = torch.as_tensor(
                         np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
                     )
-                    # GPU preprocessing runs on the concatenated (train, test) block,
-                    # exactly as the standard inference engine does.
                     full, schema = _maybe_run_gpu_preprocessing(
-                        torch.cat([x_tr, x_te], dim=0),
+                        torch.cat([x_tr, x_te], dim=0).to(device),
                         member.gpu_preprocessor,
                         member.feature_schema,
                         num_train_rows=x_tr.shape[0],
