@@ -1066,6 +1066,10 @@ def _replace_keys_from_base_architecture(
         # The base encoder's final linear projection (``encoder.5.layer``) and target
         # projection (``y_encoder.2.layer``) are now plain ``nn.Linear`` attributes.
         ("encoder.5.layer.weight", "feature_group_embedder.weight"),
+        # regression: target linear projection was at position 1
+        ("y_encoder.1.layer.weight", "target_embedder.weight"),
+        ("y_encoder.1.layer.bias", "target_embedder.bias"),
+        # multiclass: target linear projection was at position 2
         ("y_encoder.2.layer.weight", "target_embedder.weight"),
         ("y_encoder.2.layer.bias", "target_embedder.bias"),
         ("decoder_dict.standard.0.weight", "output_projection.0.weight"),
