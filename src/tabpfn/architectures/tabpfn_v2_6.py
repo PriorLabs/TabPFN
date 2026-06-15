@@ -715,7 +715,11 @@ class TabPFNV2p6(Architecture):
 
     def _add_column_embeddings(self, x_BRGX: torch.Tensor) -> torch.Tensor:
         """Add a random embedding to each column to prevent feature collapse."""
-        generator = torch.Generator(device=x_BRGX.device).manual_seed(42)
+        if torch.jit.is_tracing():
+            # JIT tracing can't trace the Generator below, fall back to the default RNG.
+            generator = None
+        else:
+            generator = torch.Generator(device=x_BRGX.device).manual_seed(42)
         num_cols, encoding_size = x_BRGX.shape[2], x_BRGX.shape[3]
         embs = torch.randn(
             (num_cols, encoding_size // 4),

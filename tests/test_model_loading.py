@@ -21,19 +21,19 @@ from tabpfn import model_loading
 from tabpfn.architectures import ARCHITECTURES, base, tabpfn_v3
 from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
 from tabpfn.architectures.base.config import ModelConfig
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
     ArchitectureModule,
 )
+from tabpfn.architectures.tabpfn_v2 import TabPFNV2, TabPFNV2Config
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
 
 
-def test__load_model__no_architecture_name_in_checkpoint__loads_base_architecture(
+def test__load_model__no_architecture_name_in_checkpoint__loads_v2_architecture(
     tmp_path: Path,
 ) -> None:
     config = _get_minimal_base_architecture_config()
@@ -43,8 +43,8 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_base_architectur
     torch.save(checkpoint, checkpoint_path)
 
     loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
-    assert isinstance(loaded_model, PerFeatureTransformer)
-    assert isinstance(loaded_config, ModelConfig)
+    assert isinstance(loaded_model, TabPFNV2)
+    assert isinstance(loaded_config, TabPFNV2Config)
 
 
 def _get_minimal_base_architecture_config() -> ModelConfig:

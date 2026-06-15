@@ -194,7 +194,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -249,7 +249,7 @@ def test__regressor_checkpoint_contains_mse_metric(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):

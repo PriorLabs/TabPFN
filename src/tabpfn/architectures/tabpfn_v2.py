@@ -42,7 +42,6 @@ from tabpfn.architectures.kv_cache import (
 )
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
-from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 # Indicator values appended to the feature/target encodings to flag the original
@@ -618,10 +617,6 @@ class TabPFNV2(Architecture):
             self.input_size // 4, self.input_size
         )
         self.seed = config.seed
-        # Pre-generated column embeddings, persisted to disk so they are consistent
-        # across platforms (random number generation varies between devices even with a
-        # fixed seed). Used for the first 2000 columns of the production checkpoints.
-        self.pre_generated_column_embeddings = load_column_embeddings()
         self._do_encoder_nan_check = True
         # TODO(Phil): This is here to not fail the memory computation. We should make
         # this a proper API.
@@ -663,7 +658,11 @@ class TabPFNV2(Architecture):
 
     def add_column_embeddings(self, x_BRCX: torch.Tensor) -> torch.Tensor:
         """Add a random embedding to each column to prevent feature collapse."""
-        generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
+        if torch.jit.is_tracing():
+            # JIT tracing can't trace the Generator below, fall back to the default RNG.
+            generator = None
+        else:
+            generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
         num_cols, encoding_size = x_BRCX.shape[2], x_BRCX.shape[3]
         embs = torch.randn(
             (num_cols, encoding_size // 4),
@@ -1047,10 +1046,21 @@ def _replace_keys_from_base_architecture(
     """
     n_layers = sum(k.endswith("self_attn_between_features._w_qkv") for k in state_dict)
 
+    # The base encoder's final linear projection lives at ``encoder.{i}.layer`` where
+    # the index ``i`` depends on which preprocessing steps the checkpoint was trained
+    # with (e.g. ``remove_duplicate_features`` adds a step and shifts every later
+    # index). It is the only base encoder step with persistent parameters, so locate it
+    # by name rather than assuming a fixed index.
+    encoder_projection_keys = [
+        key
+        for key in state_dict
+        if key.startswith("encoder.") and key.endswith(".layer.weight")
+    ]
+
     base_to_v2_mapping = [
-        # The base encoder's final linear projection (``encoder.5.layer``) and target
+        # The base encoder's final linear projection (``encoder.{i}.layer``) and target
         # projection (``y_encoder.2.layer``) are now plain ``nn.Linear`` attributes.
-        ("encoder.5.layer.weight", "feature_group_embedder.weight"),
+        *((key, "feature_group_embedder.weight") for key in encoder_projection_keys),
         # regression: target linear projection was at position 1
         ("y_encoder.1.layer.weight", "target_embedder.weight"),
         ("y_encoder.1.layer.bias", "target_embedder.bias"),
