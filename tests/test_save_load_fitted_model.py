@@ -18,7 +18,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.inference_tuning import ClassifierEvalMetrics
-from tabpfn.model_loading import save_fitted_tabpfn_model, save_tabpfn_model
+from tabpfn.model_loading import save_tabpfn_model
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
@@ -35,21 +35,6 @@ def _make_classification_data_with_categoricals() -> tuple[np.ndarray, np.ndarra
     X_cat = X.astype(object)
     X_cat[:, 2] = np.random.choice(["A", "B", "C"], size=X.shape[0])  # noqa: NPY002
     return X_cat, y
-
-
-class _DummyExecutor:
-    def save_state_except_model_weights(self, path: Path) -> None:
-        path.write_text("executor state")
-
-
-class _DummyEstimator:
-    fitted_marker_ = "fitted"
-
-    def __init__(self) -> None:
-        self.executor_ = _DummyExecutor()
-
-    def get_params(self, *, deep: bool = False) -> dict[str, object]:
-        return {"deep": deep}
 
 
 # Exclude pairs where where "mps" is exatly one device type. MPS yields different
@@ -137,9 +122,12 @@ def test__save_fit_state__does_not_move_live_estimator_to_cpu(
 
 
 def test__save_fit_state__keeps_tabpfn_fit_parent_name(tmp_path: Path) -> None:
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device="cpu", n_estimators=1)
+    model.fit(X, y)
     path = tmp_path / "project.tabpfn_fit" / "model.tabpfn_fit"
 
-    save_fitted_tabpfn_model(_DummyEstimator(), path)
+    model.save_fit_state(path)
 
     assert path.exists()
     assert not (tmp_path / "project").exists()
