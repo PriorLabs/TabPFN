@@ -17,12 +17,12 @@ from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.architectures.tabpfn_v2_sf import TabPFNV2Cache
 
 
-def _create_identical_small_v2_and_base() -> tuple[
-    tabpfn_v2_sf.TabPFNV2, PerFeatureTransformer
-]:
+def _create_identical_small_v2_and_base(
+    max_num_classes: int = 10,
+) -> tuple[tabpfn_v2_sf.TabPFNV2, PerFeatureTransformer]:
     """Construct the v2 and base architectures such that they have the same outputs."""
     configv2 = tabpfn_v2_sf.TabPFNV2Config(
-        max_num_classes=10,
+        max_num_classes=max_num_classes,
         num_buckets=5,
         emsize=192,
         nlayers=1,
@@ -34,7 +34,7 @@ def _create_identical_small_v2_and_base() -> tuple[
         seed=420,
     )
     config_base = base.ModelConfig(
-        max_num_classes=10,
+        max_num_classes=max_num_classes,
         num_buckets=5,
         emsize=192,
         nlayers=1,
@@ -76,6 +76,24 @@ def test__load_state_dict__from_base_checkpoint_strict() -> None:
     # Re-loading the (already translated) base state dict must succeed with strict=True,
     # i.e. the translated keys exactly cover the single-file architecture's parameters.
     result = arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
+    assert not result.missing_keys
+    assert not result.unexpected_keys
+
+
+@torch.no_grad()
+def test__load_state_dict__from_regression_base_checkpoint_strict() -> None:
+    """A regression base state dict loads strictly despite the shifted y-encoder index.
+
+    Regression checkpoints omit the multiclass target step, so the y-encoder's linear
+    projection lives at ``y_encoder.1.layer`` instead of ``y_encoder.2.layer``. The key
+    translation must locate it by name rather than assuming the classification index.
+    """
+    arch_v2, arch_base = _create_identical_small_v2_and_base(max_num_classes=0)
+    base_state = arch_base.state_dict()
+    assert "y_encoder.1.layer.weight" in base_state
+    assert "y_encoder.2.layer.weight" not in base_state
+
+    result = arch_v2.load_state_dict(base_state, strict=True)
     assert not result.missing_keys
     assert not result.unexpected_keys
 
