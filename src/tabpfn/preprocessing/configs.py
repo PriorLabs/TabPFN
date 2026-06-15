@@ -164,21 +164,21 @@ class EnsembleConfig:
     outlier_removal_std: float | None
     # Internal index specifying which model to use for this ensemble member.
     _model_index: int
-    passthrough_inf: bool = False
+    passthrough_inf: bool
 
 
 @dataclass
 class ClassifierEnsembleConfig(EnsembleConfig):
     """Configuration for a classifier ensemble member."""
 
-    class_permutation: np.ndarray | None = None
+    class_permutation: np.ndarray | None
 
 
 @dataclass
 class RegressorEnsembleConfig(EnsembleConfig):
     """Configuration for a regression ensemble member."""
 
-    target_transform: TransformerMixin | Pipeline | None = None
+    target_transform: TransformerMixin | Pipeline | None
 
 
 __all__ = [
