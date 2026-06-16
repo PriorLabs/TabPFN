@@ -1527,3 +1527,38 @@ def test__predict_proba_batched__rejects_balance_probabilities() -> None:
     )
     with pytest.raises(NotImplementedError, match=r"balance_probabilities"):
         clf.predict_proba_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
+def test__predict_proba_batched__does_not_mutate_estimator() -> None:
+    """predict_proba_batched runs on an internal clone, leaving self untouched."""
+
+    def mk(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] > 0).astype(int)
+        return X, y
+
+    data = [mk(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:3] for d in data]
+
+    # An unfitted estimator stays unfitted (no executor_/classes_ left behind).
+    clf = TabPFNClassifier(n_estimators=2, device="cpu", random_state=42)
+    clf.predict_proba_batched(X_list, y_list, X_tests)
+    assert not hasattr(clf, "executor_")
+    assert not hasattr(clf, "classes_")
+
+    # A prior fit is preserved exactly across a batched call.
+    a_x, a_y = mk(99, n=80)
+    fitted = TabPFNClassifier(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        inference_precision=torch.float32,
+    )
+    fitted.fit(a_x, a_y)
+    before = fitted.predict_proba(a_x[:5])
+    fitted.predict_proba_batched(X_list, y_list, X_tests)
+    after = fitted.predict_proba(a_x[:5])
+    np.testing.assert_array_equal(before, after)
