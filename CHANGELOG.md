@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Add an opt-in `passthrough_inf` argument (default `False`) to `TabPFNClassifier`, `TabPFNRegressor`, and the finetuned estimators. When enabled, `±inf` values are no longer rejected during `fit()`/`predict()`; they are carried through preprocessing (replaced with `NaN` for the steps that cannot handle them and restored afterwards) so they reach the model, which handles them natively. ([#1055](https://github.com/PriorLabs/TabPFN/pull/1055))
-
 ## [8.0.8] - 2026-06-10
 
 ### Breaking Changes
