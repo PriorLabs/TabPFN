@@ -44,10 +44,10 @@ from tabpfn.utils import (
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 if TYPE_CHECKING:
-    from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
+    from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
     from tabpfn.classifier import TabPFNClassifier
+    from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor

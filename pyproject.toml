@@ -272,30 +272,6 @@ author = "Prior Labs GmbH"
 "__init__.py" = ["I002"]
 "examples/*" = ["INP001", "I002", "E741", "D101", "D103", "T20", "D415", "ERA001", "E402", "E501", "BLE001"]
 "docs/*" = ["INP001"]
-"src/tabpfn/architectures/base/*.py" = [
-  # Documentation
-  "D100",
-  "D101",
-  "D102",
-  "D103",
-  "D107",
-]
-# TODO(eddiebergman): There's a lot of typing and ruff problems detected here
-"src/tabpfn/architectures/base/multi_head_attention.py" = [
-]
-"src/tabpfn/architectures/base/encoders.py" = [
-  "PT018",
-  "ARG002",
-  "E501",
-  "ERA001",
-  "F821",
-  "FBT001",
-  "FBT002",
-  "A001",
-]
-"src/tabpfn/architectures/base/preprocessing.py" = [
-  "ANN"
-]
 "src/tabpfn/model_loading.py" = [
   "C901"
 ]
@@ -349,13 +325,6 @@ disallow_untyped_decorators = false # Test decorators are not properly typed
 disallow_incomplete_defs = false    # Sometimes we just want to ignore verbose types
 disable_error_code = ["var-annotated"]
 
-# TODO(eddiebergman): Too much to deal with right now
-[[tool.mypy.overrides]]
-module = [
-  "tabpfn.architectures.base.multi_head_attention",
-  "tabpfn.architectures.encoders"
-]
-ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [

@@ -3,7 +3,7 @@
 """Torch-based preprocessing utilities."""
 
 from .factory import create_gpu_preprocessing_pipeline
-from .ops import torch_nanmean, torch_nanstd, torch_nansum
+from .ops import torch_nanmean, torch_nanstd
 from .pipeline_interface import (
     FeatureSchema,
     TorchPreprocessingPipeline,
@@ -47,5 +47,4 @@ __all__ = [
     "create_gpu_preprocessing_pipeline",
     "torch_nanmean",
     "torch_nanstd",
-    "torch_nansum",
 ]

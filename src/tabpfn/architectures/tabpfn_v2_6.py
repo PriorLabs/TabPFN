@@ -17,10 +17,6 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 
-from tabpfn.architectures.encoders.steps._ops import (
-    select_features,
-    torch_nanmean,
-)
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
@@ -33,6 +29,7 @@ from tabpfn.architectures.kv_cache import (
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
+from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 NAN_INDICATOR = -2.0

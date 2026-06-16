@@ -18,10 +18,6 @@ import torch
 import torch.utils.checkpoint
 from torch import nn
 
-from tabpfn.architectures.encoders.steps._ops import (
-    select_features,
-    torch_nanmean,
-)
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
@@ -36,6 +32,7 @@ from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 NAN_INDICATOR = -2.0
