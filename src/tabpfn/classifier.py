@@ -101,12 +101,12 @@ if TYPE_CHECKING:
     from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
-    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
         PerformanceOptions,
     )
+    from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
 
     try:

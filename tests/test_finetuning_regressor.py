@@ -23,7 +23,7 @@ from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from tabpfn.architectures.base.bar_distribution import BarDistribution
+from tabpfn.architectures.shared.bar_distribution import BarDistribution
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,

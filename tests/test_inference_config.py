@@ -10,9 +10,8 @@ from dataclasses import asdict
 import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
-from tabpfn.architectures import base
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.architectures.base.config import ModelConfig
+from tabpfn.architectures import tabpfn_v2_5
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import InferenceConfig
@@ -79,16 +78,17 @@ def test__override_with_user_input__override_is_None__returns_copy_of_config() -
 
 
 def _make_classifier_specs() -> ClassifierModelSpecs:
-    config = ModelConfig(
+    config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
         max_num_classes=10,
         nhead=2,
         nlayers=2,
-        remove_duplicate_features=True,
         num_buckets=100,
     )
-    model = base.get_architecture(config=config, cache_trainset_representation=False)
+    model = tabpfn_v2_5.get_architecture(
+        config=config, cache_trainset_representation=False
+    )
     inference_config = InferenceConfig.get_default(
         task_type="multiclass", model_version=ModelVersion.V2_5
     )
@@ -100,16 +100,17 @@ def _make_classifier_specs() -> ClassifierModelSpecs:
 
 
 def _make_regressor_specs() -> RegressorModelSpecs:
-    config = ModelConfig(
+    config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
         max_num_classes=10,
         nhead=2,
         nlayers=2,
-        remove_duplicate_features=True,
         num_buckets=100,
     )
-    model = base.get_architecture(config=config, cache_trainset_representation=False)
+    model = tabpfn_v2_5.get_architecture(
+        config=config, cache_trainset_representation=False
+    )
     borders = torch.linspace(-3, 3, config.num_buckets + 1)
     norm_criterion = FullSupportBarDistribution(borders)
     inference_config = InferenceConfig.get_default(

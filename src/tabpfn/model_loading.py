@@ -30,7 +30,7 @@ from filelock import FileLock
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError

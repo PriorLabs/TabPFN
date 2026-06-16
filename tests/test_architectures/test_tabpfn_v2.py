@@ -8,247 +8,60 @@ import sys
 import pytest
 import torch
 
-from tabpfn.architectures import base, tabpfn_v2
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
+from tabpfn.architectures import tabpfn_v2
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.tabpfn_v2 import TabPFNV2Cache
 
+TASK_TYPES = ["multiclass", "regression"]
 
-def _create_identical_small_v2_and_base(
-    max_num_classes: int = 10,
-) -> tuple[tabpfn_v2.TabPFNV2, PerFeatureTransformer]:
-    """Construct the v2 and base architectures such that they have the same outputs."""
-    configv2 = tabpfn_v2.TabPFNV2Config(
-        max_num_classes=max_num_classes,
-        num_buckets=5,
-        emsize=192,
-        nlayers=1,
-        nhead=6,
-        features_per_group=2,
-        # Use 420 (not the production default 42) so the column embeddings are
-        # generated purely from the random generator rather than loaded from disk,
-        # matching the base architecture configured below.
-        seed=420,
-    )
-    config_base = base.ModelConfig(
-        max_num_classes=max_num_classes,
-        num_buckets=5,
-        emsize=192,
-        nlayers=1,
-        nhead=6,
-        nhid_factor=4,
-        features_per_group=2,
-        remove_duplicate_features=False,
-        nan_handling_enabled=True,
-        # Needs to be 420 to match the single-file implementation
-        # and avoid special handling of seed=42 in the multi-file
-        # implementation.
-        seed=420,
-    )
 
-    # Get the architectures
-    arch_v2 = tabpfn_v2.get_architecture(configv2, cache_trainset_representation=False)
-    arch_base = base.get_architecture(config_base, cache_trainset_representation=False)
-    # Overwrite zero-initialized outputs to make sure we catch differences in
-    # attention outputs.
-    for param in arch_base.parameters():
+def _build_small_arch(
+    seed: int, emsize: int = 192, task_type: str = "multiclass"
+) -> tabpfn_v2.TabPFNV2:
+    model = tabpfn_v2.get_architecture(
+        tabpfn_v2.TabPFNV2Config(
+            max_num_classes=10 if task_type == "multiclass" else 0,
+            num_buckets=5,
+            emsize=emsize,
+            nlayers=1,
+            nhead=6,
+            features_per_group=2,
+            seed=seed,
+        ),
+        cache_trainset_representation=False,
+    )
+    for param in model.parameters():
         if param.abs().sum() < 1e-6:
             param.data += torch.randn_like(param) * 1e-1
-
-    # load_state_dict translates the base-architecture key names automatically.
-    arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
-
-    arch_v2.to(torch.float64)
-    arch_base.to(torch.float64)
-
-    return arch_v2, arch_base
+    return model
 
 
-@torch.no_grad()
-def test__load_state_dict__from_base_checkpoint_strict() -> None:
-    """A base-architecture state dict can be loaded strictly (all keys consumed)."""
-    arch_v2, arch_base = _create_identical_small_v2_and_base()
-    # Re-loading the (already translated) base state dict must succeed with strict=True,
-    # i.e. the translated keys exactly cover the single-file architecture's parameters.
-    result = arch_v2.load_state_dict(arch_base.state_dict(), strict=True)
-    assert not result.missing_keys
-    assert not result.unexpected_keys
+def _make_targets(
+    num_train: int,
+    batch_size: int,
+    task_type: str,
+    *,
+    dtype: torch.dtype = torch.float32,
+) -> torch.Tensor:
+    """Training targets for ``task_type``.
 
-
-@torch.no_grad()
-def test__load_state_dict__from_regression_base_checkpoint_strict() -> None:
-    """A regression base state dict loads strictly despite the shifted y-encoder index.
-
-    Regression checkpoints omit the multiclass target step, so the y-encoder's linear
-    projection lives at ``y_encoder.1.layer`` instead of ``y_encoder.2.layer``. The key
-    translation must locate it by name rather than assuming the classification index.
+    Class indices in ``[0, 10)`` for multiclass, standard-normal reals for regression.
     """
-    arch_v2, arch_base = _create_identical_small_v2_and_base(max_num_classes=0)
-    base_state = arch_base.state_dict()
-    assert "y_encoder.1.layer.weight" in base_state
-    assert "y_encoder.2.layer.weight" not in base_state
-
-    result = arch_v2.load_state_dict(base_state, strict=True)
-    assert not result.missing_keys
-    assert not result.unexpected_keys
+    if task_type == "multiclass":
+        return torch.randint(0, 10, (num_train, batch_size), dtype=dtype)
+    return torch.randn(num_train, batch_size, dtype=dtype)
 
 
-@torch.no_grad()
-def test__load_state_dict__native_keys_still_work() -> None:
-    """A round-trip of the single-file architecture's own state dict still works."""
-    arch_v2, _ = _create_identical_small_v2_and_base()
-    arch_v2.load_state_dict(arch_v2.state_dict(), strict=True)
-
-
-class TestTabPFNv2NewVsOldImplementation:
-    """Test that the v2 implementation computes exactly the same outputs as the base."""
-
-    @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-    def test__backward__v2_and_base_x_inputs_have_same_gradients(self) -> None:
-        # Doing a forward and backward pass is more expensive, so use a smaller model.
-        arch_v2, arch_base = _create_identical_small_v2_and_base()
-
-        # Use float64 (like the forward comparison tests): the functional preprocessing
-        # is mathematically equivalent to the base encoder steps but not bit-identical,
-        # so float32 gradients differ at rounding level (~1e-7) while float64 matches.
-        x_v2 = torch.randn(100, 2, 20, dtype=torch.float64) * 0.1
-        x_base = x_v2.clone().detach()
-        y_v2 = torch.randint(0, 10, [97, 2], dtype=torch.float64)
-        y_base = y_v2.clone().detach()
-
-        x_v2.requires_grad = True
-        x_base.requires_grad = True
-
-        # Forward pass and backward pass through both architectures
-        arch_v2(x_v2, y_v2, only_return_standard_out=True).sum().backward()
-        arch_base(x_base, y_base, only_return_standard_out=True).sum().backward()
-
-        msg = "Gradients for input x do not match between implementations."
-        assert torch.allclose(x_v2.grad, x_base.grad), msg
-
-
-def _handler_inputs() -> dict[str, tuple[torch.Tensor, torch.Tensor]]:
-    """Return ``(x, y)`` pairs that each exercise one preprocessing handler.
-
-    Every case must produce identical outputs in the single-file and base
-    architectures, validating the functional reimplementation of each encoder step
-    (NaN/Inf handling, constant-feature removal, feature-group normalization and the
-    multiclass target densification).
-    """
-    torch.manual_seed(0)
-    num_train, num_test, num_features, batch = 40, 13, 8, 2
-    num_rows = num_train + num_test
-
-    def make_x() -> torch.Tensor:
-        return torch.randn(num_rows, batch, num_features, dtype=torch.float64) * 0.5
-
-    def make_y() -> torch.Tensor:
-        return torch.randint(0, 10, (num_train, batch), dtype=torch.float64)
-
-    cases: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-
-    # Baseline: clean, well-behaved data (no handler is actually triggered).
-    cases["plain"] = (make_x(), make_y())
-
-    # NaNs scattered through the features, including a fully-NaN feature column.
-    x = make_x()
-    x[5, 0, 2] = float("nan")
-    x[20, 1, 4] = float("nan")
-    x[:, 0, 6] = float("nan")
-    cases["feature_nans"] = (x, make_y())
-
-    # +Inf / -Inf in the features (distinct indicator values from NaN).
-    x = make_x()
-    x[3, 0, 1] = float("inf")
-    x[7, 1, 5] = float("-inf")
-    x[11, 0, 5] = float("inf")
-    cases["feature_infs"] = (x, make_y())
-
-    # Constant feature columns -> exercises remove-empty + feature-group normalization.
-    x = make_x()
-    x[:, :, 0] = 3.14
-    x[:, :, 3] = 0.0
-    cases["constant_features"] = (x, make_y())
-
-    # Duplicated feature columns and duplicated rows (kept as-is; no dedup step).
-    x = make_x()
-    x[:, :, 1] = x[:, :, 2]
-    x[10] = x[3]
-    x[25] = x[3]
-    cases["duplicate_features_and_rows"] = (x, make_y())
-
-    # NaNs in the training targets -> exercises the target NaN handler.
-    y = make_y()
-    y[2, 0] = float("nan")
-    y[10, 1] = float("nan")
-    cases["target_nans"] = (make_x(), y)
-
-    # Non-contiguous / sparse classes -> exercises the multiclass densification.
-    y = torch.randint(0, 10, (num_train, batch), dtype=torch.float64)
-    y[y == 5] = 7
-    y[y == 2] = 9
-    cases["sparse_classes"] = (make_x(), y)
-
-    # Everything at once.
-    x = make_x()
-    x[4, 0, 2] = float("nan")
-    x[8, 1, 5] = float("inf")
-    x[:, :, 0] = 1.0
-    y = make_y()
-    y[1, 0] = float("nan")
-    cases["combined"] = (x, y)
-
-    return cases
-
-
-@pytest.mark.parametrize("case", list(_handler_inputs()))
+@pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
 @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__forward__handlers_match_base(case: str) -> None:
-    """Each preprocessing handler produces the same output as the base architecture."""
-    arch_v2, arch_base = _create_identical_small_v2_and_base()
-    x, y = _handler_inputs()[case]
-
-    output_v2 = arch_v2(x, y, only_return_standard_out=False)
-    output_base = arch_base(x, y, only_return_standard_out=False)
-
-    assert output_v2.keys() == output_base.keys()
-    for key in output_v2:
-        assert torch.allclose(output_v2[key], output_base[key]), (
-            f"Outputs for {key} do not match between implementations for case {case!r}."
-        )
-
-
-@pytest.mark.parametrize("case", ["feature_nans", "feature_infs", "constant_features"])
-@torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__kv_cache__matches_standard_forward_with_handlers(case: str) -> None:
-    """The cached feature statistics reproduce the standard forward on tricky inputs."""
-    arch = _build_small_arch(seed=420)
-    arch.to(torch.float64)
-    x_full, y_train = _handler_inputs()[case]
-    num_train = y_train.shape[0]
-    x_test = x_full[num_train:]
-
-    out_standard = arch(x_full, y_train)
-
-    out_store, cache = arch(x_full, y_train, return_kv_cache=True)
-    assert cache.feature_cache is not None
-    assert torch.allclose(out_standard, out_store, atol=1e-10)
-
-    out_cached = arch(x_test, y_train, kv_cache=cache, x_is_test_only=True)
-    assert torch.allclose(out_standard, out_cached, atol=1e-10), (
-        f"kv_cache inference differs from the standard forward for case {case!r}."
-    )
-
-
-@torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> None:
-    arch, _ = _create_identical_small_v2_and_base()
+def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled(
+    task_type: str,
+) -> None:
+    arch = _build_small_arch(seed=420, task_type=task_type)
 
     x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
+    y = _make_targets(97, 2, task_type)
 
     output_without_memory_saving = arch(x, y, only_return_standard_out=False)
     output_with_memory_saving = arch(
@@ -266,13 +79,16 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled() -> Non
         ), f"Outputs for {key} do not match between implementations."
 
 
+@pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
 @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
-def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
-    arch, _ = _create_identical_small_v2_and_base()
+def test__forward_pass_equal_with_checkpointing_enabled_and_disabled(
+    task_type: str,
+) -> None:
+    arch = _build_small_arch(seed=420, task_type=task_type)
 
     x = torch.randn(100, 2, 20, dtype=torch.float32) * 0.1
-    y = torch.randint(0, 10, [97, 2], dtype=torch.float32)
+    y = _make_targets(97, 2, task_type)
 
     output_without_recomputation = arch(x, y, only_return_standard_out=False)
     output_with_recomputation = arch(
@@ -290,37 +106,27 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled() -> None:
         ), f"Outputs for {key} do not match between implementations."
 
 
-def _build_small_arch(seed: int, emsize: int = 192) -> tabpfn_v2.TabPFNV2:
-    return tabpfn_v2.get_architecture(
-        tabpfn_v2.TabPFNV2Config(
-            max_num_classes=10,
-            num_buckets=5,
-            emsize=emsize,
-            nlayers=1,
-            nhead=6,
-            features_per_group=2,
-            seed=seed,
-        ),
-        cache_trainset_representation=False,
-    )
+def _make_kv_cache_data(task_type: str) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Return ``(x_full, y_train, num_train)`` for the KV-cache tests.
 
-
-def _make_kv_cache_data() -> tuple[torch.Tensor, torch.Tensor, int]:
-    """Return ``(x_full, y_train, num_train)`` for the KV-cache tests."""
+    Uses float64 so the cache path (test rows recomputed against the cached K/V) can
+    be compared against the standard forward at the tight ``atol=1e-10`` tolerance.
+    """
     torch.manual_seed(0)
     num_train, num_test, num_features = 30, 7, 5
-    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float32)
+    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float64)
     x_full = x_full * 0.5
-    y_train = torch.randint(0, 10, (num_train, 1), dtype=torch.float32)
+    y_train = _make_targets(num_train, 1, task_type, dtype=torch.float64)
     return x_full, y_train, num_train
 
 
+@pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
-def test__kv_cache__matches_standard_forward() -> None:
+def test__kv_cache__matches_standard_forward(task_type: str) -> None:
     """KV-cache inference must match the standard (full train+test) forward."""
-    arch = _build_small_arch(seed=420)
-    arch.to(torch.float32)
-    x_full, y_train, num_train = _make_kv_cache_data()
+    arch = _build_small_arch(seed=420, task_type=task_type)
+    arch.to(torch.float64)
+    x_full, y_train, num_train = _make_kv_cache_data(task_type)
     x_test = x_full[num_train:]
 
     out_standard = arch(x_full, y_train)
@@ -344,12 +150,13 @@ def test__kv_cache__matches_standard_forward() -> None:
     )
 
 
+@pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
-def test__kv_cache__non_standard_out_matches() -> None:
+def test__kv_cache__non_standard_out_matches(task_type: str) -> None:
     """The cache path also returns matching embeddings dicts."""
-    arch = _build_small_arch(seed=420)
-    arch.to(torch.float32)
-    x_full, y_train, num_train = _make_kv_cache_data()
+    arch = _build_small_arch(seed=420, task_type=task_type)
+    arch.to(torch.float64)
+    x_full, y_train, num_train = _make_kv_cache_data(task_type)
     x_test = x_full[num_train:]
 
     out_standard = arch(x_full, y_train, only_return_standard_out=False)
@@ -367,10 +174,11 @@ def test__kv_cache__non_standard_out_matches() -> None:
         )
 
 
+@pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
-def test__kv_cache__x_is_test_only_requires_populated_cache() -> None:
-    arch = _build_small_arch(seed=420)
-    arch.to(torch.float32)
-    x_full, y_train, _ = _make_kv_cache_data()
+def test__kv_cache__x_is_test_only_requires_populated_cache(task_type: str) -> None:
+    arch = _build_small_arch(seed=420, task_type=task_type)
+    arch.to(torch.float64)
+    x_full, y_train, _ = _make_kv_cache_data(task_type)
     with pytest.raises(ValueError, match="requires a populated kv_cache"):
         arch(x_full, y_train, x_is_test_only=True)

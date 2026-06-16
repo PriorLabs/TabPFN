@@ -18,12 +18,9 @@ from typing_extensions import override
 import joblib
 import torch
 
-from tabpfn.architectures.base.memory import (
-    DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
-    MemorySavingMode,
-    should_save_peak_mem,
-)
 from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
+from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.utils import get_autocast_context
