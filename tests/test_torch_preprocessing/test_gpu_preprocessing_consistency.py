@@ -43,9 +43,13 @@ _ResultWithSchema = tuple[npt.NDArray[np.floating], FeatureSchema]
 
 def _make_schema(n_features: int, n_cat: int) -> FeatureSchema:
     """Build a feature schema with ``n_cat`` CATEGORICAL columns first."""
-    features = [Feature(name=None, modality=FeatureModality.CATEGORICAL)] * n_cat + [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)
-    ] * (n_features - n_cat)
+    features = [
+        Feature(name=f"f{i}", modality=FeatureModality.CATEGORICAL)
+        for i in range(n_cat)
+    ] + [
+        Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+        for i in range(n_cat, n_features)
+    ]
     return FeatureSchema(features=features)
 
 

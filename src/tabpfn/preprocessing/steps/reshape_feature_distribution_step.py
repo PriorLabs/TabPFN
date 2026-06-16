@@ -63,10 +63,10 @@ def _build_reshape_output_names(
     transform, not its source). The output column layout mirrors the
     ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``.
     """
-    input_names = [
-        f.name if f.name is not None else f"f{i}"
-        for i, f in enumerate(feature_schema.features)
-    ]
+    # Every feature is named by the time it reaches this step, so ``name`` is
+    # non-None (input features named from columns/positionally; added features
+    # named from their transform).
+    input_names = [f.name for f in feature_schema.features]
     transformed_names = [f"reshape_{k}" for k in range(n_transformed)]
     if append_to_original:
         # Output: [original_all, transformed_copies]

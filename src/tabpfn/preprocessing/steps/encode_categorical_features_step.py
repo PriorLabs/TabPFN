@@ -26,12 +26,14 @@ from tabpfn.utils import infer_random_state
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
 
 
-def _input_names_or_positional(feature_schema: FeatureSchema) -> list[str]:
-    """Names of the input features, filling any ``None`` with positional names."""
-    return [
-        f.name if f.name is not None else f"f{i}"
-        for i, f in enumerate(feature_schema.features)
-    ]
+def _input_names(feature_schema: FeatureSchema) -> list[str]:
+    """Names of the input features.
+
+    Every feature is named by the time it reaches this step (input features are
+    named from the DataFrame columns or positionally; features added by earlier
+    steps are named from their transform). ``Feature.name`` is therefore non-None.
+    """
+    return [f.name for f in feature_schema.features]
 
 
 def _columntransformer_output_names(
@@ -45,9 +47,10 @@ def _columntransformer_output_names(
     transformer whose output width equals its input width, e.g. ordinal
     encoding) inherit that input column's name. Expanding transformers (e.g.
     one-hot) get ``"{transformer_name}_{k}"`` names. The result is de-duplicated
-    so all names are unique.
+    so all names are unique. ``remainder="passthrough"`` means every output
+    position is covered, so no name is left unset.
     """
-    names: list[str | None] = [None] * n_output
+    names: list[str] = [""] * n_output
     all_positions = list(range(n_output))
     for name, trans, cols in ct.transformers_:
         if trans == "drop" or name not in ct.output_indices_:
@@ -60,8 +63,7 @@ def _columntransformer_output_names(
         else:
             for k, out_idx in enumerate(out_positions):
                 names[out_idx] = f"{name}_{k}"
-    resolved = [n if n is not None else f"f{i}" for i, n in enumerate(names)]
-    return make_names_unique(resolved)
+    return make_names_unique(names)
 
 
 def _get_all_cat_indices_after_onehot(
@@ -273,7 +275,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        input_names = _input_names_or_positional(feature_schema)
+        input_names = _input_names(feature_schema)
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot
@@ -336,7 +338,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        input_names = _input_names_or_positional(feature_schema)
+        input_names = _input_names(feature_schema)
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot

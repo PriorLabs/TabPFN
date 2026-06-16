@@ -35,8 +35,8 @@ def _numerical_schema(num_features: int) -> FeatureSchema:
     """Create FeatureSchema with numerical features only."""
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(num_features)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_features)
         ]
     )
 
