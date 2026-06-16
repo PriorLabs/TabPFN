@@ -88,7 +88,6 @@ from tabpfn.utils import (
     balance_probas_by_class_counts,
     convert_batch_of_cat_ix_to_schema,
     infer_random_state,
-    remove_non_differentiable_preprocessing_from_models,
 )
 from tabpfn.validation import (
     ensure_compatible_fit_inputs,
@@ -952,7 +951,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 X=X, y=y, rng=rng
             )
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
-            remove_non_differentiable_preprocessing_from_models(models=self.models_)
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_

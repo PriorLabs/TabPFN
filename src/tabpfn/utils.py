@@ -13,10 +13,6 @@ import numpy as np
 import numpy.typing as npt
 import torch
 
-from tabpfn.architectures.encoders import (
-    MulticlassClassificationTargetEncoderStep,
-    TorchPreprocessingPipeline,
-)
 from tabpfn.constants import (
     REGRESSION_NAN_BORDER_LIMIT_LOWER,
     REGRESSION_NAN_BORDER_LIMIT_UPPER,
@@ -26,8 +22,6 @@ from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSche
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
     from sklearn.pipeline import Pipeline
-
-    from tabpfn.architectures.interface import Architecture
 
 MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 
@@ -415,30 +409,6 @@ def translate_probs_across_borders(
             logits_flat[i : i + chunk_size], frm=frm, to=to
         )
     return out_flat.reshape(*batch_shape, num_buckets_to)
-
-
-def remove_non_differentiable_preprocessing_from_models(
-    models: list[Architecture],
-) -> None:
-    """Remove non-differentiable encoder steps from the model.
-
-    Args:
-        models: The models to update.
-    """
-    for model in models:
-        if not hasattr(model, "y_encoder"):
-            continue
-
-        diffable_steps = []  # only differentiable encoder steps.
-        for module in model.y_encoder:
-            if isinstance(module, MulticlassClassificationTargetEncoderStep):
-                pass
-            else:
-                diffable_steps.append(module)
-
-        model.y_encoder = TorchPreprocessingPipeline(
-            steps=diffable_steps, output_key="output"
-        )
 
 
 def transform_borders_one(
