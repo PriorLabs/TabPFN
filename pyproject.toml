@@ -61,7 +61,7 @@ dev = [
   "pre-commit>=4.3.0",
   # This version must be the same as in [tool.ruff] below and in .pre-commit-config.yaml
   "ruff==0.15.12",
-  "mypy==1.19.1", # This version must be the same as in .pre-commit-config.yaml
+  "mypy==2.1.0", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
   # Changelog
