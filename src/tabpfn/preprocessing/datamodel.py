@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     import numpy as np
+    import torch
 
 
 class FeatureModality(str, Enum):
@@ -51,15 +52,16 @@ class Feature:
             needs the specified GPU transform.  Set by CPU preprocessing
             steps (e.g. :class:`ReshapeFeatureDistributionsStep`) and
             cleared by the GPU pipeline after the transform has been applied.
-        inf_mask (np.ndarray, optional): Per-feature record of +/-infinite values
-            in the input, with finite entries set to 0. Used to restore infinities
-            after preprocessing when ``passthrough_inf`` is enabled. Defaults to None.
+        inf_mask (np.ndarray | torch.Tensor, optional): Per-feature record of
+            +/-infinite values in the input, with finite entries set to 0. Used
+            to restore infinities after preprocessing when ``passthrough_inf`` is
+            enabled. Same kind (and device) as the data. Defaults to None.
     """
 
     name: str | None
     modality: FeatureModality
     scheduled_gpu_transform: GPUTransformType | None = None
-    inf_mask: np.ndarray | None = None
+    inf_mask: np.ndarray | torch.Tensor | None = None
 
 
 @dataclasses.dataclass

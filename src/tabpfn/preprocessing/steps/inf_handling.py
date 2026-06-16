@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
+import torch
 
 from tabpfn.preprocessing.datamodel import FeatureSchema
 from tabpfn.preprocessing.pipeline_interface import (
@@ -46,7 +47,7 @@ class InfToNanStep(PreprocessingStep):
 
     @override
     def transform(
-        self, X: np.ndarray, *, is_test: bool = True
+        self, X: np.ndarray | torch.Tensor, *, is_test: bool = True
     ) -> PreprocessingStepResult:
         """Record infinite values and replace them with NaN.
 
@@ -57,8 +58,11 @@ class InfToNanStep(PreprocessingStep):
         ``Feature`` objects) is shared across ensemble members preprocessed in
         parallel, so mutating it in place would be a data race.
 
+        Works for both numpy arrays and torch tensors; the recorded ``inf_mask``
+        is of the same kind (and device) as ``X``.
+
         Args:
-            X: 2d array of shape (n_samples, n_features).
+            X: 2d array/tensor of shape (n_samples, n_features).
             is_test: Whether this is a test-time transform. Unused.
 
         Returns:
@@ -66,19 +70,20 @@ class InfToNanStep(PreprocessingStep):
             of the feature schema carrying the recorded ``inf_mask``.
         """
         del is_test
-        bool_mask = np.isinf(X)
+        xp = torch if isinstance(X, torch.Tensor) else np
+        bool_mask = xp.isinf(X)
         new_features = []
         for idx, feat in enumerate(self.feature_schema_updated_.features):
             feature_bool_mask = bool_mask[:, idx]
-            if np.any(feature_bool_mask):
+            if xp.any(feature_bool_mask):
                 new_features.append(
                     dataclasses.replace(
-                        feat, inf_mask=np.where(feature_bool_mask, X[:, idx], 0)
+                        feat, inf_mask=xp.where(feature_bool_mask, X[:, idx], 0)
                     )
                 )
             else:
                 new_features.append(feat)
-        X[bool_mask] = np.nan
+        X[bool_mask] = float("nan")
 
         self._validate_added_data(X_added=None, modality_added=None)
         return PreprocessingStepResult(
@@ -122,7 +127,7 @@ class RestoreInfStep(PreprocessingStep):
 
     @override
     def transform(
-        self, X: np.ndarray, *, is_test: bool = True
+        self, X: np.ndarray | torch.Tensor, *, is_test: bool = True
     ) -> PreprocessingStepResult:
         """Write recorded infinities back into the transformed array.
 
@@ -132,8 +137,12 @@ class RestoreInfStep(PreprocessingStep):
         ``X``; it leaves ``self.feature_schema_updated_`` untouched and returns
         it unchanged.
 
+        Works for both numpy arrays and torch tensors. The recorded ``inf_mask``
+        matches the kind of ``X`` seen by :class:`InfToNanStep`, so the restore
+        indexes ``X`` with a mask of the same kind.
+
         Args:
-            X: 2d array of shape (n_samples, n_features).
+            X: 2d array/tensor of shape (n_samples, n_features).
             is_test: Whether this is a test-time transform. Unused.
 
         Returns:
@@ -143,7 +152,8 @@ class RestoreInfStep(PreprocessingStep):
         for idx, feat in enumerate(self.feature_schema_updated_.features):
             if feat.inf_mask is not None:
                 # TODO: should we store the bool mask or recompute it?
-                bool_mask = np.isinf(feat.inf_mask)
+                xp = torch if isinstance(feat.inf_mask, torch.Tensor) else np
+                bool_mask = xp.isinf(feat.inf_mask)
                 X[bool_mask, idx] = feat.inf_mask[bool_mask]
 
         self._validate_added_data(X_added=None, modality_added=None)

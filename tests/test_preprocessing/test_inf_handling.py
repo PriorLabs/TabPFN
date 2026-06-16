@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -200,6 +201,32 @@ def test__pipeline__round_trip_restores_infinities() -> None:
 
     assert np.isposinf(result.X[0, 1])
     assert np.isneginf(result.X[1, 2])
+
+
+def test__pipeline__round_trip_restores_infinities_torch() -> None:
+    """The passthrough pipeline also round-trips infinities for torch tensors."""
+    X = torch.tensor(
+        [
+            [1.0, float("inf"), 3.0],
+            [4.0, 5.0, float("-inf")],
+            [7.0, 8.0, 9.0],
+            [2.0, 1.0, 0.5],
+        ]
+    )
+    original = X.clone()
+    schema = _numerical_schema(num_features=3)
+    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
+
+    result = pipeline.fit_transform(X.clone(), schema)
+
+    assert isinstance(result.X, torch.Tensor)
+    # The recorded mask is a tensor of the same kind as the data.
+    inf_features = [f for f in result.feature_schema.features if f.inf_mask is not None]
+    assert inf_features
+    assert all(isinstance(f.inf_mask, torch.Tensor) for f in inf_features)
+    assert torch.isposinf(result.X[0, 1])
+    assert torch.isneginf(result.X[1, 2])
+    assert torch.equal(result.X, original)
 
 
 def _preprocessed_X_trains(configs, X_train, y_train) -> list[np.ndarray]:
