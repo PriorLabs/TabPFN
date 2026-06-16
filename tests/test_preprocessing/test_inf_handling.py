@@ -96,13 +96,18 @@ def test__inf_to_nan_step__records_inf_mask_per_feature() -> None:
     )
     schema = _numerical_schema(num_features=3)
 
-    InfToNanStep().fit_transform(X, schema)
+    result = InfToNanStep().fit_transform(X, schema)
 
+    # The mask is recorded on a copy of the schema; the input schema is left
+    # untouched so it stays safe to share across parallel ensemble members.
+    assert all(feat.inf_mask is None for feat in schema.features)
+
+    out_features = result.feature_schema.features
     # Feature 0 and 2 are finite -> no mask.
-    assert schema.features[0].inf_mask is None
-    assert schema.features[2].inf_mask is None
+    assert out_features[0].inf_mask is None
+    assert out_features[2].inf_mask is None
     # Feature 1 has an inf in the first row -> mask records the value, 0 elsewhere.
-    mask = schema.features[1].inf_mask
+    mask = out_features[1].inf_mask
     assert mask is not None
     np.testing.assert_array_equal(mask, np.array([np.inf, 0.0]))
 
@@ -132,12 +137,14 @@ def test__restore_inf_step__restores_recorded_infinities() -> None:
         ]
     )
     original = X.copy()
-    # Share the same schema (hence the same Feature objects) across both steps so
-    # the recorded inf_mask is visible to the restore step.
+    # Thread the schema returned by the nan step (which carries the recorded
+    # inf_mask) into the restore step, mirroring how the pipeline forwards it.
     schema = _numerical_schema(num_features=3)
 
     nan_result = InfToNanStep().fit_transform(X, schema)
-    restore_result = RestoreInfStep().fit_transform(nan_result.X, schema)
+    restore_result = RestoreInfStep().fit_transform(
+        nan_result.X, nan_result.feature_schema
+    )
 
     np.testing.assert_array_equal(restore_result.X, original)
     assert restore_result.X_added is None
