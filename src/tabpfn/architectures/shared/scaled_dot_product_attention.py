@@ -126,8 +126,9 @@ def scaled_dot_product_attention(
     backends = _backends_override if _backends_override is not None else _SDPA_BACKENDS
 
     num_parallel_calls = q_BHSD.shape[:2].numel()
-    torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.
-    torch._check(q_BHSD.shape[0] >= 1)
+    if torch.compiler.is_compiling():
+        torch._check(num_parallel_calls >= 1)  # These checks help torch.compile.
+        torch._check(q_BHSD.shape[0] >= 1)
     CUDA_MAX_GRID = 65536
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations

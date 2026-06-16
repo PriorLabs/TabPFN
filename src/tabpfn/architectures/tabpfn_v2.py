@@ -25,7 +25,6 @@ import pydantic
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from tabpfn.architectures.encoders.steps._ops import (
     select_features,
@@ -40,9 +39,10 @@ from tabpfn.architectures.kv_cache import (
     KVCache,
     KVCacheEntry,
 )
-from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
-from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
+from tabpfn.architectures.shared.scaled_dot_product_attention import (
+    scaled_dot_product_attention,
+)
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 # Indicator values appended to the feature/target encodings to flag the original
@@ -70,13 +70,8 @@ class TabPFNV2Config(ArchitectureConfig):
     """If > 1, the features will be grouped into groups of this size and the attention
     is across groups."""
 
-    seed: int = 42
-    """Seed used to generate the per-column positional embeddings.
-
-    When ``seed == 42`` and the embedding subspace size is 48 (i.e. ``emsize == 192``),
-    the first 2000 columns use the pre-generated embeddings loaded from disk, matching
-    the production checkpoints. For any other seed the embeddings are generated purely
-    from the random generator, which is what the comparison tests rely on."""
+    seed: int = 0
+    """Seed used to generate the per-column positional embeddings."""
 
 
 class Attention(nn.Module, ABC):
@@ -151,7 +146,7 @@ class AlongRowAttention(Attention):
         k_BrCHD = k_flat_BrCHF.view(Br, C, -1, self.head_dim)
         v_BrCHD = v_flat_BrCHF.view(Br, C, -1, self.head_dim)
 
-        output_BrHCD = _batched_scaled_dot_product_attention(q_BrCHD, k_BrCHD, v_BrCHD)
+        output_BrHCD = scaled_dot_product_attention(q_BrCHD, k_BrCHD, v_BrCHD)
         output_BrCF = output_BrHCD.reshape(Br, C, self.head_dim * self.num_heads)
         return self.out_projection(output_BrCF)
 
@@ -222,7 +217,7 @@ class AlongColumnAttention(Attention):
             if k_Bc1.dtype != q_BcRHD.dtype:
                 k_Bc1 = k_Bc1.to(q_BcRHD.dtype)
                 v_Bc1 = v_Bc1.to(q_BcRHD.dtype)
-            output_BcSHD = _batched_scaled_dot_product_attention(q_BcRHD, k_Bc1, v_Bc1)
+            output_BcSHD = scaled_dot_product_attention(q_BcRHD, k_Bc1, v_Bc1)
         else:
             # If no single_eval_pos was specified, then the whole input is training.
             N = R if single_eval_pos is None else single_eval_pos
@@ -230,14 +225,12 @@ class AlongColumnAttention(Attention):
             v_BcNHD = self.v_projection(x_BcRE[:, :N]).view(Bc, N, -1, self.head_dim)
 
             if single_eval_pos == R:
-                output_BcSHD = _batched_scaled_dot_product_attention(
-                    q_BcRHD, k_BcNHD, v_BcNHD
-                )
+                output_BcSHD = scaled_dot_product_attention(q_BcRHD, k_BcNHD, v_BcNHD)
             else:
-                out_train_BcNHD = _batched_scaled_dot_product_attention(
+                out_train_BcNHD = scaled_dot_product_attention(
                     q_BcRHD[:, :N], k_BcNHD, v_BcNHD
                 )
-                out_test_BcMHD = _batched_scaled_dot_product_attention(
+                out_test_BcMHD = scaled_dot_product_attention(
                     q_BcRHD[:, N:], k_BcNHD[:, :, :1], v_BcNHD[:, :, :1]
                 )
                 output_BcSHD = torch.cat([out_train_BcNHD, out_test_BcMHD], dim=1)
@@ -253,70 +246,6 @@ class AlongColumnAttention(Attention):
 
         output_BcSF = output_BcSHD.reshape(Bc, R, self.head_dim * self.num_heads)
         return self.out_projection(output_BcSF), kv_entry
-
-
-def _batched_scaled_dot_product_attention(
-    q_BSHD: torch.Tensor, k_BSJD: torch.Tensor, v_BSJD: torch.Tensor
-) -> torch.Tensor:
-    """Execute scaled dot product attention, chunked over the batch dimension.
-
-    Our between-feature attention can have a large batch size.
-    E.g., for 2048 datapoints, a batch size of 32, and 6 heads,
-    we compute 2048 * 32 * 6 = 393216 attentions.
-    This is larger than the maximum launch grid size of cuda and will raise an error.
-    Thus, we split the inputs into chunks of the maximum batch size, and execute these
-    sequentially.
-    """
-    q_BHSD = q_BSHD.permute(0, 2, 1, 3)
-    k_BJSD = k_BSJD.permute(0, 2, 1, 3)
-    v_BJSD = v_BSJD.permute(0, 2, 1, 3)
-
-    # In the case of multi-query attention, the keys and values will have only one head.
-    # GQA is only supported with fp16/bf16 dtypes - the fused attention kernels
-    # don't support GQA with float32.
-    dtype_supports_gqa = q_BHSD.dtype in {torch.float16, torch.bfloat16}
-    if gqa_is_supported() and dtype_supports_gqa:
-        keys = k_BJSD
-        values = v_BJSD
-        enable_gqa = {"enable_gqa": True}
-    else:
-        # On older GPUs or with float32 dtype, the fused attention kernels don't
-        # support broadcasting, so we manually expand the keys and values to the
-        # same number of heads as the queries.
-        keys = k_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
-        values = v_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
-        enable_gqa = {}
-
-    # Enable backends explicitly to ensure we don't silently fall back to
-    # the math backend, which requires a lot of memory as attention scores
-    # are stored explicitly.
-    backends = [
-        SDPBackend.FLASH_ATTENTION,
-        SDPBackend.EFFICIENT_ATTENTION,
-        SDPBackend.CUDNN_ATTENTION,
-    ]
-    if not torch.cuda.is_available():
-        backends.append(SDPBackend.MATH)
-    num_parallel_calls = q_BHSD.shape[:2].numel()
-    num_iterations = 1
-    CUDA_MAX_GRID = 65536
-    num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
-    sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
-
-    with sdpa_kernel(backends=backends):
-        outputs = []
-        for i in range(num_iterations):
-            outputs.append(
-                torch.nn.functional.scaled_dot_product_attention(
-                    q_BHSD[i * sub_batch : (i + 1) * sub_batch],
-                    keys[i * sub_batch : (i + 1) * sub_batch],
-                    values[i * sub_batch : (i + 1) * sub_batch],
-                    attn_mask=None,
-                    **enable_gqa,
-                )
-            )
-    output_BHSD = outputs[0] if len(outputs) == 1 else torch.cat(outputs)
-    return output_BHSD.permute(0, 2, 1, 3)
 
 
 class LowerPrecisionLayerNorm(torch.nn.LayerNorm):
@@ -623,10 +552,6 @@ class TabPFNV2(Architecture):
             self.input_size // 4, self.input_size
         )
         self.seed = config.seed
-        # Pre-generated column embeddings, persisted to disk so they are consistent
-        # across platforms (random number generation varies between devices even with a
-        # fixed seed). Used for the first 2000 columns of the production checkpoints.
-        self.pre_generated_column_embeddings = load_column_embeddings()
         self._do_encoder_nan_check = True
         # TODO(Phil): This is here to not fail the memory computation. We should make
         # this a proper API.
@@ -667,8 +592,20 @@ class TabPFNV2(Architecture):
         return {p for p in self.blocks.parameters() if p.ndim == 2}
 
     def add_column_embeddings(self, x_BRCX: torch.Tensor) -> torch.Tensor:
-        """Add a random embedding to each column to prevent feature collapse."""
-        generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
+        """Add a random embedding to each column to prevent feature collapse.
+
+        Note: For 2.5 and onwards, we pre-compute the random embeddings since they
+        were always computed with a fixed seed and therefore fixed embeddings. Ideally,
+        we would check if the v2 model suffers from the same behavior. If yes, this
+        requires different embeddings than 2.5 due to using seed=0.
+        """
+        # Tracing for Onnx export can't trace the Generator below, so we use the default
+        # RNG.
+        if torch.jit.is_tracing():
+            generator = None
+            generator = None
+        else:
+            generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
         num_cols, encoding_size = x_BRCX.shape[2], x_BRCX.shape[3]
         embs = torch.randn(
             (num_cols, encoding_size // 4),
@@ -676,16 +613,6 @@ class TabPFNV2(Architecture):
             dtype=x_BRCX.dtype,
             generator=generator,
         )
-        # Random numbers vary between devices, even with a fixed seed. Thus, for the
-        # production checkpoints (seed 42, embedding subspace size 48 == 192 // 4), we
-        # overwrite the first 2000 columns with the pre-generated embeddings loaded from
-        # disk to ensure they are consistent between pretraining and inference. Some
-        # tests use a smaller embedding size or a different seed, in which case we use
-        # the random embeddings.
-        if embs.shape[1] == 48 and self.seed == 42:
-            embs[:2000] = self.pre_generated_column_embeddings[: embs.shape[0]].to(
-                device=embs.device, dtype=embs.dtype
-            )
         embs = self.feature_positional_embedding_embeddings(embs)
         return x_BRCX + embs[None, None]
 
@@ -1062,10 +989,21 @@ def _replace_keys_from_base_architecture(
     """
     n_layers = sum(k.endswith("self_attn_between_features._w_qkv") for k in state_dict)
 
+    # The base encoder's final linear projection lives at ``encoder.{i}.layer`` where
+    # the index ``i`` depends on which preprocessing steps the checkpoint was trained
+    # with (e.g. ``remove_duplicate_features`` adds a step and shifts every later
+    # index). It is the only base encoder step with persistent parameters, so locate it
+    # by name rather than assuming a fixed index.
+    encoder_projection_keys = [
+        key
+        for key in state_dict
+        if key.startswith("encoder.") and key.endswith(".layer.weight")
+    ]
+
     base_to_v2_mapping = [
-        # The base encoder's final linear projection (``encoder.5.layer``) and target
+        # The base encoder's final linear projection (``encoder.{i}.layer``) and target
         # projection (``y_encoder.2.layer``) are now plain ``nn.Linear`` attributes.
-        ("encoder.5.layer.weight", "feature_group_embedder.weight"),
+        *((key, "feature_group_embedder.weight") for key in encoder_projection_keys),
         # regression: target linear projection was at position 1
         ("y_encoder.1.layer.weight", "target_embedder.weight"),
         ("y_encoder.1.layer.bias", "target_embedder.bias"),
