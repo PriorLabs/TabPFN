@@ -24,6 +24,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
     GPUTransformType,
+    make_names_unique,
 )
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
@@ -45,6 +46,39 @@ from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
+
+
+def _build_reshape_output_names(
+    feature_schema: FeatureSchema,
+    *,
+    categorical_features: list[int],
+    n_transformed: int,
+    append_to_original: bool,
+    apply_to_categorical: bool,
+) -> list[str]:
+    """Build unique, output-order names for the reshape step.
+
+    Passthrough columns keep their input names; distribution-transformed columns
+    get generated ``reshape_{k}`` names (a derived feature is named from the
+    transform, not its source). The output column layout mirrors the
+    ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``.
+    """
+    input_names = [
+        f.name if f.name is not None else f"f{i}"
+        for i, f in enumerate(feature_schema.features)
+    ]
+    transformed_names = [f"reshape_{k}" for k in range(n_transformed)]
+    if append_to_original:
+        # Output: [original_all, transformed_copies]
+        output_names = list(input_names) + transformed_names
+    elif apply_to_categorical:
+        # Output: [transformed (cats + nums)]
+        output_names = transformed_names
+    else:
+        # Output: [cats_passthrough, transformed_nums]
+        output_names = [input_names[c] for c in categorical_features]
+        output_names += transformed_names
+    return make_names_unique(output_names)
 
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
@@ -268,6 +302,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         new_schema = FeatureSchema.from_only_categorical_indices(
             categorical_indices=sorted(cat_ix),
             num_columns=n_output_features,
+            names=_build_reshape_output_names(
+                feature_schema,
+                categorical_features=categorical_features,
+                n_transformed=output_multiplier * len(trans_ixs),
+                append_to_original=self.append_to_original_decision_,
+                apply_to_categorical=self.apply_to_categorical,
+            ),
         )
 
         if self.schedule_gpu_transform is not None:

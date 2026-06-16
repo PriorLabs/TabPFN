@@ -39,7 +39,9 @@ def test__detect_feature_modalities_basic():
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
     assert feature_schema.indices_for(FeatureModality.TEXT) == [3]
     assert feature_schema.indices_for(FeatureModality.CONSTANT) == [4]
-    assert feature_schema.feature_names == df.columns.tolist()
+    # Input column names are namespaced with the "input_" prefix so they cannot
+    # collide with names generated for features added by preprocessing steps.
+    assert feature_schema.feature_names == [f"input_{c}" for c in df.columns]
 
 
 @pytest.mark.parametrize(

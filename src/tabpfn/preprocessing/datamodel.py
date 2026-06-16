@@ -15,6 +15,68 @@ if TYPE_CHECKING:
     import torch
 
 
+#: Prefix applied to feature names derived from the input data (DataFrame columns
+#: or positional ``f{i}`` names for plain arrays). Namespacing input-derived names
+#: keeps them from colliding with names generated for features that preprocessing
+#: steps add (e.g. ``svd_0``, ``fingerprint``), so the full schema can stay unique
+#: by construction without runtime checks.
+INPUT_FEATURE_PREFIX = "input_"
+
+
+def make_names_unique(
+    names: Iterable[str],
+    *,
+    existing: Iterable[str] = (),
+) -> list[str]:
+    """Return ``names`` made unique w.r.t. each other and ``existing``.
+
+    Collisions are resolved deterministically by appending ``_1``, ``_2``, ...
+    until the name is free. This is the single mechanism used to guarantee
+    feature-name uniqueness by construction (see module-level naming docs).
+
+    Args:
+        names: The candidate names, in order.
+        existing: Names already in use that the result must not collide with.
+
+    Returns:
+        A list the same length as ``names`` with all entries distinct and
+        distinct from ``existing``.
+    """
+    seen: set[str] = set(existing)
+    out: list[str] = []
+    for name in names:
+        candidate = name
+        suffix = 1
+        while candidate in seen:
+            candidate = f"{name}_{suffix}"
+            suffix += 1
+        seen.add(candidate)
+        out.append(candidate)
+    return out
+
+
+def build_input_feature_names(
+    feature_names: list[str] | None,
+    num_features: int,
+) -> list[str]:
+    """Build unique names for the original input features.
+
+    Args:
+        feature_names: Names of the input columns (e.g. from a DataFrame), or
+            ``None`` when the input was a plain array with no column names.
+        num_features: Number of input features.
+
+    Returns:
+        For DataFrame input, each column name prefixed with
+        :data:`INPUT_FEATURE_PREFIX` and de-duplicated (pandas allows duplicate
+        column names). For array input, positional ``f0``, ``f1``, ... names.
+    """
+    if feature_names is None:
+        return [f"f{i}" for i in range(num_features)]
+    prefixed = [f"{INPUT_FEATURE_PREFIX}{name}" for name in feature_names]
+    return make_names_unique(prefixed)
+
+
 class FeatureModality(str, Enum):
     """The modality of a feature.
 
@@ -58,7 +120,7 @@ class Feature:
             enabled. Same kind (and device) as the data. Defaults to None.
     """
 
-    name: str | None
+    name: str
     modality: FeatureModality
     scheduled_gpu_transform: GPUTransformType | None = None
     inf_mask: np.ndarray | torch.Tensor | None = None
@@ -84,12 +146,20 @@ class FeatureSchema:
         cls,
         categorical_indices: list[int],
         num_columns: int,
+        names: list[str] | None = None,
     ) -> FeatureSchema:
         """Create FeatureSchema from only categorical indices.
 
         This is used for backwards compatibility with the old preprocessing pipeline
         that only tracked categorical indices. All columns that are not categorical
         are assumed to be numerical.
+
+        Args:
+            categorical_indices: Output column indices that are categorical.
+            num_columns: Total number of output columns.
+            names: Names for the output columns (in output order). If ``None``,
+                positional ``f{i}`` names are generated. Callers that reorder
+                columns are responsible for passing names already in output order.
         """
         numerical_indices = [
             i for i in range(num_columns) if i not in categorical_indices
@@ -97,11 +167,19 @@ class FeatureSchema:
         if not numerical_indices and not categorical_indices:
             return cls(features=[])
 
+        chosen_names = [f"f{i}" for i in range(num_columns)] if names is None else names
+        if len(chosen_names) != num_columns:
+            raise ValueError(f"Expected {num_columns} names, got {len(chosen_names)}")
+
         features: list[Feature | None] = [None] * num_columns
         for idx in categorical_indices:
-            features[idx] = Feature(name=None, modality=FeatureModality.CATEGORICAL)
+            features[idx] = Feature(
+                name=chosen_names[idx], modality=FeatureModality.CATEGORICAL
+            )
         for idx in numerical_indices:
-            features[idx] = Feature(name=None, modality=FeatureModality.NUMERICAL)
+            features[idx] = Feature(
+                name=chosen_names[idx], modality=FeatureModality.NUMERICAL
+            )
 
         return cls(features=features)  # type: ignore[arg-type]
 
@@ -109,6 +187,11 @@ class FeatureSchema:
     def feature_names(self) -> list[str | None]:
         """Get list of feature names (derived from features list)."""
         return [f.name for f in self.features]
+
+    @property
+    def feature_name_set(self) -> set[str]:
+        """Set of non-``None`` feature names currently in use."""
+        return {f.name for f in self.features if f.name is not None}
 
     @property
     def num_columns(self) -> int:
@@ -165,23 +248,37 @@ class FeatureSchema:
         modality: FeatureModality,
         num_new: int,
         names: list[str] | None = None,
+        *,
+        name_prefix: str | None = None,
     ) -> FeatureSchema:
         """Return new schema with additional columns appended.
+
+        Appended names are made unique against the names already in this schema,
+        so features added by preprocessing steps never collide with input
+        features or with each other.
 
         Args:
             modality: The modality for the new columns.
             num_new: Number of new columns to add.
-            names: Names for the new columns. If None, uses "added_0", "added_1", ...
+            names: Explicit names for the new columns. If ``None``, names are
+                generated as ``"{name_prefix}_{i}"``.
+            name_prefix: Prefix used to generate names when ``names`` is ``None``.
+                Defaults to ``"added"``. Should identify the producing transform
+                (e.g. ``"svd"``, ``"fingerprint"``) so generated names are
+                self-describing.
 
         Returns:
             New FeatureSchema instance with added features.
         """
-        chosen_names = [None] * num_new if names is None else names
-        if len(chosen_names) != num_new:
-            raise ValueError(f"Expected {num_new} names, got {len(chosen_names)}")
+        if names is None:
+            prefix = name_prefix or "added"
+            names = [f"{prefix}_{i}" for i in range(num_new)]
+        if len(names) != num_new:
+            raise ValueError(f"Expected {num_new} names, got {len(names)}")
 
+        unique_names = make_names_unique(names, existing=self.feature_name_set)
         new_features = self.features + [
-            Feature(name=name, modality=modality) for name in chosen_names
+            Feature(name=name, modality=modality) for name in unique_names
         ]
         return FeatureSchema(features=new_features)
 

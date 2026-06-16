@@ -64,6 +64,14 @@ class TorchPreprocessingStep(abc.ABC):
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}"
 
+    def added_feature_prefix(self) -> str:
+        """Name prefix for features this step appends via ``added_columns``.
+
+        Mirrors :meth:`PreprocessingStep.added_feature_prefix` on the CPU side so
+        appended columns get self-describing, unique names.
+        """
+        return self.__class__.__name__
+
     @abc.abstractmethod
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit on the selected columns (training rows only) and return a cache.
@@ -207,6 +215,7 @@ class TorchPreprocessingPipeline:
                 feature_schema = feature_schema.append_columns(
                     result.added_modality or FeatureModality.NUMERICAL,
                     result.added_columns.shape[-1],
+                    name_prefix=step.added_feature_prefix(),
                 )
 
             if result.schema_permutation is not None:

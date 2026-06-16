@@ -665,7 +665,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "Categorical features are not supported for differentiable input."
             )
         n_features = X.shape[1]
-        features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
+        features = [
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(n_features)
+        ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 

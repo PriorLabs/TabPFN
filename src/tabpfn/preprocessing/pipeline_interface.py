@@ -193,6 +193,15 @@ class PreprocessingStep:
         del n_samples, feature_schema
         return 0
 
+    def added_feature_prefix(self) -> str:
+        """Name prefix for features this step appends via ``X_added``.
+
+        Used by the pipeline to generate self-describing, unique names for
+        appended columns (e.g. ``svd_0``). Steps that add features should
+        override this with a short identifier of the transform.
+        """
+        return self.__class__.__name__
+
     def has_data_dependent_feature_expansion(self) -> bool:
         """Return True if this step's feature expansion depends on data values.
 
@@ -386,7 +395,7 @@ class PreprocessingPipeline:
                 X[:, indices] = result.X
 
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result
+                    X, feature_schema, result, step
                 )
                 feature_schema = feature_schema.update_from_preprocessing_step_result(
                     indices, result.feature_schema
@@ -403,7 +412,7 @@ class PreprocessingPipeline:
                 X = result.X
                 feature_schema = result.feature_schema
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result
+                    X, feature_schema, result, step
                 )
 
             if self.record_timings:
@@ -429,6 +438,7 @@ class PreprocessingPipeline:
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
         result: PreprocessingStepResult,
+        step: PreprocessingStep,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Append added columns from a step result and update schema."""
         if result.X_added is not None:
@@ -440,6 +450,7 @@ class PreprocessingPipeline:
             feature_schema = feature_schema.append_columns(
                 result.modality_added or FeatureModality.NUMERICAL,
                 result.X_added.shape[1],
+                name_prefix=step.added_feature_prefix(),
             )
         return X, feature_schema
 

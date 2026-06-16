@@ -150,6 +150,10 @@ class AddFingerprintFeaturesStep(PreprocessingStep):
         del n_samples, feature_schema
         return 1
 
+    @override
+    def added_feature_prefix(self) -> str:
+        return "fingerprint"
+
 
 __all__ = [
     "AddFingerprintFeaturesStep",

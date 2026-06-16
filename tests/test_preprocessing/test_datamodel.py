@@ -86,7 +86,9 @@ class TestFeatureSchemaAddColumns:
         new_schema = schema.append_columns(FeatureModality.CATEGORICAL, num_new=2)
 
         assert new_schema.num_columns == 3
-        assert new_schema.feature_names == ["a", None, None]
+        # Without explicit names or a prefix, appended columns get unique
+        # generated names rather than ``None``.
+        assert new_schema.feature_names == ["a", "added_0", "added_1"]
         assert new_schema.indices_for(FeatureModality.NUMERICAL) == [0]
         assert new_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
 
