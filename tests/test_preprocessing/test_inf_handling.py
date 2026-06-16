@@ -294,6 +294,47 @@ def test__restore_inf_step__keeps_inf_mask_on_fitted_schema_for_predict() -> Non
     assert np.isneginf(restored.X[1, 2])
 
 
+def test__pipeline__predict_restores_test_inf_pattern_not_train() -> None:
+    """Predict-time restoration must use the test data's infinities, not train's.
+
+    Known-failing regression test (CI stays red until the bug is fixed):
+    ``RestoreInfStep.transform`` restores from its fitted
+    ``feature_schema_updated_`` (the *train* mask), because ``transform(X)`` has
+    no access to the per-pass schema ``InfToNanStep`` threads forward. So for a
+    test set whose inf pattern differs from train, the test infinities are NaN'd
+    and never restored, while infinities are fabricated at the train positions.
+
+    See ``examples/pri_inf_predict_mre.py``.
+    """
+    schema = _numerical_schema(num_features=3)
+    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
+
+    # Fit: inf at [0, 1].
+    X_train = np.array(
+        [
+            [1.0, np.inf, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+        ]
+    )
+    pipeline.fit_transform(X_train.copy(), schema)
+
+    # Predict: a different inf pattern -- inf at [2, 0].
+    X_test = np.array(
+        [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [np.inf, 8.0, 9.0],
+        ]
+    )
+    result = pipeline.transform(X_test.copy())
+
+    # The test infinity must survive the round-trip ...
+    assert np.isposinf(result.X[2, 0])
+    # ... and no infinity should be fabricated at the train position.
+    assert not np.isinf(result.X[0, 1])
+
+
 def _preprocessed_X_trains(configs, X_train, y_train) -> list[np.ndarray]:
     """Run the ensemble preprocessor and return each member's preprocessed X_train."""
     feature_schema = FeatureSchema.from_only_categorical_indices([], X_train.shape[1])
