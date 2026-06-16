@@ -8,11 +8,16 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sklearn.compose import ColumnTransformer, make_column_selector
+from sklearn.preprocessing import FunctionTransformer, OrdinalEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
-from tabpfn.preprocessing.clean import process_text_na_dataframe
+from tabpfn.preprocessing.clean import (
+    _encoded_column_positions,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.validation import ensure_compatible_fit_inputs
@@ -724,3 +729,46 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
     # encode to a valid (non-negative) code; the non-numeric "abc" -> NaN -> unknown.
     assert out[0, 1] == -1
     assert (out[1:, 1] >= 0).all()
+
+
+def test__process_text_na_dataframe__restores_infs_when_encoder_reorders() -> None:
+    """+/-inf is restored at the encoded position even if the encoder reorders cols.
+
+    A plain ``ColumnTransformer`` emits the encoded (string) columns first and the
+    numeric remainder last, so the numeric columns carrying the infinities move. The
+    restore must target their post-encoding positions, not their input positions.
+    """
+    X = pd.DataFrame(
+        {
+            "num_a": pd.array([1.0, np.inf, 3.0], dtype="float64"),
+            "str_b": pd.array(["x", "y", "x"], dtype="string"),
+            "num_c": pd.array([10.0, 20.0, -np.inf], dtype="float64"),
+        }
+    )
+    # Plain (reordering) ColumnTransformer: encoded columns are placed before the
+    # passthrough remainder, unlike the order-preserving production encoder.
+    encoder = ColumnTransformer(
+        transformers=[
+            (
+                "encoder",
+                OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1),
+                make_column_selector(dtype_include=["category", "string"]),
+            )
+        ],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+        verbose_feature_names_out=False,
+    )
+
+    out = process_text_na_dataframe(
+        X.copy(), ord_encoder=encoder, fit_encoder=True, passthrough_inf=True
+    )
+
+    pos = _encoded_column_positions(encoder, X.columns)
+    # The string column is reordered to the front, numeric columns to the back.
+    assert pos["str_b"] == 0
+    assert {pos["num_a"], pos["num_c"]} == {1, 2}
+    # Infinities land in the numeric columns at their reordered output positions.
+    assert np.isposinf(out[1, pos["num_a"]])
+    assert np.isneginf(out[2, pos["num_c"]])
+    assert not np.isinf(out[:, pos["str_b"]]).any()
