@@ -59,7 +59,8 @@ dev = [
   {include-group = "ci"},
   # Lint/format
   "pre-commit>=4.3.0",
-  "ruff==0.15.12", # This version must be the same as in .pre-commit-config.yaml
+  # This version must be the same as in [tool.ruff] below and in .pre-commit-config.yaml
+  "ruff==0.15.12",
   "mypy==1.19.1", # This version must be the same as in .pre-commit-config.yaml
   # Test
   "pytest-xdist>=3.8.0",
@@ -90,7 +91,7 @@ ci = [
 
 [tool.uv]
 exclude-newer = "7 days"
-exclude-newer-package = {torch = false} 
+exclude-newer-package = {torch = false}
 
 [tool.setuptools.package-data]
 "tabpfn.architectures.shared" = ["tabpfn_col_embedding.pt"]
@@ -110,6 +111,8 @@ markers = [
 
 # https://github.com/charliermarsh/ruff
 [tool.ruff]
+# Must be the same version as in [dependency-groups] above and .pre-commit-config.yaml
+required-version = "==0.15.12"
 target-version = "py310"
 line-length = 88
 output-format = "full"
