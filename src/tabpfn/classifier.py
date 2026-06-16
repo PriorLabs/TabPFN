@@ -209,6 +209,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         *,
         n_estimators: int = 8,
         auto_scale_n_estimators: bool = True,
+        ensemble_batch_size: int | None = None,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -270,6 +271,15 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 categorical. If `None`, the model will infer the categorical columns.
                 If provided, we might ignore some of the suggestion to better fit the
                 data seen during pre-training.
+
+            ensemble_batch_size:
+                Batch compatible ensemble members together during single-device
+                prediction. This reduces the number of forward passes needed for
+                `n_estimators > 1` in `low_memory` or `fit_preprocessors` mode.
+
+                - If `None`, estimators are evaluated one-by-one.
+                - If an int, up to that many compatible ensemble members are evaluated
+                  in one forward pass on a single device.
 
                 !!! note
                     The indices are 0-based and should represent the data passed to
@@ -487,6 +497,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         super().__init__()
         self.n_estimators = n_estimators
         self.auto_scale_n_estimators = auto_scale_n_estimators
+        self.ensemble_batch_size = ensemble_batch_size
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -856,6 +867,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            ensemble_batch_size=self.ensemble_batch_size,
             inference_mode=True,
             keep_cache_on_device=self.keep_cache_on_device,
         )
@@ -933,11 +945,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         return self
 
-    def predict_proba_batched(
+    def predict_proba_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
         y_train_list: list[YType],
         X_test_list: list[XType],
+        *,
+        fuse_estimators: bool = False,
     ) -> np.ndarray:
         """Predict probabilities for several independent datasets in one pass.
 
@@ -962,6 +976,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X_train_list: Training features, one array per dataset (all same shape).
             y_train_list: Training labels, one array per dataset.
             X_test_list: Test features, one array per dataset (all same shape).
+            fuse_estimators: If True, also batch ensemble members across datasets
+                (one forward per distinct member shape) and average over estimators
+                per dataset, capped at ``ensemble_batch_size`` members per forward.
 
         Returns:
             Probabilities of shape ``(n_datasets, n_test, n_classes)``.
@@ -1049,6 +1066,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # preprocessing).
         worker.fit_mode = "fit_preprocessors"
         items = []
+        # fuse_estimators: collect every (dataset, estimator) member flat (dataset-
+        # major) so same-shaped members can be batched into one forward across BOTH
+        # datasets and estimators, instead of one forward per estimator.
+        flat_xc, flat_xq, flat_yc, flat_cat, flat_cfg = [], [], [], [], []
         for X, y, X_test in zip(X_train_list, y_train_list, X_test_list, strict=True):
             # Standard fit on the clone: builds the ensemble preprocessor + configs,
             # caches the fitted members on the executor, and sets classes_/n_classes_
@@ -1093,6 +1114,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     schema.indices_for(FeatureModality.CATEGORICAL) or []
                 )
             n_test = x_query[0].shape[0]
+            flat_xc.extend(x_context)
+            flat_xq.extend(x_query)
+            flat_yc.extend(y_context)
+            flat_cat.extend(cat_indices)
+            flat_cfg.extend(worker.ensemble_configs_)
             items.append(
                 ClassifierBatch(
                     X_context=x_context,
@@ -1103,6 +1129,49 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     configs=worker.ensemble_configs_,
                 )
             )
+
+        if fuse_estimators:
+            # Fuse BOTH axes: members differ in feature count (feature subsampling),
+            # so group same-shaped members and run one forward per group (batching
+            # across datasets AND estimators), then average over the estimator axis
+            # per dataset. ``ensemble_batch_size`` caps members per forward.
+            import collections  # noqa: PLC0415
+
+            n_datasets = len(X_train_list)
+            n_est = len(flat_cfg) // n_datasets
+            n_test = flat_xq[0].shape[0]
+            probs = np.zeros(
+                (n_test, n_datasets, n_est, worker.n_classes_), dtype=np.float64
+            )
+            cap = worker.ensemble_batch_size
+            groups = collections.defaultdict(list)
+            for idx in range(len(flat_xc)):
+                key = (tuple(flat_xc[idx].shape), tuple(flat_xq[idx].shape))
+                groups[key].append(idx)
+            worker.fit_mode = "batched"
+            for idxs in groups.values():
+                chunks = (
+                    [idxs[i : i + cap] for i in range(0, len(idxs), cap)]
+                    if cap and cap >= 1
+                    else [idxs]
+                )
+                for chunk in chunks:
+                    worker.fit_from_preprocessed(
+                        [torch.stack([flat_xc[i] for i in chunk])],
+                        [torch.stack([flat_yc[i] for i in chunk])],
+                        [[flat_cat[i] for i in chunk]],
+                        [[flat_cfg[i] for i in chunk]],
+                        performance_options=PerformanceOptions(),
+                    )
+                    o = worker.forward(
+                        [torch.stack([flat_xq[i] for i in chunk])],
+                        use_inference_mode=True,
+                    )
+                    o = o.detach().float().cpu().numpy()  # (n_test, |chunk|, n_cls)
+                    for j, i in enumerate(chunk):
+                        probs[:, i // n_est, i % n_est, :] = o[:, j, :]
+            out = probs.mean(axis=2)  # (n_test, n_datasets, n_classes)
+            return np.transpose(out, (1, 0, 2))
 
         batch = meta_dataset_collator(items)
         # The clone now drives the batched executor; set the mode so
@@ -1714,7 +1783,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             if original_ndim == 2:
                 # Shape is [Nsamples, NClasses] -> [Nsamples, 1,  NClasses]
                 processed_output = output.unsqueeze(1)
-                config_list = [config]
+                config_list = config if isinstance(config, list) else [config]
             elif original_ndim == 3:
                 # Shape is [Nsamples, batch_size, NClasses]
                 processed_output = output
@@ -1745,7 +1814,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
                     output_batch.append(processed_output[:, i, use_perm])
 
-            outputs.append(torch.stack(output_batch, dim=1))
+            if is_batched_inference:
+                # Dataset-batched inference: the batch dim is independent datasets,
+                # kept stacked per estimator (averaged over estimators per dataset
+                # downstream). Differs from #906's ensemble batching, where the
+                # batch dim is estimators flattened to average over.
+                outputs.append(torch.stack(output_batch, dim=1))
+            else:
+                outputs.extend(output_batch)
 
         # --- Post-processing ---
         stacked_outputs = torch.stack(outputs)
@@ -1764,11 +1840,20 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if output.ndim > 2 and use_inference_mode and not is_batched_inference:
             output = output.squeeze(1) if not return_raw_logits else output.squeeze(2)
 
-        if not use_inference_mode:
-            # This case is primarily for fine-tuning where NLLLoss expects [B, C, N]
-            if output.ndim == 2:  # was likely [N, C]
-                output = output.unsqueeze(0)  # [1, N, C]
-            output = output.transpose(0, 1).transpose(1, 2)
+        if not use_inference_mode and return_raw_logits:
+            # Fine-tuning consumes raw logits as [Q, B, E, L]. The batched
+            # engine currently emits [E, Q, L] after selecting B=1.
+            if output.ndim == 3:
+                output = output.permute(1, 0, 2).unsqueeze(1)
+            elif output.ndim == 4:
+                output = output.permute(1, 2, 0, 3)
+        elif not use_inference_mode:
+            # This case is primarily for fine-tuning where NLLLoss expects
+            # [B, C, N]. The batched engine emits averaged [N, C].
+            if output.ndim == 2:
+                output = output.T.unsqueeze(0)
+            elif output.ndim == 3:
+                output = output.permute(1, 2, 0)
 
         return output
 

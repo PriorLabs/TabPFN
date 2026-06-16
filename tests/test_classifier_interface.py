@@ -409,6 +409,48 @@ def test_predict_raw_logits(
         )
 
 
+def test_predict_outputs_match_with_ensemble_batching(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = X_y
+    y = y.astype(np.int64)
+
+    sequential = TabPFNClassifier(
+        n_estimators=5,
+        fit_mode="fit_preprocessors",
+        random_state=42,
+    )
+    batched = TabPFNClassifier(
+        n_estimators=5,
+        ensemble_batch_size=2,
+        fit_mode="fit_preprocessors",
+        random_state=42,
+    )
+
+    sequential.fit(X, y)
+    batched.fit(X, y)
+
+    np.testing.assert_allclose(
+        sequential.predict_proba(X),
+        batched.predict_proba(X),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        sequential.predict_logits(X),
+        batched.predict_logits(X),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        sequential.predict_raw_logits(X),
+        batched.predict_raw_logits(X),
+        atol=1e-3,
+        rtol=1e-5,
+    )
+    np.testing.assert_array_equal(sequential.predict(X), batched.predict(X))
+
+
 def test_multiple_models_predict_different_logits(X_y: tuple[np.ndarray, np.ndarray]):
     """Tests the predict_raw_logits method."""
     X, y = X_y
