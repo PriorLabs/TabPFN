@@ -12,6 +12,8 @@ verify it holds end-to-end across the preprocessing pipeline presets.
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Iterator
 from typing import Literal
 
 import numpy as np
@@ -42,6 +44,28 @@ def assert_unique_feature_names(schema: FeatureSchema) -> None:
         f"schema has duplicate feature names: "
         f"{[n for n in set(names) if names.count(n) > 1]}"
     )
+
+
+@contextlib.contextmanager
+def assert_every_schema_unique() -> Iterator[None]:
+    """Validate uniqueness on *every* ``FeatureSchema`` built within the block.
+
+    The preprocessing pipeline threads a single schema through its steps, and
+    every intermediate schema is produced via the ``FeatureSchema`` constructor.
+    Wrapping the constructor for the duration of the block therefore asserts the
+    invariant after *each* step (and sub-step), not just on the final output.
+    """
+    original_init = FeatureSchema.__init__
+
+    def validating_init(self: FeatureSchema, *args: object, **kwargs: object) -> None:
+        original_init(self, *args, **kwargs)  # type: ignore[arg-type]
+        assert_unique_feature_names(self)
+
+    FeatureSchema.__init__ = validating_init  # type: ignore[method-assign]
+    try:
+        yield
+    finally:
+        FeatureSchema.__init__ = original_init  # type: ignore[method-assign]
 
 
 # --------------------------------------------------------------------------- #
@@ -223,7 +247,11 @@ def test__pipeline_output_has_unique_feature_names(
     add_fingerprint: bool,
     polynomial_features: Literal["no", "all"],
 ) -> None:
-    """The schema after a full preprocessing pipeline has unique names."""
+    """Every schema built by a full preprocessing pipeline has unique names.
+
+    Validation runs after *each* step (via the constructor hook), at both fit
+    and predict time, not only on the final output.
+    """
     rng = np.random.default_rng(RANDOM_STATE)
     df = _mixed_dataframe(rng)
     X, schema = _schema_from_dataframe(df)
@@ -235,10 +263,15 @@ def test__pipeline_output_has_unique_feature_names(
         polynomial_features=polynomial_features,
     )
     pipeline = create_preprocessing_pipeline(config, random_state=RANDOM_STATE)
-    result = pipeline.fit_transform(X, schema)
+
+    X_test = _mixed_dataframe(rng).to_numpy(dtype=np.float64)
+    with assert_every_schema_unique():
+        result = pipeline.fit_transform(X, schema)
+        transform_result = pipeline.transform(X_test)
 
     assert_unique_feature_names(result.feature_schema)
     assert result.feature_schema.num_columns == result.X.shape[1]
+    assert transform_result.feature_schema.num_columns == transform_result.X.shape[1]
 
 
 def test__duplicate_input_columns_are_disambiguated() -> None:
