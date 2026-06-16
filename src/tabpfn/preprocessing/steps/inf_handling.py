@@ -141,25 +141,37 @@ class RestoreInfStep(PreprocessingStep):
         matches the kind of ``X`` seen by :class:`InfToNanStep`, so the restore
         indexes ``X`` with a mask of the same kind.
 
+        The ``inf_mask`` is dropped from the *returned* schema once the
+        infinities are back in ``X``: nothing downstream needs it, and leaving it
+        in place would pin the (potentially GPU) mask arrays for the lifetime of
+        every consumer of the pipeline output. ``self.feature_schema_updated_``
+        intentionally keeps the mask, as it is the restoration source reused on
+        subsequent ``transform`` (predict) calls.
+
         Args:
             X: 2d array/tensor of shape (n_samples, n_features).
             is_test: Whether this is a test-time transform. Unused.
 
         Returns:
-            PreprocessingStepResult with infinities restored.
+            PreprocessingStepResult with infinities restored and an ``inf_mask``
+            free feature schema.
         """
         del is_test
+        new_features = []
         for idx, feat in enumerate(self.feature_schema_updated_.features):
             if feat.inf_mask is not None:
                 # TODO: should we store the bool mask or recompute it?
                 xp = torch if isinstance(feat.inf_mask, torch.Tensor) else np
                 bool_mask = xp.isinf(feat.inf_mask)
                 X[bool_mask, idx] = feat.inf_mask[bool_mask]
+                new_features.append(dataclasses.replace(feat, inf_mask=None))
+            else:
+                new_features.append(feat)
 
         self._validate_added_data(X_added=None, modality_added=None)
         return PreprocessingStepResult(
             X=X,
-            feature_schema=self.feature_schema_updated_,
+            feature_schema=FeatureSchema(features=new_features),
             X_added=None,
             modality_added=None,
         )

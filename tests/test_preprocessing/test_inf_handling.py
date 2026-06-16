@@ -203,6 +203,20 @@ def test__pipeline__round_trip_restores_infinities() -> None:
     assert np.isneginf(result.X[1, 2])
 
 
+def test__inf_to_nan_step__records_tensor_inf_mask_for_torch_input() -> None:
+    """The recorded ``inf_mask`` is a tensor when the data is a torch tensor."""
+    X = torch.tensor([[1.0, float("inf"), 3.0], [4.0, 5.0, float("-inf")]])
+    schema = _numerical_schema(num_features=3)
+
+    result = InfToNanStep().fit_transform(X.clone(), schema)
+
+    masks = [
+        f.inf_mask for f in result.feature_schema.features if f.inf_mask is not None
+    ]
+    assert len(masks) == 2
+    assert all(isinstance(m, torch.Tensor) for m in masks)
+
+
 def test__pipeline__round_trip_restores_infinities_torch() -> None:
     """The passthrough pipeline also round-trips infinities for torch tensors."""
     X = torch.tensor(
@@ -220,13 +234,64 @@ def test__pipeline__round_trip_restores_infinities_torch() -> None:
     result = pipeline.fit_transform(X.clone(), schema)
 
     assert isinstance(result.X, torch.Tensor)
-    # The recorded mask is a tensor of the same kind as the data.
-    inf_features = [f for f in result.feature_schema.features if f.inf_mask is not None]
-    assert inf_features
-    assert all(isinstance(f.inf_mask, torch.Tensor) for f in inf_features)
     assert torch.isposinf(result.X[0, 1])
     assert torch.isneginf(result.X[1, 2])
     assert torch.equal(result.X, original)
+
+
+def test__pipeline__output_schema_has_no_inf_mask() -> None:
+    """The pipeline output schema carries no ``inf_mask`` (no leaked references).
+
+    ``RestoreInfStep`` writes the infinities back into ``X`` and then drops the
+    recorded masks from the schema it returns, so nothing downstream pins the
+    (potentially GPU) mask arrays.
+    """
+    X = np.array(
+        [
+            [1.0, np.inf, 3.0],
+            [4.0, 5.0, -np.inf],
+            [7.0, 8.0, 9.0],
+        ]
+    )
+    schema = _numerical_schema(num_features=3)
+    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
+
+    result = pipeline.fit_transform(X.copy(), schema)
+
+    # Sanity check the masks were actually recorded (otherwise this is vacuous).
+    assert np.isposinf(result.X[0, 1])
+    assert all(feat.inf_mask is None for feat in result.feature_schema.features)
+    assert pipeline.final_feature_schema_ is not None
+    assert all(
+        feat.inf_mask is None for feat in pipeline.final_feature_schema_.features
+    )
+
+
+def test__restore_inf_step__keeps_inf_mask_on_fitted_schema_for_predict() -> None:
+    """The fitted ``RestoreInfStep`` retains its mask (restoration source at predict).
+
+    Only the *returned* schema is cleared; ``feature_schema_updated_`` keeps the
+    mask so repeated ``transform`` (predict) calls can still restore infinities.
+    """
+    X = np.array([[1.0, np.inf, 3.0], [4.0, 5.0, -np.inf], [7.0, 8.0, 9.0]])
+    schema = _numerical_schema(num_features=3)
+    restore = RestoreInfStep()
+    pipeline = PreprocessingPipeline([InfToNanStep(), restore])
+
+    pipeline.fit_transform(X.copy(), schema)
+
+    retained = [
+        feat.inf_mask
+        for feat in restore.feature_schema_updated_.features
+        if feat.inf_mask is not None
+    ]
+    assert len(retained) == 2
+
+    # The retained mask still drives restoration on a subsequent transform call.
+    nan_test = np.array([[np.nan, 1.0, 2.0], [3.0, 4.0, np.nan], [5.0, 6.0, 7.0]])
+    restored = pipeline.transform(nan_test.copy())
+    assert np.isposinf(restored.X[0, 1])
+    assert np.isneginf(restored.X[1, 2])
 
 
 def _preprocessed_X_trains(configs, X_train, y_train) -> list[np.ndarray]:
