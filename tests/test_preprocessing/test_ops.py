@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
+from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean, torch_nanstd
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float64])
@@ -21,6 +21,22 @@ def test__torch_nanmean__basic(dtype: torch.dtype):
 
     x_all_nan = torch.tensor([torch.nan, torch.nan], dtype=dtype)
     assert torch.isclose(torch_nanmean(x_all_nan), torch.tensor(0.0, dtype=dtype))
+
+
+def test__torch_nanstd__basic():
+    """Tests that torch_nanstd correctly calculates std and edge cases."""
+    x = torch.tensor([1, 2, 3, 4], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x), torch.std(x))
+
+    x_nan = torch.tensor([1, 2, torch.nan, 4], dtype=torch.float32)
+    expected_std = torch.std(torch.tensor([1, 2, 4], dtype=torch.float32))
+    assert torch.isclose(torch_nanstd(x_nan), expected_std)
+
+    x_single_valid = torch.tensor([torch.nan, 3, torch.nan], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x_single_valid), torch.tensor(0.0))
+
+    x_constant = torch.tensor([5, 5, 5, 5], dtype=torch.float32)
+    assert torch.isclose(torch_nanstd(x_constant), torch.tensor(0.0))
 
 
 def test__select_features__all_selected():
