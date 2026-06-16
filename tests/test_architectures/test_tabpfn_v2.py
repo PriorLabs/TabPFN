@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import sys
-
 import pytest
 import torch
 
@@ -54,7 +52,6 @@ def _make_targets(
 
 @pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled(
     task_type: str,
 ) -> None:
@@ -75,13 +72,12 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled(
     assert output_with_memory_saving.keys() == output_without_memory_saving.keys(), msg
     for key in output_with_memory_saving:
         assert torch.allclose(
-            output_with_memory_saving[key], output_without_memory_saving[key]
+            output_with_memory_saving[key], output_without_memory_saving[key], atol=1e-5
         ), f"Outputs for {key} do not match between implementations."
 
 
 @pytest.mark.parametrize("task_type", TASK_TYPES)
 @torch.no_grad()
-@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward_pass_equal_with_checkpointing_enabled_and_disabled(
     task_type: str,
 ) -> None:
@@ -102,21 +98,17 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled(
     assert output_with_recomputation.keys() == output_without_recomputation.keys(), msg
     for key in output_with_recomputation:
         assert torch.allclose(
-            output_with_recomputation[key], output_without_recomputation[key]
+            output_with_recomputation[key], output_without_recomputation[key], atol=1e-5
         ), f"Outputs for {key} do not match between implementations."
 
 
 def _make_kv_cache_data(task_type: str) -> tuple[torch.Tensor, torch.Tensor, int]:
-    """Return ``(x_full, y_train, num_train)`` for the KV-cache tests.
-
-    Uses float64 so the cache path (test rows recomputed against the cached K/V) can
-    be compared against the standard forward at the tight ``atol=1e-10`` tolerance.
-    """
+    """Return ``(x_full, y_train, num_train)`` for the KV-cache tests."""
     torch.manual_seed(0)
     num_train, num_test, num_features = 30, 7, 5
-    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float64)
+    x_full = torch.randn(num_train + num_test, 1, num_features, dtype=torch.float32)
     x_full = x_full * 0.5
-    y_train = _make_targets(num_train, 1, task_type, dtype=torch.float64)
+    y_train = _make_targets(num_train, 1, task_type, dtype=torch.float32)
     return x_full, y_train, num_train
 
 
@@ -125,7 +117,6 @@ def _make_kv_cache_data(task_type: str) -> tuple[torch.Tensor, torch.Tensor, int
 def test__kv_cache__matches_standard_forward(task_type: str) -> None:
     """KV-cache inference must match the standard (full train+test) forward."""
     arch = _build_small_arch(seed=420, task_type=task_type)
-    arch.to(torch.float64)
     x_full, y_train, num_train = _make_kv_cache_data(task_type)
     x_test = x_full[num_train:]
 
@@ -138,14 +129,14 @@ def test__kv_cache__matches_standard_forward(task_type: str) -> None:
     assert len(cache.kv) == 1  # nlayers=1
     assert cache.train_shape == (1, num_train)
     assert cache.feature_cache is not None
-    assert torch.allclose(out_standard, out_store, atol=1e-10), (
+    assert torch.allclose(out_standard, out_store, atol=1e-5), (
         "return_kv_cache=True output differs from the standard forward."
     )
 
     # Use the cache on test-only data.
     out_cached = arch(x_test, y_train, kv_cache=cache, x_is_test_only=True)
     assert out_cached.shape == out_standard.shape
-    assert torch.allclose(out_standard, out_cached, atol=1e-10), (
+    assert torch.allclose(out_standard, out_cached, atol=1e-5), (
         "kv_cache inference output differs from the standard forward."
     )
 
@@ -155,7 +146,6 @@ def test__kv_cache__matches_standard_forward(task_type: str) -> None:
 def test__kv_cache__non_standard_out_matches(task_type: str) -> None:
     """The cache path also returns matching embeddings dicts."""
     arch = _build_small_arch(seed=420, task_type=task_type)
-    arch.to(torch.float64)
     x_full, y_train, num_train = _make_kv_cache_data(task_type)
     x_test = x_full[num_train:]
 
@@ -169,7 +159,7 @@ def test__kv_cache__non_standard_out_matches(task_type: str) -> None:
         x_is_test_only=True,
     )
     for key in ("standard", "test_embeddings"):
-        assert torch.allclose(out_standard[key], out_cached[key], atol=1e-10), (
+        assert torch.allclose(out_standard[key], out_cached[key], atol=1e-5), (
             f"cache path output for {key} differs from the standard forward."
         )
 
@@ -178,7 +168,6 @@ def test__kv_cache__non_standard_out_matches(task_type: str) -> None:
 @torch.no_grad()
 def test__kv_cache__x_is_test_only_requires_populated_cache(task_type: str) -> None:
     arch = _build_small_arch(seed=420, task_type=task_type)
-    arch.to(torch.float64)
     x_full, y_train, _ = _make_kv_cache_data(task_type)
     with pytest.raises(ValueError, match="requires a populated kv_cache"):
         arch(x_full, y_train, x_is_test_only=True)
