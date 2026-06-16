@@ -135,6 +135,13 @@ class FeatureSchema:
     for tracking which columns represent which modality, and for updating
     this mapping as preprocessing steps transform the data.
 
+    Feature-name uniqueness is an invariant of any schema, guaranteed by
+    construction (names come from the input columns or from a transform plus an
+    index; see ``build_input_feature_names`` and ``append_columns``). Prefer the
+    methods that return new instances (``append_columns``, ``remove_columns``,
+    ``apply_permutation``, ...) over mutating ``features`` in place, so the
+    invariant stays easy to verify at construction time in tests.
+
     Attributes:
         features: List of Feature objects where index = column position.
     """

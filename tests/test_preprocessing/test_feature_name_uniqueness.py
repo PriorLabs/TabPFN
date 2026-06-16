@@ -50,22 +50,33 @@ def assert_unique_feature_names(schema: FeatureSchema) -> None:
 def assert_every_schema_unique() -> Iterator[None]:
     """Validate uniqueness on *every* ``FeatureSchema`` built within the block.
 
-    The preprocessing pipeline threads a single schema through its steps, and
-    every intermediate schema is produced via the ``FeatureSchema`` constructor.
-    Wrapping the constructor for the duration of the block therefore asserts the
-    invariant after *each* step (and sub-step), not just on the final output.
+    Two checks, with no cost to production code (the schema stays a plain mutable
+    dataclass):
+
+    1. At construction: the pipeline threads a single schema through its steps
+       and every intermediate schema is produced via the ``FeatureSchema``
+       constructor, so wrapping ``__init__`` asserts the invariant after *each*
+       step and sub-step, not just on the final output.
+    2. On exit: every schema constructed in the block is re-checked. Because we
+       hold a reference to each one, an *in-place* mutation made after
+       construction (e.g. a future ``schema.features.append(...)`` that bypasses
+       the constructor) that breaks uniqueness is caught when the block closes.
     """
     original_init = FeatureSchema.__init__
+    constructed: list[FeatureSchema] = []
 
     def validating_init(self: FeatureSchema, *args: object, **kwargs: object) -> None:
         original_init(self, *args, **kwargs)  # type: ignore[arg-type]
         assert_unique_feature_names(self)
+        constructed.append(self)
 
     FeatureSchema.__init__ = validating_init  # type: ignore[method-assign]
     try:
         yield
     finally:
         FeatureSchema.__init__ = original_init  # type: ignore[method-assign]
+        for schema in constructed:
+            assert_unique_feature_names(schema)
 
 
 # --------------------------------------------------------------------------- #
@@ -272,6 +283,39 @@ def test__pipeline_output_has_unique_feature_names(
     assert_unique_feature_names(result.feature_schema)
     assert result.feature_schema.num_columns == result.X.shape[1]
     assert transform_result.feature_schema.num_columns == transform_result.X.shape[1]
+
+
+def test__guard_catches_construction_time_duplicate() -> None:
+    """A schema built with duplicate names inside the block fails immediately."""
+    with (
+        pytest.raises(AssertionError, match="duplicate feature names"),
+        assert_every_schema_unique(),
+    ):
+        FeatureSchema(
+            features=[
+                Feature(name="dup", modality=FeatureModality.NUMERICAL),
+                Feature(name="dup", modality=FeatureModality.NUMERICAL),
+            ]
+        )
+
+
+def test__guard_catches_in_place_mutation_on_exit() -> None:
+    """An in-place mutation that bypasses the constructor is caught on exit.
+
+    This is the guarantee that a plain constructor hook cannot provide: a future
+    ``schema.features.append(...)`` that introduces a duplicate is detected when
+    the context closes, because the guard holds a reference to every schema it
+    saw constructed.
+    """
+    with (  # noqa: PT012
+        pytest.raises(AssertionError, match="duplicate feature names"),
+        assert_every_schema_unique(),
+    ):
+        schema = FeatureSchema(
+            features=[Feature(name="a", modality=FeatureModality.NUMERICAL)]
+        )
+        # Bypasses __init__ entirely.
+        schema.features.append(Feature(name="a", modality=FeatureModality.NUMERICAL))
 
 
 def test__duplicate_input_columns_are_disambiguated() -> None:
