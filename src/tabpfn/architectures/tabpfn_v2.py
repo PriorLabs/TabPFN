@@ -592,9 +592,17 @@ class TabPFNV2(Architecture):
         return {p for p in self.blocks.parameters() if p.ndim == 2}
 
     def add_column_embeddings(self, x_BRCX: torch.Tensor) -> torch.Tensor:
-        """Add a random embedding to each column to prevent feature collapse."""
+        """Add a random embedding to each column to prevent feature collapse.
+
+        Note: For 2.5 and onwards, we pre-compute the random embeddings since they
+        were always computed with a fixed seed and therefore fixed embeddings. Ideally,
+        we would check if the v2 model suffers from the same behavior. If yes, this
+        requires different embeddings than 2.5 due to using seed=0.
+        """
+        # Tracing for Onnx export can't trace the Generator below, so we use the default
+        # RNG.
         if torch.jit.is_tracing():
-            # JIT tracing can't trace the Generator below, fall back to the default RNG.
+            generator = None
             generator = None
         else:
             generator = torch.Generator(device=x_BRCX.device).manual_seed(self.seed)
