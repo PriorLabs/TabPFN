@@ -12,7 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from tabpfn import TabPFNClassifier
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
@@ -313,6 +313,54 @@ def test__fit_validation__rejects_infinities_when_passthrough_disabled() -> None
 
     with pytest.raises(TabPFNValidationError):
         ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
+
+
+@pytest.mark.parametrize("passthrough_inf", [True, False])
+def test__classifier_fit_predict__handles_infinities_per_passthrough_flag(
+    passthrough_inf: bool,
+) -> None:
+    """End-to-end fit/predict with infinities in X.
+
+    Regression test for a crash where ``passthrough_inf=True`` survived input
+    validation but the infinities then reached the ordinal encoder in
+    ``clean_data`` and raised. With the flag enabled the fit must succeed; with it
+    disabled the infinities are rejected at validation.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 5))
+    y = (X[:, 0] > 0).astype(int)
+    X[3, 1] = np.inf
+    X[7, 2] = -np.inf
+
+    model = TabPFNClassifier(n_estimators=1, passthrough_inf=passthrough_inf)
+    if passthrough_inf:
+        model.fit(X, y)
+        predictions = model.predict(X)
+        assert predictions.shape == (X.shape[0],)
+    else:
+        with pytest.raises(TabPFNValidationError):
+            model.fit(X, y)
+
+
+@pytest.mark.parametrize("passthrough_inf", [True, False])
+def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
+    passthrough_inf: bool,
+) -> None:
+    """End-to-end regressor fit/predict with infinities in X (see classifier twin)."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 5))
+    y = X[:, 0] + rng.standard_normal(60) * 0.1
+    X[3, 1] = np.inf
+    X[7, 2] = -np.inf
+
+    model = TabPFNRegressor(n_estimators=1, passthrough_inf=passthrough_inf)
+    if passthrough_inf:
+        model.fit(X, y)
+        predictions = model.predict(X)
+        assert predictions.shape == (X.shape[0],)
+    else:
+        with pytest.raises(TabPFNValidationError):
+            model.fit(X, y)
 
 
 def test__generate_regression_configs__propagates_passthrough_inf() -> None:

@@ -38,12 +38,17 @@ UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 def clean_data(
     X: np.ndarray,
     feature_schema: FeatureSchema,
+    *,
+    passthrough_inf: bool = False,
 ) -> tuple[np.ndarray, ColumnTransformer, FeatureSchema]:
     """Clean the data by converting dtypes and ordinally encoding categorical columns.
 
     Args:
         X: The data to clean.
         feature_schema: The feature schema corresponding to the data.
+        passthrough_inf: If True, +/-inf values are carried through the ordinal
+            encoding stage unchanged instead of crashing it (see
+            `process_text_na_dataframe`).
 
     Returns:
         A tuple containing the cleaned data, the ordinal encoder, and the inferred
@@ -60,7 +65,10 @@ def clean_data(
     # Ensure categories are ordinally encoded
     ord_encoder = get_ordinal_encoder()
     X_numpy = process_text_na_dataframe(
-        X=X_pandas, ord_encoder=ord_encoder, fit_encoder=True
+        X=X_pandas,
+        ord_encoder=ord_encoder,
+        fit_encoder=True,
+        passthrough_inf=passthrough_inf,
     )
 
     return X_numpy, ord_encoder, feature_schema
@@ -235,16 +243,35 @@ def process_text_na_dataframe(
     ord_encoder: ColumnTransformer | None = None,
     *,
     fit_encoder: bool = False,
+    passthrough_inf: bool = False,
 ) -> np.ndarray:
     """Convert `X` to float64, replacing NA with NaN in string cells.
 
     If `ord_encoder` is not None, then it will be used to encode `X` before the
     conversion to float64.
 
+    If `passthrough_inf` is True, +/-inf in numeric columns would otherwise crash
+    the ordinal encoder, so they are replaced with NaN before encoding and written
+    back into the output at their original positions afterwards. The output columns
+    align positionally with `X`'s columns, so the recorded positions stay valid.
+
     Note that this function sometimes mutates its input.
     """
     # TODO: Check if this step needs to be done as early as it is done here, or whether
     # it can be done later and include it in a main preprocessor object.
+
+    # Record +/-inf positions (numeric columns only) and replace them with NaN so the
+    # ordinal encoder doesn't crash; they are restored into the output further below.
+    inf_col_ix: list[int] = []
+    pos_inf = neg_inf = None
+    if passthrough_inf:
+        numeric_cols = X.select_dtypes(include=["number"]).columns
+        inf_col_ix = [X.columns.get_loc(c) for c in numeric_cols]
+        numeric_values = X[numeric_cols].to_numpy()
+        pos_inf = np.isposinf(numeric_values)
+        neg_inf = np.isneginf(numeric_values)
+        if pos_inf.any() or neg_inf.any():
+            X[numeric_cols] = X[numeric_cols].replace([np.inf, -np.inf], np.nan)
 
     # When transforming with a fitted encoder, coerce columns whose dtype drifted
     # between fit and predict back to their fit-time dtype, so the OrdinalEncoder is
@@ -273,4 +300,13 @@ def process_text_na_dataframe(
         np.nan,
         X_encoded[:, string_cols_ix],
     )
-    return typing.cast("np.ndarray", X_encoded.astype(np.float64))
+    X_encoded = X_encoded.astype(np.float64)
+
+    # Write the recorded +/-inf values back into their original numeric cells.
+    if passthrough_inf and inf_col_ix and (pos_inf.any() or neg_inf.any()):
+        sub = X_encoded[:, inf_col_ix]
+        sub[pos_inf] = np.inf
+        sub[neg_inf] = -np.inf
+        X_encoded[:, inf_col_ix] = sub
+
+    return typing.cast("np.ndarray", X_encoded)
