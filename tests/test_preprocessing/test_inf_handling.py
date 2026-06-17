@@ -580,3 +580,50 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
     else:
         with pytest.raises(TabPFNValidationError):
             model.fit(X, y)
+
+
+# --- CUDA end-to-end (real GPU hardware) ---------------------------------------
+
+_CUDA_AVAILABLE = torch.cuda.is_available()
+
+
+@pytest.mark.skipif(not _CUDA_AVAILABLE, reason="requires a CUDA device")
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__estimator_fit_predict_on_cuda__passes_infinities_through(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    """End-to-end fit/predict with infinities on a real CUDA device.
+
+    Exercises the GPU (torch) preprocessing pipeline on actual hardware -- where
+    SVD/quantile would crash on raw +/-inf -- so it covers the CPU->GPU inf
+    round-trip that the CPU-only and CPU-tensor torch tests cannot. Skipped where
+    no GPU is present.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 5))
+    X[3, 1] = np.inf
+    X[7, 2] = -np.inf
+    if estimator_cls is TabPFNClassifier:
+        y = (X[:, 0] > 0).astype(int)
+    else:
+        y = X[:, 0] + rng.standard_normal(60) * 0.1
+
+    model = estimator_cls(n_estimators=2, passthrough_inf=True, device="cuda")
+    model.fit(X, y)
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
+    assert np.isfinite(np.asarray(predictions)).all()
+
+
+@pytest.mark.skipif(not _CUDA_AVAILABLE, reason="requires a CUDA device")
+def test__classifier_fit_on_cuda__rejects_infinities_without_passthrough() -> None:
+    """On CUDA too, infinities are rejected at validation when passthrough is off."""
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 5))
+    y = (X[:, 0] > 0).astype(int)
+    X[3, 1] = np.inf
+
+    model = TabPFNClassifier(n_estimators=1, passthrough_inf=False, device="cuda")
+    with pytest.raises(TabPFNValidationError):
+        model.fit(X, y)

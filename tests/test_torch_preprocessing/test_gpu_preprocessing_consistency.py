@@ -60,6 +60,7 @@ def _make_config(
     feature_shift_decoder: Literal["shuffle", "rotate"] | None = "shuffle",
     feature_shift_count: int = 3,
     outlier_removal_std: float | None = 12.0,
+    passthrough_inf: bool = False,
 ) -> ClassifierEnsembleConfig:
     return ClassifierEnsembleConfig(
         preprocess_config=pconfig,
@@ -70,7 +71,7 @@ def _make_config(
         feature_shift_decoder=feature_shift_decoder,
         outlier_removal_std=outlier_removal_std,
         _model_index=0,
-        passthrough_inf=False,
+        passthrough_inf=passthrough_inf,
     )
 
 
@@ -603,3 +604,68 @@ class TestTestDataConsistency:
             gpu_out.feature_schema,
             has_fingerprint_on_gpu=True,
         )
+
+
+class TestGpuPipelineInfPassthrough:
+    """+/-inf passthrough through the *factory-built* GPU (torch) pipeline.
+
+    The standalone torch-pipeline tests use hand-built step lists; these drive
+    the real ``create_gpu_preprocessing_pipeline`` output (selective quantile /
+    SVD / shuffle / soft-clip wired from the CPU ``scheduled_gpu_transform``
+    marks) so the CPU->GPU handoff is exercised end to end. Tensors stay on CPU,
+    so this runs in CI; a CUDA twin lives in the estimator tests.
+
+    Infinities are recorded and NaN'd inside each pipeline and written back at
+    the end, so the robust, layout-independent invariant is that the set of rows
+    carrying a +/-inf is exactly the input's (columns get added/reordered/renamed
+    in between).
+    """
+
+    @pytest.mark.parametrize(
+        "preset", ["quantile_uni_coarse", "squashing_scaler_default"]
+    )
+    @pytest.mark.parametrize("global_transformer_name", [None, "svd"])
+    def test_infinities_survive_cpu_plus_gpu_pipeline(
+        self,
+        preset: str,
+        global_transformer_name: str | None,
+    ) -> None:
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((40, 5)).astype(np.float64)
+        X[3, 1] = np.inf
+        X[7, 2] = -np.inf
+        schema = _make_schema(n_features=5, n_cat=0)
+
+        config = _make_config(
+            PreprocessorConfig(
+                preset,
+                categorical_name="numeric",
+                global_transformer_name=global_transformer_name,
+            ),
+            passthrough_inf=True,
+        )
+
+        X_out, _ = _run_cpu_plus_gpu(X, schema, config, seed=0)
+
+        pos_rows = set(np.where(np.isposinf(X_out).any(axis=1))[0].tolist())
+        neg_rows = set(np.where(np.isneginf(X_out).any(axis=1))[0].tolist())
+        assert pos_rows == {3}
+        assert neg_rows == {7}
+
+    def test_finite_input_stays_finite_through_cpu_plus_gpu_pipeline(self) -> None:
+        """The unconditional inf round-trip fabricates nothing on finite input."""
+        rng = np.random.default_rng(0)
+        X = rng.standard_normal((40, 5)).astype(np.float64)
+        schema = _make_schema(n_features=5, n_cat=0)
+        config = _make_config(
+            PreprocessorConfig(
+                "quantile_uni_coarse",
+                categorical_name="numeric",
+                global_transformer_name="svd",
+            ),
+            passthrough_inf=True,
+        )
+
+        X_out, _ = _run_cpu_plus_gpu(X, schema, config, seed=0)
+
+        assert not np.isinf(X_out).any()
