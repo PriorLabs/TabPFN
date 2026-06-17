@@ -35,16 +35,6 @@ _CARRIED_FEATURE_FIELDS = tuple(
 )
 
 
-def _input_names(feature_schema: FeatureSchema) -> list[str]:
-    """Names of the input features.
-
-    Every feature is named by the time it reaches this step (input features are
-    named from the DataFrame columns or positionally; features added by earlier
-    steps are named from their transform). ``Feature.name`` is therefore non-None.
-    """
-    return [f.name for f in feature_schema.features]
-
-
 def _columntransformer_output_names(
     ct: ColumnTransformer,
     input_names: list[str],
@@ -288,7 +278,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        input_names = _input_names(feature_schema)
+        input_names = [f.name for f in feature_schema.features]
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot
@@ -351,7 +341,7 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
-        input_names = _input_names(feature_schema)
+        input_names = [f.name for f in feature_schema.features]
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot
