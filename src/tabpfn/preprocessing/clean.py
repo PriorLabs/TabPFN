@@ -17,13 +17,10 @@ import pandas as pd
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.steps.preprocessing_helpers import (
-    OrderPreservingColumnTransformer,
-    get_ordinal_encoder,
-)
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 
 if TYPE_CHECKING:
-    from collections.abc import Hashable, Sequence
+    from collections.abc import Sequence
     from typing import Any, Literal
 
     from sklearn.compose import ColumnTransformer
@@ -240,40 +237,6 @@ def _align_columns_to_fitted_dtypes(
     return X
 
 
-def _encoded_column_positions(
-    ord_encoder: ColumnTransformer | None,
-    columns: pd.Index,
-) -> dict[Hashable, int]:
-    """Map each input column label to its position in the encoder's output.
-
-    A :class:`~sklearn.compose.ColumnTransformer` emits the columns of each
-    sub-transformer in turn (the encoded columns first, then the passthrough
-    remainder), so its output is generally *not* positionally aligned with the
-    input frame. Callers that write values back into the encoded array therefore
-    cannot assume column positions are unchanged; they must look up where each
-    input column actually landed.
-
-    ``None`` (no encoding) and :class:`OrderPreservingColumnTransformer` both
-    keep the input order, so the mapping is the identity in those cases.
-    """
-    if ord_encoder is None or isinstance(ord_encoder, OrderPreservingColumnTransformer):
-        return {col: i for i, col in enumerate(columns)}
-
-    # Generic ColumnTransformer: reconstruct the output order from the fitted
-    # column assignments. Non-remainder transformers store resolved column
-    # labels; the remainder stores integer positions. Dropped transformers
-    # contribute no output columns.
-    input_columns_in_output_order: list[Hashable] = []
-    for name, transformer, cols in ord_encoder.transformers_:
-        if isinstance(transformer, str) and transformer == "drop":
-            continue
-        if name == "remainder":
-            input_columns_in_output_order.extend(columns[i] for i in cols)
-        else:
-            input_columns_in_output_order.extend(cols)
-    return {col: i for i, col in enumerate(input_columns_in_output_order)}
-
-
 def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
@@ -289,9 +252,8 @@ def process_text_na_dataframe(
 
     If `passthrough_inf` is True, +/-inf in numeric columns would otherwise crash
     the ordinal encoder, so they are replaced with NaN before encoding and written
-    back into the output afterwards. The encoder may reorder columns, so the
-    restore maps each numeric column to its actual output position rather than
-    assuming positions are preserved (see `_encoded_column_positions`).
+    back into the output at their original positions afterwards. The output columns
+    align positionally with `X`'s columns, so the recorded positions stay valid.
 
     Note that this function sometimes mutates its input.
     """
@@ -300,10 +262,11 @@ def process_text_na_dataframe(
 
     # Record +/-inf positions (numeric columns only) and replace them with NaN so the
     # ordinal encoder doesn't crash; they are restored into the output further below.
-    numeric_cols: pd.Index = X.columns[:0]
+    inf_col_ix: list[int] = []
     pos_inf = neg_inf = None
     if passthrough_inf:
         numeric_cols = X.select_dtypes(include=["number"]).columns
+        inf_col_ix = [X.columns.get_loc(c) for c in numeric_cols]
         numeric_values = X[numeric_cols].to_numpy()
         pos_inf = np.isposinf(numeric_values)
         neg_inf = np.isneginf(numeric_values)
@@ -330,11 +293,7 @@ def process_text_na_dataframe(
     else:
         X_encoded = X.to_numpy()
 
-    # The encoder may reorder columns, so map input columns to their output
-    # positions instead of assuming the encoded array stays positionally aligned.
-    output_position = _encoded_column_positions(ord_encoder, X.columns)
-
-    string_cols_ix = [output_position[col] for col in string_cols]
+    string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
     X_encoded[:, string_cols_ix] = np.where(
         placeholder_mask,
@@ -343,10 +302,8 @@ def process_text_na_dataframe(
     )
     X_encoded = X_encoded.astype(np.float64)
 
-    # Write the recorded +/-inf values back into their numeric cells (at their
-    # post-encoding positions).
-    if passthrough_inf and len(numeric_cols) and (pos_inf.any() or neg_inf.any()):
-        inf_col_ix = [output_position[col] for col in numeric_cols]
+    # Write the recorded +/-inf values back into their original numeric cells.
+    if passthrough_inf and inf_col_ix and (pos_inf.any() or neg_inf.any()):
         sub = X_encoded[:, inf_col_ix]
         sub[pos_inf] = np.inf
         sub[neg_inf] = -np.inf
