@@ -468,7 +468,7 @@ class PreprocessingPipeline:
                 X[:, indices] = result.X
 
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result, step
+                    X, feature_schema, result, step.added_feature_prefix()
                 )
                 feature_schema = feature_schema.update_from_preprocessing_step_result(
                     indices, result.feature_schema
@@ -485,7 +485,7 @@ class PreprocessingPipeline:
                 X = result.X
                 feature_schema = result.feature_schema
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result, step
+                    X, feature_schema, result, step.added_feature_prefix()
                 )
 
             if self.record_timings:
@@ -514,7 +514,7 @@ class PreprocessingPipeline:
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
         result: PreprocessingStepResult,
-        step: PreprocessingStep,
+        name_prefix: str,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Append added columns from a step result and update schema."""
         if result.X_added is not None:
@@ -526,7 +526,7 @@ class PreprocessingPipeline:
             feature_schema = feature_schema.append_columns(
                 result.modality_added or FeatureModality.NUMERICAL,
                 result.X_added.shape[1],
-                name_prefix=step.added_feature_prefix(),
+                name_prefix=name_prefix,
             )
         return X, feature_schema
 
