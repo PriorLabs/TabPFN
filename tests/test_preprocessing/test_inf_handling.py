@@ -561,6 +561,7 @@ def test__classifier_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
             predictions = model.predict(X)
         assert predictions.shape == (X.shape[0],)
+        assert np.isfinite(np.asarray(predictions)).all()
     else:
         with pytest.raises(TabPFNValidationError):
             model.fit(X, y)
@@ -587,6 +588,7 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
             predictions = model.predict(X)
         assert predictions.shape == (X.shape[0],)
+        assert np.isfinite(np.asarray(predictions)).all()
     else:
         with pytest.raises(TabPFNValidationError):
             model.fit(X, y)
