@@ -594,6 +594,37 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
 
 
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__estimator_fit_predict__handles_infinities_on_categoricals(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    """MRE For a bug triggered in "tabpfn.preprocessing.clean.clean_data()"
+    where categoricals containing infs crash the ordinal encoder.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((5, 5))
+
+    # setup a categorical column
+    X[:, 0] = rng.integers(0, 3, size=X.shape[0])
+    # add an inf
+    X[0, 0] = np.inf
+    if estimator_cls is TabPFNClassifier:
+        y = (X[:, 0] > 0).astype(int)
+    else:
+        y = X[:, 0] + rng.standard_normal(X.shape[0]) * 0.1
+
+    model = estimator_cls(
+        n_estimators=1,
+        passthrough_inf=True,
+        categorical_features_indices=[0],
+    )
+    model.fit(X, y)
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
+    assert np.isfinite(np.asarray(predictions)).all()
+
+
 # --- CUDA end-to-end (real GPU hardware) ---------------------------------------
 
 _CUDA_AVAILABLE = torch.cuda.is_available()
