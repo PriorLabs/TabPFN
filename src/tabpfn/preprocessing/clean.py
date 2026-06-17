@@ -263,16 +263,15 @@ def process_text_na_dataframe(
 
     # Record +/-inf positions (numeric columns only) and replace them with NaN so the
     # ordinal encoder doesn't crash; they are restored into the output further below.
-    inf_col_ix: list[int] = []
     pos_inf = neg_inf = None
+
     if passthrough_inf:
-        numeric_cols = X.select_dtypes(include=["number"]).columns
-        inf_col_ix = [X.columns.get_loc(c) for c in numeric_cols]
-        numeric_values = X[numeric_cols].to_numpy()
-        pos_inf = np.isposinf(numeric_values)
-        neg_inf = np.isneginf(numeric_values)
-        if pos_inf.any() or neg_inf.any():
-            X[numeric_cols] = X[numeric_cols].replace([np.inf, -np.inf], np.nan)
+        # use pandas to compute the mask in order to handle non-numeric dtypes
+        # with infinite values:
+        pos_inf = (X == np.inf).to_numpy()  # noqa: SIM300
+        neg_inf = (X == -np.inf).to_numpy()  # noqa: SIM300
+        # coerce columns to NaN:
+        X[neg_inf | pos_inf] = np.nan
 
     # When transforming with a fitted encoder, coerce columns whose dtype drifted
     # between fit and predict back to their fit-time dtype, so the OrdinalEncoder is
@@ -304,10 +303,8 @@ def process_text_na_dataframe(
     X_encoded = X_encoded.astype(np.float64)
 
     # Write the recorded +/-inf values back into their original numeric cells.
-    if passthrough_inf and inf_col_ix and (pos_inf.any() or neg_inf.any()):
-        sub = X_encoded[:, inf_col_ix]
-        sub[pos_inf] = np.inf
-        sub[neg_inf] = -np.inf
-        X_encoded[:, inf_col_ix] = sub
+    if passthrough_inf and (pos_inf.any() or neg_inf.any()):
+        X_encoded[pos_inf] = np.inf
+        X_encoded[neg_inf] = -np.inf
 
     return typing.cast("np.ndarray", X_encoded)
