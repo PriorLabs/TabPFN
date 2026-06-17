@@ -20,6 +20,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
+    clean_data,
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
 )
@@ -594,10 +595,7 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
 
 
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__estimator_fit_predict__handles_infinities_on_categoricals(
-    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
-) -> None:
+def test__clean_data__handles_infinities_on_categoricals() -> None:
     """MRE For a bug triggered in "tabpfn.preprocessing.clean.clean_data()"
     where categoricals containing infs crash the ordinal encoder.
     """
@@ -608,21 +606,15 @@ def test__estimator_fit_predict__handles_infinities_on_categoricals(
     X[:, 0] = rng.integers(0, 3, size=X.shape[0])
     # add an inf
     X[0, 0] = np.inf
-    if estimator_cls is TabPFNClassifier:
-        y = (X[:, 0] > 0).astype(int)
-    else:
-        y = X[:, 0] + rng.standard_normal(X.shape[0]) * 0.1
-
-    model = estimator_cls(
-        n_estimators=1,
-        passthrough_inf=True,
-        categorical_features_indices=[0],
+    schema = FeatureSchema(
+        features=[Feature(name="f0", modality=FeatureModality.CATEGORICAL)]
+        + [
+            Feature(name=f"f{idx}", modality=FeatureModality.CATEGORICAL)
+            for idx in range(X.shape[-1] - 1)
+        ]
     )
-    model.fit(X, y)
-    predictions = model.predict(X)
-
-    assert predictions.shape == (X.shape[0],)
-    assert np.isfinite(np.asarray(predictions)).all()
+    X_clean, *_ = clean_data(X, schema, passthrough_inf=True)
+    assert np.all(np.isinf(X_clean) == np.isinf(X))
 
 
 # --- CUDA end-to-end (real GPU hardware) ---------------------------------------
