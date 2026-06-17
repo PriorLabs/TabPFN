@@ -553,8 +553,13 @@ def test__classifier_fit_predict__handles_infinities_per_passthrough_flag(
 
     model = TabPFNClassifier(n_estimators=1, passthrough_inf=passthrough_inf)
     if passthrough_inf:
-        model.fit(X, y)
-        predictions = model.predict(X)
+        # Passing infs through preprocessing must not silently produce invalid
+        # values (NaN from e.g. inf-inf); errstate turns any such op into a hard
+        # error. Scoped to this branch: the reject branch trips sklearn's own
+        # finite check (it sums +inf/-inf -> NaN before raising its error).
+        with np.errstate(invalid="raise"):
+            model.fit(X, y)
+            predictions = model.predict(X)
         assert predictions.shape == (X.shape[0],)
     else:
         with pytest.raises(TabPFNValidationError):
@@ -574,8 +579,13 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
 
     model = TabPFNRegressor(n_estimators=1, passthrough_inf=passthrough_inf)
     if passthrough_inf:
-        model.fit(X, y)
-        predictions = model.predict(X)
+        # Passing infs through preprocessing must not silently produce invalid
+        # values (NaN from e.g. inf-inf); errstate turns any such op into a hard
+        # error. Scoped to this branch: the reject branch trips sklearn's own
+        # finite check (it sums +inf/-inf -> NaN before raising its error).
+        with np.errstate(invalid="raise"):
+            model.fit(X, y)
+            predictions = model.predict(X)
         assert predictions.shape == (X.shape[0],)
     else:
         with pytest.raises(TabPFNValidationError):
