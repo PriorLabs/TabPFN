@@ -23,8 +23,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any, Literal
 
-    from sklearn.compose import ColumnTransformer
-
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
     from tabpfn.preprocessing.torch import FeatureSchema
 
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
@@ -40,7 +41,7 @@ def clean_data(
     feature_schema: FeatureSchema,
     *,
     passthrough_inf: bool = False,
-) -> tuple[np.ndarray, ColumnTransformer, FeatureSchema]:
+) -> tuple[np.ndarray, OrderPreservingColumnTransformer, FeatureSchema]:
     """Clean the data by converting dtypes and ordinally encoding categorical columns.
 
     Args:
@@ -183,7 +184,7 @@ def _column_kind(dtype: Any) -> str:
 
 
 def _align_columns_to_fitted_dtypes(
-    X: pd.DataFrame, ord_encoder: ColumnTransformer
+    X: pd.DataFrame, ord_encoder: OrderPreservingColumnTransformer
 ) -> pd.DataFrame:
     """Coerce each encoded column to the scalar dtype it had when the encoder was fit.
 
@@ -240,7 +241,7 @@ def _align_columns_to_fitted_dtypes(
 def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
-    ord_encoder: ColumnTransformer | None = None,
+    ord_encoder: OrderPreservingColumnTransformer | None = None,
     *,
     fit_encoder: bool = False,
     passthrough_inf: bool = False,

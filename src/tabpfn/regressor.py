@@ -90,7 +90,6 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
@@ -103,6 +102,9 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
 
     try:
         from sklearn.base import Tags
@@ -210,7 +212,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    ordinal_encoder_: ColumnTransformer
+    ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913

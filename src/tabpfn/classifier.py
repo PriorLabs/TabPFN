@@ -99,7 +99,6 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
     from tabpfn.architectures.base.memory import MemorySavingMode
@@ -109,6 +108,9 @@ if TYPE_CHECKING:
         PerformanceOptions,
     )
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
 
     try:
         from sklearn.base import Tags
@@ -185,7 +187,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     label_encoder_: TabPFNLabelEncoder
     """The label encoder used to encode the target variable."""
 
-    ordinal_encoder_: ColumnTransformer
+    ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
