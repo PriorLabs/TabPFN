@@ -134,12 +134,22 @@ We're building the future of tabular machine learning and would love your involv
 
 ## Citation
 
-You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and the model report of TabPFN-2.5 [here](https://arxiv.org/abs/2511.08667).
+You can read our paper explaining TabPFNv2 [here](https://doi.org/10.1038/s41586-024-08328-6), and model reports for [TabPFN-2.5](https://arxiv.org/abs/2511.08667) and [TabPFN-3](https://arxiv.org/abs/2605.13986).
 
 <details>
 <summary><b>BibTeX</b></summary>
 
 ```bibtex
+@misc{grinsztajn2026tabpfn3technicalreport,
+      title={TabPFN-3: Technical Report}, 
+      author={Léo Grinsztajn and Klemens Flöge and Oscar Key and Felix Birkel and Philipp Jund and Brendan Roof and Mihir Manium and Shi Bin Hoo and Magnus Bühler and Anurag Garg and Dominik Safaric and Jake Robertson and Benjamin Jäger and Simone Alessi and Adrian Hayler and Vladyslav Moroshan and Lennart Purucker and Philipp Singer and Alan Arazi and Julien Siems and Jan Hendrik Metzen and Georg Grab and Nick Erickson and Siyuan Guo and Eliott Kalfon and Simon Bing and David Salinas and Clara Cornu and Lilly Charlotte Wehrhahn and Diana Kriuchkova and Kursat Kaya and Lydia Sidhoum and Marie Salmon and Jerry Chen and Madelon Hulsebos and Yann LeCun and Samuel Müller and Bernhard Schölkopf and Sauraj Gambhir and Noah Hollmann and Frank Hutter},
+      year={2026},
+      eprint={2605.13986},
+      archivePrefix={arXiv},
+      primaryClass={cs.LG},
+      url={https://arxiv.org/abs/2605.13986}, 
+}
+
 @misc{grinsztajn2025tabpfn,
   title={TabPFN-2.5: Advancing the State of the Art in Tabular Foundation Models},
   author={Léo Grinsztajn and Klemens Flöge and Oscar Key and Felix Birkel and Philipp Jund and Brendan Roof and
