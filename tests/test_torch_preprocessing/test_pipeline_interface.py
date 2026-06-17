@@ -15,7 +15,11 @@ from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingPipeline,
     TorchPreprocessingStep,
 )
-from tabpfn.preprocessing.torch.steps import TorchStandardScalerStep
+from tabpfn.preprocessing.torch.steps import (
+    TorchAddSVDFeaturesStep,
+    TorchShuffleFeaturesStep,
+    TorchStandardScalerStep,
+)
 
 
 class MockStep(TorchPreprocessingStep):
@@ -353,3 +357,116 @@ def test__call__multiple_steps_cache_stored_independently():
     pipeline(x, metadata, num_train_rows=5, use_fitted_cache=True)
     assert step1.fit_call_count == 1
     assert step2.fit_call_count == 1
+
+
+def _named_numerical_schema(num_features: int) -> FeatureSchema:
+    """A numerical-only schema with explicit unique names (needed for inf restore)."""
+    return FeatureSchema(
+        features=[
+            Feature(name=f"c{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_features)
+        ]
+    )
+
+
+class RequireFiniteStep(TorchPreprocessingStep):
+    """Step that asserts its input is finite, mimicking inf-intolerant transforms."""
+
+    @override
+    def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        assert not torch.isinf(x).any(), "inf reached a transform"
+        return {}
+
+    @override
+    def _transform(
+        self,
+        x: torch.Tensor,
+        fitted_cache: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, FeatureModality | None]:
+        assert not torch.isinf(x).any(), "inf reached a transform"
+        return x, None, None
+
+
+def test__call__nans_infinities_during_steps_and_restores_them() -> None:
+    """+/-inf are hidden from the steps as NaN and written back at the end."""
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(RequireFiniteStep(), {FeatureModality.NUMERICAL})]
+    )
+    x = torch.randn(8, 1, 3)
+    x[2, 0, 1] = float("inf")
+    x[5, 0, 2] = float("-inf")
+
+    result = pipeline(x.clone(), _named_numerical_schema(3), num_train_rows=8)
+
+    assert torch.isposinf(result.x[2, 0, 1])
+    assert torch.isneginf(result.x[5, 0, 2])
+    # Exactly the originals are restored -- none fabricated elsewhere.
+    assert torch.isinf(result.x).sum() == 2
+
+
+def test__call__finite_input_is_untouched_by_inf_handling() -> None:
+    """The inf round-trip is a no-op when the input is already finite."""
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(RequireFiniteStep(), {FeatureModality.NUMERICAL})]
+    )
+    x = torch.randn(8, 1, 3)
+
+    result = pipeline(x.clone(), _named_numerical_schema(3), num_train_rows=8)
+
+    assert torch.equal(result.x, x)
+
+
+def test__call__2d_input_round_trips_infinities() -> None:
+    """2D input restores infinities after the batch dim is added and removed."""
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(RequireFiniteStep(), {FeatureModality.NUMERICAL})]
+    )
+    x = torch.randn(8, 3)
+    x[2, 1] = float("inf")
+
+    result = pipeline(x.clone(), _named_numerical_schema(3), num_train_rows=8)
+
+    assert result.x.shape == (8, 3)
+    assert torch.isposinf(result.x[2, 1])
+
+
+def test__call__restores_infinities_into_shuffled_columns() -> None:
+    """Restore matches columns by name, so it survives a shuffle permutation."""
+    pipeline = TorchPreprocessingPipeline(
+        steps=[
+            (RequireFiniteStep(), {FeatureModality.NUMERICAL}),
+            (
+                TorchShuffleFeaturesStep(
+                    shuffle_method="shuffle", shuffle_index=1, random_state=3
+                ),
+                None,
+            ),
+        ]
+    )
+    x = torch.randn(12, 1, 5)
+    x[3, 0, 1] = float("inf")
+    x[7, 0, 2] = float("-inf")
+
+    result = pipeline(x.clone(), _named_numerical_schema(5), num_train_rows=12)
+
+    names = [f.name for f in result.feature_schema.features]
+    assert names != ["c0", "c1", "c2", "c3", "c4"]  # actually permuted
+    assert torch.isposinf(result.x[3, 0, names.index("c1")])
+    assert torch.isneginf(result.x[7, 0, names.index("c2")])
+    assert torch.isinf(result.x).sum() == 2
+
+
+def test__call__svd_does_not_crash_on_infinities_and_restores_them() -> None:
+    """SVD (which crashes on raw inf) runs fine; original columns get inf back."""
+    pipeline = TorchPreprocessingPipeline(
+        steps=[(TorchAddSVDFeaturesStep(global_transformer_name="svd"), None)]
+    )
+    x = torch.randn(40, 1, 5)
+    x[3, 0, 1] = float("inf")
+    x[7, 0, 2] = float("-inf")
+
+    result = pipeline(x.clone(), _named_numerical_schema(5), num_train_rows=40)
+
+    names = [f.name for f in result.feature_schema.features]
+    assert torch.isposinf(result.x[3, 0, names.index("c1")])
+    assert torch.isneginf(result.x[7, 0, names.index("c2")])

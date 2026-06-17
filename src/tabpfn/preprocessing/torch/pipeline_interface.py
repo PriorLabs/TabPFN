@@ -186,6 +186,11 @@ class TorchPreprocessingPipeline:
         if num_train_rows is None:
             num_train_rows = x.shape[0]
 
+        # Record any +/-inf positions (passed through from CPU preprocessing) and
+        # replace them with NaN so SVD/quantile/scaler steps don't crash on or
+        # corrupt from them; they are written back at the end.  No-op when finite.
+        inf_masks = _extract_inf_masks(x, feature_schema)
+
         self.step_timings_ = {} if self.record_timings else None
         for i, (step, modalities) in enumerate(self.steps):
             if self.record_timings:
@@ -229,6 +234,13 @@ class TorchPreprocessingPipeline:
                 self.step_timings_[f"{i}_{step.__class__.__name__}"] = (
                     time.perf_counter() - t0
                 )
+
+        # Write the recorded infinities back into the columns that still carry
+        # them (matched by name; torch steps don't rename surviving columns,
+        # appended SVD/fingerprint columns get none).
+        # NOTE: since no GPU pipelines currently duplicate features, we don't
+        # need to track ancestry
+        _restore_inf_masks(x, feature_schema, inf_masks)
 
         if squeeze_batch_dim:
             x = x.squeeze(1)
@@ -286,6 +298,54 @@ def _move_cache_to_device(
     return {
         k: v.to(device) if isinstance(v, torch.Tensor) else v for k, v in cache.items()
     }
+
+
+def _extract_inf_masks(
+    x: torch.Tensor,
+    feature_schema: FeatureSchema,
+) -> dict[str, torch.Tensor]:
+    """Record per-feature +/-inf values and replace them with NaN in ``x``.
+
+    The torch counterpart of the CPU pipeline's helper, operating on the column
+    (last) axis of an ``[num_rows, batch_size, num_columns]`` tensor. Returns a
+    ``{feature_name: signed-inf slice}`` mapping for the columns that contained
+    infinities (empty when ``x`` is finite, leaving ``x`` untouched). ``x`` is
+    mutated in place.
+    """
+    inf_bool = torch.isinf(x)
+    if not bool(inf_bool.any()):
+        return {}
+
+    masks: dict[str, torch.Tensor] = {}
+    for idx, feat in enumerate(feature_schema.features):
+        col_inf = inf_bool[..., idx]
+        if bool(col_inf.any()):
+            col = x[..., idx]
+            masks[feat.name] = torch.where(col_inf, col, 0)
+    x[inf_bool] = float("nan")
+    return masks
+
+
+def _restore_inf_masks(
+    x: torch.Tensor,
+    feature_schema: FeatureSchema,
+    inf_masks: dict[str, torch.Tensor],
+) -> None:
+    """Write recorded infinities back into the columns that still carry them.
+
+    Columns are matched by name. Torch steps don't rename surviving columns
+    (shuffle only permutes, SVD/fingerprint only append), so a name match maps
+    each mask to its final column position. ``x`` is mutated in place.
+    """
+    if not inf_masks:
+        return
+    for idx, feat in enumerate(feature_schema.features):
+        mask = inf_masks.get(feat.name)
+        if mask is None:
+            continue
+        bool_mask = torch.isinf(mask)
+        col = x[..., idx]  # integer index on the last axis -> view into ``x``
+        col[bool_mask] = mask[bool_mask].to(col.dtype)
 
 
 @dataclasses.dataclass
