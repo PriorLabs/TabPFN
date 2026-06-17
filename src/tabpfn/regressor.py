@@ -1019,7 +1019,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         X = fix_dtypes(X, cat_indices=cat_indices)
         X = process_text_na_dataframe(
-            X, ord_encoder=getattr(self, "ordinal_encoder_", None)
+            X,
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
+            passthrough_inf=self.passthrough_inf,
         )
 
         n_estimators = 0

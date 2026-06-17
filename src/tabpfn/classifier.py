@@ -1173,6 +1173,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = process_text_na_dataframe(
                 X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
+                passthrough_inf=self.passthrough_inf,
             )
 
         with handle_oom_errors(
