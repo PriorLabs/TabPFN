@@ -53,6 +53,18 @@ def make_names_unique(
     return out
 
 
+def default_input_feature_names(num_features: int) -> list[str]:
+    """Build default input feature names for unnamed features.
+
+    Args:
+        num_features (int): Number of names to generate.
+
+    Returns:
+        ["f0", "f1", ... ,"f{num_features-1}"]
+    """
+    return [f"f{i}" for i in range(num_features)]
+
+
 def build_input_feature_names(
     feature_names: list[str] | None,
     num_features: int,
@@ -70,7 +82,7 @@ def build_input_feature_names(
         column names). For array input, positional ``f0``, ``f1``, ... names.
     """
     if feature_names is None:
-        return [f"f{i}" for i in range(num_features)]
+        return default_input_feature_names(num_features)
     prefixed = [f"{INPUT_FEATURE_PREFIX}{name}" for name in feature_names]
     return make_names_unique(prefixed)
 
@@ -174,7 +186,7 @@ class FeatureSchema:
         if not numerical_indices and not categorical_indices:
             return cls(features=[])
 
-        chosen_names = [f"f{i}" for i in range(num_columns)] if names is None else names
+        chosen_names = names or default_input_feature_names(num_columns)
         if len(chosen_names) != num_columns:
             raise ValueError(f"Expected {num_columns} names, got {len(chosen_names)}")
 
