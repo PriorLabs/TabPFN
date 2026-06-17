@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, NamedTuple
 from typing_extensions import override
 
 import numpy as np
@@ -48,78 +48,100 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
 
 
-def _build_reshape_output_names(
-    feature_schema: FeatureSchema,
+class _ReshapeColumn(NamedTuple):
+    """One output column of the reshape step.
+
+    Attributes:
+        source_ix: Index of the input feature this column comes from / derives from.
+        is_passthrough: ``True`` if the input column is carried over unchanged (so
+            it keeps the input name and needs no ancestor); ``False`` if it is a
+            distribution-transformed column (gets a generated ``reshape_{k}`` name
+            and records its source via ``ancestor``).
+    """
+
+    source_ix: int
+    is_passthrough: bool
+
+
+def _build_reshape_output_layout(
     *,
+    n_features: int,
+    trans_ixs: list[int],
     categorical_features: list[int],
     n_transformed: int,
     append_to_original: bool,
     apply_to_categorical: bool,
+) -> list[_ReshapeColumn]:
+    """Describe the reshape step's output columns, in output order.
+
+    Single source of truth for the output column layout, mirroring the
+    ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``;
+    names (:func:`_build_reshape_output_names`) and ancestors
+    (:func:`_build_reshape_ancestors`) are both derived from it so they can't
+    drift apart. The passthrough block always precedes the transformed block.
+
+    The transformed block holds ``output_multiplier`` columns per transformed
+    input. ``ColumnTransformer``/``FeatureUnion`` lays these out sub-transform
+    major (e.g. ``[norm(c0), norm(c1), kdi(c0), kdi(c1)]``), so the ``p``-th
+    transformed column derives from input ``trans_ixs[p % len(trans_ixs)]``;
+    this also holds for single-output transforms where ``p % len == p``.
+    """
+    transformed = [
+        _ReshapeColumn(trans_ixs[p % len(trans_ixs)], is_passthrough=False)
+        for p in range(n_transformed)
+    ]
+    if append_to_original:
+        # Output: [original_all, transformed_copies]
+        passthrough_ixs = range(n_features)
+    elif apply_to_categorical:
+        # Output: [transformed (cats + nums)]
+        passthrough_ixs = range(0)
+    else:
+        # Output: [cats_passthrough, transformed_nums]
+        passthrough_ixs = categorical_features
+    passthrough = [_ReshapeColumn(i, is_passthrough=True) for i in passthrough_ixs]
+    return passthrough + transformed
+
+
+def _build_reshape_output_names(
+    feature_schema: FeatureSchema,
+    layout: list[_ReshapeColumn],
 ) -> list[str]:
-    """Build unique, output-order names for the reshape step.
+    """Unique, output-order names for the reshape layout.
 
     Passthrough columns keep their input names; distribution-transformed columns
     get generated ``reshape_{k}`` names (a derived feature is named from the
-    transform, not its source). The output column layout mirrors the
-    ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``.
+    transform, not its source).
     """
     # Every feature is named by the time it reaches this step, so ``name`` is
     # non-None (input features named from columns/positionally; added features
     # named from their transform).
     input_names = [f.name for f in feature_schema.features]
-    transformed_names = [f"reshape_{k}" for k in range(n_transformed)]
-    if append_to_original:
-        # Output: [original_all, transformed_copies]
-        output_names = list(input_names) + transformed_names
-    elif apply_to_categorical:
-        # Output: [transformed (cats + nums)]
-        output_names = transformed_names
-    else:
-        # Output: [cats_passthrough, transformed_nums]
-        output_names = [input_names[c] for c in categorical_features]
-        output_names += transformed_names
-    return make_names_unique(output_names)
+    names: list[str] = []
+    n_transformed = 0
+    for col in layout:
+        if col.is_passthrough:
+            names.append(input_names[col.source_ix])
+        else:
+            names.append(f"reshape_{n_transformed}")
+            n_transformed += 1
+    return make_names_unique(names)
 
 
 def _build_reshape_ancestors(
     feature_schema: FeatureSchema,
-    *,
-    trans_ixs: list[int],
-    categorical_features: list[int],
-    n_transformed: int,
-    n_output_features: int,
-    append_to_original: bool,
-    apply_to_categorical: bool,
+    layout: list[_ReshapeColumn],
 ) -> list[str | None]:
     """Map each output column back to the input feature it derives from.
 
-    Mirrors the output column layout of :func:`_build_reshape_output_names`. An
-    entry is the *name* of the source input feature for distribution-transformed
-    columns, or ``None`` for columns that keep their own identity (passthrough
-    originals/categoricals), which already carry their source name directly.
-
-    The transformed block holds ``output_multiplier`` columns per transformed
-    input. ``ColumnTransformer``/``FeatureUnion`` lays these out sub-transform
-    major (e.g. ``[norm(c0), norm(c1), kdi(c0), kdi(c1)]``), so position ``p``
-    maps to input ``trans_ixs[p % len(trans_ixs)]``; this also holds for the
-    single-output case where ``p % len == p``.
+    An entry is the *name* of the source input feature for distribution-
+    transformed columns, or ``None`` for passthrough columns, which already
+    carry their source name directly.
     """
     input_names = [f.name for f in feature_schema.features]
-
-    def transformed_ancestor(p: int) -> str:
-        return input_names[trans_ixs[p % len(trans_ixs)]]
-
-    transformed = [transformed_ancestor(p) for p in range(n_transformed)]
-    if append_to_original:
-        # Output: [original_all (n_features), transformed_copies]
-        prefix: list[str | None] = [None] * (n_output_features - n_transformed)
-    elif apply_to_categorical:
-        # Output: [transformed (cats + nums)]
-        prefix = []
-    else:
-        # Output: [cats_passthrough, transformed_nums]
-        prefix = [None] * len(categorical_features)
-    return prefix + transformed
+    return [
+        None if col.is_passthrough else input_names[col.source_ix] for col in layout
+    ]
 
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
@@ -339,27 +361,23 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         )
 
         # Build the new metadata with updated categorical indices
-        # Non-categorical indices become numerical
+        # Non-categorical indices become numerical. Names and ancestors are both
+        # derived from one layout so they stay consistent.
+        layout = _build_reshape_output_layout(
+            n_features=n_features,
+            trans_ixs=trans_ixs,
+            categorical_features=categorical_features,
+            n_transformed=output_multiplier * len(trans_ixs),
+            append_to_original=self.append_to_original_decision_,
+            apply_to_categorical=self.apply_to_categorical,
+        )
         new_schema = FeatureSchema.from_only_categorical_indices(
             categorical_indices=sorted(cat_ix),
             num_columns=n_output_features,
-            names=_build_reshape_output_names(
-                feature_schema,
-                categorical_features=categorical_features,
-                n_transformed=output_multiplier * len(trans_ixs),
-                append_to_original=self.append_to_original_decision_,
-                apply_to_categorical=self.apply_to_categorical,
-            ),
+            names=_build_reshape_output_names(feature_schema, layout),
         )
-
-        self._set_ancestors(
-            new_schema,
-            feature_schema,
-            trans_ixs=trans_ixs,
-            categorical_features=categorical_features,
-            output_multiplier=output_multiplier,
-            n_output_features=n_output_features,
-        )
+        ancestors = _build_reshape_ancestors(feature_schema, layout)
+        self._set_ancestors(new_schema, ancestors)
 
         if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
@@ -382,12 +400,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def _set_ancestors(
         self,
         new_schema: FeatureSchema,
-        feature_schema: FeatureSchema,
-        *,
-        trans_ixs: list[int],
-        categorical_features: list[int],
-        output_multiplier: int,
-        n_output_features: int,
+        ancestors: list[str | None],
     ) -> None:
         """Point distribution-transformed columns back at their source feature.
 
@@ -395,15 +408,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         tracked for ``passthrough_inf``) be mapped onto the renamed ``reshape_{k}``
         outputs, even when one input expands into several columns.
         """
-        ancestors = _build_reshape_ancestors(
-            feature_schema,
-            trans_ixs=trans_ixs,
-            categorical_features=categorical_features,
-            n_transformed=output_multiplier * len(trans_ixs),
-            n_output_features=n_output_features,
-            append_to_original=self.append_to_original_decision_,
-            apply_to_categorical=self.apply_to_categorical,
-        )
         for idx, ancestor in enumerate(ancestors):
             if ancestor is not None:
                 f = new_schema.features[idx]
