@@ -11,9 +11,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    import numpy as np
-    import torch
-
 
 #: Prefix applied to feature names derived from the input data (DataFrame columns
 #: or positional ``f{i}`` names for plain arrays). Namespacing input-derived names
@@ -108,22 +105,19 @@ class Feature:
     """A single feature with its name and modality.
 
     Attributes:
-        name: The name of the feature.
+        name: The name of the feature. Should be unique inside any given FeatureSchema.
         modality: The modality (type) of the feature.
         scheduled_gpu_transform: When set, indicates that this column still
             needs the specified GPU transform.  Set by CPU preprocessing
             steps (e.g. :class:`ReshapeFeatureDistributionsStep`) and
             cleared by the GPU pipeline after the transform has been applied.
-        inf_mask (np.ndarray | torch.Tensor, optional): Per-feature record of
-            +/-infinite values in the input, with finite entries set to 0. Used
-            to restore infinities after preprocessing when ``passthrough_inf`` is
-            enabled. Same kind (and device) as the data. Defaults to None.
+        ancestor: Name of the feature that this feature is derived from, if applicable.
     """
 
     name: str
     modality: FeatureModality
     scheduled_gpu_transform: GPUTransformType | None = None
-    inf_mask: np.ndarray | torch.Tensor | None = None
+    ancestor: str | None = None
 
 
 @dataclasses.dataclass
@@ -234,7 +228,7 @@ class FeatureSchema:
             return self
         return FeatureSchema(
             features=[
-                Feature(name=f.name, modality=f.modality)
+                dataclasses.replace(f, scheduled_gpu_transform=None)
                 if f.scheduled_gpu_transform
                 else f
                 for f in self.features
@@ -329,6 +323,7 @@ class FeatureSchema:
                 name=step_feature.name,
                 modality=step_feature.modality,
                 scheduled_gpu_transform=step_feature.scheduled_gpu_transform,
+                ancestor=step_feature.ancestor,
             )
         return FeatureSchema(features=new_features)
 

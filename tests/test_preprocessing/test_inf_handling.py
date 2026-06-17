@@ -2,9 +2,12 @@
 
 """Tests for infinity passthrough handling.
 
-Covers the :class:`InfToNanStep` / :class:`RestoreInfStep` preprocessing steps,
-their wiring into the pipeline via ``EnsembleConfig.passthrough_inf``, and the
-propagation of the flag through the ensemble config generators.
+Infinities are passed through preprocessing by the pipeline itself rather than
+by dedicated steps: :func:`_extract_inf_masks` records and NaN's them before the
+steps run, and :func:`_restore_inf_masks` writes them back afterwards, mapping
+renamed/derived columns back to their source via :attr:`Feature.ancestor`. This
+module covers those helpers, the round-trip through a real (renaming) step, and
+the propagation of ``passthrough_inf`` through validation and the ensemble.
 """
 
 from __future__ import annotations
@@ -20,14 +23,16 @@ from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.configs import (
-    ClassifierEnsembleConfig,
-    PreprocessorConfig,
-)
+from tabpfn.preprocessing.configs import PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
-from tabpfn.preprocessing.pipeline_factory import create_preprocessing_pipeline
-from tabpfn.preprocessing.steps.inf_handling import InfToNanStep, RestoreInfStep
+from tabpfn.preprocessing.pipeline_interface import (
+    _extract_inf_masks,
+    _restore_inf_masks,
+)
+from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
+    ReshapeFeatureDistributionsStep,
+)
 from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 
@@ -35,304 +40,192 @@ def _numerical_schema(num_features: int) -> FeatureSchema:
     """Create FeatureSchema with numerical features only."""
     return FeatureSchema(
         features=[
-            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            Feature(name=f"input_f{i}", modality=FeatureModality.NUMERICAL)
             for i in range(num_features)
         ]
     )
 
 
-def _step_types(pipeline: PreprocessingPipeline) -> list[str]:
-    """Return the class names of the pipeline's steps, unwrapping modality tuples."""
-    names = []
-    for step in pipeline.steps:
-        unwrapped = step[0] if isinstance(step, tuple) else step
-        names.append(type(unwrapped).__name__)
-    return names
-
-
-def _classifier_config(*, passthrough_inf: bool) -> ClassifierEnsembleConfig:
-    return ClassifierEnsembleConfig(
-        preprocess_config=PreprocessorConfig("none"),
-        add_fingerprint_feature=False,
-        polynomial_features="no",
-        feature_shift_count=0,
-        feature_shift_decoder=None,
-        outlier_removal_std=None,
-        _model_index=0,
-        class_permutation=None,
-        passthrough_inf=passthrough_inf,
-    )
-
-
-def test__inf_to_nan_step__replaces_inf_with_nan() -> None:
-    """Infinite values are replaced with NaN, finite values untouched."""
-    X = np.array(
+def _reshape_pipeline(*, append_to_original: bool = False) -> PreprocessingPipeline:
+    """A one-step pipeline whose step renames the columns it transforms."""
+    return PreprocessingPipeline(
         [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, -np.inf],
-            [7.0, 8.0, 9.0],
+            ReshapeFeatureDistributionsStep(
+                transform_name="quantile_uni_coarse",
+                apply_to_categorical=False,
+                append_to_original=append_to_original,
+            )
         ]
     )
+
+
+# --- _extract_inf_masks / _restore_inf_masks ------------------------------------
+
+
+def test__extract_inf_masks__records_per_feature_and_nans_in_place() -> None:
+    """Only features with infinities are recorded; the infs become NaN in X."""
+    X = np.array([[1.0, np.inf, 3.0], [4.0, 5.0, -np.inf], [7.0, 8.0, 9.0]])
     schema = _numerical_schema(num_features=3)
 
-    result = InfToNanStep().fit_transform(X, schema)
+    masks = _extract_inf_masks(X, schema)
 
-    assert np.isnan(result.X[0, 1])
-    assert np.isnan(result.X[1, 2])
-    assert not np.isinf(result.X).any()
-    # Finite entries are preserved.
-    assert result.X[0, 0] == 1.0
-    assert result.X[2, 1] == 8.0
-    assert result.X_added is None
-    assert result.modality_added is None
-
-
-def test__inf_to_nan_step__records_inf_mask_per_feature() -> None:
-    """Only features containing infinities get an ``inf_mask``."""
-    X = np.array(
-        [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, 6.0],
-        ]
-    )
-    schema = _numerical_schema(num_features=3)
-
-    result = InfToNanStep().fit_transform(X, schema)
-
-    # The mask is recorded on a copy of the schema; the input schema is left
-    # untouched so it stays safe to share across parallel ensemble members.
-    assert all(feat.inf_mask is None for feat in schema.features)
-
-    out_features = result.feature_schema.features
-    # Feature 0 and 2 are finite -> no mask.
-    assert out_features[0].inf_mask is None
-    assert out_features[2].inf_mask is None
-    # Feature 1 has an inf in the first row -> mask records the value, 0 elsewhere.
-    mask = out_features[1].inf_mask
-    assert mask is not None
-    np.testing.assert_array_equal(mask, np.array([np.inf, 0.0]))
+    assert set(masks) == {"input_f1", "input_f2"}
+    np.testing.assert_array_equal(masks["input_f1"], np.array([np.inf, 0.0, 0.0]))
+    np.testing.assert_array_equal(masks["input_f2"], np.array([0.0, -np.inf, 0.0]))
+    # Infinities are replaced with NaN, finite entries untouched.
+    assert np.isnan(X[0, 1])
+    assert np.isnan(X[1, 2])
+    assert not np.isinf(X).any()
+    assert X[0, 0] == 1.0
+    assert X[2, 1] == 8.0
 
 
-def test__inf_to_nan_step__noop_without_infinities() -> None:
-    """All-finite input is returned unchanged with no recorded ``inf_mask``."""
-    X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-    schema = _numerical_schema(num_features=2)
-
-    result = InfToNanStep().fit_transform(X, schema)
-
-    np.testing.assert_array_equal(
-        result.X, np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-    )
-    assert all(feat.inf_mask is None for feat in schema.features)
-    assert result.X_added is None
-    assert result.modality_added is None
-
-
-def test__restore_inf_step__restores_recorded_infinities() -> None:
-    """Round-trip: NaN'd infinities are written back to their original cells."""
-    X = np.array(
-        [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, -np.inf],
-            [7.0, 8.0, 9.0],
-        ]
-    )
-    original = X.copy()
-    # Thread the schema returned by the nan step (which carries the recorded
-    # inf_mask) into the restore step, mirroring how the pipeline forwards it.
-    schema = _numerical_schema(num_features=3)
-
-    nan_result = InfToNanStep().fit_transform(X, schema)
-    restore_result = RestoreInfStep().fit_transform(
-        nan_result.X, nan_result.feature_schema
-    )
-
-    np.testing.assert_array_equal(restore_result.X, original)
-    assert restore_result.X_added is None
-    assert restore_result.modality_added is None
-
-
-def test__restore_inf_step__noop_without_recorded_infinities() -> None:
-    """Restore is a no-op when no feature carries an ``inf_mask``."""
+def test__extract_inf_masks__noop_on_finite_input() -> None:
+    """Finite input yields an empty mapping and leaves X unchanged."""
     X = np.array([[1.0, 2.0], [3.0, 4.0]])
-    schema = _numerical_schema(num_features=2)
+    original = X.copy()
 
-    result = RestoreInfStep().fit_transform(X, schema)
+    masks = _extract_inf_masks(X, _numerical_schema(num_features=2))
 
-    np.testing.assert_array_equal(result.X, np.array([[1.0, 2.0], [3.0, 4.0]]))
-
-
-def test__pipeline__wraps_with_inf_steps_when_passthrough_enabled() -> None:
-    """``passthrough_inf=True`` brackets the pipeline with the inf steps."""
-    pipeline = create_preprocessing_pipeline(
-        _classifier_config(passthrough_inf=True),
-        random_state=0,
-    )
-    names = _step_types(pipeline)
-    assert names[0] == "InfToNanStep"
-    assert names[-1] == "RestoreInfStep"
+    assert masks == {}
+    np.testing.assert_array_equal(X, original)
 
 
-def test__pipeline__omits_inf_steps_when_passthrough_disabled() -> None:
-    """``passthrough_inf=False`` leaves the inf steps out entirely."""
-    pipeline = create_preprocessing_pipeline(
-        _classifier_config(passthrough_inf=False),
-        random_state=0,
-    )
-    names = _step_types(pipeline)
-    assert "InfToNanStep" not in names
-    assert "RestoreInfStep" not in names
+def test__extract_inf_masks__records_tensor_for_torch_input() -> None:
+    """The recorded mask is a tensor when the input is a torch tensor."""
+    X = torch.tensor([[1.0, float("inf"), 3.0], [4.0, 5.0, float("-inf")]])
+
+    masks = _extract_inf_masks(X, _numerical_schema(num_features=3))
+
+    assert set(masks) == {"input_f1", "input_f2"}
+    assert all(isinstance(m, torch.Tensor) for m in masks.values())
+    assert torch.isnan(X[0, 1])
+    assert torch.isnan(X[1, 2])
 
 
-def test__pipeline__round_trip_restores_infinities() -> None:
-    """An end-to-end passthrough pipeline preserves infinite values."""
-    X = np.array(
-        [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, -np.inf],
-            [7.0, 8.0, 9.0],
-            [2.0, 1.0, 0.5],
+def test__restore_inf_masks__matches_by_name() -> None:
+    """Infinities are written back into the column with the recorded name."""
+    X = np.array([[1.0, np.nan, 3.0], [4.0, 5.0, np.nan]])
+    schema = _numerical_schema(num_features=3)
+    masks = {
+        "input_f1": np.array([np.inf, 0.0]),
+        "input_f2": np.array([0.0, -np.inf]),
+    }
+
+    _restore_inf_masks(X, schema, masks)
+
+    assert np.isposinf(X[0, 1])
+    assert np.isneginf(X[1, 2])
+
+
+def test__restore_inf_masks__matches_by_ancestor_and_one_to_many() -> None:
+    """A renamed column restores via ancestor; many columns can share a source."""
+    X = np.full((2, 2), np.nan)
+    # Both columns derive from the same input feature.
+    schema = FeatureSchema(
+        features=[
+            Feature(
+                name="reshape_0",
+                modality=FeatureModality.NUMERICAL,
+                ancestor="input_f0",
+            ),
+            Feature(
+                name="reshape_0_copy",
+                modality=FeatureModality.NUMERICAL,
+                ancestor="input_f0",
+            ),
         ]
     )
-    schema = _numerical_schema(num_features=3)
-    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
+    masks = {"input_f0": np.array([np.inf, 0.0])}
 
-    result = pipeline.fit_transform(X.copy(), schema)
+    _restore_inf_masks(X, schema, masks)
 
+    assert np.isposinf(X[0, 0])
+    assert np.isposinf(X[0, 1])
+
+
+# --- end-to-end pipeline round-trip (through a renaming step) -------------------
+
+
+_ROUND_TRIP_DATA = [
+    [1.0, np.inf, 3.0],
+    [4.0, 5.0, -np.inf],
+    [7.0, 8.0, 9.0],
+    [2.0, 1.0, 0.5],
+    [3.0, 2.0, 1.5],
+]
+
+
+def test__pipeline__round_trips_infinities_through_renaming_step() -> None:
+    """Infinities survive a step that renames the columns it transforms."""
+    X = np.array(_ROUND_TRIP_DATA)
+    result = _reshape_pipeline().fit_transform(X, _numerical_schema(num_features=3))
+
+    # The transformed columns are renamed, but the infs land at their origin.
+    assert [f.name for f in result.feature_schema.features] == [
+        "reshape_0",
+        "reshape_1",
+        "reshape_2",
+    ]
     assert np.isposinf(result.X[0, 1])
     assert np.isneginf(result.X[1, 2])
 
 
-def test__inf_to_nan_step__records_tensor_inf_mask_for_torch_input() -> None:
-    """The recorded ``inf_mask`` is a tensor when the data is a torch tensor."""
-    X = torch.tensor([[1.0, float("inf"), 3.0], [4.0, 5.0, float("-inf")]])
-    schema = _numerical_schema(num_features=3)
+def test__pipeline__round_trips_infinities_for_torch_input() -> None:
+    """Torch input round-trips even though the sklearn step returns numpy.
 
-    result = InfToNanStep().fit_transform(X.clone(), schema)
-
-    masks = [
-        f.inf_mask for f in result.feature_schema.features if f.inf_mask is not None
-    ]
-    assert len(masks) == 2
-    assert all(isinstance(m, torch.Tensor) for m in masks)
-
-
-def test__pipeline__round_trip_restores_infinities_torch() -> None:
-    """The passthrough pipeline also round-trips infinities for torch tensors."""
-    X = torch.tensor(
-        [
-            [1.0, float("inf"), 3.0],
-            [4.0, 5.0, float("-inf")],
-            [7.0, 8.0, 9.0],
-            [2.0, 1.0, 0.5],
-        ]
-    )
-    original = X.clone()
-    schema = _numerical_schema(num_features=3)
-    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
-
-    result = pipeline.fit_transform(X.clone(), schema)
-
-    assert isinstance(result.X, torch.Tensor)
-    assert torch.isposinf(result.X[0, 1])
-    assert torch.isneginf(result.X[1, 2])
-    assert torch.equal(result.X, original)
-
-
-def test__pipeline__output_schema_has_no_inf_mask() -> None:
-    """The pipeline output schema carries no ``inf_mask`` (no leaked references).
-
-    ``RestoreInfStep`` writes the infinities back into ``X`` and then drops the
-    recorded masks from the schema it returns, so nothing downstream pins the
-    (potentially GPU) mask arrays.
+    The recorded (torch) mask is coerced to the output array kind before the
+    infinities are written back.
     """
+    X = torch.tensor(_ROUND_TRIP_DATA)
+    result = _reshape_pipeline().fit_transform(X, _numerical_schema(num_features=3))
+
+    assert np.isposinf(np.asarray(result.X)[0, 1])
+    assert np.isneginf(np.asarray(result.X)[1, 2])
+
+
+def test__pipeline__append_to_original_restores_into_every_descendant() -> None:
+    """With append_to_original, both the original and its copy get the inf back."""
     X = np.array(
-        [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, -np.inf],
-            [7.0, 8.0, 9.0],
-        ]
+        [[1.0, np.inf, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0], [2.0, 3.0, 4.0]]
     )
-    schema = _numerical_schema(num_features=3)
-    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
-
-    result = pipeline.fit_transform(X.copy(), schema)
-
-    # Sanity check the masks were actually recorded (otherwise this is vacuous).
-    assert np.isposinf(result.X[0, 1])
-    assert all(feat.inf_mask is None for feat in result.feature_schema.features)
-    assert pipeline.final_feature_schema_ is not None
-    assert all(
-        feat.inf_mask is None for feat in pipeline.final_feature_schema_.features
+    result = _reshape_pipeline(append_to_original=True).fit_transform(
+        X, _numerical_schema(num_features=3)
     )
 
+    names = [f.name for f in result.feature_schema.features]
+    # Original f1 (kept) and its appended reshaped copy both carry the inf.
+    orig_idx = names.index("input_f1")
+    posinf_cols = {c for _, c in np.argwhere(np.isposinf(result.X))}
+    assert orig_idx in posinf_cols
+    assert len(posinf_cols) == 2  # original + one appended copy
 
-def test__restore_inf_step__keeps_inf_mask_on_fitted_schema_for_predict() -> None:
-    """The fitted ``RestoreInfStep`` retains its mask (restoration source at predict).
 
-    Only the *returned* schema is cleared; ``feature_schema_updated_`` keeps the
-    mask so repeated ``transform`` (predict) calls can still restore infinities.
+def test__pipeline__predict_restores_test_pattern_not_train() -> None:
+    """Predict restores the test data's infinities, not the fitted train pattern.
+
+    The mask is recomputed each call, so a test set whose inf pattern differs
+    from train restores correctly (regression test for the old fitted-mask bug).
     """
-    X = np.array([[1.0, np.inf, 3.0], [4.0, 5.0, -np.inf], [7.0, 8.0, 9.0]])
+    pipeline = _reshape_pipeline()
     schema = _numerical_schema(num_features=3)
-    restore = RestoreInfStep()
-    pipeline = PreprocessingPipeline([InfToNanStep(), restore])
 
-    pipeline.fit_transform(X.copy(), schema)
-
-    retained = [
-        feat.inf_mask
-        for feat in restore.feature_schema_updated_.features
-        if feat.inf_mask is not None
-    ]
-    assert len(retained) == 2
-
-    # The retained mask still drives restoration on a subsequent transform call.
-    nan_test = np.array([[np.nan, 1.0, 2.0], [3.0, 4.0, np.nan], [5.0, 6.0, 7.0]])
-    restored = pipeline.transform(nan_test.copy())
-    assert np.isposinf(restored.X[0, 1])
-    assert np.isneginf(restored.X[1, 2])
-
-
-def test__pipeline__predict_restores_test_inf_pattern_not_train() -> None:
-    """Predict-time restoration must use the test data's infinities, not train's.
-
-    Known-failing regression test (CI stays red until the bug is fixed):
-    ``RestoreInfStep.transform`` restores from its fitted
-    ``feature_schema_updated_`` (the *train* mask), because ``transform(X)`` has
-    no access to the per-pass schema ``InfToNanStep`` threads forward. So for a
-    test set whose inf pattern differs from train, the test infinities are NaN'd
-    and never restored, while infinities are fabricated at the train positions.
-
-    See ``examples/pri_inf_predict_mre.py``.
-    """
-    schema = _numerical_schema(num_features=3)
-    pipeline = PreprocessingPipeline([InfToNanStep(), RestoreInfStep()])
-
-    # Fit: inf at [0, 1].
     X_train = np.array(
-        [
-            [1.0, np.inf, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0],
-        ]
+        [[1.0, np.inf, 3.0], [4.0, 5.0, 6.0], [7.0, 8.0, 9.0], [2.0, 3.0, 4.0]]
     )
     pipeline.fit_transform(X_train.copy(), schema)
 
-    # Predict: a different inf pattern -- inf at [2, 0].
+    # Different inf pattern at predict time: inf at [2, 0].
     X_test = np.array(
-        [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [np.inf, 8.0, 9.0],
-        ]
+        [[1.0, 2.0, 3.0], [4.0, 5.0, 6.0], [np.inf, 8.0, 9.0], [2.0, 3.0, 4.0]]
     )
     result = pipeline.transform(X_test.copy())
 
-    # The test infinity must survive the round-trip ...
-    assert np.isposinf(result.X[2, 0])
-    # ... and no infinity should be fabricated at the train position.
-    assert not np.isinf(result.X[0, 1])
+    assert np.isposinf(result.X[2, 0])  # the test infinity survives ...
+    assert not np.isinf(result.X[0]).any()  # ... no train infinity is fabricated
+
+
+# --- validation gating and ensemble propagation --------------------------------
 
 
 def _preprocessed_X_trains(configs, X_train, y_train) -> list[np.ndarray]:
@@ -434,6 +327,27 @@ def test__generate_classification_configs__propagates_passthrough_inf() -> None:
     assert not any(c.passthrough_inf for c in disabled)
 
 
+def test__generate_regression_configs__propagates_passthrough_inf() -> None:
+    """The flag reaches every generated regressor config."""
+    common = {
+        "num_estimators": 3,
+        "add_fingerprint_feature": False,
+        "polynomial_features": "no",
+        "feature_shift_decoder": None,
+        "preprocessor_configs": [PreprocessorConfig("none")],
+        "target_transforms": [None],
+        "random_state": 0,
+        "num_models": 1,
+        "outlier_removal_std": None,
+    }
+
+    enabled = generate_regression_ensemble_configs(**common, passthrough_inf=True)
+    disabled = generate_regression_ensemble_configs(**common)
+
+    assert all(c.passthrough_inf for c in enabled)
+    assert not any(c.passthrough_inf for c in disabled)
+
+
 def test__fit_validation__accepts_infinities_when_passthrough_enabled() -> None:
     """Input validation lets infinities through when ``passthrough_inf=True``."""
     X = np.array([[1.0, np.inf], [2.0, 3.0], [4.0, 5.0]])
@@ -461,10 +375,9 @@ def test__classifier_fit_predict__handles_infinities_per_passthrough_flag(
 ) -> None:
     """End-to-end fit/predict with infinities in X.
 
-    Regression test for a crash where ``passthrough_inf=True`` survived input
-    validation but the infinities then reached the ordinal encoder in
-    ``clean_data`` and raised. With the flag enabled the fit must succeed; with it
-    disabled the infinities are rejected at validation.
+    With the flag enabled the fit must succeed (infinities are NaN'd through
+    preprocessing and written back); with it disabled they are rejected at
+    validation.
     """
     rng = np.random.default_rng(0)
     X = rng.standard_normal((60, 5))
@@ -501,24 +414,3 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
     else:
         with pytest.raises(TabPFNValidationError):
             model.fit(X, y)
-
-
-def test__generate_regression_configs__propagates_passthrough_inf() -> None:
-    """The flag reaches every generated regressor config."""
-    common = {
-        "num_estimators": 3,
-        "add_fingerprint_feature": False,
-        "polynomial_features": "no",
-        "feature_shift_decoder": None,
-        "preprocessor_configs": [PreprocessorConfig("none")],
-        "target_transforms": [None],
-        "random_state": 0,
-        "num_models": 1,
-        "outlier_removal_std": None,
-    }
-
-    enabled = generate_regression_ensemble_configs(**common, passthrough_inf=True)
-    disabled = generate_regression_ensemble_configs(**common)
-
-    assert all(c.passthrough_inf for c in enabled)
-    assert not any(c.passthrough_inf for c in disabled)

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 from typing import TYPE_CHECKING, Literal
 from typing_extensions import override
 
@@ -20,7 +21,6 @@ from sklearn.preprocessing import (
 )
 
 from tabpfn.preprocessing.datamodel import (
-    Feature,
     FeatureModality,
     FeatureSchema,
     GPUTransformType,
@@ -79,6 +79,47 @@ def _build_reshape_output_names(
         output_names = [input_names[c] for c in categorical_features]
         output_names += transformed_names
     return make_names_unique(output_names)
+
+
+def _build_reshape_ancestors(
+    feature_schema: FeatureSchema,
+    *,
+    trans_ixs: list[int],
+    categorical_features: list[int],
+    n_transformed: int,
+    n_output_features: int,
+    append_to_original: bool,
+    apply_to_categorical: bool,
+) -> list[str | None]:
+    """Map each output column back to the input feature it derives from.
+
+    Mirrors the output column layout of :func:`_build_reshape_output_names`. An
+    entry is the *name* of the source input feature for distribution-transformed
+    columns, or ``None`` for columns that keep their own identity (passthrough
+    originals/categoricals), which already carry their source name directly.
+
+    The transformed block holds ``output_multiplier`` columns per transformed
+    input. ``ColumnTransformer``/``FeatureUnion`` lays these out sub-transform
+    major (e.g. ``[norm(c0), norm(c1), kdi(c0), kdi(c1)]``), so position ``p``
+    maps to input ``trans_ixs[p % len(trans_ixs)]``; this also holds for the
+    single-output case where ``p % len == p``.
+    """
+    input_names = [f.name for f in feature_schema.features]
+
+    def transformed_ancestor(p: int) -> str:
+        return input_names[trans_ixs[p % len(trans_ixs)]]
+
+    transformed = [transformed_ancestor(p) for p in range(n_transformed)]
+    if append_to_original:
+        # Output: [original_all (n_features), transformed_copies]
+        prefix: list[str | None] = [None] * (n_output_features - n_transformed)
+    elif apply_to_categorical:
+        # Output: [transformed (cats + nums)]
+        prefix = []
+    else:
+        # Output: [cats_passthrough, transformed_nums]
+        prefix = [None] * len(categorical_features)
+    return prefix + transformed
 
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
@@ -311,6 +352,15 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             ),
         )
 
+        self._set_ancestors(
+            new_schema,
+            feature_schema,
+            trans_ixs=trans_ixs,
+            categorical_features=categorical_features,
+            output_multiplier=output_multiplier,
+            n_output_features=n_output_features,
+        )
+
         if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
                 # Output: [original_all, transformed_copies]
@@ -323,13 +373,41 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 gpu_target = new_schema.indices_for(FeatureModality.NUMERICAL)
             for idx in gpu_target:
                 f = new_schema.features[idx]
-                new_schema.features[idx] = Feature(
-                    name=f.name,
-                    modality=f.modality,
-                    scheduled_gpu_transform=self.schedule_gpu_transform,
+                new_schema.features[idx] = dataclasses.replace(
+                    f, scheduled_gpu_transform=self.schedule_gpu_transform
                 )
 
         return transformer, new_schema
+
+    def _set_ancestors(
+        self,
+        new_schema: FeatureSchema,
+        feature_schema: FeatureSchema,
+        *,
+        trans_ixs: list[int],
+        categorical_features: list[int],
+        output_multiplier: int,
+        n_output_features: int,
+    ) -> None:
+        """Point distribution-transformed columns back at their source feature.
+
+        Lets per-feature state recorded on the input (e.g. the +/-inf positions
+        tracked for ``passthrough_inf``) be mapped onto the renamed ``reshape_{k}``
+        outputs, even when one input expands into several columns.
+        """
+        ancestors = _build_reshape_ancestors(
+            feature_schema,
+            trans_ixs=trans_ixs,
+            categorical_features=categorical_features,
+            n_transformed=output_multiplier * len(trans_ixs),
+            n_output_features=n_output_features,
+            append_to_original=self.append_to_original_decision_,
+            apply_to_categorical=self.apply_to_categorical,
+        )
+        for idx, ancestor in enumerate(ancestors):
+            if ancestor is not None:
+                f = new_schema.features[idx]
+                new_schema.features[idx] = dataclasses.replace(f, ancestor=ancestor)
 
     @override
     def _fit(

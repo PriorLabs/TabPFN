@@ -22,7 +22,6 @@ from tabpfn.preprocessing.steps import (
     ReshapeFeatureDistributionsStep,
     ShuffleFeaturesStep,
 )
-from tabpfn.preprocessing.steps.inf_handling import InfToNanStep, RestoreInfStep
 from tabpfn.preprocessing.torch.gpu_preprocessing_metadata import (
     is_gpu_quantile_eligible,
     is_gpu_squashing_scaler_eligible,
@@ -47,7 +46,7 @@ def _polynomial_feature_settings(
     raise ValueError(f"Invalid polynomial_features value: {polynomial_features}")
 
 
-def create_preprocessing_pipeline(  # noqa: C901
+def create_preprocessing_pipeline(
     config: EnsembleConfig,
     *,
     random_state: int | np.random.Generator | None,
@@ -65,8 +64,6 @@ def create_preprocessing_pipeline(  # noqa: C901
     steps: list[PreprocessingStep | StepWithModalities] = []
 
     pconfig = config.preprocess_config
-    if config.passthrough_inf:
-        steps.append(InfToNanStep())
     use_poly_features, max_poly_features = _polynomial_feature_settings(
         config.polynomial_features
     )
@@ -143,6 +140,4 @@ def create_preprocessing_pipeline(  # noqa: C901
                 random_state=random_state,
             ),
         )
-    if config.passthrough_inf:
-        steps.append(RestoreInfStep())
     return PreprocessingPipeline(steps)
