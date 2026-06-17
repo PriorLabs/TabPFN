@@ -268,10 +268,16 @@ def process_text_na_dataframe(
     if passthrough_inf:
         # use pandas to compute the mask in order to handle non-numeric dtypes
         # with infinite values:
-        pos_inf = (X == np.inf).to_numpy()  # noqa: SIM300
-        neg_inf = (X == -np.inf).to_numpy()  # noqa: SIM300
+        pos_inf = X == np.inf  # noqa: SIM300
+        neg_inf = X == -np.inf  # noqa: SIM300
         # coerce columns to NaN:
         X[neg_inf | pos_inf] = np.nan
+        # Coerce to a plain boolean array: comparing a `string` column yields a
+        # nullable `boolean` mask, which would otherwise make `to_numpy()` return
+        # an `object` array that cannot be used to index `X_encoded`. NA entries
+        # (from string columns, which never hold true infinities) become False.
+        pos_inf = pos_inf.to_numpy(dtype=bool, na_value=False)
+        neg_inf = neg_inf.to_numpy(dtype=bool, na_value=False)
 
     # When transforming with a fitted encoder, coerce columns whose dtype drifted
     # between fit and predict back to their fit-time dtype, so the OrdinalEncoder is

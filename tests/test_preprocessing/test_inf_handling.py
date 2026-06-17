@@ -13,6 +13,7 @@ the propagation of ``passthrough_inf`` through validation and the ensemble.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 
@@ -615,6 +616,53 @@ def test__clean_data__handles_infinities_on_categoricals() -> None:
     )
     X_clean, *_ = clean_data(X, schema, passthrough_inf=True)
     assert np.all(np.isinf(X_clean) == np.isinf(X))
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__estimator_fit_predict__handles_infinities_on_all_dtypes(
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> None:
+    """The model should support infs in all dtypes."""
+    rng = np.random.default_rng(0)
+
+    features = rng.normal(size=4)
+    if estimator_cls is TabPFNClassifier:
+        y = (features > 0).astype(int)
+    else:
+        y = features + rng.standard_normal(features.shape[0]) * 0.1
+
+    # dataframe with inf features in first row
+    features[0] = np.inf
+    X = pd.DataFrame(
+        {
+            "num": features,
+            # ints cannot be inf-valued
+            "int": [np.inf, 3, 1, 2],
+            "cat": [np.inf, 2, 1, 2],
+            "cat_obj": [np.inf, "1", "1", "2"],
+            "txt": [np.inf, "foo", "bar", "baz"],
+        }
+    )
+
+    # setup categorical columns
+    X = X.astype(
+        {
+            col: pd.CategoricalDtype(set(X[col]))
+            for col in X.columns
+            if col.startswith("cat")
+        }
+    )
+
+    model = estimator_cls(
+        n_estimators=1,
+        passthrough_inf=True,
+        categorical_features_indices=[0],
+    )
+    model.fit(X, y)
+    predictions = model.predict(X)
+
+    assert predictions.shape == (X.shape[0],)
+    assert np.isfinite(np.asarray(predictions)).all()
 
 
 # --- CUDA end-to-end (real GPU hardware) ---------------------------------------
