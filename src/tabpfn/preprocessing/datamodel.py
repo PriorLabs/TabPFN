@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+from copy import copy
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -103,6 +104,11 @@ class GPUTransformType(str, Enum):
 @dataclasses.dataclass
 class Feature:
     """A single feature with its name and modality.
+
+    Warning: features are computed/updated at `fit()`-time only.
+    Existing/transformed columns carry over their features, using
+    `dataclasses.replace()` if needed instead of implicitly copying with
+    `Feature()`.
 
     Attributes:
         name: The name of the feature. Should be unique inside any given FeatureSchema.
@@ -319,12 +325,7 @@ class FeatureSchema:
         new_features = list(self.features)
         for step_idx, original_idx in enumerate(original_indices):
             step_feature = new_schema.features[step_idx]
-            new_features[original_idx] = Feature(
-                name=step_feature.name,
-                modality=step_feature.modality,
-                scheduled_gpu_transform=step_feature.scheduled_gpu_transform,
-                ancestor=step_feature.ancestor,
-            )
+            new_features[original_idx] = copy(step_feature)
         return FeatureSchema(features=new_features)
 
     def remove_columns(self, indices_to_remove: list[int]) -> FeatureSchema:

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from typing_extensions import override
 
@@ -12,7 +13,6 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
 from tabpfn.preprocessing.datamodel import (
-    Feature,
     FeatureModality,
     FeatureSchema,
     make_names_unique,
@@ -126,9 +126,7 @@ def _carry_over_features_scheduled_gpu_transforms(  # noqa: C901
             mark = input_schema.features[i].scheduled_gpu_transform
             if mark is not None:
                 f = new_features[i]
-                new_features[i] = Feature(
-                    name=f.name, modality=f.modality, scheduled_gpu_transform=mark
-                )
+                new_features[i] = dataclasses.replace(f, scheduled_gpu_transform=mark)
     else:
         # Use the fitted ColumnTransformer's remainder mapping.
         # The remainder columns have a 1:1 mapping to input columns that
@@ -151,9 +149,8 @@ def _carry_over_features_scheduled_gpu_transforms(  # noqa: C901
                 mark = input_schema.features[in_idx].scheduled_gpu_transform
                 if mark is not None:
                     f = new_features[out_idx]
-                    new_features[out_idx] = Feature(
-                        name=f.name,
-                        modality=f.modality,
+                    new_features[out_idx] = dataclasses.replace(
+                        f,
                         scheduled_gpu_transform=mark,
                     )
 
