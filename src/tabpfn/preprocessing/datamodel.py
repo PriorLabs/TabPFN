@@ -208,11 +208,6 @@ class FeatureSchema:
         return [f.name for f in self.features]
 
     @property
-    def feature_name_set(self) -> set[str]:
-        """Set of non-``None`` feature names currently in use."""
-        return {f.name for f in self.features if f.name is not None}
-
-    @property
     def num_columns(self) -> int:
         """Get the total number of columns."""
         return len(self.features)
@@ -295,7 +290,7 @@ class FeatureSchema:
         if len(names) != num_new:
             raise ValueError(f"Expected {num_new} names, got {len(names)}")
 
-        unique_names = make_names_unique(names, existing=self.feature_name_set)
+        unique_names = make_names_unique(names, existing=self.feature_names)
         new_features = self.features + [
             Feature(name=name, modality=modality) for name in unique_names
         ]
