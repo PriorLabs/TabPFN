@@ -305,6 +305,172 @@ def test__regressor_preprocessing__identical_without_inf_regardless_of_flag() ->
         np.testing.assert_array_equal(a, b)
 
 
+# --- end-to-end full-pipeline inf passthrough ----------------------------------
+
+# (label, preprocessor config, add_fingerprint_feature, polynomial_features).
+# Chosen to exercise the renaming reshape step, GPU-schedulable presets, SVD and
+# fingerprint appended columns, one-hot expansion, and multi-output transforms.
+_E2E_PRESETS = [
+    ("none", PreprocessorConfig("none", categorical_name="numeric"), False, "no"),
+    (
+        "quantile_uni_coarse",
+        PreprocessorConfig("quantile_uni_coarse", categorical_name="numeric"),
+        False,
+        "no",
+    ),
+    (
+        "squashing_scaler_default",
+        PreprocessorConfig("squashing_scaler_default", categorical_name="numeric"),
+        False,
+        "no",
+    ),
+    (
+        "norm_and_kdi",
+        PreprocessorConfig("norm_and_kdi", categorical_name="numeric"),
+        False,
+        "no",
+    ),
+    (
+        "svd+fingerprint+poly",
+        PreprocessorConfig(
+            "quantile_uni_coarse",
+            categorical_name="numeric",
+            global_transformer_name="svd",
+        ),
+        True,
+        3,
+    ),
+    (
+        "onehot",
+        PreprocessorConfig("quantile_uni_coarse", categorical_name="onehot"),
+        False,
+        "no",
+    ),
+]
+
+
+def _infinity_rows(X: np.ndarray) -> tuple[set[int], set[int]]:
+    """Return (rows with any +inf, rows with any -inf) in ``X``."""
+    return (
+        set(np.where(np.isposinf(X).any(axis=1))[0].tolist()),
+        set(np.where(np.isneginf(X).any(axis=1))[0].tolist()),
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "preprocessor_config", "add_fp", "poly"), _E2E_PRESETS
+)
+def test__full_pipeline__passes_infinities_through_to_preprocessed_output(
+    label: str,
+    preprocessor_config: PreprocessorConfig,
+    add_fp: bool,
+    poly,
+) -> None:
+    """Infinities survive the full factory pipeline at their original rows.
+
+    Runs the real ensemble preprocessor (poly -> remove-constant -> reshape ->
+    encode -> SVD -> fingerprint -> shuffle) with ``passthrough_inf=True``. The
+    output adds/reorders/renames columns, so we assert the robust invariant: the
+    set of rows carrying a +/-inf is exactly the input's, never fabricated
+    elsewhere. The +inf at row 3 and -inf at row 7 must reach the model input.
+    """
+    del label
+    rng = np.random.default_rng(0)
+    X_train = rng.standard_normal((40, 5))
+    y_train = rng.integers(0, 3, 40)
+    X_train[3, 1] = np.inf
+    X_train[7, 2] = -np.inf
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=2,
+        add_fingerprint_feature=add_fp,
+        polynomial_features=poly,
+        feature_shift_decoder="shuffle",  # exercise the column permutation
+        preprocessor_configs=[preprocessor_config],
+        class_shift_method=None,
+        n_classes=3,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+        passthrough_inf=True,
+    )
+
+    members = _preprocessed_X_trains(configs, X_train, y_train)
+
+    assert members  # sanity: the preprocessor produced ensemble members
+    for out in members:
+        pos_rows, neg_rows = _infinity_rows(out)
+        assert pos_rows == {3}
+        assert neg_rows == {7}
+
+
+def test__full_pipeline__omits_infinities_when_passthrough_disabled_is_unused() -> None:
+    """Without infinities present the full pipeline output is finite.
+
+    The handling is unconditional but a no-op on finite input, so a finite run
+    produces no fabricated infinities regardless of the flag.
+    """
+    rng = np.random.default_rng(0)
+    X_train = rng.standard_normal((40, 5))
+    y_train = rng.integers(0, 3, 40)
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=2,
+        add_fingerprint_feature=True,
+        polynomial_features="no",
+        feature_shift_decoder="shuffle",
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "quantile_uni_coarse",
+                categorical_name="numeric",
+                global_transformer_name="svd",
+            )
+        ],
+        class_shift_method=None,
+        n_classes=3,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+        passthrough_inf=True,
+    )
+
+    for out in _preprocessed_X_trains(configs, X_train, y_train):
+        assert not np.isinf(out).any()
+
+
+def test__regressor_full_pipeline__passes_infinities_through() -> None:
+    """The regressor config path also preserves infinities end-to-end (with SVD)."""
+    rng = np.random.default_rng(0)
+    X_train = rng.standard_normal((40, 5))
+    y_train = rng.standard_normal(40)
+    X_train[3, 1] = np.inf
+    X_train[7, 2] = -np.inf
+
+    configs = generate_regression_ensemble_configs(
+        num_estimators=2,
+        add_fingerprint_feature=True,
+        polynomial_features="no",
+        feature_shift_decoder="shuffle",
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "quantile_uni_coarse",
+                categorical_name="numeric",
+                global_transformer_name="svd",
+            )
+        ],
+        target_transforms=[None],
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+        passthrough_inf=True,
+    )
+
+    for out in _preprocessed_X_trains(configs, X_train, y_train):
+        pos_rows, neg_rows = _infinity_rows(out)
+        assert pos_rows == {3}
+        assert neg_rows == {7}
+
+
 def test__generate_classification_configs__propagates_passthrough_inf() -> None:
     """The flag reaches every generated classifier config."""
     common = {
