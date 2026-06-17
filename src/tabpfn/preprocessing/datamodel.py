@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
-from copy import copy
+from copy import deepcopy
 from enum import Enum
 from typing import TYPE_CHECKING
 
@@ -332,7 +332,7 @@ class FeatureSchema:
         new_features = list(self.features)
         for step_idx, original_idx in enumerate(original_indices):
             step_feature = new_schema.features[step_idx]
-            new_features[original_idx] = copy(step_feature)
+            new_features[original_idx] = deepcopy(step_feature)
         return FeatureSchema(features=new_features)
 
     def remove_columns(self, indices_to_remove: list[int]) -> FeatureSchema:
