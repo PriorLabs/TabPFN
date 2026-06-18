@@ -266,16 +266,37 @@ def process_text_na_dataframe(
     pos_inf = neg_inf = None
 
     if passthrough_inf:
-        # use pandas to compute the mask in order to handle non-numeric dtypes
-        # with infinite values:
-        pos_inf = X == np.inf  # noqa: SIM300
-        neg_inf = X == -np.inf  # noqa: SIM300
-        # Coerce to a plain boolean array: comparing a `string` column yields a
-        # nullable `boolean` mask, which would otherwise make `to_numpy()` return
-        # an `object` array that cannot be used to index `X_encoded`. NA entries
-        # (from string columns, which never hold true infinities) become False.
-        pos_inf = pos_inf.to_numpy(dtype=bool, na_value=False)
-        neg_inf = neg_inf.to_numpy(dtype=bool, na_value=False)
+        # Build the +/-inf masks (shape matches `X`). Numeric columns are the common
+        # case and the element-wise pandas comparison over the whole frame is slow, so
+        # test them directly with numpy instead and fall back to pandas only for the
+        # (rare) non-numeric columns that may still hold python float infinities.
+        pos_inf = np.zeros(X.shape, dtype=bool)
+        neg_inf = np.zeros(X.shape, dtype=bool)
+
+        numeric_col_mask = np.array(
+            [pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes],
+            dtype=bool,
+        )
+
+        # Fast numpy path for numeric columns. `to_numpy(dtype=float64)` coerces any
+        # nullable NA to NaN, which never matches +/-inf, so the masks stay correct.
+        if numeric_col_mask.any():
+            numeric_values = X.iloc[:, numeric_col_mask].to_numpy(dtype=np.float64)
+            pos_inf[:, numeric_col_mask] = numeric_values == np.inf
+            neg_inf[:, numeric_col_mask] = numeric_values == -np.inf
+
+        # Slow pandas path for the remaining (non-numeric) columns. Comparing a
+        # `string` column yields a nullable `boolean` mask, so coerce to a plain bool
+        # array; NA entries (which never hold true infinities) become False.
+        if not numeric_col_mask.all():
+            other = X.iloc[:, ~numeric_col_mask]
+            pos_inf[:, ~numeric_col_mask] = (other == np.inf).to_numpy(
+                dtype=bool, na_value=False
+            )
+            neg_inf[:, ~numeric_col_mask] = (other == -np.inf).to_numpy(
+                dtype=bool, na_value=False
+            )
+
         # coerce columns to NaN:
         X[neg_inf | pos_inf] = np.nan
 
