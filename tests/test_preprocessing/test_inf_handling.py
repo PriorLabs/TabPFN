@@ -12,6 +12,9 @@ the propagation of ``passthrough_inf`` through validation and the ensemble.
 
 from __future__ import annotations
 
+import statistics
+import time
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -25,6 +28,14 @@ from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
 )
+from tabpfn.preprocessing.clean import (
+    _is_single_float_block,
+    fix_dtypes,
+    inf_masks_numpy_numeric_,
+    inf_masks_pandas_only,
+    numeric_columns,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.configs import PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
@@ -32,6 +43,7 @@ from tabpfn.preprocessing.pipeline_interface import (
     _extract_inf_masks,
     _restore_inf_masks,
 )
+from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.preprocessing.steps.reshape_feature_distribution_step import (
     ReshapeFeatureDistributionsStep,
 )
@@ -616,6 +628,229 @@ def test__clean_data__handles_infinities_on_categoricals() -> None:
     )
     X_clean, *_ = clean_data(X, schema, passthrough_inf=True)
     assert np.all(np.isinf(X_clean) == np.isinf(X))
+
+
+# --- process_text_na_dataframe inf-mask fast path -------------------------------
+#
+# `process_text_na_dataframe` records +/-inf positions before ordinal encoding and
+# restores them afterwards. The recording splits work by dtype: numeric columns are
+# tested directly with numpy (the fast path), while non-numeric columns (object /
+# string / categorical that may hold a python ``float('inf')``) fall back to the
+# slower whole-column pandas comparison. Both must agree with the original
+# pure-pandas semantics: an element is +inf iff ``X == np.inf`` (NA -> False).
+
+
+def _numpy_split_inf_masks(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """The per-block numpy path (numeric columns extracted into one float array)."""
+    pos_inf = np.zeros(X.shape, dtype=bool)
+    neg_inf = np.zeros(X.shape, dtype=bool)
+    numeric_col_mask = numeric_columns(X)
+    inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
+    return pos_inf, neg_inf
+
+
+def _median_runtime(fn) -> float:
+    """Median wall-clock of ``fn`` over 11 runs after a warm-up call."""
+    fn()  # warm up
+    samples = []
+    for _ in range(11):
+        start = time.perf_counter()
+        fn()
+        samples.append(time.perf_counter() - start)
+    return statistics.median(samples)
+
+
+def _restored_inf_masks(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Run the real cleaning step and read back where infinities landed.
+
+    Output columns align positionally with ``X``'s columns, so the returned masks
+    can be compared cell-for-cell against :func:`_pandas_inf_reference`.
+    """
+    out = process_text_na_dataframe(
+        X.copy(),  # the function mutates its input
+        ord_encoder=get_ordinal_encoder(),
+        fit_encoder=True,
+        passthrough_inf=True,
+    )
+    return np.isposinf(out), np.isneginf(out)
+
+
+def _inf_dtype_frames() -> dict[str, pd.DataFrame]:
+    """DataFrames exercising every dtype branch of the inf-mask split."""
+    inf, ninf = np.inf, -np.inf
+    return {
+        # numeric-only -> fast numpy path only
+        "all_float64": pd.DataFrame(
+            {"a": [1.0, inf, 3.0, 4.0], "b": [ninf, 2.0, 3.0, 4.0]}
+        ),
+        # object column holding a python float('inf') -> slow pandas path
+        "object_and_float": pd.DataFrame(
+            {
+                "a": pd.Series([inf, 1.0, 2.0, 3.0], dtype="object"),
+                "b": [1.0, 2.0, inf, 4.0],
+            }
+        ),
+        # string column never holds infinities; its comparison is a nullable
+        # boolean that must coerce to all-False, not crash the bool indexing
+        "string_and_float": pd.DataFrame(
+            {
+                "s": pd.array(["x", "y", "z", "w"], dtype="string"),
+                "n": [inf, 2.0, ninf, 4.0],
+            }
+        ),
+        # categorical is non-numeric -> slow path; one category is +inf
+        "categorical_and_float": pd.DataFrame(
+            {
+                "c": pd.Series([inf, 1.0, 2.0, 1.0]).astype("category"),
+                "n": [1.0, 2.0, 3.0, ninf],
+            }
+        ),
+        # no numeric columns at all -> only the slow pandas path runs
+        "all_object": pd.DataFrame(
+            {
+                "a": pd.Series([inf, 1.0, 2.0, 3.0], dtype="object"),
+                "b": pd.Series([1.0, ninf, 2.0, 3.0], dtype="object"),
+            }
+        ),
+        # finite numeric frame -> the fast path must fabricate no infinities
+        "finite_only": pd.DataFrame(
+            {"a": [1.0, 2.0, 3.0, 4.0], "b": [5.0, 6.0, 7.0, 8.0]}
+        ),
+    }
+
+
+@pytest.mark.parametrize("frame_id", list(_inf_dtype_frames()))
+def test__process_text_na_dataframe__inf_masks_match_pandas_reference(
+    frame_id: str,
+) -> None:
+    """The numpy fast path reproduces the original pure-pandas +/-inf semantics.
+
+    Regression guard for the dtype-split mask computation: for each dtype mix the
+    restored infinities must land in exactly the cells the whole-frame pandas
+    comparison would mark, with no fabricated or dropped infinities.
+    """
+    X = _inf_dtype_frames()[frame_id]
+    ref_pos, ref_neg = inf_masks_pandas_only(X)
+
+    got_pos, got_neg = _restored_inf_masks(X)
+
+    np.testing.assert_array_equal(got_pos, ref_pos)
+    np.testing.assert_array_equal(got_neg, ref_neg)
+
+
+def test__process_text_na_dataframe__nullable_numeric_na_not_seen_as_inf() -> None:
+    """Nullable extension numerics survive the fast path via the real fit pipeline.
+
+    Nullable ``Int64``/``Float64`` reach this step only after ``fix_dtypes`` has
+    cast them to ``float64`` (pd.NA -> NaN, +/-inf preserved). The numpy fast path
+    then tests them with ``np.float64`` values, so a missing entry (NaN) must never
+    be mistaken for an infinity while a genuine inf is carried through.
+    """
+    raw = pd.DataFrame(
+        {
+            "f": pd.array([1.0, np.inf, pd.NA, 4.0], dtype="Float64"),
+            "i": pd.array([1, 2, 3, pd.NA], dtype="Int64"),  # ints are never inf
+            "g": [-np.inf, 2.0, 3.0, 4.0],
+        }
+    )
+    X = fix_dtypes(raw, cat_indices=None)
+
+    got_pos, got_neg = _restored_inf_masks(X)
+
+    expected_pos = np.zeros(X.shape, dtype=bool)
+    expected_neg = np.zeros(X.shape, dtype=bool)
+    expected_pos[1, 0] = True  # +inf in column 'f'
+    expected_neg[0, 2] = True  # -inf in column 'g'
+    np.testing.assert_array_equal(got_pos, expected_pos)
+    np.testing.assert_array_equal(got_neg, expected_neg)
+
+
+def test__is_single_float_block__distinguishes_consolidated_from_fragmented() -> None:
+    """The fast-path predicate fires only for a single contiguous float block."""
+    rng = np.random.default_rng(0)
+    consolidated = pd.DataFrame(rng.standard_normal((4, 3)))
+    assert _is_single_float_block(consolidated)
+
+    # fix_dtypes assigns column-by-column, fragmenting into one block per column.
+    fragmented = fix_dtypes(rng.standard_normal((4, 3)), cat_indices=None)
+    assert not _is_single_float_block(fragmented)
+
+    # A mixed frame is never a single float block.
+    mixed = pd.DataFrame({"n": [1.0, 2.0], "s": pd.array(["a", "b"], dtype="string")})
+    assert not _is_single_float_block(mixed)
+
+
+def test__process_text_na_dataframe__single_float_block_round_trips_infs() -> None:
+    """The consolidated-float fast path restores +/-inf at their original cells."""
+    X_np = np.arange(12, dtype="float64").reshape(4, 3)
+    X_np[0, 1] = np.inf
+    X_np[3, 2] = -np.inf
+    X = pd.DataFrame(X_np)
+    assert _is_single_float_block(X)  # the branch under test is actually taken
+
+    ref_pos, ref_neg = inf_masks_pandas_only(X)
+    got_pos, got_neg = _restored_inf_masks(X)
+
+    np.testing.assert_array_equal(got_pos, ref_pos)
+    np.testing.assert_array_equal(got_neg, ref_neg)
+    assert got_pos[0, 1]
+    assert got_neg[3, 2]
+
+
+def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> None:
+    """On a fragmented frame the per-block numpy path beats pure pandas.
+
+    A wide numeric frame shaped like a real post-``fix_dtypes`` input (one block
+    per column) is the layout that reaches ``process_text_na_dataframe`` in
+    practice; there the per-block numpy path beats the whole-frame pandas
+    comparison (~1.5x locally). The assertion is a no-regression guard with
+    generous slack so it survives CI noise; marked ``slow`` to run at merge time.
+    """
+    rng = np.random.default_rng(0)
+    X_np = rng.standard_normal((2000, 300))
+    X_np[0, 0] = np.inf
+    X = fix_dtypes(X_np, cat_indices=None)
+    assert not _is_single_float_block(X)  # routed to the per-block path
+
+    # Same result, so the speed comparison is apples-to-apples.
+    np.testing.assert_array_equal(
+        np.stack(_numpy_split_inf_masks(X)), np.stack(inf_masks_pandas_only(X))
+    )
+
+    numpy_median = _median_runtime(lambda: _numpy_split_inf_masks(X))
+    pandas_median = _median_runtime(lambda: inf_masks_pandas_only(X))
+
+    # ~1.5x faster locally; allow 25% slack so only a genuine regression fails.
+    assert numpy_median < pandas_median * 1.25, (
+        f"per-block inf-mask path regressed: {numpy_median * 1e3:.2f}ms vs "
+        f"pandas {pandas_median * 1e3:.2f}ms"
+    )
+
+
+def test__inf_mask__pandas_path_not_slower_than_per_block_on_single_block() -> None:
+    """On a consolidated float frame the fast pandas path beats per-block numpy.
+
+    A single contiguous float block compares element-wise on that block and
+    ``to_numpy()`` is a view, so pandas beats extracting the columns into a fresh
+    array (~3x locally). Guards the fast-pandas branch added for this layout.
+    """
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(rng.standard_normal((2000, 300)))
+    X.iloc[0, 0] = np.inf
+    assert _is_single_float_block(X)  # routed to the fast pandas path
+
+    np.testing.assert_array_equal(
+        np.stack(inf_masks_pandas_only(X)), np.stack(_numpy_split_inf_masks(X))
+    )
+
+    pandas_median = _median_runtime(lambda: inf_masks_pandas_only(X))
+    numpy_median = _median_runtime(lambda: _numpy_split_inf_masks(X))
+
+    # ~3x faster locally; allow 25% slack so only a genuine regression fails.
+    assert pandas_median < numpy_median * 1.25, (
+        f"single-block fast-pandas path regressed: {pandas_median * 1e3:.2f}ms vs "
+        f"per-block {numpy_median * 1e3:.2f}ms"
+    )
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
