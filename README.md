@@ -7,7 +7,7 @@
 [![colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 [![Python Versions](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12%20%7C%203.13%20%7C%203.14-blue)](https://pypi.org/project/tabpfn/)
 
-<img src="https://github.com/PriorLabs/TabPFN/blob/main/docs/assets/tabpfn_architecture.webp" width="80%" alt="TabPFN-3 Architecture">
+<img src="docs/assets/tabpfn_architecture.webp" width="80%" alt="TabPFN-3 Architecture">
 
 ## Quick Start
 
