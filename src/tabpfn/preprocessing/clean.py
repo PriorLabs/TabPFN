@@ -183,6 +183,21 @@ def _column_kind(dtype: Any) -> str:
     return dtype.kind
 
 
+def _is_single_float_block(X: pd.DataFrame) -> bool:
+    """True if ``X`` is backed by a single contiguous numpy float block.
+
+    For such frames pandas' vectorized ``X == inf`` runs directly on the one block
+    and ``to_numpy()`` returns a view, which is faster than extracting the numeric
+    columns into a fresh array (the per-block path below). A column-fragmented
+    frame -- e.g. what ``fix_dtypes`` produces via per-column ``astype`` -- has many
+    blocks and does not qualify. Defensively returns ``False`` if pandas' block
+    internals are unavailable, falling back to the per-block path.
+    """
+    blocks = getattr(getattr(X, "_mgr", None), "blocks", ())
+    # `.values` is the pandas Block array accessor here, not a Series/DataFrame.
+    return len(blocks) == 1 and blocks[0].values.dtype.kind == "f"  # noqa: PD011
+
+
 def _align_columns_to_fitted_dtypes(
     X: pd.DataFrame, ord_encoder: OrderPreservingColumnTransformer
 ) -> pd.DataFrame:
@@ -238,6 +253,110 @@ def _align_columns_to_fitted_dtypes(
     return X
 
 
+def inf_masks_pandas_only(
+    X: pd.DataFrame,
+    *,
+    numeric_only: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Pure-Pandas inf detection.
+
+    Generic but slow with both numeric and object dtypes, fastest in the
+    all-numeric case.
+
+    Args:
+        X (pd.DataFrame): DataFrame to check for +/-infs.
+        numeric_only (Any, optional): If True, skips checks for boolean mask NaNs.
+
+    Returns:
+        pos_inf, neg_inf: Boolean masks.
+    """
+    kwargs = {} if numeric_only else {"na_value": False}
+    pos_inf = (X == np.inf).to_numpy(dtype=bool, **kwargs)  # noqa: SIM300
+    neg_inf = (X == -np.inf).to_numpy(dtype=bool, **kwargs)  # noqa: SIM300
+    return pos_inf, neg_inf
+
+
+def numeric_columns(X: pd.DataFrame) -> np.ndarray:
+    """Computes a mask for the numeric columns of a DataFrame."""
+    return np.array(
+        [pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes],
+        dtype=bool,
+    )
+
+
+def inf_masks_numpy_numeric_(
+    X: pd.DataFrame,
+    numeric_col_mask: np.ndarray,
+    pos_inf: np.ndarray,
+    neg_inf: np.ndarray,
+) -> None:
+    """Computes infinite masks for dataframes, with a fast numpy path for
+    numeric columns.
+
+    Args:
+        X (pd.DataFrame): DataFrame to check for +/-infs.
+        numeric_col_mask (np.ndarray): Numeric columns of X.
+        pos_inf (np.ndarray): Boolean mask, modified in-place.
+        neg_inf (np.ndarray): Boolean mask, modified in-place.
+    """
+    numeric_values = X.iloc[:, numeric_col_mask].to_numpy(dtype=np.float64)
+    pos_inf[:, numeric_col_mask] = numeric_values == np.inf
+    neg_inf[:, numeric_col_mask] = numeric_values == -np.inf
+
+
+def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Computes infinite masks for dataframes, with a fast numpy path for
+    numeric columns.
+
+    Args:
+        X (pd.DataFrame): DataFrame to check for +/-infs.
+
+    Returns:
+        pos_inf, neg_inf: Boolean masks.
+    """
+    # Per-block path for fragmented / mixed frames. Numeric columns are the
+    # common case and the element-wise pandas comparison over a fragmented
+    # frame is slow, so test them directly with numpy and fall back to pandas
+    # only for the (rare) non-numeric columns that may still hold python
+    # float infinities.
+    pos_inf = np.zeros(X.shape, dtype=bool)
+    neg_inf = np.zeros(X.shape, dtype=bool)
+
+    numeric_col_mask = numeric_columns(X)
+
+    # Fast numpy path for numeric columns. `to_numpy(dtype=float64)` coerces
+    # any nullable NA to NaN, which never matches +/-inf, so masks stay correct.
+    if numeric_col_mask.any():
+        inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
+
+    # Slow pandas path for the remaining (non-numeric) columns. Comparing a
+    # `string` column yields a nullable `boolean` mask, so coerce to a plain
+    # bool array; NA entries (never true infinities) become False.
+    non_numeric_col_mask = ~numeric_col_mask
+    if non_numeric_col_mask.any():
+        other = X.iloc[:, non_numeric_col_mask]
+        pos_inf[:, non_numeric_col_mask], neg_inf[:, non_numeric_col_mask] = (
+            inf_masks_pandas_only(other)
+        )
+    return pos_inf, neg_inf
+
+
+def inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """Computes infinite masks for dataframes, with a fast path for numeric dtypes.
+
+    Args:
+        X (pd.DataFrame): DataFrame to check for +/-infs.
+
+    Returns:
+        pos_inf, neg_inf: Boolean masks.
+    """
+    # Build the +/-inf masks (shape matches `X`).
+    if _is_single_float_block(X):
+        return inf_masks_pandas_only(X, numeric_only=True)
+
+    return inf_masks_mixed(X)
+
+
 def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
@@ -266,36 +385,7 @@ def process_text_na_dataframe(
     pos_inf = neg_inf = None
 
     if passthrough_inf:
-        # Build the +/-inf masks (shape matches `X`). Numeric columns are the common
-        # case and the element-wise pandas comparison over the whole frame is slow, so
-        # test them directly with numpy instead and fall back to pandas only for the
-        # (rare) non-numeric columns that may still hold python float infinities.
-        pos_inf = np.zeros(X.shape, dtype=bool)
-        neg_inf = np.zeros(X.shape, dtype=bool)
-
-        numeric_col_mask = np.array(
-            [pd.api.types.is_numeric_dtype(dt) for dt in X.dtypes],
-            dtype=bool,
-        )
-
-        # Fast numpy path for numeric columns. `to_numpy(dtype=float64)` coerces any
-        # nullable NA to NaN, which never matches +/-inf, so the masks stay correct.
-        if numeric_col_mask.any():
-            numeric_values = X.iloc[:, numeric_col_mask].to_numpy(dtype=np.float64)
-            pos_inf[:, numeric_col_mask] = numeric_values == np.inf
-            neg_inf[:, numeric_col_mask] = numeric_values == -np.inf
-
-        # Slow pandas path for the remaining (non-numeric) columns. Comparing a
-        # `string` column yields a nullable `boolean` mask, so coerce to a plain bool
-        # array; NA entries (which never hold true infinities) become False.
-        if not numeric_col_mask.all():
-            other = X.iloc[:, ~numeric_col_mask]
-            pos_inf[:, ~numeric_col_mask] = (other == np.inf).to_numpy(
-                dtype=bool, na_value=False
-            )
-            neg_inf[:, ~numeric_col_mask] = (other == -np.inf).to_numpy(
-                dtype=bool, na_value=False
-            )
+        pos_inf, neg_inf = inf_masks_dataframe(X)
 
         # coerce columns to NaN:
         X[neg_inf | pos_inf] = np.nan
