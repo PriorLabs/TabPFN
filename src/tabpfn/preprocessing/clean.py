@@ -276,8 +276,10 @@ def process_text_na_dataframe(
         # nullable `boolean` mask, which would otherwise make `to_numpy()` return
         # an `object` array that cannot be used to index `X_encoded`. NA entries
         # (from string columns, which never hold true infinities) become False.
-        pos_inf = pos_inf.to_numpy(dtype=bool, na_value=False)
-        neg_inf = neg_inf.to_numpy(dtype=bool, na_value=False)
+        pos_inf.fillna(value=False, inplace=True)  # noqa: PD002
+        neg_inf.fillna(value=False, inplace=True)  # noqa: PD002
+        pos_inf = pos_inf.to_numpy(dtype=bool)
+        neg_inf = neg_inf.to_numpy(dtype=bool)
 
     # When transforming with a fitted encoder, coerce columns whose dtype drifted
     # between fit and predict back to their fit-time dtype, so the OrdinalEncoder is
