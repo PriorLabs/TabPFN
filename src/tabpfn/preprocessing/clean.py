@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
+from packaging.version import Version
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
@@ -34,6 +35,7 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
+PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
 
 
 def clean_data(
@@ -341,8 +343,11 @@ def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return pos_inf, neg_inf
 
 
-def inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Computes infinite masks for dataframes, with a fast path for numeric dtypes.
+
+    Slower than `inf_masks_pandas_only` on pandas < 3.0.0.
+    Use `inf_masks_dataframe` in general.
 
     Args:
         X (pd.DataFrame): DataFrame to check for +/-infs.
@@ -355,6 +360,12 @@ def inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
         return inf_masks_pandas_only(X, numeric_only=True)
 
     return inf_masks_mixed(X)
+
+
+if PANDAS_FASTER_THAN_MIXED_PATH:
+    inf_masks_dataframe = inf_masks_pandas_only
+else:
+    inf_masks_dataframe = _inf_masks_dataframe
 
 
 def process_text_na_dataframe(

@@ -29,6 +29,7 @@ from tabpfn.preprocessing import (
     generate_regression_ensemble_configs,
 )
 from tabpfn.preprocessing.clean import (
+    PANDAS_FASTER_THAN_MIXED_PATH,
     _is_single_float_block,
     fix_dtypes,
     inf_masks_numpy_numeric_,
@@ -797,6 +798,9 @@ def test__process_text_na_dataframe__single_float_block_round_trips_infs() -> No
     assert got_neg[3, 2]
 
 
+@pytest.mark.skipif(
+    PANDAS_FASTER_THAN_MIXED_PATH, reason="native pandas <3.0.0 is faster and in use"
+)
 def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> None:
     """On a fragmented frame the per-block numpy path beats pure pandas.
 
