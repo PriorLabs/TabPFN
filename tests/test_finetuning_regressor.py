@@ -23,7 +23,7 @@ from sklearn.datasets import make_regression
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-from tabpfn.architectures.base.bar_distribution import BarDistribution
+from tabpfn.architectures.shared.bar_distribution import BarDistribution
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -194,7 +194,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -249,7 +249,7 @@ def test__regressor_checkpoint_contains_mse_metric(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.base.transformer.PerFeatureTransformer.forward",
+        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
         autospec=True,
         side_effect=mock_forward,
     ):

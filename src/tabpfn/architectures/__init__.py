@@ -13,14 +13,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from . import base, tabpfn_v2_5, tabpfn_v2_6, tabpfn_v2_sf, tabpfn_v3
+from . import tabpfn_v2, tabpfn_v2_5, tabpfn_v2_6, tabpfn_v3
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import ArchitectureModule
 
 ARCHITECTURES: dict[str, ArchitectureModule] = {
-    "base": base,
-    "tabpfn_v2_sf": tabpfn_v2_sf,
+    "tabpfn_v2": tabpfn_v2,
     "tabpfn_v2_5": tabpfn_v2_5,
     "tabpfn_v2_6": tabpfn_v2_6,
     "tabpfn_v3": tabpfn_v3,

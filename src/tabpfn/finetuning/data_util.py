@@ -15,7 +15,7 @@ import pandas as pd
 import torch
 from sklearn.model_selection import StratifiedKFold
 
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.utils import infer_random_state, pad_tensors

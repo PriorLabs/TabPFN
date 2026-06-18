@@ -1,4 +1,5 @@
 #  Copyright (c) Prior Labs GmbH 2026.
+"""Distributions over binned (bucketed) continuous targets and related utilities."""
 
 # TODO: This module needs some tidying
 from __future__ import annotations
@@ -16,6 +17,8 @@ if TYPE_CHECKING:
 
 # TODO: Merge functionality from BarDistribution and FullSupportBarDistribution
 class BarDistribution(nn.Module):
+    """Distribution over buckets."""
+
     def __init__(self, borders: torch.Tensor, *, ignore_nan_targets: bool = True):
         """Loss for a distribution over bars. The bars are defined by the borders.
         The loss is the negative log density of the distribution. The density is defined
@@ -54,10 +57,12 @@ class BarDistribution(nn.Module):
 
     @property
     def bucket_widths(self) -> torch.Tensor:
+        """Width of each bucket."""
         return self.borders[1:] - self.borders[:-1]
 
     @property
     def num_bars(self) -> int:
+        """Number of buckets (bars) in the distribution."""
         return len(self.borders) - 1
 
     def cdf(self, logits: torch.Tensor, ys: torch.Tensor) -> torch.Tensor:
@@ -159,6 +164,7 @@ class BarDistribution(nn.Module):
         self.__dict__.setdefault("append_mean_pred", False)
 
     def map_to_bucket_idx(self, y: torch.Tensor) -> torch.Tensor:
+        """Map each target value to the index of the bucket it falls into."""
         # assert the borders are actually sorted
         assert (self.borders[1:] - self.borders[:-1] >= 0.0).all()
         target_sample = torch.searchsorted(self.borders, y) - 1
@@ -167,6 +173,7 @@ class BarDistribution(nn.Module):
         return target_sample
 
     def ignore_init(self, y: torch.Tensor) -> torch.Tensor:
+        """Return a mask of NaN targets to ignore, replacing them with a dummy value."""
         ignore_loss_mask = torch.isnan(y)
         if ignore_loss_mask.any() and not self.ignore_nan_targets:
             raise ValueError(f"Found NaN in target {y}")
@@ -176,11 +183,13 @@ class BarDistribution(nn.Module):
         return ignore_loss_mask
 
     def compute_scaled_log_probs(self, logits: torch.Tensor) -> torch.Tensor:
+        """Compute per-bucket log densities (log-softmax scaled by bucket width)."""
         # this is equivalent to log(p(y)) of the density p
         bucket_log_probs = torch.log_softmax(logits, -1)
         return bucket_log_probs - torch.log(self.bucket_widths)
 
     def full_ce(self, logits: torch.Tensor, probs: torch.Tensor) -> torch.Tensor:
+        """Cross-entropy between target ``probs`` and the distribution of ``logits``."""
         return -(probs * torch.log_softmax(logits, -1)).sum(-1)
 
     def forward(
@@ -189,6 +198,7 @@ class BarDistribution(nn.Module):
         y: torch.Tensor,
         mean_prediction_logits: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """Return the negative log density (the loss) of ``y`` under ``logits``."""
         # gives the negative log density (the _loss_),
         # y: T x B, logits: T x B x self.num_bars
         y = y.clone().view(*logits.shape[:-1])  # no trailing one dimension
@@ -227,6 +237,7 @@ class BarDistribution(nn.Module):
         logits: torch.Tensor,
         mean_prediction_logits: torch.Tensor,
     ) -> torch.Tensor:  # TO BE REMOVED AFTER BO SUBMISSION
+        """Auxiliary loss pulling the mean-prediction logits towards the mean."""
         scaled_mean_log_probs = self.compute_scaled_log_probs(mean_prediction_logits)
         if not self.training:
             pass
@@ -242,11 +253,13 @@ class BarDistribution(nn.Module):
         return -scaled_mean_log_probs.gather(1, target_mean.T).mean(1).unsqueeze(0)
 
     def mean(self, logits: torch.Tensor) -> torch.Tensor:
+        """Expected value of the distribution."""
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
         p = torch.softmax(logits, -1)
         return p @ bucket_means
 
     def median(self, logits: torch.Tensor) -> torch.Tensor:
+        """Median of the distribution."""
         return self.icdf(logits, 0.5)
 
     # TODO(eddiebergman): Check if still relevant
@@ -292,6 +305,7 @@ class BarDistribution(nn.Module):
         logits: torch.Tensor,
         center_prob: float = 0.682,
     ) -> torch.Tensor:
+        """Lower and upper quantiles bounding the central ``center_prob`` mass."""
         side_probs = (1.0 - center_prob) / 2
         return torch.stack(
             (self.icdf(logits, side_probs), self.icdf(logits, 1.0 - side_probs)),
@@ -331,6 +345,7 @@ class BarDistribution(nn.Module):
         return self.icdf(logits, rest_prob)
 
     def mode(self, logits: torch.Tensor) -> torch.Tensor:
+        """Mode of the distribution (center of the highest-density bucket)."""
         density = logits.softmax(-1) / self.bucket_widths
         mode_inds = density.argmax(-1)
         bucket_means = self.borders[:-1] + self.bucket_widths / 2
@@ -343,6 +358,7 @@ class BarDistribution(nn.Module):
         *,
         maximize: bool = True,
     ) -> torch.Tensor:  # logits: evaluation_points x batch x feature_dim
+        """Acquisition function: Expected Improvement over ``best_f``."""
         bucket_diffs = self.borders[1:] - self.borders[:-1]
         assert maximize
         if not torch.is_tensor(best_f) or not len(best_f.shape):  # type: ignore
@@ -410,6 +426,7 @@ class BarDistribution(nn.Module):
         return p @ bucket_mean_of_square
 
     def variance(self, logits: torch.Tensor) -> torch.Tensor:
+        """Variance of the distribution."""
         return self.mean_of_square(logits) - self.mean(logits).square()
 
     # TODO: Move into standalone module for plotting
@@ -452,6 +469,8 @@ class BarDistribution(nn.Module):
 
 
 class FullSupportBarDistribution(BarDistribution):
+    """Bar distribution with half-normal tails, giving support over all of R."""
+
     def __init__(
         self,
         borders: torch.Tensor,
@@ -467,6 +486,7 @@ class FullSupportBarDistribution(BarDistribution):
         self.register_buffer("losses_per_bucket", losses_per_bucket)
 
     def assert_support(self, *, allow_zero_bucket_left: bool = False) -> None:
+        """Validate (and optionally repair) the outer buckets used as tails."""
         if allow_zero_bucket_left:
             assert self.bucket_widths[-1] > 0, (
                 f"Half Normal weight must be > 0 (got -1:{self.bucket_widths[-1]})."
@@ -484,6 +504,7 @@ class FullSupportBarDistribution(BarDistribution):
         range_max: float,
         p: float = 0.5,
     ) -> torch.distributions.HalfNormal:
+        """Build a half-normal placing ``p`` of its mass below ``range_max``."""
         s = range_max / torch.distributions.HalfNormal(torch.tensor(1.0)).icdf(
             torch.tensor(p),
         )

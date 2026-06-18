@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import zipfile
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
@@ -118,6 +119,25 @@ def test__save_fit_state__does_not_move_live_estimator_to_cpu(
     # These output types rely on the bar distributions living on the model device.
     model.predict(X, output_type="median")
     model.predict(X, output_type="quantiles")
+
+
+def test__save_fit_state__keeps_tabpfn_fit_parent_name(tmp_path: Path) -> None:
+    X, y = _make_regression_data()
+    model = TabPFNRegressor(device="cpu", n_estimators=1)
+    model.fit(X, y)
+    path = tmp_path / "project.tabpfn_fit" / "model.tabpfn_fit"
+
+    model.save_fit_state(path)
+
+    assert path.exists()
+    assert not (tmp_path / "project").exists()
+
+    with zipfile.ZipFile(path) as archive:
+        assert sorted(archive.namelist()) == [
+            "executor_state.joblib",
+            "fitted_attrs.joblib",
+            "init_params.json",
+        ]
 
 
 # --- Error Handling Tests ---

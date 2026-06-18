@@ -38,7 +38,7 @@ from sklearn.base import (
 )
 from tqdm.auto import tqdm
 
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
     create_inference_engine,
@@ -53,10 +53,7 @@ from tabpfn.constants import (
     ModelVersion,
 )
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
-from tabpfn.inference import (
-    InferenceEngine,
-    InferenceEngineBatchedNoPreprocessing,
-)
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -101,13 +98,12 @@ if TYPE_CHECKING:
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
-    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
         PerformanceOptions,
     )
-    from tabpfn.constants import XType, YType
+    from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
 
