@@ -609,6 +609,58 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
 
 
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
+    estimator_cls: type,
+) -> None:
+    """Regression test for the ``fit_with_cache`` + ``passthrough_inf`` cache bug.
+
+    The v3 architecture used to build its inference KV cache by re-fitting the
+    standard scaler on the *raw* train tensor, whose passed-through +/-inf
+    poisoned the cached mean/std (``torch_nanmean``/``torch_nanstd`` ignore NaN
+    but not inf). At predict time, standardising the (finite) test rows with
+    those statistics produced ``(finite - inf)/inf = NaN`` for every cell of the
+    affected columns, NaN logits, and ``nan_to_num`` then collapsed every
+    prediction to a constant (ROC-AUC 0.5 / degenerate regression output).
+
+    The scaler statistics are now fitted on the imputed train rows and reused for
+    the cache, so the train and test rows are standardised identically. Predicting
+    on fully finite test data must yield finite, non-constant outputs.
+    """
+    rng = np.random.default_rng(0)
+    n_features = 8
+    X_train = rng.standard_normal((120, n_features))
+    signal = X_train[:, 0].copy()  # copy before corruption (column 0 may get inf'd)
+    X_test = rng.standard_normal((40, n_features))
+
+    # Corrupt ~5% of train cells with +inf, hitting most columns (the test set
+    # stays finite, mirroring the real-world failure).
+    n_corrupt = round(0.05 * X_train.size)
+    flat = rng.choice(X_train.size, size=n_corrupt, replace=False)
+    rows, cols = np.unravel_index(flat, X_train.shape)
+    X_train[rows, cols] = np.inf
+
+    if estimator_cls is TabPFNClassifier:
+        y_train = (signal > 0).astype(int)
+        model = estimator_cls(
+            n_estimators=1, fit_mode="fit_with_cache", passthrough_inf=True
+        )
+        model.fit(X_train, y_train)
+        proba = model.predict_proba(X_test)
+        assert np.isfinite(proba).all()
+        # Degenerate (poisoned-cache) output is identical for every row.
+        assert proba[:, 1].std() > 1e-3
+    else:
+        y_train = signal + rng.standard_normal(120) * 0.1
+        model = estimator_cls(
+            n_estimators=1, fit_mode="fit_with_cache", passthrough_inf=True
+        )
+        model.fit(X_train, y_train)
+        preds = model.predict(X_test)
+        assert np.isfinite(preds).all()
+        assert np.asarray(preds).std() > 1e-3
+
+
 def test__clean_data__handles_infinities_on_categoricals() -> None:
     """MRE For a bug triggered in "tabpfn.preprocessing.clean.clean_data()"
     where categoricals containing infs crash the ordinal encoder.
