@@ -32,10 +32,15 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
+        forced = [feat.non_constant_inf for feat in feature_schema.features]
         if isinstance(X, torch.Tensor):
             sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
+            if any(forced):
+                sel_ = sel_ | torch.tensor(forced, dtype=torch.bool)
         else:
             sel_ = ((X[0:1, :] == X).mean(axis=0) < 1.0).tolist()
+            if any(forced):
+                sel_ = [bool(keep or f) for keep, f in zip(sel_, forced, strict=False)]
 
         if not any(sel_):
             raise TabPFNValidationError(

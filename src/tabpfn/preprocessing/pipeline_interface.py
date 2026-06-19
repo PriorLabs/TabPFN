@@ -72,6 +72,29 @@ def _restore_inf_masks(
         X[bool_mask, idx] = mask[bool_mask]
 
 
+def _flag_non_constant_infs(
+    feature_schema: FeatureSchema,
+    inf_masks: InfMasks,
+) -> FeatureSchema:
+    """Flag inf-carrying features that are genuinely non-constant."""
+    if not inf_masks:
+        return feature_schema
+
+    new_features = list(feature_schema.features)
+    changed = False
+    for idx, feat in enumerate(feature_schema.features):
+        mask = inf_masks.get(feat.name)
+        if mask is None:
+            continue
+        if bool((mask != mask[0]).any()):
+            new_features[idx] = dataclasses.replace(feat, non_constant_inf=True)
+            changed = True
+
+    if not changed:
+        return feature_schema
+    return dataclasses.replace(feature_schema, features=new_features)
+
+
 def _coerce_like(
     arr: np.ndarray | torch.Tensor,
     reference: np.ndarray | torch.Tensor,
@@ -436,6 +459,8 @@ class PreprocessingPipeline:
         # end.  Computed per call so train and test each restore their own
         # pattern.  A no-op when the input is already finite.
         inf_masks = _extract_inf_masks(X, feature_schema)
+        if is_fitting:
+            feature_schema = _flag_non_constant_infs(feature_schema, inf_masks)
 
         self.step_timings_ = {} if self.record_timings else None
         for step_idx, (step, modalities) in enumerate(self.steps):
