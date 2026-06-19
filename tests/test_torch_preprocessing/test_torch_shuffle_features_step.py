@@ -31,7 +31,10 @@ def test__shuffle_features_step__same_permutation_as_cpu(
     )
     cpu_X: npt.NDArray[np.float64] = np.arange(n_cols).reshape(1, -1).astype(np.float64)
     cpu_schema = FeatureSchema(
-        features=[Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_cols
+        features=[
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(n_cols)
+        ]
     )
     cpu_step._fit(cpu_X, cpu_schema)
     cpu_perm: list[int] = list(cpu_step.index_permutation_)

@@ -30,14 +30,14 @@ class TestFeatureSchema:
         """Test from_feature_modalities factory method."""
         schema = FeatureSchema(
             features=[
-                Feature(name=None, modality=FeatureModality.NUMERICAL),
-                Feature(name=None, modality=FeatureModality.CATEGORICAL),
-                Feature(name=None, modality=FeatureModality.NUMERICAL),
+                Feature(name="num0", modality=FeatureModality.NUMERICAL),
+                Feature(name="cat0", modality=FeatureModality.CATEGORICAL),
+                Feature(name="num1", modality=FeatureModality.NUMERICAL),
             ]
         )
 
         assert schema.num_columns == 3
-        assert schema.feature_names == [None, None, None]
+        assert schema.feature_names == ["num0", "cat0", "num1"]
         assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
         assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
 

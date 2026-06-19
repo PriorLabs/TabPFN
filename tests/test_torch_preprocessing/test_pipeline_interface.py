@@ -77,9 +77,18 @@ def get_test_feature_schema(
 ) -> FeatureSchema:
     """Create FeatureSchema for tests from modality counts."""
     features = (
-        [Feature(name=None, modality=FeatureModality.NUMERICAL)] * num_numericals
-        + [Feature(name=None, modality=FeatureModality.CATEGORICAL)] * num_categoricals
-        + [Feature(name=None, modality=FeatureModality.TEXT)] * num_text
+        [
+            Feature(name=f"num{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_numericals)
+        ]
+        + [
+            Feature(name=f"cat{i}", modality=FeatureModality.CATEGORICAL)
+            for i in range(num_categoricals)
+        ]
+        + [
+            Feature(name=f"txt{i}", modality=FeatureModality.TEXT)
+            for i in range(num_text)
+        ]
     )
     return FeatureSchema(features=features)
 

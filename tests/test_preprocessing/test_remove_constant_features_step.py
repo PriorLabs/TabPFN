@@ -20,8 +20,8 @@ def _numerical_metadata(num_features: int) -> FeatureSchema:
     """Create FeatureSchema with numerical features only."""
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(num_features)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_features)
         ]
     )
 
@@ -185,14 +185,7 @@ def test__pipeline__keeps_column_with_multiple_infinities() -> None:
             [inf, 9.0, 3.0],
         ]
     )
-    # The inf-mask helpers key columns by name, so use unique names (as real
-    # schemas do) rather than the ``name=None`` test helper.
-    schema = FeatureSchema(
-        features=[
-            Feature(name=f"input_f{i}", modality=FeatureModality.NUMERICAL)
-            for i in range(3)
-        ]
-    )
+    schema = _numerical_metadata(num_features=3)
 
     result = PreprocessingPipeline([RemoveConstantFeaturesStep()]).fit_transform(
         X.copy(), schema
