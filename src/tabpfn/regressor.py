@@ -82,7 +82,6 @@ from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
     infer_random_state,
-    remove_non_differentiable_preprocessing_from_models,
     transform_borders_one,
     translate_probs_across_borders,
 )
@@ -963,7 +962,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 X=X, rng=rng
             )
             self.ensemble_configs_ = ensemble_configs  # Store for prompt tuning reuse
-            remove_non_differentiable_preprocessing_from_models(models=self.models_)
         else:
             _, _, byte_size = determine_precision(
                 self.inference_precision, self.devices_
