@@ -1,0 +1,159 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1095 330" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 z" fill="#101010"/>
+    </marker>
+    <marker id="tip" markerWidth="8" markerHeight="8" refX="5" refY="3" orient="auto-start-reverse" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 z" fill="#b6698d"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1095" height="330" fill="#ffffff"/>
+  <text x="20" y="32" font-size="20" font-weight="700" fill="#101010">b</text>
+  <text x="548" y="30" text-anchor="middle" font-size="15" font-weight="600" fill="#101075">TabPFN-3 architecture: a distribution embedder, then row-wise and cross-row attention, read out as per-row tokens</text>
+
+  <!-- panel -->
+  <rect x="24" y="48" width="1047" height="272" rx="14" fill="#e8e8f2"/>
+
+  <!-- ============ STAGE 1: input table (3 train + 2 test rows) ============ -->
+  <rect x="60" y="115" width="140" height="140" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
+  <rect x="60" y="199" width="140" height="56" fill="#fff2ae"/>
+  <g stroke="#101010" stroke-width="1">
+    <line x1="95"  y1="115" x2="95"  y2="255"/>
+    <line x1="130" y1="115" x2="130" y2="255"/>
+    <line x1="165" y1="115" x2="165" y2="255"/>
+    <line x1="60" y1="143" x2="200" y2="143"/>
+    <line x1="60" y1="171" x2="200" y2="171"/>
+    <line x1="60" y1="199" x2="200" y2="199"/>
+    <line x1="60" y1="227" x2="200" y2="227"/>
+  </g>
+  <rect x="60" y="115" width="140" height="140" fill="none" stroke="#101010" stroke-width="1.5"/>
+  <text x="46" y="157" font-size="10" font-style="italic" fill="#3f2670" text-anchor="middle" transform="rotate(-90 46 157)">train</text>
+  <text x="46" y="227" font-size="10" font-style="italic" fill="#8a6a00" text-anchor="middle" transform="rotate(-90 46 227)">test</text>
+  <text x="130" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Input table</text>
+
+  <line x1="205" y1="185" x2="260" y2="185" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ============ STAGE 2: distribution embedder ============ -->
+  <g stroke="#101010" stroke-width="1.5" fill="#ffffff">
+    <rect x="268" y="115" width="24" height="140"/>
+    <rect x="304" y="115" width="24" height="140"/>
+    <rect x="340" y="115" width="24" height="140"/>
+    <rect x="376" y="115" width="24" height="140"/>
+  </g>
+  <!-- bottom 2 cells of each feature column = test -->
+  <g fill="#fff2ae">
+    <rect x="268" y="199" width="24" height="56"/>
+    <rect x="304" y="199" width="24" height="56"/>
+    <rect x="340" y="199" width="24" height="56"/>
+    <rect x="376" y="199" width="24" height="56"/>
+  </g>
+  <!-- cell dividers -->
+  <g stroke="#101010" stroke-width="0.8">
+    <line x1="268" y1="143" x2="292" y2="143"/><line x1="268" y1="171" x2="292" y2="171"/><line x1="268" y1="199" x2="292" y2="199"/><line x1="268" y1="227" x2="292" y2="227"/>
+    <line x1="304" y1="143" x2="328" y2="143"/><line x1="304" y1="171" x2="328" y2="171"/><line x1="304" y1="199" x2="328" y2="199"/><line x1="304" y1="227" x2="328" y2="227"/>
+    <line x1="340" y1="143" x2="364" y2="143"/><line x1="340" y1="171" x2="364" y2="171"/><line x1="340" y1="199" x2="364" y2="199"/><line x1="340" y1="227" x2="364" y2="227"/>
+    <line x1="376" y1="143" x2="400" y2="143"/><line x1="376" y1="171" x2="400" y2="171"/><line x1="376" y1="199" x2="400" y2="199"/><line x1="376" y1="227" x2="400" y2="227"/>
+  </g>
+  <!-- redraw column borders over the yellow fill -->
+  <g stroke="#101010" stroke-width="1.5" fill="none">
+    <rect x="268" y="115" width="24" height="140"/>
+    <rect x="304" y="115" width="24" height="140"/>
+    <rect x="340" y="115" width="24" height="140"/>
+    <rect x="376" y="115" width="24" height="140"/>
+  </g>
+  <!-- inducing-point tokens (slightly different colour), same cell size as the embedder -->
+  <rect x="424" y="143" width="24" height="56" fill="#3f2670" stroke="#101075" stroke-width="1.5"/>
+  <!-- train rows attend both ways with the inducing points (full + back) -->
+  <g fill="none" stroke="#b6698d" stroke-width="1.4">
+    <path d="M401,129 Q414,138 423,156" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M401,157 L423,166" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M401,185 Q414,186 423,182" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  </g>
+  <!-- inducing points -> test rows only (one-directional arrows to test) -->
+  <g fill="none" stroke="#b6698d" stroke-width="1.4">
+    <path d="M423,192 Q412,213 401,213" marker-end="url(#tip)"/>
+    <path d="M423,195 Q410,236 401,241" marker-end="url(#tip)"/>
+  </g>
+  <text x="436" y="212" text-anchor="middle" font-size="8.5" font-style="italic" fill="#101075">inducing</text>
+
+  <text x="350" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Distribution embedder</text>
+  <text x="350" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">inducing points: full &#8596; train &#183; &#8594; test only</text>
+
+  <line x1="456" y1="185" x2="498" y2="185" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ============ STAGE 3: row-wise (within-row feature) attention ============ -->
+  <!-- horizontal row blocks (3 train, 2 test), each split into feature cells -->
+  <g stroke="#101010" stroke-width="1.5">
+    <rect x="505" y="118" width="164" height="22" fill="#ececf5"/>
+    <rect x="505" y="146" width="164" height="22" fill="#ececf5"/>
+    <rect x="505" y="174" width="164" height="22" fill="#ececf5"/>
+    <rect x="505" y="202" width="164" height="22" fill="#fff2ae"/>
+    <rect x="505" y="230" width="164" height="22" fill="#fff2ae"/>
+  </g>
+  <!-- feature-cell dividers per row block -->
+  <g stroke="#101010" stroke-width="0.8">
+    <line x1="546" y1="118" x2="546" y2="140"/><line x1="587" y1="118" x2="587" y2="140"/><line x1="628" y1="118" x2="628" y2="140"/>
+    <line x1="546" y1="146" x2="546" y2="168"/><line x1="587" y1="146" x2="587" y2="168"/><line x1="628" y1="146" x2="628" y2="168"/>
+    <line x1="546" y1="174" x2="546" y2="196"/><line x1="587" y1="174" x2="587" y2="196"/><line x1="628" y1="174" x2="628" y2="196"/>
+    <line x1="546" y1="202" x2="546" y2="224"/><line x1="587" y1="202" x2="587" y2="224"/><line x1="628" y1="202" x2="628" y2="224"/>
+    <line x1="546" y1="230" x2="546" y2="252"/><line x1="587" y1="230" x2="587" y2="252"/><line x1="628" y1="230" x2="628" y2="252"/>
+  </g>
+  <!-- within each row, all feature cells attend to each other (spaced arcs) -->
+  <g fill="none" stroke="#b6698d" stroke-width="1.3">
+    <path d="M527,129 Q546,123 565,129" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M569,129 Q587,123 606,129" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M610,129 Q628,123 647,129" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M527,157 Q546,151 565,157" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M569,157 Q587,151 606,157" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M610,157 Q628,151 647,157" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M527,185 Q546,179 565,185" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M569,185 Q587,179 606,185" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M610,185 Q628,179 647,185" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M527,213 Q546,207 565,213" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M569,213 Q587,207 606,213" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M610,213 Q628,207 647,213" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M527,241 Q546,235 565,241" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M569,241 Q587,235 606,241" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M610,241 Q628,235 647,241" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  </g>
+  <text x="587" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Row-wise attention</text>
+  <text x="587" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">all features in a row attend to each other</text>
+
+  <line x1="679" y1="185" x2="734" y2="185" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ============ STAGE 4: cross-row attention with train/test mask ============ -->
+  <!-- train tokens -->
+  <g stroke="#101010" stroke-width="1.5" fill="#ffffff">
+    <rect x="752" y="160" width="34" height="50" rx="3"/>
+    <rect x="798" y="160" width="34" height="50" rx="3"/>
+    <rect x="844" y="160" width="34" height="50" rx="3"/>
+  </g>
+  <!-- divider train | test -->
+  <line x1="892" y1="142" x2="892" y2="238" stroke="#cccccc" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <!-- test tokens -->
+  <g stroke="#caa400" stroke-width="1.5" fill="#fff2ae">
+    <rect x="906" y="160" width="34" height="50" rx="3"/>
+    <rect x="952" y="160" width="34" height="50" rx="3"/>
+  </g>
+
+  <!-- full attention ONLY among train rows (spaced, double-headed) -->
+  <g fill="none" stroke="#b6698d" stroke-width="1.6">
+    <path d="M772,160 Q793,142 812,160" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M818,160 Q839,142 858,160" marker-start="url(#tip)" marker-end="url(#tip)"/>
+    <path d="M770,158 Q815,114 860,158" marker-start="url(#tip)" marker-end="url(#tip)"/>
+  </g>
+  <!-- test rows attend to train rows only (one-directional) -->
+  <path d="M955,236 C 905,256 850,256 820,238" fill="none" stroke="#b6698d" stroke-width="1.6" marker-end="url(#tip)"/>
+  <!-- no attention between test rows (blocked) -->
+  <path d="M923,160 Q946,140 969,160" fill="none" stroke="#cccccc" stroke-width="1.4" stroke-dasharray="4 3"/>
+  <g stroke="#b6698d" stroke-width="1.8">
+    <line x1="941" y1="143" x2="951" y2="153"/>
+    <line x1="951" y1="143" x2="941" y2="153"/>
+  </g>
+
+  <text x="815" y="226" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">train rows</text>
+  <text x="946" y="226" text-anchor="middle" font-size="10.5" font-style="italic" fill="#8a6a00">test rows</text>
+  <text x="888" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Cross-row attention</text>
+  <text x="888" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">full only train &#8596; train &#183; test &#8594; train only &#183; no test &#8596; test</text>
+</svg>

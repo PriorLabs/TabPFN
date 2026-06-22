@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 300" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="9" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 z" fill="#101010"/>
+    </marker>
+    <marker id="arrg" markerWidth="9" markerHeight="9" refX="5" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L6,3 L0,6 z" fill="#cccccc"/>
+    </marker>
+    <!-- Prior Labs mark -->
+    <clipPath id="priorClip"><circle cx="998.25" cy="998.25" r="918.39"/></clipPath>
+    <symbol id="priorLogo" viewBox="0 0 1996.5 1996.5">
+      <g clip-path="url(#priorClip)">
+        <path fill="#101075" d="M1811.2,0H185.3C83.1,0,0,83.1,0,185.3v1625.9c0,102.2,83.1,185.3,185.3,185.3h1625.9c102.2,0,185.3-83.1,185.3-185.3V185.3c0-102.2-83.1-185.3-185.3-185.3ZM1343.2,1090.5c115.2,38.8,284.7,72.2,592.7,85.8v73.3c-322.9-26.2-485.5-88.7-592.7-159.2ZM1935.9,1277.4v74.8c-297.2-36.5-453.7-116.1-555.9-207.3,110.2,59.5,273.2,109.8,555.9,132.5ZM1313.8,1043.7c119.7,12.7,296,25.2,622.1,29.9v74c-213.1-8.4-428.7-32.9-622.1-103.9ZM1270.3,1004.3c125-17.7,306.9-30.7,665.6-34.8v69.8c-370.1-5.4-546-20.7-665.6-35ZM1244.1,970.3c130.8-52.2,316.5-94,691.8-106v67.8c-381.4,4.4-564.7,18.7-691.8,38.2ZM1232.5,930.8c135.6-84.4,328-154.6,703.4-172.8v65.4c-379.5,12-569.4,54.3-703.4,107.4ZM1228.2,881.5c140.7-114.9,337.5-209,707.7-230.7v63.1c-370.3,17.7-568.3,85-707.7,167.6ZM1232.6,817.2c44.5-43.2,94-83.7,151.2-119.4,144-89.7,325.5-140.8,552.1-155.1v60.5c-357.1,20.4-559,106.1-703.3,214ZM1247.1,735c37.2-40,77.6-77.6,122.6-111.7,149-112.7,335-174.7,566.2-188.8v57.5c-337.8,20.5-541.1,117.1-688.8,243ZM1260.5,644.4c29.5-34.1,60.8-66.5,94.5-96.5,154.3-137,345-210,580.9-222.3v54.5c-321.6,18.6-525,123.4-675.4,264.2ZM1278.3,540.7c19.8-23.9,40.3-46.9,61.8-68.8,162.4-165.2,352.6-246.7,595.8-254.8v51.2c-304,14.8-505.6,122.3-657.6,272.4ZM185.3,60.5h1625.9c58.9,0,108.5,41.1,121.4,96.1-474.2,16.6-706.2,300.6-889.3,627.3h0s0,0,0,0c-89.6-51.6-216.8-85.2-419.6-85.2H60.5V185.3c0-68.8,56-124.7,124.7-124.7ZM60.5,1738.9h10.5c65.2,0,128.7-5.9,188.7-17.7,72.4-14,137.2-35.6,196-63.3-106.4,71.8-234.3,116.6-395.3,121.5v-40.6ZM248.9,1665c-56.5,11-116.3,16.6-177.8,16.6h-10.5v-44.3h51.3c62.5,0,124.4-5.3,184.1-15.8,91.3-15.8,170.3-41.7,239.9-75.1-80.1,55.3-173.6,96.8-286.9,118.6ZM286.6,1568.3c-57.4,10.1-114.6,15-174.8,15h-51.3v-47.6h92.1c59.8,0,118.5-4.6,179.5-14,113.4-17.5,207.2-47.5,287.2-86-88.8,62.1-195.9,109-332.7,132.6ZM324.4,1471.7c-58.4,9-114.6,13.4-171.7,13.4H60.5v-50.9h132.9c56.8,0,114.1-4,174.9-12.2,135.8-18.3,242.8-50,330.8-90.1-95.3,65-213.9,114.9-374.7,139.8ZM362,1375c-58.7,7.9-113.9,11.8-168.6,11.8H60.5v-54.2h173.7c53.9,0,109.6-3.4,170.4-10.4,163.4-18.9,283.6-50.7,378.6-89.6-101,65.3-230.7,116.8-421.3,142.5ZM399.6,1278.4c-59.1,6.8-113.2,10.1-165.4,10.1H60.5v-57.5h214.5c50.9,0,105.2-2.8,166-8.7,186.3-17.9,314.4-44.4,412.2-74.9-.9,1.7-1.8,3.3-2.7,5-102.9,55.8-238.1,101.4-451,125.9ZM437.1,1181.7c-59.4,5.7-112.5,8.5-162.1,8.5H60.5v-60.8h255.3c48,0,100.9-2.3,161.6-6.9,189.4-14.5,316.5-29.8,412.1-45-3,5.9-6.1,11.8-9.1,17.7-100.2,35.4-234.2,66.4-443.3,86.5ZM474.6,1085.1c-59.8,4.6-111.7,6.8-158.8,6.8H60.5v-64.1h296.1c45.8,0,95.8-1.6,157.3-5.2,191.5-11,317.7-14.8,411-14.1-.8,1.5-1.5,2.9-2.2,4.4-3.9,7.7-7.9,15.4-11.8,23.1-97.7,16.5-229.5,33.2-436.3,49.1ZM512,988.5c-60.8,3.5-110.2,5.1-155.3,5.1H60.5v-67.4h336.8c44.9,0,95-1.1,153-3.4,193.5-7,318.4,1.1,409.2,18-5.8,11.2-11.6,22.5-17.3,33.8-95.7-1.4-226.2,2.3-430.3,14ZM549.3,891.9c-57.7,2.3-107.3,3.4-151.9,3.4H60.5v-70.6h377.6c42.3,0,91-.6,148.9-1.7,196.2-3.6,319.8,16.2,408.2,49.4-7,13.2-13.9,26.4-20.8,39.6-93.6-18.4-222.8-27.4-425.3-20.1ZM586.5,795.4c-57.7,1.1-106.2,1.7-148.3,1.7H60.5v-73.9h563.2c199,0,321.7,31.7,408,81.7-7.8,14.1-15.5,28.4-23.2,42.6-91.3-34.9-219-55.7-422-52.1ZM1811.2,1935.9H185.3c-58.9,0-108.4-41-121.4-96,372.7-12.1,581.8-225.3,743.7-488.7,106.1-143.8,286.7-453.1,483.4-263.5,103.6,123.9,258.7,242.3,644.9,289.1v434.4c0,68.8-56,124.8-124.8,124.8Z"/>
+      </g>
+      <circle cx="998.25" cy="998.25" r="918.39" fill="none" stroke="#101075" stroke-width="60"/>
+    </symbol>
+  </defs>
+
+  <rect x="0" y="0" width="1280" height="300" fill="#ffffff"/>
+  <text x="20" y="30" font-size="20" font-weight="700" fill="#101010">a</text>
+
+  <!-- ================= LEFT PANEL ================= -->
+  <rect x="36" y="44" width="600" height="234" rx="14" fill="#e8e8f2"/>
+  <text x="336" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN is trained on synthetic data to take entire</text>
+  <text x="336" y="42" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">datasets as inputs and predict in a forward pass</text>
+
+  <!-- data table -->
+  <g stroke="#101010" stroke-width="1.5" fill="#ffffff">
+    <rect x="72" y="84" width="120" height="50"/>
+    <rect x="192" y="84" width="80" height="50"/>
+    <rect x="72" y="134" width="120" height="50"/>
+    <rect x="192" y="134" width="80" height="50"/>
+  </g>
+  <text x="132" y="114" text-anchor="middle" font-size="14" fill="#101010">X<tspan font-size="8.5" dy="2.5">train</tspan></text>
+  <text x="232" y="114" text-anchor="middle" font-size="14" fill="#101010">y<tspan font-size="8.5" dy="2.5">train</tspan></text>
+  <text x="132" y="164" text-anchor="middle" font-size="14" fill="#101010">X<tspan font-size="8.5" dy="2.5">test</tspan></text>
+  <text x="232" y="164" text-anchor="middle" font-size="15" fill="#101010">?</text>
+
+  <!-- arrow to network -->
+  <line x1="272" y1="109" x2="352" y2="109" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- network box -->
+  <rect x="358" y="80" width="158" height="58" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
+  <use href="#priorLogo" x="393" y="84" width="21" height="21"/>
+  <text x="418" y="100" text-anchor="start" font-size="14" font-weight="700" fill="#101010">TabPFN-3</text>
+  <text x="437" y="120" text-anchor="middle" font-size="10.5" fill="#374151">neural network</text>
+  <text x="437" y="133" text-anchor="middle" font-size="10.5" fill="#374151">parameterized by θ</text>
+
+  <!-- arrow to prediction -->
+  <line x1="516" y1="109" x2="552" y2="109" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- prediction histogram -->
+  <text x="582" y="66" text-anchor="middle" font-size="12" fill="#101010">Prediction</text>
+  <g fill="#6b7280">
+    <rect x="560" y="105" width="6" height="11"/>
+    <rect x="566" y="96"  width="6" height="20"/>
+    <rect x="572" y="86"  width="6" height="30"/>
+    <rect x="578" y="98"  width="6" height="18"/>
+    <rect x="584" y="108" width="6" height="8"/>
+    <rect x="590" y="92"  width="6" height="24"/>
+    <rect x="596" y="84"  width="6" height="32"/>
+    <rect x="602" y="100" width="6" height="16"/>
+    <rect x="608" y="110" width="6" height="6"/>
+  </g>
+
+  <!-- subtitle: the whole array (X_train, y_train, X_test) is one dataset -->
+  <text x="172" y="202" text-anchor="middle" font-size="11.5" font-style="italic" fill="#3f2670">A synthetic dataset</text>
+
+  <!-- loss box -->
+  <rect x="340" y="206" width="200" height="58" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
+  <text x="440" y="228" text-anchor="middle" font-size="13" fill="#101010">−log q<tspan font-size="8.5" dy="2.5">θ</tspan><tspan dy="-2.5"> (y</tspan><tspan font-size="8.5" dy="2.5">test</tspan><tspan dy="-2.5"> |…)</tspan></text>
+  <text x="440" y="245" text-anchor="middle" font-size="10.5" fill="#374151">Training loss to be optimized</text>
+  <text x="440" y="258" text-anchor="middle" font-size="10.5" fill="#374151">across millions of datasets</text>
+
+  <!-- prediction -> loss arrow -->
+  <path d="M585 120 L 585 235 L 545 235" fill="none" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- y_test box -->
+  <rect x="180" y="217" width="72" height="36" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
+  <text x="216" y="239" text-anchor="middle" font-size="14" fill="#101010">y<tspan font-size="8.5" dy="2.5">test</tspan></text>
+  <line x1="252" y1="235" x2="335" y2="235" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- ================= RIGHT PANEL ================= -->
+  <rect x="688" y="44" width="556" height="234" rx="14" fill="#f1eaf0"/>
+  <text x="966" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN can now be applied to arbitrary</text>
+  <text x="966" y="42" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">unseen real-world datasets</text>
+
+  <!-- data table -->
+  <g stroke="#101010" stroke-width="1.5" fill="#ffffff">
+    <rect x="724" y="112" width="120" height="50"/>
+    <rect x="844" y="112" width="80" height="50"/>
+    <rect x="724" y="162" width="120" height="50"/>
+    <rect x="844" y="162" width="80" height="50"/>
+  </g>
+  <text x="784" y="142" text-anchor="middle" font-size="14" fill="#101010">X<tspan font-size="8.5" dy="2.5">train</tspan></text>
+  <text x="884" y="142" text-anchor="middle" font-size="14" fill="#101010">y<tspan font-size="8.5" dy="2.5">train</tspan></text>
+  <text x="784" y="192" text-anchor="middle" font-size="14" fill="#101010">X<tspan font-size="8.5" dy="2.5">test</tspan></text>
+  <text x="884" y="192" text-anchor="middle" font-size="15" fill="#101010">?</text>
+
+  <!-- arrow to network -->
+  <line x1="924" y1="137" x2="1010" y2="137" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- network box -->
+  <rect x="1016" y="112" width="120" height="50" rx="4" fill="#ffffff" stroke="#101010" stroke-width="1.5"/>
+  <use href="#priorLogo" x="1039" y="128" width="17" height="17"/>
+  <text x="1060" y="141" text-anchor="start" font-size="12" font-weight="700" fill="#101010">TabPFN-3</text>
+
+  <!-- arrow to prediction -->
+  <line x1="1136" y1="137" x2="1172" y2="137" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
+
+  <!-- prediction histogram -->
+  <text x="1202" y="94" text-anchor="middle" font-size="12" fill="#101010">Prediction</text>
+  <g fill="#6b7280">
+    <rect x="1180" y="133" width="6" height="11"/>
+    <rect x="1186" y="124" width="6" height="20"/>
+    <rect x="1192" y="114" width="6" height="30"/>
+    <rect x="1198" y="126" width="6" height="18"/>
+    <rect x="1204" y="136" width="6" height="8"/>
+    <rect x="1210" y="120" width="6" height="24"/>
+    <rect x="1216" y="112" width="6" height="32"/>
+    <rect x="1222" y="128" width="6" height="16"/>
+    <rect x="1228" y="138" width="6" height="6"/>
+  </g>
+
+  <!-- subtitle: the whole array (X_train, y_train, X_test) is one dataset -->
+  <text x="824" y="230" text-anchor="middle" font-size="11.5" font-style="italic" fill="#3f2670">An arbitrary real-world dataset</text>
+</svg>
