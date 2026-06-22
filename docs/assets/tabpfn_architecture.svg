@@ -21,8 +21,8 @@
 
   <!-- ================= LEFT PANEL ================= -->
   <rect x="36" y="44" width="600" height="234" rx="14" fill="#e8e8f2"/>
-  <text x="336" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN is trained on synthetic data to take entire</text>
-  <text x="336" y="42" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">datasets as inputs and predict in a forward pass</text>
+  <text x="336" y="18" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN is trained on synthetic data to take entire</text>
+  <text x="336" y="36" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">datasets as inputs and predict in a forward pass</text>
 
   <!-- data table -->
   <g stroke="#101010" stroke-width="1.5" fill="#ffffff">
@@ -82,8 +82,8 @@
 
   <!-- ================= RIGHT PANEL ================= -->
   <rect x="688" y="44" width="556" height="234" rx="14" fill="#f1eaf0"/>
-  <text x="966" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN can now be applied to arbitrary</text>
-  <text x="966" y="42" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">unseen real-world datasets</text>
+  <text x="966" y="18" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">TabPFN can now be applied to arbitrary</text>
+  <text x="966" y="36" text-anchor="middle" font-size="14" font-weight="600" fill="#101075">unseen real-world datasets</text>
 
   <!-- data table -->
   <g stroke="#101010" stroke-width="1.5" fill="#ffffff">

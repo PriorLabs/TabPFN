@@ -143,8 +143,8 @@
     <path d="M818,160 Q839,142 858,160" marker-start="url(#tip)" marker-end="url(#tip)"/>
     <path d="M770,158 Q815,114 860,158" marker-start="url(#tip)" marker-end="url(#tip)"/>
   </g>
-  <!-- test rows attend to train rows only (one-directional) -->
-  <path d="M955,236 C 905,256 850,256 820,238" fill="none" stroke="#b6698d" stroke-width="1.6" marker-end="url(#tip)"/>
+  <!-- test rows attend to train rows only: KV (train) -> Q (test), arrow points to the querying test rows -->
+  <path d="M820,238 C 850,256 905,256 955,236" fill="none" stroke="#b6698d" stroke-width="1.6" marker-end="url(#tip)"/>
   <!-- no attention between test rows (blocked) -->
   <path d="M923,160 Q946,140 969,160" fill="none" stroke="#cccccc" stroke-width="1.4" stroke-dasharray="4 3"/>
   <g stroke="#b6698d" stroke-width="1.8">
