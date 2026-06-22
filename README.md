@@ -9,6 +9,8 @@
 
 <img src="docs/assets/tabpfn_architecture.svg" width="100%" alt="TabPFN trains on synthetic datasets and predicts on unseen real-world datasets in a single forward pass">
 
+<img src="docs/assets/tabpfn_attention.svg" width="100%" alt="TabPFN-3 architecture: a distribution embedder, then row-wise and cross-row attention, read out as per-row tokens">
+
 ## Quick Start
 
 ### Interactive Notebook Tutorial
