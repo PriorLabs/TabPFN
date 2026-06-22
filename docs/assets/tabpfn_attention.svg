@@ -78,7 +78,7 @@
   <text x="436" y="212" text-anchor="middle" font-size="8.5" font-style="italic" fill="#101075">inducing</text>
 
   <text x="350" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Distribution embedder</text>
-  <text x="350" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">inducing points: full &#8596; train &#183; &#8594; test only</text>
+  <text x="350" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">inducing points: full &#8596; train, &#8594; test only</text>
 
   <line x1="456" y1="185" x2="498" y2="185" stroke="#101010" stroke-width="2" marker-end="url(#arr)"/>
 
