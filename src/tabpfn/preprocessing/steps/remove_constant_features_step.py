@@ -33,9 +33,11 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         if isinstance(X, torch.Tensor):
-            sel_ = torch.max(X[0:1, :] != X, dim=0)[0].cpu()
+            sel_ = (torch.max(X[0:1, :] != X, dim=0)[0] & ~X.isnan().all(dim=0)).cpu()
         else:
-            sel_ = ((X[0:1, :] == X).mean(axis=0) < 1.0).tolist()
+            sel_ = np.logical_and(
+                (X[0:1, :] == X).mean(axis=0) < 1.0, ~np.all(np.isnan(X), axis=0)
+            ).tolist()
 
         if not any(sel_):
             raise TabPFNValidationError(
