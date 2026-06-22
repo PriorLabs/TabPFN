@@ -155,5 +155,5 @@
   <text x="815" y="226" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">train rows</text>
   <text x="946" y="226" text-anchor="middle" font-size="10.5" font-style="italic" fill="#8a6a00">test rows</text>
   <text x="888" y="278" text-anchor="middle" font-size="12.5" font-weight="600" fill="#101075">Cross-row attention</text>
-  <text x="888" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">full only train &#8596; train &#183; train &#8594; test only &#183; no test &#8596; test</text>
+  <text x="888" y="293" text-anchor="middle" font-size="10.5" font-style="italic" fill="#3f2670">full only train &#8596; train, train &#8594; test only, no test &#8596; test</text>
 </svg>
