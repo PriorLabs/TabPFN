@@ -53,6 +53,33 @@ def test__remove_constant_features_step__drops_constant_numpy() -> None:
     assert result.modality_added is None
 
 
+def test__remove_constant_features_step__drops_constant_nan_numpy() -> None:
+    """Remove constant columns for NumPy inputs."""
+    X = np.array(
+        [
+            [np.nan, 2.0, 3.0],
+            [np.nan, 5.0, 3.0],
+            [np.nan, 7.0, 4.0],
+        ]
+    )
+    schema = _numerical_metadata(num_features=3)
+
+    step = RemoveConstantFeaturesStep()
+    result = step.fit_transform(X, schema)
+
+    expected = np.array(
+        [
+            [2.0, 3.0],
+            [5.0, 3.0],
+            [7.0, 4.0],
+        ]
+    )
+    np.testing.assert_array_equal(result.X, expected)
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    assert result.X_added is None
+    assert result.modality_added is None
+
+
 def test__remove_constant_features_step__raises_when_all_constant() -> None:
     """Raise when all columns are constant."""
     X = np.ones((4, 2))
@@ -70,6 +97,34 @@ def test__remove_constant_features_step__drops_constant_torch() -> None:
             [2.0, 0.0, 5.0],
             [2.0, 1.0, 6.0],
             [2.0, 3.0, 6.0],
+        ]
+    )
+    schema = _numerical_metadata(num_features=3)
+
+    step = RemoveConstantFeaturesStep()
+    result = step.fit_transform(X, schema)  # type: ignore[arg-type]
+
+    expected = torch.tensor(
+        [
+            [0.0, 5.0],
+            [1.0, 6.0],
+            [3.0, 6.0],
+        ]
+    )
+    assert isinstance(result.X, torch.Tensor)
+    assert torch.equal(result.X, expected)
+    assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
+    assert result.X_added is None
+    assert result.modality_added is None
+
+
+def test__remove_constant_features_step__drops_constant_nan_torch() -> None:
+    """Remove constant columns for torch inputs."""
+    X = torch.tensor(
+        [
+            [float("nan"), 0.0, 5.0],
+            [float("nan"), 1.0, 6.0],
+            [float("nan"), 3.0, 6.0],
         ]
     )
     schema = _numerical_metadata(num_features=3)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, field
+from dataclasses import field
 from typing import Any
 from typing_extensions import override
 
@@ -10,7 +10,6 @@ import pytest
 from pydantic.dataclasses import dataclass
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.config import ModelConfig
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
@@ -18,7 +17,7 @@ from tabpfn.architectures.interface import (
 )
 
 
-@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["base"]])
+@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["tabpfn_v2"]])
 def test__parse_config__no_unused_keys__returns_empty_dict(
     architecture: ArchitectureModule,
 ) -> None:
@@ -29,7 +28,7 @@ def test__parse_config__no_unused_keys__returns_empty_dict(
     assert unused_config == {}
 
 
-@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["base"]])
+@pytest.mark.parametrize(("architecture"), [ARCHITECTURES["tabpfn_v2"]])
 def test__parse_config__unused_keys__returns_unused_config(
     architecture: ArchitectureModule,
 ) -> None:
@@ -96,39 +95,3 @@ def test__parse_config__nested_config__unused_keys__returns_unused_keys() -> Non
     )
     assert isinstance(config, FakeConfig)
     assert unused_config == {"b": {"extra": "value"}}
-
-
-def test__base_config__upgrade__no_old_keys__does_nothing() -> None:
-    config = asdict(
-        ModelConfig(
-            emsize=16,
-            features_per_group=1,
-            max_num_classes=1,
-            nhead=2,
-            remove_duplicate_features=False,
-            num_buckets=1000,
-        )
-    )
-
-    assert ModelConfig.upgrade_config(config) == config
-
-
-def test__base_config__attention_type__old_and_new_set__raises_value_error() -> None:
-    config = asdict(
-        ModelConfig(
-            emsize=16,
-            features_per_group=1,
-            max_num_classes=1,
-            nhead=2,
-            remove_duplicate_features=False,
-            num_buckets=1000,
-        )
-    )
-    config["attention_type"] = "full"
-    config["item_attention_type"] = "full"
-    config["feature_attention_type"] = "full"
-
-    with pytest.raises(
-        ValueError, match="Can't have both old and new attention types set"
-    ):
-        ModelConfig.upgrade_config(config)

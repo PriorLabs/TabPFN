@@ -18,6 +18,10 @@ from packaging import version
 TaskType: TypeAlias = Literal["multiclass", "regression"]
 TaskTypeValues: tuple[TaskType, ...] = ("multiclass", "regression")
 
+MemorySavingMode: TypeAlias = bool | Literal["auto"] | float | int
+DEFAULT_SAVE_PEAK_MEMORY_FACTOR = 8
+
+
 XType: TypeAlias = Any
 YType: TypeAlias = Any
 
