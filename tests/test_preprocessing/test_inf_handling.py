@@ -13,7 +13,9 @@ the propagation of ``passthrough_inf`` through validation and the ensemble.
 from __future__ import annotations
 
 import statistics
+import sys
 import time
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -21,6 +23,8 @@ import pytest
 import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures import tabpfn_v2, tabpfn_v2_5, tabpfn_v2_6
+from tabpfn.architectures.interface import Architecture
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
@@ -659,6 +663,113 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
         preds = model.predict(X_test)
         assert np.isfinite(preds).all()
         assert np.asarray(preds).std() > 1e-3
+
+
+# Each 2.x architecture builds its KV cache differently, but all share the same
+# failure mode the v3 test above covers: ``(module, config_cls, regression_classes,
+# has_thinking_rows)``. v2 uses ``max_num_classes=0`` for regression and has no thinking
+# rows; v2.5/v2.6 use ``max_num_classes=-1`` and prepend thinking rows.
+_TWO_X_ARCHITECTURES = [
+    pytest.param(tabpfn_v2, tabpfn_v2.TabPFNV2Config, 0, False, id="v2"),
+    pytest.param(tabpfn_v2_5, tabpfn_v2_5.TabPFNV2p5Config, -1, True, id="v2.5"),
+    pytest.param(tabpfn_v2_6, tabpfn_v2_6.TabPFNV2p6Config, -1, True, id="v2.6"),
+]
+
+
+def _build_small_2x_arch(
+    module: ModuleType,
+    config_cls: type,
+    *,
+    max_num_classes: int,
+    has_thinking_rows: bool,
+) -> Architecture:
+    """Build a small (float64) 2.x architecture for the KV-cache inf tests."""
+    kwargs: dict = {
+        "max_num_classes": max_num_classes,
+        "num_buckets": 5,
+        "emsize": 96,
+        "nlayers": 2,
+        "nhead": 6,
+        "features_per_group": 2,
+    }
+    if has_thinking_rows:
+        kwargs["num_thinking_rows"] = 3
+    arch = module.get_architecture(config_cls(**kwargs))
+    arch.to(torch.float64)
+    # The out-projections and the final MLP layer are zero-initialised, which would
+    # make the transformer blocks an identity map. Perturb them so the blocks actually
+    # mix the (cached) train rows into the test outputs, exercising the cache fully.
+    for param in arch.parameters():
+        if param.abs().sum() < 1e-6:
+            param.data += torch.randn_like(param) * 1e-1
+    return arch
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
+@pytest.mark.parametrize(
+    ("module", "config_cls", "regression_classes", "has_thinking_rows"),
+    _TWO_X_ARCHITECTURES,
+)
+@pytest.mark.parametrize("task_type", ["multiclass", "regression"])
+@torch.no_grad()
+def test__kv_cache__inf_in_train_does_not_poison_cache(
+    module: ModuleType,
+    config_cls: type,
+    regression_classes: int,
+    has_thinking_rows: bool,
+    task_type: str,
+) -> None:
+    """The 2.x analogue of the ``fit_with_cache`` + ``passthrough_inf`` cache bug.
+
+    Like the v3 architecture (see
+    ``test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test``), every 2.x
+    architecture builds its inference KV cache from the training rows. If the cached
+    standard-scaler statistics were fitted on the *raw* train tensor, the passed-through
+    +/-inf would poison the cached mean/std (``torch_nanmean`` ignores NaN but not inf).
+    Predicting on finite test rows with those statistics would then yield
+    ``(finite - inf)/inf = NaN`` for every affected cell and collapse the outputs.
+
+    The statistics are fitted on the imputed train rows and reused for the cache, so the
+    cached prediction on fully finite test data must be finite, non-constant, and
+    identical to the standard (full train+test) forward.
+    """
+    max_num_classes = 10 if task_type == "multiclass" else regression_classes
+    arch = _build_small_2x_arch(
+        module,
+        config_cls,
+        max_num_classes=max_num_classes,
+        has_thinking_rows=has_thinking_rows,
+    )
+
+    torch.manual_seed(0)
+    num_train, num_test, num_features = 60, 20, 8
+    x_full = (
+        torch.randn(num_train + num_test, 1, num_features, dtype=torch.float64) * 0.5
+    )
+    # Corrupt scattered train cells with +inf across most columns; the test rows stay
+    # finite, mirroring the real-world failure.
+    inf_rows = torch.arange(0, num_train, 7)
+    for col in range(num_features - 1):
+        x_full[inf_rows, 0, col] = float("inf")
+    x_test = x_full[num_train:]
+    assert torch.isfinite(x_test).all()
+
+    if task_type == "multiclass":
+        y_train = torch.randint(0, 10, (num_train, 1), dtype=torch.float64)
+    else:
+        y_train = torch.randn(num_train, 1, dtype=torch.float64)
+
+    out_standard = arch(x_full, y_train)
+    # Build the cache from the (inf-carrying) train rows, then predict on the finite
+    # test rows via the cache.
+    _, cache = arch(x_full, y_train, return_kv_cache=True)
+    out_cached = arch(x_test, y_train, kv_cache=cache, x_is_test_only=True)
+
+    # A poisoned cache would standardise the finite test rows to NaN and collapse them.
+    assert torch.isfinite(out_cached).all()
+    assert torch.allclose(out_standard, out_cached, atol=1e-10)
+    # Degenerate (poisoned-cache) output is constant across rows.
+    assert out_cached.std() > 1e-3
 
 
 def test__clean_data__handles_infinities_on_categoricals() -> None:
