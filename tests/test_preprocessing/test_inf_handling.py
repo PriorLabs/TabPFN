@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import statistics
 import time
+from collections.abc import Iterable
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -627,6 +629,46 @@ _FIT_WITH_CACHE_VERSIONS = [
 ]
 
 
+def _nonfinite_tensors(
+    obj: object, path: str = "kv_cache", _seen: set[int] | None = None
+) -> list[str]:
+    """Paths to every tensor in ``obj`` (recursing arbitrarily) that holds inf/NaN.
+
+    Walks attributes, dicts, and sequences so it covers any architecture's cache
+    layout without naming fields. The cache build refits the standard scaler; if
+    raw +/-inf reached it the cached stats would be poisoned (the bug this guards).
+    """
+    _seen = _seen if _seen is not None else set()
+    if id(obj) in _seen:
+        return []
+    _seen.add(id(obj))
+
+    if isinstance(obj, torch.Tensor):
+        return [] if torch.isfinite(obj).all() else [f"{path} {tuple(obj.shape)}"]
+
+    items: Iterable[tuple[Any, Any]]
+    if isinstance(obj, dict):
+        items = obj.items()
+    elif isinstance(obj, (list, tuple)):
+        items = enumerate(obj)
+    elif hasattr(obj, "__dict__"):
+        items = vars(obj).items()
+    else:
+        return []
+
+    return [
+        bad
+        for key, value in items
+        for bad in _nonfinite_tensors(value, f"{path}.{key}", _seen)
+    ]
+
+
+def _assert_kv_caches_finite(model: TabPFNClassifier | TabPFNRegressor) -> None:
+    """Every tensor in every per-member KV cache must be finite (no inf/NaN)."""
+    bad = _nonfinite_tensors(getattr(model.executor_, "kv_caches", []))
+    assert not bad, f"non-finite tensors in kv cache: {bad}"
+
+
 @pytest.mark.parametrize("model_version", _FIT_WITH_CACHE_VERSIONS)
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
@@ -669,6 +711,7 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
             passthrough_inf=True,
         )
         model.fit(X_train, y_train)
+        _assert_kv_caches_finite(model)
         proba = model.predict_proba(X_test)
         assert np.isfinite(proba).all()
         # Degenerate (poisoned-cache) output is identical for every row.
@@ -682,6 +725,7 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
             passthrough_inf=True,
         )
         model.fit(X_train, y_train)
+        _assert_kv_caches_finite(model)
         preds = model.predict(X_test)
         assert np.isfinite(preds).all()
         assert np.asarray(preds).std() > 1e-3
