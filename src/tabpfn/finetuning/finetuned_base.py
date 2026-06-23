@@ -245,6 +245,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         experiment_logger: An optional logger implementing the ``FinetuningLogger``
             protocol (e.g., ``WandbLogger``) for experiment tracking. If None,
             a no-op ``NullLogger`` is used. Defaults to None.
+        passthrough_inf: Whether to pass infinite values through to the model
+            instead of rejecting them. When True, infinities are replaced with NaN
+            for preprocessing and restored afterwards. Defaults to False.
     """
 
     def __init__(  # noqa: PLR0913

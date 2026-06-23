@@ -285,6 +285,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             data batches. This is helpful in most cases because, e.g., the column order
             will stay the same across batches.
             If False, the preprocessing will use a different random seed for each batch.
+        passthrough_inf: Whether to pass infinite values through to the model
+            instead of rejecting them. When True, infinities are replaced with NaN
+            for preprocessing and restored afterwards. Defaults to False.
 
         FinetunedTabPFNRegressor specific arguments:
 
