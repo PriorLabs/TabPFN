@@ -21,14 +21,13 @@ from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNClassifier
-from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from tabpfn.constants import XType, YType
+    from tabpfn.constants import ModelVersion, XType, YType
     from tabpfn.finetuning.data_util import ClassifierBatch
     from tabpfn.finetuning.logging import FinetuningLogger
 
@@ -157,6 +156,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         experiment_logger: FinetuningLogger | None = None,
         extra_classifier_kwargs: dict[str, Any] | None = None,
         eval_metric: Literal["roc_auc", "log_loss"] | None = None,
+        model_version: ModelVersion | None = None,
     ):
         super().__init__(
             device=device,
@@ -182,6 +182,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
             experiment_logger=experiment_logger,
+            model_version=model_version,
         )
         self.extra_classifier_kwargs = extra_classifier_kwargs
         self.eval_metric = eval_metric
@@ -210,7 +211,7 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
     def _create_estimator(self, config: dict[str, Any]) -> TabPFNClassifier:
         """Create the TabPFNClassifier with the given config."""
         return TabPFNClassifier.create_default_for_version(
-            version=ModelVersion.V2_5,
+            version=self.finetune_model_version,
             **config,
             fit_mode="batched",
             differentiable_input=False,

@@ -21,14 +21,13 @@ from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
-from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from tabpfn.constants import XType, YType
+    from tabpfn.constants import ModelVersion, XType, YType
     from tabpfn.finetuning.data_util import RegressorBatch
     from tabpfn.finetuning.logging import FinetuningLogger
     from tabpfn.regressor import RegressionResultType
@@ -346,6 +345,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         mae_loss_weight: float = 0.0,
         mae_loss_clip: float | None = None,
         eval_metric: Literal["mse"] | None = None,
+        model_version: ModelVersion | None = None,
     ):
         super().__init__(
             device=device,
@@ -371,6 +371,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
             experiment_logger=experiment_logger,
+            model_version=model_version,
         )
         self.extra_regressor_kwargs = extra_regressor_kwargs
         self.eval_metric = eval_metric
@@ -404,7 +405,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
     def _create_estimator(self, config: dict[str, Any]) -> TabPFNRegressor:
         """Create the TabPFNRegressor with the given config."""
         return TabPFNRegressor.create_default_for_version(
-            version=ModelVersion.V2_5,
+            version=self.finetune_model_version,
             **config,
             fit_mode="batched",
             differentiable_input=False,

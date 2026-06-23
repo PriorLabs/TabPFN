@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.logging import FinetuningLogger, NullLogger, WandbLogger
 
@@ -147,14 +148,18 @@ class TestClassifierMetricName:
     """Verify _metric_name reflects the chosen eval_metric."""
 
     def test_default_metric_is_roc_auc(self):
-        clf = FinetunedTabPFNClassifier()
+        clf = FinetunedTabPFNClassifier(model_version=ModelVersion.V2_5)
         # eval_metric defaults to None; _metric_name should return "ROC AUC"
         assert clf._metric_name == "ROC AUC"
 
     def test_roc_auc_metric_name(self):
-        clf = FinetunedTabPFNClassifier(eval_metric="roc_auc")
+        clf = FinetunedTabPFNClassifier(
+            model_version=ModelVersion.V2_5, eval_metric="roc_auc"
+        )
         assert clf._metric_name == "ROC AUC"
 
     def test_log_loss_metric_name(self):
-        clf = FinetunedTabPFNClassifier(eval_metric="log_loss")
+        clf = FinetunedTabPFNClassifier(
+            model_version=ModelVersion.V2_5, eval_metric="log_loss"
+        )
         assert clf._metric_name == "log_loss"
