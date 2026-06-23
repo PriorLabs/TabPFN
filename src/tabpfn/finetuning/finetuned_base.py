@@ -151,6 +151,11 @@ def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:
         ]
 
 
+def _snapshot_model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    """Return a detached CPU copy of a model's weights."""
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+
 class _TabPFNDDPWrapper(torch.nn.Module):
     """Thin wrapper that registers estimator.model_ as a submodule for DDP."""
 
@@ -739,13 +744,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             dist.broadcast(t, src=0)
             return float(t.item())
 
-        def _snapshot_model_state() -> dict[str, torch.Tensor]:
-            """Return a detached CPU copy of the current model weights."""
-            return {
-                k: v.detach().cpu().clone()
-                for k, v in self.finetuned_estimator_.model_.state_dict().items()
-            }
-
         # --- Initial eval (rank 0 only) ---
         if is_main_process:
             logger.info("--- 🚀 Eval default model ---")
@@ -779,7 +777,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         # overwrite this on their first improvement and their weights are unused.
         best_model_state: dict[str, torch.Tensor] | None = None
         if self.early_stopping and is_main_process:
-            best_model_state = _snapshot_model_state()
+            best_model_state = _snapshot_model_state(self.finetuned_estimator_.model_)
 
         scheduler: LambdaLR | None = None
 
@@ -1034,7 +1032,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 if self._is_improvement(primary_metric, best_metric):
                     best_metric = primary_metric
                     patience_counter = 0
-                    best_model_state = _snapshot_model_state()
+                    best_model_state = _snapshot_model_state(
+                        self.finetuned_estimator_.model_
+                    )
                 else:
                     patience_counter += 1
                     if is_main_process:
