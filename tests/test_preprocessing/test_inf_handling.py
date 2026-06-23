@@ -12,7 +12,6 @@ the propagation of ``passthrough_inf`` through validation and the ensemble.
 
 from __future__ import annotations
 
-import dataclasses
 import statistics
 import time
 from collections.abc import Iterable
@@ -26,7 +25,6 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
     clean_data,
@@ -534,23 +532,11 @@ def test__generate_regression_configs__propagates_passthrough_inf() -> None:
     assert not any(c.passthrough_inf for c in disabled)
 
 
-def _classifier_with_resolved_config(*, passthrough_inf: bool) -> TabPFNClassifier:
-    """Classifier whose ``inference_config_`` is resolved as ``fit()`` would, but
-    without loading weights -- the validation helpers read it directly.
-    """
-    estimator = TabPFNClassifier()
-    estimator.inference_config_ = dataclasses.replace(
-        InferenceConfig.get_default("multiclass", ModelVersion.V2),
-        PASSTHROUGH_INF=passthrough_inf,
-    )
-    return estimator
-
-
 def test__fit_validation__accepts_infinities_when_passthrough_enabled() -> None:
     """Input validation lets infinities through when ``PASSTHROUGH_INF=True``."""
     X = np.array([[1.0, np.inf], [2.0, 3.0], [4.0, 5.0]])
     y = np.array([0, 1, 0])
-    estimator = _classifier_with_resolved_config(passthrough_inf=True)
+    estimator = TabPFNClassifier(inference_config={"PASSTHROUGH_INF": True})
 
     X_out, _, _, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
 
@@ -561,7 +547,7 @@ def test__fit_validation__rejects_infinities_when_passthrough_disabled() -> None
     """Input validation rejects infinities when ``PASSTHROUGH_INF=False``."""
     X = np.array([[1.0, np.inf], [2.0, 3.0], [4.0, 5.0]])
     y = np.array([0, 1, 0])
-    estimator = _classifier_with_resolved_config(passthrough_inf=False)
+    estimator = TabPFNClassifier(inference_config={"PASSTHROUGH_INF": False})
 
     with pytest.raises(TabPFNValidationError):
         ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)

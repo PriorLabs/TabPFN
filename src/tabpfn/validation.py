@@ -11,7 +11,7 @@ from __future__ import annotations
 import typing
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import pandas as pd
 import torch
@@ -30,6 +30,23 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
+
+    T = TypeVar("T")
+
+
+def _resolve_early_config(
+    estimator: TabPFNRegressor | TabPFNClassifier, key: str, default: T
+) -> T:
+    """Resolves a config key, potentially before ``_initialize_model_variables()``
+    and config validation.
+    """
+    resolved = getattr(estimator, "inference_config_", None)
+    if resolved is not None:
+        return getattr(resolved, key)
+    user = estimator.inference_config
+    if isinstance(user, dict):
+        return user.get(key, default)  # type: ignore
+    return getattr(user, key, default)
 
 
 def ensure_compatible_fit_inputs(
@@ -106,7 +123,7 @@ def ensure_compatible_predict_input_sklearn(
             accept_sparse=False,
             dtype=None,
             ensure_all_finite=False
-            if estimator.inference_config_.PASSTHROUGH_INF
+            if _resolve_early_config(estimator, "PASSTHROUGH_INF", default=False)
             else "allow-nan",
             estimator=estimator,
         )
@@ -180,7 +197,7 @@ def ensure_compatible_fit_inputs_sklearn(
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
             ensure_all_finite=False
-            if estimator.inference_config_.PASSTHROUGH_INF
+            if _resolve_early_config(estimator, "PASSTHROUGH_INF", default=False)
             else "allow-nan",
             ensure_min_samples=2,
             ensure_min_features=1,
