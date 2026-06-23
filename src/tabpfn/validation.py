@@ -105,7 +105,9 @@ def ensure_compatible_predict_input_sklearn(
             # Parameters to `check_X_y()`
             accept_sparse=False,
             dtype=None,
-            ensure_all_finite=False if estimator.passthrough_inf else "allow-nan",
+            ensure_all_finite=False
+            if estimator.inference_config_.PASSTHROUGH_INF
+            else "allow-nan",
             estimator=estimator,
         )
     except (ValueError, TypeError) as e:
@@ -177,7 +179,9 @@ def ensure_compatible_fit_inputs_sklearn(
             # Parameters to `check_X_y()`
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
-            ensure_all_finite=False if estimator.passthrough_inf else "allow-nan",
+            ensure_all_finite=False
+            if estimator.inference_config_.PASSTHROUGH_INF
+            else "allow-nan",
             ensure_min_samples=2,
             ensure_min_features=1,
             y_numeric=ensure_y_numeric,

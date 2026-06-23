@@ -245,9 +245,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         experiment_logger: An optional logger implementing the ``FinetuningLogger``
             protocol (e.g., ``WandbLogger``) for experiment tracking. If None,
             a no-op ``NullLogger`` is used. Defaults to None.
-        passthrough_inf: Whether to pass infinite values through to the model
-            instead of rejecting them. When True, infinities are replaced with NaN
-            for preprocessing and restored afterwards. Defaults to False.
     """
 
     def __init__(  # noqa: PLR0913
@@ -276,7 +273,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
         experiment_logger: FinetuningLogger | None = None,
-        passthrough_inf: bool = False,
     ):
         super().__init__()
         self.experiment_logger = experiment_logger
@@ -304,7 +300,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.meta_batch_size = META_BATCH_SIZE
         self.use_fixed_preprocessing_seed = use_fixed_preprocessing_seed
         self._ddp_module_: DistributedDataParallel | None = None
-        self.passthrough_inf = passthrough_inf
 
         if self.use_fixed_preprocessing_seed and not (
             self.n_estimators_finetune
@@ -588,14 +583,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         _estimator_kwargs = copy.deepcopy(self._estimator_kwargs)
         model_path = _estimator_kwargs.pop("model_path", None)
-        inference_config = copy.deepcopy(_estimator_kwargs.get("inference_config", {}))
+        # Any inference_config (e.g. {"PASSTHROUGH_INF": True}) the user supplied via
+        # extra_*_kwargs flows through the spread below unchanged.
         base_estimator_config: dict[str, Any] = {
             **_estimator_kwargs,
             "ignore_pretraining_limits": True,
             "device": self.device,
             "random_state": self.random_state,
-            "inference_config": inference_config,
-            "passthrough_inf": self.passthrough_inf,
         }
 
         # Config used for the finetuning loop.

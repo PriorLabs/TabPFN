@@ -12,6 +12,7 @@ the propagation of ``passthrough_inf`` through validation and the ensemble.
 
 from __future__ import annotations
 
+import dataclasses
 import statistics
 import time
 from collections.abc import Iterable
@@ -25,6 +26,7 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
+from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
     clean_data,
@@ -532,11 +534,23 @@ def test__generate_regression_configs__propagates_passthrough_inf() -> None:
     assert not any(c.passthrough_inf for c in disabled)
 
 
+def _classifier_with_resolved_config(*, passthrough_inf: bool) -> TabPFNClassifier:
+    """Classifier whose ``inference_config_`` is resolved as ``fit()`` would, but
+    without loading weights -- the validation helpers read it directly.
+    """
+    estimator = TabPFNClassifier()
+    estimator.inference_config_ = dataclasses.replace(
+        InferenceConfig.get_default("multiclass", ModelVersion.V2),
+        PASSTHROUGH_INF=passthrough_inf,
+    )
+    return estimator
+
+
 def test__fit_validation__accepts_infinities_when_passthrough_enabled() -> None:
-    """Input validation lets infinities through when ``passthrough_inf=True``."""
+    """Input validation lets infinities through when ``PASSTHROUGH_INF=True``."""
     X = np.array([[1.0, np.inf], [2.0, 3.0], [4.0, 5.0]])
     y = np.array([0, 1, 0])
-    estimator = TabPFNClassifier(passthrough_inf=True)
+    estimator = _classifier_with_resolved_config(passthrough_inf=True)
 
     X_out, _, _, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
 
@@ -544,10 +558,10 @@ def test__fit_validation__accepts_infinities_when_passthrough_enabled() -> None:
 
 
 def test__fit_validation__rejects_infinities_when_passthrough_disabled() -> None:
-    """Input validation rejects infinities when ``passthrough_inf=False``."""
+    """Input validation rejects infinities when ``PASSTHROUGH_INF=False``."""
     X = np.array([[1.0, np.inf], [2.0, 3.0], [4.0, 5.0]])
     y = np.array([0, 1, 0])
-    estimator = TabPFNClassifier(passthrough_inf=False)
+    estimator = _classifier_with_resolved_config(passthrough_inf=False)
 
     with pytest.raises(TabPFNValidationError):
         ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
@@ -569,7 +583,9 @@ def test__classifier_fit_predict__handles_infinities_per_passthrough_flag(
     X[3, 1] = np.inf
     X[7, 2] = -np.inf
 
-    model = TabPFNClassifier(n_estimators=1, passthrough_inf=passthrough_inf)
+    model = TabPFNClassifier(
+        n_estimators=1, inference_config={"PASSTHROUGH_INF": passthrough_inf}
+    )
     if passthrough_inf:
         # Passing infs through preprocessing must not silently produce invalid
         # values (NaN from e.g. inf-inf); errstate turns any such op into a hard
@@ -596,7 +612,9 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
     X[3, 1] = np.inf
     X[7, 2] = -np.inf
 
-    model = TabPFNRegressor(n_estimators=1, passthrough_inf=passthrough_inf)
+    model = TabPFNRegressor(
+        n_estimators=1, inference_config={"PASSTHROUGH_INF": passthrough_inf}
+    )
     if passthrough_inf:
         # Passing infs through preprocessing must not silently produce invalid
         # values (NaN from e.g. inf-inf); errstate turns any such op into a hard
@@ -708,7 +726,7 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
             model_version,
             n_estimators=1,
             fit_mode="fit_with_cache",
-            passthrough_inf=True,
+            inference_config={"PASSTHROUGH_INF": True},
         )
         model.fit(X_train, y_train)
         _assert_kv_caches_finite(model)
@@ -722,7 +740,7 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
             model_version,
             n_estimators=1,
             fit_mode="fit_with_cache",
-            passthrough_inf=True,
+            inference_config={"PASSTHROUGH_INF": True},
         )
         model.fit(X_train, y_train)
         _assert_kv_caches_finite(model)
@@ -1016,7 +1034,7 @@ def test__estimator_fit_predict__handles_infinities_on_all_dtypes(
 
     model = estimator_cls(
         n_estimators=1,
-        passthrough_inf=True,
+        inference_config={"PASSTHROUGH_INF": True},
         categorical_features_indices=[0],
     )
     model.fit(X, y)
@@ -1052,7 +1070,9 @@ def test__estimator_fit_predict_on_cuda__passes_infinities_through(
     else:
         y = X[:, 0] + rng.standard_normal(60) * 0.1
 
-    model = estimator_cls(n_estimators=2, passthrough_inf=True, device="cuda")
+    model = estimator_cls(
+        n_estimators=2, inference_config={"PASSTHROUGH_INF": True}, device="cuda"
+    )
     model.fit(X, y)
     predictions = model.predict(X)
 
@@ -1068,6 +1088,8 @@ def test__classifier_fit_on_cuda__rejects_infinities_without_passthrough() -> No
     y = (X[:, 0] > 0).astype(int)
     X[3, 1] = np.inf
 
-    model = TabPFNClassifier(n_estimators=1, passthrough_inf=False, device="cuda")
+    model = TabPFNClassifier(
+        n_estimators=1, inference_config={"PASSTHROUGH_INF": False}, device="cuda"
+    )
     with pytest.raises(TabPFNValidationError):
         model.fit(X, y)

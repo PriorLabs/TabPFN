@@ -246,7 +246,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
         show_progress_bar: bool = False,
-        passthrough_inf: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
 
@@ -468,11 +467,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             show_progress_bar:
                 Whether to show a progress bar during inference. Defaults to False.
-
-            passthrough_inf:
-                Whether to pass infinite values through to the model instead of
-                rejecting them. When True, infinities are replaced with NaN for
-                preprocessing and restored afterwards. Defaults to False.
         """
         super().__init__()
         self.n_estimators = n_estimators
@@ -508,7 +502,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         self.n_jobs = n_jobs
         self.n_preprocessing_jobs = n_preprocessing_jobs
-        self.passthrough_inf = passthrough_inf
 
     @classmethod
     def create_default_for_version(cls, version: ModelVersion, **overrides) -> Self:
@@ -702,7 +695,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         X, ordinal_encoder, feature_schema = clean_data(
-            X=X, feature_schema=feature_schema, passthrough_inf=self.passthrough_inf
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -742,7 +737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
-            passthrough_inf=self.passthrough_inf,
+            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -1020,7 +1015,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         X = process_text_na_dataframe(
             X,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
-            passthrough_inf=self.passthrough_inf,
+            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
         )
 
         n_estimators = 0
