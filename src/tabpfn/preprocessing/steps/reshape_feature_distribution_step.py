@@ -76,9 +76,9 @@ def _build_reshape_output_layout(
 
     Single source of truth for the output column layout, mirroring the
     ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``;
-    names (:func:`_build_reshape_output_names`) and ancestors
-    (:func:`_build_reshape_ancestors`) are both derived from it so they can't
-    drift apart. The passthrough block always precedes the transformed block.
+    names (`_build_reshape_output_names`) and ancestors
+    (`_build_reshape_ancestors`) are both derived from it so they can't drift
+    apart. The passthrough block always precedes the transformed block.
 
     The transformed block holds ``output_multiplier`` columns per transformed
     input. ``ColumnTransformer``/``FeatureUnion`` lays these out sub-transform
