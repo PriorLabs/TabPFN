@@ -623,12 +623,7 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
 _FIT_WITH_CACHE_VERSIONS = [
     ModelVersion.V2,
     ModelVersion.V2_5,
-    pytest.param(
-        ModelVersion.V2_6,
-        marks=pytest.mark.xfail(
-            raises=ValueError, strict=True, reason="fit_with_cache guard for v2.6"
-        ),
-    ),
+    ModelVersion.V2_6,
     ModelVersion.V3,
 ]
 
