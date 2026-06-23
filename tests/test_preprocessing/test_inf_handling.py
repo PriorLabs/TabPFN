@@ -21,6 +21,7 @@ import pytest
 import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import (
     PreprocessingPipeline,
@@ -609,9 +610,28 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
 
 
+# All v2.x architectures (download weights on first use). v2.6 has no
+# fit_with_cache support yet -- it's only a guard (regressor.py / classifier.py:
+# "fit_with_cache is not supported for TabPFN v2.6 yet."). strict xfail makes the
+# day that guard is lifted fail loudly, prompting this marker's removal.
+_FIT_WITH_CACHE_VERSIONS = [
+    ModelVersion.V2,
+    ModelVersion.V2_5,
+    pytest.param(
+        ModelVersion.V2_6,
+        marks=pytest.mark.xfail(
+            raises=ValueError, strict=True, reason="fit_with_cache guard for v2.6"
+        ),
+    ),
+    ModelVersion.V3,
+]
+
+
+@pytest.mark.parametrize("model_version", _FIT_WITH_CACHE_VERSIONS)
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
 def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
-    estimator_cls: type,
+    estimator_cls: type[TabPFNClassifier] | type[TabPFNRegressor],
+    model_version: ModelVersion,
 ) -> None:
     """Regression test for the ``fit_with_cache`` + ``passthrough_inf`` cache bug.
 
@@ -642,8 +662,11 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
 
     if estimator_cls is TabPFNClassifier:
         y_train = (signal > 0).astype(int)
-        model = estimator_cls(
-            n_estimators=1, fit_mode="fit_with_cache", passthrough_inf=True
+        model = estimator_cls.create_default_for_version(
+            model_version,
+            n_estimators=1,
+            fit_mode="fit_with_cache",
+            passthrough_inf=True,
         )
         model.fit(X_train, y_train)
         proba = model.predict_proba(X_test)
@@ -652,8 +675,11 @@ def test__fit_with_cache__inf_in_train_does_not_degenerate_clean_test(
         assert proba[:, 1].std() > 1e-3
     else:
         y_train = signal + rng.standard_normal(120) * 0.1
-        model = estimator_cls(
-            n_estimators=1, fit_mode="fit_with_cache", passthrough_inf=True
+        model = estimator_cls.create_default_for_version(
+            model_version,
+            n_estimators=1,
+            fit_mode="fit_with_cache",
+            passthrough_inf=True,
         )
         model.fit(X_train, y_train)
         preds = model.predict(X_test)
