@@ -118,9 +118,6 @@ class Feature:
     """A single feature with its name and modality.
 
     Warning: features are computed/updated at `fit()`-time only.
-    Existing/transformed columns carry over their features, using
-    `dataclasses.replace()` if needed instead of implicitly copying with
-    `Feature()`.
 
     Attributes:
         name: The name of the feature. Should be unique inside any given FeatureSchema.
