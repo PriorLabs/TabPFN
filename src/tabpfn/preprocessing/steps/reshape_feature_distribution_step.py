@@ -77,7 +77,7 @@ def _build_reshape_output_layout(
     Single source of truth for the output column layout, mirroring the
     ``ColumnTransformer`` assembled in ``_create_transformers_and_new_schema``;
     names (`_build_reshape_output_names`) and ancestors
-    (`_build_reshape_ancestors`) are both derived from it so they can't drift
+    (part 1 of `set_ancestors`) are both derived from it so they can't drift
     apart. The passthrough block always precedes the transformed block.
 
     The transformed block holds ``output_multiplier`` columns per transformed
@@ -126,22 +126,6 @@ def _build_reshape_output_names(
             names.append(f"reshape_{n_transformed}")
             n_transformed += 1
     return make_names_unique(names)
-
-
-def _build_reshape_ancestors(
-    feature_schema: FeatureSchema,
-    layout: list[_ReshapeColumn],
-) -> list[str | None]:
-    """Map each output column back to the input feature it derives from.
-
-    An entry is the *name* of the source input feature for distribution-
-    transformed columns, or ``None`` for passthrough columns, which already
-    carry their source name directly.
-    """
-    input_names = [f.name for f in feature_schema.features]
-    return [
-        None if col.is_passthrough else input_names[col.source_ix] for col in layout
-    ]
 
 
 def _exp_minus_1(x: np.ndarray) -> np.ndarray:
@@ -376,8 +360,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             num_columns=n_output_features,
             names=_build_reshape_output_names(feature_schema, layout),
         )
-        ancestors = _build_reshape_ancestors(feature_schema, layout)
-        self._set_ancestors(new_schema, ancestors)
+        self._set_ancestors(new_schema, feature_schema, layout)
 
         if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
@@ -400,14 +383,30 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def _set_ancestors(
         self,
         new_schema: FeatureSchema,
-        ancestors: list[str | None],
+        old_schema: FeatureSchema,
+        layout: list[_ReshapeColumn],
     ) -> None:
         """Point distribution-transformed columns back at their source feature.
 
         Lets per-feature state recorded on the input (e.g. the +/-inf positions
         tracked for ``passthrough_inf``) be mapped onto the renamed ``reshape_{k}``
         outputs, even when one input expands into several columns.
+
+        Args:
+            new_schema (FeatureSchema): Output feature schema to modify in-place.
+            old_schema (FeatureSchema): Input feature schema.
+            layout (list[_ReshapeColumn]): Metadata for reshape step's output
+                columns, in output order.
         """
+        # part 1: Map each output column back to the input feature it derives from
+        # An ancestor is the *name* of the source input feature for distribution-
+        # transformed columns, or ``None`` for passthrough columns, which already
+        # carry their source name directly.
+        input_names = [f.name for f in old_schema.features]
+        ancestors = [
+            None if col.is_passthrough else input_names[col.source_ix] for col in layout
+        ]
+        # part 2: Point distribution-transformed columns back at their source feature
         for idx, ancestor in enumerate(ancestors):
             if ancestor is not None:
                 f = new_schema.features[idx]
