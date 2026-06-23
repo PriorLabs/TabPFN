@@ -30,10 +30,10 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import (
     PANDAS_FASTER_THAN_MIXED_PATH,
+    _inf_masks_numpy_numeric_,
+    _inf_masks_pandas_only,
     _is_single_float_block,
     fix_dtypes,
-    inf_masks_numpy_numeric_,
-    inf_masks_pandas_only,
     numeric_columns,
     process_text_na_dataframe,
 )
@@ -698,7 +698,7 @@ def _numpy_split_inf_masks(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     pos_inf = np.zeros(X.shape, dtype=bool)
     neg_inf = np.zeros(X.shape, dtype=bool)
     numeric_col_mask = numeric_columns(X)
-    inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
+    _inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
     return pos_inf, neg_inf
 
 
@@ -783,7 +783,7 @@ def test__process_text_na_dataframe__inf_masks_match_pandas_reference(
     comparison would mark, with no fabricated or dropped infinities.
     """
     X = _inf_dtype_frames()[frame_id]
-    ref_pos, ref_neg = inf_masks_pandas_only(X)
+    ref_pos, ref_neg = _inf_masks_pandas_only(X)
 
     got_pos, got_neg = _restored_inf_masks(X)
 
@@ -841,7 +841,7 @@ def test__process_text_na_dataframe__single_float_block_round_trips_infs() -> No
     X = pd.DataFrame(X_np)
     assert _is_single_float_block(X)  # the branch under test is actually taken
 
-    ref_pos, ref_neg = inf_masks_pandas_only(X)
+    ref_pos, ref_neg = _inf_masks_pandas_only(X)
     got_pos, got_neg = _restored_inf_masks(X)
 
     np.testing.assert_array_equal(got_pos, ref_pos)
@@ -870,11 +870,11 @@ def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> Non
 
     # Same result, so the speed comparison is apples-to-apples.
     np.testing.assert_array_equal(
-        np.stack(_numpy_split_inf_masks(X)), np.stack(inf_masks_pandas_only(X))
+        np.stack(_numpy_split_inf_masks(X)), np.stack(_inf_masks_pandas_only(X))
     )
 
     numpy_median = _median_runtime(lambda: _numpy_split_inf_masks(X))
-    pandas_median = _median_runtime(lambda: inf_masks_pandas_only(X))
+    pandas_median = _median_runtime(lambda: _inf_masks_pandas_only(X))
 
     # ~1.5x faster locally; allow 25% slack so only a genuine regression fails.
     assert numpy_median < pandas_median * 1.25, (
@@ -896,10 +896,10 @@ def test__inf_mask__pandas_path_not_slower_than_per_block_on_single_block() -> N
     assert _is_single_float_block(X)  # routed to the fast pandas path
 
     np.testing.assert_array_equal(
-        np.stack(inf_masks_pandas_only(X)), np.stack(_numpy_split_inf_masks(X))
+        np.stack(_inf_masks_pandas_only(X)), np.stack(_numpy_split_inf_masks(X))
     )
 
-    pandas_median = _median_runtime(lambda: inf_masks_pandas_only(X))
+    pandas_median = _median_runtime(lambda: _inf_masks_pandas_only(X))
     numpy_median = _median_runtime(lambda: _numpy_split_inf_masks(X))
 
     # ~3x faster locally; allow 25% slack so only a genuine regression fails.

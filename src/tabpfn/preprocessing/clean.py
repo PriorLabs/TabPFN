@@ -255,7 +255,7 @@ def _align_columns_to_fitted_dtypes(
     return X
 
 
-def inf_masks_pandas_only(
+def _inf_masks_pandas_only(
     X: pd.DataFrame,
     *,
     numeric_only: bool = False,
@@ -286,7 +286,7 @@ def numeric_columns(X: pd.DataFrame) -> np.ndarray:
     )
 
 
-def inf_masks_numpy_numeric_(
+def _inf_masks_numpy_numeric_(
     X: pd.DataFrame,
     numeric_col_mask: np.ndarray,
     pos_inf: np.ndarray,
@@ -306,7 +306,7 @@ def inf_masks_numpy_numeric_(
     neg_inf[:, numeric_col_mask] = numeric_values == -np.inf
 
 
-def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def _inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Computes infinite masks for dataframes, with a fast numpy path for
     numeric columns.
 
@@ -329,7 +329,7 @@ def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     # Fast numpy path for numeric columns. `to_numpy(dtype=float64)` coerces
     # any nullable NA to NaN, which never matches +/-inf, so masks stay correct.
     if numeric_col_mask.any():
-        inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
+        _inf_masks_numpy_numeric_(X, numeric_col_mask, pos_inf, neg_inf)
 
     # Slow pandas path for the remaining (non-numeric) columns. Comparing a
     # `string` column yields a nullable `boolean` mask, so coerce to a plain
@@ -338,7 +338,7 @@ def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     if non_numeric_col_mask.any():
         other = X.iloc[:, non_numeric_col_mask]
         pos_inf[:, non_numeric_col_mask], neg_inf[:, non_numeric_col_mask] = (
-            inf_masks_pandas_only(other)
+            _inf_masks_pandas_only(other)
         )
     return pos_inf, neg_inf
 
@@ -346,7 +346,7 @@ def inf_masks_mixed(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """Computes infinite masks for dataframes, with a fast path for numeric dtypes.
 
-    Slower than `inf_masks_pandas_only` on pandas < 3.0.0.
+    Slower than `_inf_masks_pandas_only` on pandas < 3.0.0.
     Use `inf_masks_dataframe` in general.
 
     Args:
@@ -357,13 +357,13 @@ def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """
     # Build the +/-inf masks (shape matches `X`).
     if _is_single_float_block(X):
-        return inf_masks_pandas_only(X, numeric_only=True)
+        return _inf_masks_pandas_only(X, numeric_only=True)
 
-    return inf_masks_mixed(X)
+    return _inf_masks_mixed(X)
 
 
 if PANDAS_FASTER_THAN_MIXED_PATH:
-    inf_masks_dataframe = inf_masks_pandas_only
+    inf_masks_dataframe = _inf_masks_pandas_only
 else:
     inf_masks_dataframe = _inf_masks_dataframe
 
