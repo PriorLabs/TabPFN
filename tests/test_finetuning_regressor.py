@@ -24,7 +24,6 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn.architectures.shared.bar_distribution import BarDistribution
-from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.data_util import (
     RegressorBatch,
     get_preprocessed_dataset_chunks,
@@ -38,6 +37,7 @@ from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
 
 from .utils import (
+    FINETUNE_TEST_MODEL_VERSION,
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
     mark_mps_configs_as_slow,
@@ -176,7 +176,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     epochs = 4 if early_stopping else 2
     finetuned_reg = FinetunedTabPFNRegressor(
-        model_version=ModelVersion.V2_5,
+        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=epochs,
         learning_rate=1e-4,
@@ -233,7 +233,7 @@ def test__regressor_checkpoint_contains_mse_metric(
     output_folder = tmp_path / "checkpoints_regressor"
 
     finetuned_reg = FinetunedTabPFNRegressor(
-        model_version=ModelVersion.V2_5,
+        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=2,
         learning_rate=1e-4,
