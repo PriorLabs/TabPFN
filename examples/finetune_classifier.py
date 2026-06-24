@@ -47,9 +47,6 @@ logging.basicConfig(
 # Training hyperparameters
 NUM_EPOCHS = 30
 LEARNING_RATE = 1e-5
-# Samples per fine-tuning step (context + query). Higgs is large, so a bigger
-# context than the 10k default lets each step see more data and actually improve
-# the held-out test set (not just validation).
 N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 30_000
 
 # Ensemble configuration
