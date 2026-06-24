@@ -616,10 +616,6 @@ def test__regressor_fit_predict__handles_infinities_per_passthrough_flag(
             model.fit(X, y)
 
 
-# All v2.x architectures (download weights on first use). v2.6 has no
-# fit_with_cache support yet -- it's only a guard (regressor.py / classifier.py:
-# "fit_with_cache is not supported for TabPFN v2.6 yet."). strict xfail makes the
-# day that guard is lifted fail loudly, prompting this marker's removal.
 _FIT_WITH_CACHE_VERSIONS = [
     ModelVersion.V2,
     ModelVersion.V2_5,
