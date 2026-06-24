@@ -46,7 +46,11 @@ logging.basicConfig(
 
 # Training hyperparameters
 NUM_EPOCHS = 30
-LEARNING_RATE = 2e-5
+LEARNING_RATE = 1e-5
+# Samples per fine-tuning step (context + query). Higgs is large, so a bigger
+# context than the 10k default lets each step see more data and actually improve
+# the held-out test set (not just validation).
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 30_000
 
 # Ensemble configuration
 # number of estimators to use during finetuning
@@ -124,6 +128,7 @@ def main() -> None:
         device="cuda",
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
+        n_finetune_ctx_plus_query_samples=N_FINETUNE_CTX_PLUS_QUERY_SAMPLES,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
