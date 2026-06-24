@@ -11,6 +11,8 @@ import numpy as np
 import torch
 from sklearn.preprocessing import PowerTransformer
 
+from tabpfn.preprocessing.steps.utils import mode
+
 try:
     from kditransform import KDITransformer
 
@@ -56,7 +58,10 @@ class KDITransformerWithNaN(KDITransformer):
         *,
         standardize: bool = True,
         copy: bool = True,
+        categorical_features: list[int] | None = None,
     ) -> None:
+        # Columns imputed with the per-column mode instead of the mean.
+        self.categorical_features = categorical_features
         # ``kditransform`` exposes ``alpha`` and ``output_distribution`` but the
         # PowerTransformer fallback does not. To keep compatibility across both
         # backends, only pass the parameters that are supported by the active
@@ -106,6 +111,9 @@ class KDITransformerWithNaN(KDITransformer):
 
         # If all-nan or empty, nanmean returns nan.
         self.imputation_values_ = np.nan_to_num(np.nanmean(X, axis=0), nan=0)
+        if self.categorical_features:
+            cats = list(self.categorical_features)
+            self.imputation_values_[cats] = np.nan_to_num(mode(X[:, cats]), nan=0)
         X = np.nan_to_num(X, nan=self.imputation_values_)
 
         return super().fit(X, y)  # type: ignore
@@ -138,24 +146,38 @@ class KDITransformerWithNaN(KDITransformer):
         return self.transform(X)
 
 
-def get_all_kdi_transformers() -> dict[str, KDITransformerWithNaN]:
-    """Get all KDI transformers."""
+def get_all_kdi_transformers(
+    categorical_features: list[int] | None = None,
+) -> dict[str, KDITransformerWithNaN]:
+    """Get all KDI transformers.
+
+    Args:
+        categorical_features: Column indices imputed with the per-column mode
+            instead of the mean. ``None``/empty keeps mean imputation.
+    """
     try:
         all_preprocessors = {
-            "kdi": KDITransformerWithNaN(alpha=1.0, output_distribution="normal"),
+            "kdi": KDITransformerWithNaN(
+                alpha=1.0,
+                output_distribution="normal",
+                categorical_features=categorical_features,
+            ),
             "kdi_uni": KDITransformerWithNaN(
                 alpha=1.0,
                 output_distribution="uniform",
+                categorical_features=categorical_features,
             ),
         }
         for alpha in ALPHAS:
             all_preprocessors[f"kdi_alpha_{alpha}"] = KDITransformerWithNaN(
                 alpha=alpha,
                 output_distribution="normal",
+                categorical_features=categorical_features,
             )
             all_preprocessors[f"kdi_alpha_{alpha}_uni"] = KDITransformerWithNaN(
                 alpha=alpha,
                 output_distribution="uniform",
+                categorical_features=categorical_features,
             )
         return all_preprocessors
     except Exception:  # noqa: BLE001

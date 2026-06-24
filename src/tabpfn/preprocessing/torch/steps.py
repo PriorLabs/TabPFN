@@ -370,6 +370,7 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
     def __init__(
         self,
         global_transformer_name: Literal["svd", "svd_quarter_components"] = "svd",
+        categorical_features: list[int] | None = None,
     ) -> None:
         """Initialize the SVD features step.
 
@@ -377,10 +378,14 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
             global_transformer_name: Name of the SVD variant. The number of
                 components is computed inside ``_fit`` via
                 :func:`get_svd_n_components`, matching the CPU pipeline.
+            categorical_features: Column indices the pre-SVD scaler should impute
+                with the per-column mode instead of the mean.
         """
         super().__init__()
         self.global_transformer_name = global_transformer_name
-        self._scaler = TorchSafeStandardScaler()
+        self._scaler = TorchSafeStandardScaler(
+            categorical_features=categorical_features
+        )
         self._svd: TorchTruncatedSVD | None = None
 
     @override
@@ -425,6 +430,7 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         return {
             "scaler_std": scaler_cache["std"],
             "scaler_mean": scaler_cache["mean"],
+            "scaler_impute_fill": scaler_cache.get("impute_fill", scaler_cache["mean"]),
             "svd_components": svd_cache["components"],
             "svd_singular_values": svd_cache["singular_values"],
             "batch_size": torch.tensor(batch_size),
@@ -455,6 +461,7 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         scaler_cache = {
             "std": fitted_cache["scaler_std"],
             "mean": fitted_cache["scaler_mean"],
+            "impute_fill": fitted_cache["scaler_impute_fill"],
         }
         svd_cache = {
             "components": fitted_cache["svd_components"],

@@ -806,6 +806,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             save_peak_mem=self.memory_saving_mode,
             inference_mode=True,
             performance_options=performance_options,
+            categorical_imputation=self.inference_config_.CATEGORICAL_IMPUTATION,
         )
 
         return self
@@ -884,6 +885,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_preprocessing_jobs=self.n_preprocessing_jobs,
             keep_fitted_cache=(self.fit_mode == "fit_with_cache"),
             enable_gpu_preprocessing=self.inference_config_.ENABLE_GPU_PREPROCESSING,
+            categorical_imputation=self.inference_config_.CATEGORICAL_IMPUTATION,
             feature_subsampling_method=FeatureSubsamplingMethod(
                 self.inference_config_.FEATURE_SUBSAMPLING_METHOD
             ),
@@ -907,6 +909,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
             keep_cache_on_device=self.keep_cache_on_device,
+            categorical_imputation=self.inference_config_.CATEGORICAL_IMPUTATION,
             # TODO: Standard fit usually uses inference_mode=True, before it was enabled
         )
 

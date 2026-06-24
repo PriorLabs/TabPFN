@@ -4,10 +4,42 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 import torch
 
-from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean, torch_nanstd
+from tabpfn.preprocessing.steps.utils import mode as np_mode
+from tabpfn.preprocessing.torch.ops import (
+    mode as torch_mode,
+    select_features,
+    torch_nanmean,
+    torch_nanstd,
+)
+
+
+@pytest.mark.parametrize(
+    "x",
+    [
+        [[1.0, 10.0], [1.0, 20.0], [2.0, 20.0]],  # basic per-column mode
+        [[np.nan, 5.0], [1.0, np.inf], [1.0, -np.inf]],  # ignores non-finite
+        [[1.0], [1.0], [2.0], [2.0]],  # tie -> smallest value wins
+        [[np.nan, 3.0], [np.inf, 3.0]],  # all-non-finite column -> NaN
+        [[7.0, 7.0, 9.0]],  # single row
+    ],
+)
+def test__torch_mode__matches_numpy_mode(x: list[list[float]]):
+    """The torch and numpy ``mode`` implementations must agree element-wise."""
+    arr = np.array(x, dtype=float)
+    expected = np.asarray(np_mode(arr), dtype=float)
+    got = torch_mode(torch.tensor(arr)).numpy().astype(float)
+    np.testing.assert_array_equal(np.isnan(got), np.isnan(expected))
+    finite = ~np.isnan(expected)
+    np.testing.assert_array_equal(got[finite], expected[finite])
+
+
+def test__torch_mode__matches_numpy_mode_1d():
+    arr = np.array([np.nan, 4.0, 4.0, np.inf, 2.0], dtype=float)
+    assert float(torch_mode(torch.tensor(arr))) == float(np_mode(arr))
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.float64])

@@ -51,6 +51,7 @@ def create_preprocessing_pipeline(
     *,
     random_state: int | np.random.Generator | None,
     enable_gpu_preprocessing: bool = False,
+    categorical_imputation: Literal["mean", "mode"] = "mean",
 ) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline.
 
@@ -60,6 +61,9 @@ def create_preprocessing_pipeline(
         enable_gpu_preprocessing: When True, the quantile transform (if GPU-
             eligible), SVD, and shuffle steps are omitted from the CPU pipeline
             because they will run on GPU instead.
+        categorical_imputation: When ``"mode"``, categorical columns that flow
+            through the (numeric) reshape transform are imputed with the
+            per-column mode instead of the mean.
     """
     steps: list[PreprocessingStep | StepWithModalities] = []
 
@@ -102,6 +106,7 @@ def create_preprocessing_pipeline(
                 apply_to_categorical=(pconfig.categorical_name == "numeric"),
                 random_state=random_state,
                 schedule_gpu_transform=schedule_gpu_transform,
+                categorical_imputation=categorical_imputation,
             )
         )
 

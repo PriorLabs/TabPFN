@@ -95,6 +95,7 @@ class TabPFNEnsemblePreprocessor:
         n_preprocessing_jobs: int,
         keep_fitted_cache: bool = False,
         enable_gpu_preprocessing: bool = False,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         feature_subsampling_method: FeatureSubsamplingMethod = FeatureSubsamplingMethod.RANDOM,  # noqa: E501
         constant_feature_count: int = 50,
         subsample_samples: int | float | list[np.ndarray] | None = None,
@@ -116,6 +117,9 @@ class TabPFNEnsemblePreprocessor:
                 For the cpu preprocessors, the cache is always kept implicitly in the
                 preprocessor objects.
             enable_gpu_preprocessing: Whether to move quantile/SVD/shuffle to GPU.
+            categorical_imputation: When ``"mode"``, impute categorical columns
+                that flow through the numeric reshape transform with the
+                per-column mode instead of the mean.
             feature_subsampling_method: Method for subsampling features. One of
                 "balanced", "random", "constant_and_balanced", or "feature_importance".
             constant_feature_count: Number of leading features to always include
@@ -146,6 +150,7 @@ class TabPFNEnsemblePreprocessor:
 
         self.random_state = random_state
         self.enable_gpu_preprocessing = enable_gpu_preprocessing
+        self.categorical_imputation = categorical_imputation
         _, rng = infer_random_state(random_state)
         # Derive independent seeds for each random step in one batch so that
         # each step's stream is unaffected by what happens in the others.
@@ -164,6 +169,7 @@ class TabPFNEnsemblePreprocessor:
                 config,
                 random_state=int(seed),
                 enable_gpu_preprocessing=enable_gpu_preprocessing,
+                categorical_imputation=categorical_imputation,
             )
             for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]
@@ -303,6 +309,7 @@ class TabPFNEnsemblePreprocessor:
                     enable_gpu_preprocessing=True,
                     feature_schema=feature_schema_preprocessed,
                     n_train_samples=X_train_preprocessed.shape[0],
+                    categorical_imputation=self.categorical_imputation,
                     random_state=int(self.pipeline_seeds[config_index]),
                 )
             else:

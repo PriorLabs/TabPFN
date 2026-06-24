@@ -219,6 +219,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         max_features_per_estimator: int = 500,
         random_state: int | np.random.Generator | None = None,
         schedule_gpu_transform: GPUTransformType | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
     ):
         """Initialize the step.
 
@@ -248,6 +249,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                 preprocessing pipeline picks them up. The CPU transform
                 itself is not skipped — pass ``transform_name="none"`` to
                 let the GPU side do the actual work.
+            categorical_imputation: When ``"mode"`` and ``apply_to_categorical``
+                is set, categorical columns flowing through the transform are
+                imputed with the per-column mode instead of the mean.
         """
         super().__init__()
 
@@ -260,6 +264,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.random_state = random_state
         self.max_features_per_estimator = max_features_per_estimator
         self.schedule_gpu_transform = schedule_gpu_transform
+        self.categorical_imputation = categorical_imputation
         self.transformer_: Pipeline | ColumnTransformer | None = None
 
     def _create_transformers_and_new_schema(
@@ -274,9 +279,20 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         static_seed, _ = infer_random_state(self.random_state)
         categorical_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
+        # In the apply_to_categorical branches below, categorical columns are
+        # placed first within ``trans_ixs``, so within the transform they occupy
+        # positions 0..len(categorical_features)-1.
+        mode_categorical_ix = (
+            list(range(len(categorical_features)))
+            if self.categorical_imputation == "mode"
+            and self.apply_to_categorical
+            and categorical_features
+            else None
+        )
         all_preprocessors = get_all_reshape_feature_distribution_preprocessors(
             n_samples,
             random_state=static_seed,
+            categorical_features=mode_categorical_ix,
         )
         all_feats_ix = list(range(n_features))
         transformers = []
@@ -604,23 +620,34 @@ def get_adaptive_preprocessors(
 def get_all_reshape_feature_distribution_preprocessors(
     num_examples: int,
     random_state: int | None = None,
+    categorical_features: list[int] | None = None,
 ) -> dict[str, TransformerMixin | Pipeline]:
-    """Returns a dictionary of preprocessing to preprocess the data."""
+    """Returns a dictionary of preprocessing to preprocess the data.
+
+    ``categorical_features`` lists the columns (in the transform's input space)
+    to impute with the per-column mode instead of the mean. It is threaded into
+    the imputing transforms (the power/standard-scaler variants and the KDI
+    transforms); the other transforms handle NaN themselves and ignore it.
+    """
     all_preprocessors = {
         "power": wrap_with_safe_standard_scaler(
             PowerTransformer(standardize=False),
+            categorical_features,
         ),
         "safepower": wrap_with_safe_standard_scaler(
             SafePowerTransformer(standardize=False),
+            categorical_features,
         ),
         "power_box": _make_box_cox_safe(
             wrap_with_safe_standard_scaler(
                 PowerTransformer(standardize=False, method="box-cox"),
+                categorical_features,
             ),
         ),
         "safepower_box": _make_box_cox_safe(
             wrap_with_safe_standard_scaler(
                 SafePowerTransformer(standardize=False, method="box-cox"),
+                categorical_features,
             ),
         ),
         "log": FunctionTransformer(
@@ -691,7 +718,7 @@ def get_all_reshape_feature_distribution_preprocessors(
         "robust": RobustScaler(unit_variance=True),
         # default FunctionTransformer yields the identity function
         "none": FunctionTransformer(),
-        **get_all_kdi_transformers(),
+        **get_all_kdi_transformers(categorical_features),
     }
 
     with contextlib.suppress(Exception):
@@ -707,7 +734,11 @@ def get_all_reshape_feature_distribution_preprocessors(
                 ),
                 (
                     "kdi",
-                    KDITransformerWithNaN(alpha=1.0, output_distribution="uniform"),
+                    KDITransformerWithNaN(
+                        alpha=1.0,
+                        output_distribution="uniform",
+                        categorical_features=categorical_features,
+                    ),
                 ),
             ],
         )

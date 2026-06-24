@@ -77,6 +77,12 @@ class InferenceConfig:
             -> 12.0 for classification and None for regression.
     """
 
+    CATEGORICAL_IMPUTATION: Literal["mean", "mode"] = "mean"
+    """How to impute missing values in categorical features. ``"mode"`` uses the
+    per-column mode; ``"mean"`` uses the mean (same as numerical features). Only
+    affects categorical columns; numerical features always use the mean.
+    Defaults to ``"mean"`` (mean imputation everywhere) for backwards compatibility."""
+
     FEATURE_SHIFT_METHOD: Literal["shuffle", "rotate"] | None = "shuffle"
     """The method used to shift features during preprocessing for ensembling to emulate
      the effect of invariance to feature position. Without ensembling, TabPFN is not

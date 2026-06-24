@@ -30,7 +30,7 @@ import logging as _logging
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
 import numpy as np
@@ -51,6 +51,7 @@ from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
 from tabpfn.errors import is_oom_error
+from tabpfn.preprocessing.torch.ops import categorical_mode_fill
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 if TYPE_CHECKING:
@@ -1616,6 +1617,7 @@ class TabPFNV3(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
         kv_cache: TabPFNV3Cache | None = None,
@@ -1640,7 +1642,10 @@ class TabPFNV3(Architecture):
         """
         del task_type
         del test_targets_MB
-        del categorical_inds
+        # categorical_inds is only consumed by the mode-imputation path; when mode
+        # is off it stays unused (and None keeps the compiled mean path untouched).
+        if categorical_imputation != "mode":
+            categorical_inds = None
         if isinstance(x, dict):
             x = x["main"]
         if isinstance(y, dict):
@@ -1691,6 +1696,7 @@ class TabPFNV3(Architecture):
             return_inducing_hidden=return_kv_cache,
             kv_cache=kv_cache,
             x_is_test_only=x_is_test_only,
+            categorical_inds=categorical_inds,
         )
 
         # ---- Stage 3: ICL ----
@@ -1849,6 +1855,7 @@ class TabPFNV3(Architecture):
         x_RiBC: torch.Tensor,
         num_train: int,
         scaler_cache: dict[str, torch.Tensor] | None = None,
+        categorical_inds: list[list[int]] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
         """NaN indicator capture → imputation → standardisation → transpose.
 
@@ -1869,12 +1876,16 @@ class TabPFNV3(Architecture):
             nan_indicator_RiBC = _generate_nan_and_inf_indicator(x_RiBC)
             nan_ind_BRiC = nan_indicator_RiBC.transpose(0, 1)
 
-        x_RiBC, _ = _impute_nan_and_inf_with_mean(x_RiBC, num_train, scaler_cache)
+        x_RiBC, _ = _impute_nan_and_inf_with_mean(
+            x_RiBC, num_train, scaler_cache, categorical_inds=categorical_inds
+        )
         if scaler_cache is None:
             # Fit on the imputed train rows (matching ``__call__``'s split), so the
             # returned statistics are exactly those applied here and can be reused.
             fit_data = x_RiBC[:num_train] if num_train > 0 else x_RiBC
-            scaler_cache = self.standard_scaler.fit(fit_data)
+            scaler_cache = self.standard_scaler.fit(
+                fit_data, categorical_inds=categorical_inds
+            )
         x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache)
         x_BRiC = x_RiBC.transpose(0, 1)
 
@@ -1978,6 +1989,7 @@ class TabPFNV3(Architecture):
         y: torch.Tensor,
         num_train: int,
         scaler_cache: dict[str, torch.Tensor] | None,
+        categorical_inds: list[list[int]] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
         """Preprocess rows, embed y for the col stage, and group features.
 
@@ -1988,7 +2000,7 @@ class TabPFNV3(Architecture):
         """
         B = rows_RiBC.shape[1]
         x_BRiC, nan_ind_BRiC, scaler_stats = self._preprocess_raw(
-            rows_RiBC, num_train, scaler_cache
+            rows_RiBC, num_train, scaler_cache, categorical_inds
         )
         y_col_emb_BNE: torch.Tensor | None = None
         if scaler_cache is None and num_train > 0:
@@ -2007,6 +2019,7 @@ class TabPFNV3(Architecture):
         return_inducing_hidden: bool,
         kv_cache: TabPFNV3Cache | None,
         x_is_test_only: bool,
+        categorical_inds: list[list[int]] | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor] | None, dict[str, torch.Tensor]]:
         """Stages 0-2: feature embedding, distribution embedding, column aggregation.
 
@@ -2046,7 +2059,7 @@ class TabPFNV3(Architecture):
             else self._preprocess_and_group
         )
         x_grouped_BRiCG, y_col_emb_BNE, scaler_stats = preprocess_fn(
-            rows_RiBC, y, num_train, scaler_cache
+            rows_RiBC, y, num_train, scaler_cache, categorical_inds
         )
         num_rows, C = x_grouped_BRiCG.shape[1], x_grouped_BRiCG.shape[2]
 
@@ -2282,8 +2295,13 @@ def _impute_nan_and_inf_with_mean(
     x: torch.Tensor,
     num_train_rows: int,
     scaler_cache: dict[str, torch.Tensor] | None = None,
+    *,
+    categorical_inds: list[list[int]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Impute the nan and inf with the mean of the feature.
+
+    When ``categorical_inds`` is given, those columns are filled with the per-column
+    train mode instead of the mean (columns with no finite train value keep the mean).
 
     Returns:
         A tuple of (imputed tensor, is_finite mask).
@@ -2292,11 +2310,16 @@ def _impute_nan_and_inf_with_mean(
     if num_train_rows == 0 and scaler_cache is None:
         _logging.warning("No training rows or scaler cache provided, imputing with 0.")
     if scaler_cache is not None:
-        feature_means = scaler_cache["mean"]
+        # The scaler cache carries the per-column imputation fill (mode for
+        # categoricals, mean elsewhere) under "impute_fill" when fit with
+        # categorical_inds; otherwise the mean is the fill. No recompute needed.
+        fill = scaler_cache.get("impute_fill", scaler_cache["mean"])
     else:
         x_train = torch.where(is_finite[:num_train_rows], x[:num_train_rows], torch.nan)
-        feature_means = torch.nan_to_num(torch.nanmean(x_train, dim=0), 0)
-    return torch.where(is_finite, x, feature_means.unsqueeze(0).expand_as(x)), is_finite
+        fill = torch.nan_to_num(torch.nanmean(x_train, dim=0), 0)
+        if categorical_inds is not None and num_train_rows > 0:
+            fill = categorical_mode_fill(x, num_train_rows, categorical_inds, fill)
+    return torch.where(is_finite, x, fill.unsqueeze(0).expand_as(x)), is_finite
 
 
 def _impute_target_nan_and_inf(

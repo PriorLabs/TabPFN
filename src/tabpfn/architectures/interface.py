@@ -170,6 +170,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor: ...
@@ -183,6 +184,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> dict[str, Tensor]: ...
@@ -196,6 +198,7 @@ class Architecture(nn.Module, ABC):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
@@ -222,6 +225,10 @@ class Architecture(nn.Module, ABC):
                 below.
 
             categorical_inds: The indices of categorical features.
+
+            categorical_imputation: How to impute NaN/Inf in categorical features.
+                ``"mode"`` fills with the per-column train mode; ``"mean"`` (default)
+                fills with the mean like all other features. Only v3 acts on this.
 
             performance_options: Performance and memory options for this forward pass.
                 If None, uses defaults (no memory saving, no recomputation).

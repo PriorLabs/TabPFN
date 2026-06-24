@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.steps.adaptive_quantile_transformer import (
@@ -42,6 +42,7 @@ def create_gpu_preprocessing_pipeline(
     feature_schema: FeatureSchema | None = None,
     n_train_samples: int | None = None,
     random_state: int | np.random.Generator | None = None,
+    categorical_imputation: Literal["mean", "mode"] = "mean",
 ) -> TorchPreprocessingPipeline | None:
     """Create a GPU preprocessing pipeline based on configuration.
 
@@ -55,6 +56,9 @@ def create_gpu_preprocessing_pipeline(
             Used to read ``scheduled_gpu_transform`` column annotations.
         n_train_samples: Number of training samples (after subsampling).
         random_state: Random state for the shuffle step.
+        categorical_imputation: When ``"mode"``, the pre-SVD safe standard
+            scaler imputes categorical columns with the per-column mode instead
+            of the mean.
     """
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]] = []
     pconfig = config.preprocess_config
@@ -106,10 +110,20 @@ def create_gpu_preprocessing_pipeline(
             and pconfig.global_transformer_name != "None"
         )
         if has_svd:
+            # The SVD step receives the full tensor (modalities=None), so the
+            # schema's categorical indices map directly onto the columns the
+            # pre-SVD scaler sees. Earlier GPU steps transform in place, so the
+            # indices are stable at SVD entry.
+            svd_categorical_features = (
+                feature_schema.indices_for(FeatureModality.CATEGORICAL)
+                if categorical_imputation == "mode"
+                else None
+            )
             steps.append(
                 (
                     TorchAddSVDFeaturesStep(
                         global_transformer_name=pconfig.global_transformer_name,
+                        categorical_features=svd_categorical_features,
                     ),
                     None,
                 )

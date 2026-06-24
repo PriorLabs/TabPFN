@@ -39,7 +39,13 @@ from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
-from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
+from tabpfn.preprocessing.torch.ops import (
+    categorical_mask_from_inds,
+    categorical_mode_fill,
+    grouped_inds_from_mask,
+    select_features,
+    torch_nanmean,
+)
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 # Indicator values appended to the feature/target encodings to flag the original
@@ -635,6 +641,7 @@ class TabPFNV2(Architecture):
         num_feature_groups: int,
         batch_size: int,
         feature_cache: dict[str, torch.Tensor] | None = None,
+        categorical_mask_RSF: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Preprocess and embed the (grouped) features, adding column embeddings.
 
@@ -660,14 +667,24 @@ class TabPFNV2(Architecture):
         )
         x_RSF = _remove_constant_features(x_RSF, column_selection_mask)
 
+        # Route the categorical mask through the same constant-feature removal as the
+        # data so the per-(folded-batch) indices align with the grouped tensor.
+        grouped_cat_inds = None
+        if categorical_mask_RSF is not None and fitting:
+            cat_RSF = _remove_constant_features(
+                categorical_mask_RSF, column_selection_mask
+            )
+            grouped_cat_inds = grouped_inds_from_mask(cat_RSF)
+
         # The NaN/Inf indicators must be captured before imputation.
         nan_indicator_RSF = _generate_nan_and_inf_indicator(x_RSF)
 
-        # Impute, then standard-scale. The imputation mean ignores NaN/Inf, while the
-        # standard-scaler statistics are computed on the (imputed) training rows.
+        # Impute, then standard-scale. The imputation mean ignores NaN/Inf (categorical
+        # columns use the mode), while the standard-scaler statistics are computed on
+        # the (imputed) training rows.
         feature_means = None if fitting else feature_cache["feature_means"]
         x_RSF, feature_means = _impute_nan_and_inf_with_mean(
-            x_RSF, num_train_labels, feature_means
+            x_RSF, num_train_labels, feature_means, categorical_inds=grouped_cat_inds
         )
         if fitting:
             scaler_stats = self.standard_scaler.fit(x_RSF[:num_train_labels])
@@ -796,6 +813,7 @@ class TabPFNV2(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
         kv_cache: TabPFNV2Cache | None = None,
@@ -822,7 +840,10 @@ class TabPFNV2(Architecture):
             performance_options = self.get_default_performance_options()
         force_recompute_layer = performance_options.force_recompute_layer
         save_peak_memory_factor = performance_options.save_peak_memory_factor
-        del categorical_inds
+        # categorical_inds is only consumed by the mode-imputation path; when mode
+        # is off it stays unused (None keeps the mean path untouched).
+        if categorical_imputation != "mode":
+            categorical_inds = None
         del task_type
 
         using_cache = kv_cache is not None and not kv_cache.is_empty()
@@ -851,6 +872,18 @@ class TabPFNV2(Architecture):
             x
         )
 
+        # Build a categorical mask and group it the same way the data is grouped, so it
+        # can be threaded through the same constant-removal the data undergoes in
+        # _embed_features. Only the opt-in mode-imputation path populates it.
+        categorical_mask_RSF: torch.Tensor | None = None
+        if categorical_inds is not None:
+            cat_mask = categorical_mask_from_inds(
+                categorical_inds, batch_size, x.shape[-1], x
+            )
+            categorical_mask_RSF, _ = _pad_and_reshape_feature_groups(
+                cat_mask, self.features_per_group
+            )
+
         # Populated on the cache-build path so we can store the fitted feature-
         # preprocessing statistics and the embedded all-NaN target in the cache.
         feature_cache: dict[str, torch.Tensor] | None = None
@@ -865,6 +898,7 @@ class TabPFNV2(Architecture):
                 num_feature_groups=num_feature_groups,
                 batch_size=batch_size,
                 feature_cache=kv_cache.feature_cache,
+                categorical_mask_RSF=categorical_mask_RSF,
             )
             # The target column is the embedded all-NaN target, broadcast to all rows.
             test_y_BY = kv_cache.test_y_embedding.to(
@@ -890,6 +924,7 @@ class TabPFNV2(Architecture):
                 num_train_labels=num_train_labels,
                 num_feature_groups=num_feature_groups,
                 batch_size=batch_size,
+                categorical_mask_RSF=categorical_mask_RSF,
             )
 
             # Add the targets as an additional column.
@@ -1158,17 +1193,26 @@ def _impute_nan_and_inf_with_mean(
     x: torch.Tensor,
     num_train_rows: int,
     feature_means: torch.Tensor | None = None,
+    *,
+    categorical_inds: list[list[int]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Replace NaN/Inf cells with the per-feature mean of the (finite) training rows.
 
     When ``feature_means`` is given (the cached-inference path) it is used directly
-    instead of being recomputed from the training rows.
+    instead of being recomputed from the training rows. When ``categorical_inds`` is
+    given (fit path), those columns are filled with the per-column train mode instead
+    of the mean; the returned ``feature_means`` carries that mode so the cache path
+    reuses it (and the standard scaler that fits on the imputed data centers on it).
 
     Returns:
         A tuple of ``(imputed tensor, feature_means)``.
     """
     if feature_means is None:
         feature_means = torch_nanmean(x[:num_train_rows], axis=0, include_inf=True)
+        if categorical_inds is not None and num_train_rows > 0:
+            feature_means = categorical_mode_fill(
+                x, num_train_rows, categorical_inds, feature_means
+            )
     nan_mask = torch.logical_or(torch.isnan(x), torch.isinf(x))
     imputed = torch.where(nan_mask, feature_means.unsqueeze(0).expand_as(x), x)
     return imputed, feature_means

@@ -285,6 +285,7 @@ def create_inference_engine(  # noqa: PLR0913
     use_autocast_: bool,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
+    categorical_imputation: Literal["mean", "mode"] = "mean",
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -311,6 +312,8 @@ def create_inference_engine(  # noqa: PLR0913
             inference device. If False, caches are offloaded to CPU as they
             are built and moved back on demand during inference, lowering
             resident device memory at the cost of per-call transfers.
+        categorical_imputation: How the model imputes NaN/Inf in categorical
+            features ("mean" or "mode"); forwarded to each model forward call.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -322,6 +325,7 @@ def create_inference_engine(  # noqa: PLR0913
             dtype_byte_size=byte_size,
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
+            categorical_imputation=categorical_imputation,
         )
     if fit_mode == "fit_preprocessors":
         return InferenceEngineCachePreprocessing(
@@ -334,6 +338,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             inference_mode=inference_mode,
+            categorical_imputation=categorical_imputation,
         )
     if fit_mode == "fit_with_cache":
         return InferenceEngineExplicitKVCache(
@@ -347,6 +352,7 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
             keep_cache_on_device=keep_cache_on_device,
+            categorical_imputation=categorical_imputation,
         )
     if fit_mode == "batched":
         raise ValueError(

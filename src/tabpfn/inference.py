@@ -12,7 +12,7 @@ from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -337,6 +337,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         dtype_byte_size: int,
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
     ) -> None:
         """Initialize the on-demand inference engine.
 
@@ -351,6 +352,8 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
             dtype_byte_size: The byte size of the dtype.
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
+            categorical_imputation: How the model imputes NaN/Inf in categorical
+                features ("mean" or "mode"); forwarded to each model call.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -362,6 +365,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
         self.X_train = X_train
         self.y_train = y_train
         self.ensemble_preprocessor = ensemble_preprocessor
+        self.categorical_imputation = categorical_imputation
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
@@ -482,6 +486,7 @@ class InferenceEngineOnDemand(MultiDeviceInferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
+                categorical_imputation=self.categorical_imputation,
                 performance_options=performance_options,
                 **kwargs,
             )
@@ -506,6 +511,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         performance_options: PerformanceOptions,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
     ) -> None:
         """Initialize the batched inference engine without preprocessing.
 
@@ -523,6 +529,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             save_peak_mem: Whether to save peak memory usage.
             performance_options: Performance and memory options forwarded to
                 the model on each forward call.
+            categorical_imputation: How the model imputes NaN/Inf in categorical
+                features ("mean" or "mode"); forwarded to each model call.
         """
         for ensemble_config in ensemble_configs:
             if len(ensemble_config) > 1:
@@ -544,6 +552,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         self.ensemble_configs = ensemble_configs
         self.inference_mode = inference_mode
         self.performance_options = performance_options
+        self.categorical_imputation = categorical_imputation
 
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
 
@@ -586,6 +595,7 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
                             for cat_item in self.feature_schema_list
                         ]
                     ),
+                    categorical_imputation=self.categorical_imputation,
                     performance_options=self.performance_options,
                     **kwargs,
                 )
@@ -619,7 +629,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
     forward pass through the model which is currently done sequentially.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         X_train: np.ndarray | torch.Tensor,
         y_train: np.ndarray | torch.Tensor,
@@ -632,6 +642,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         inference_mode: bool,
         no_preprocessing: bool = False,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
     ) -> None:
         """Initialize the cache preprocessing inference engine.
 
@@ -650,6 +661,8 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 (this is quicker but disables backpropagation)
             no_preprocessing: If True, skip preprocessing on test data.
                 Used for differentiability.
+            categorical_imputation: How the model imputes NaN/Inf in categorical
+                features ("mean" or "mode"); forwarded to each model call.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -662,6 +675,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.no_preprocessing = no_preprocessing
         self.X_train_shape_before_preprocessing = X_train.shape
         self.ensemble_preprocessor = ensemble_preprocessor
+        self.categorical_imputation = categorical_imputation
 
         fit_preprocess_start = time.perf_counter()
         self.ensemble_members: list[TabPFNEnsembleMember] = (
@@ -796,6 +810,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
+                categorical_imputation=self.categorical_imputation,
                 performance_options=performance_options,
                 **kwargs,
             )
@@ -842,6 +857,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         autocast: bool,
         keep_cache_on_device: bool = True,
         maybe_quantize_kv_cache: bool = True,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -869,6 +885,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             maybe_quantize_kv_cache: If True (default), quantize the KV cache
                 to reduce memory footprint if it is supported by the architecture.
                 If False, the KV cache is not quantized.
+            categorical_imputation: How the model imputes NaN/Inf in categorical
+                features ("mean" or "mode"); forwarded to each model call.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -880,6 +898,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         self.keep_cache_on_device = keep_cache_on_device
         self.maybe_quantize_kv_cache = maybe_quantize_kv_cache
         self.ensemble_preprocessor = ensemble_preprocessor
+        self.categorical_imputation = categorical_imputation
 
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
@@ -985,6 +1004,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 y,
                 only_return_standard_out=True,
                 categorical_inds=batched_cat_ix,
+                categorical_imputation=self.categorical_imputation,
                 performance_options=performance_options,
                 return_kv_cache=True,
             )
@@ -1131,6 +1151,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 y_train,
                 only_return_standard_out=only_return_standard_out,
                 categorical_inds=batched_cat_ix,
+                categorical_imputation=self.categorical_imputation,
                 performance_options=performance_options,
                 kv_cache=cache_on_device,
                 x_is_test_only=True,

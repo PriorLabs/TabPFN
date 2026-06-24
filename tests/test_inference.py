@@ -48,6 +48,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: Literal[True] = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor: ...
@@ -60,6 +61,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: Literal[False],
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> dict[str, Tensor]: ...
@@ -72,6 +74,7 @@ class _TestModel(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
     ) -> Tensor | dict[str, Tensor]:
@@ -112,11 +115,13 @@ class _TestModelLegacy(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
     ) -> Tensor | dict[str, Tensor]:
         del (
             only_return_standard_out,
             categorical_inds,
+            categorical_imputation,
             performance_options,
         )
         """Perform a forward pass."""
@@ -161,6 +166,7 @@ class _TestModelWithKVCache(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
         return_kv_cache: bool = False,

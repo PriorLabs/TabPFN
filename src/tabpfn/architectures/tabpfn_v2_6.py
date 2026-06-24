@@ -29,7 +29,13 @@ from tabpfn.architectures.kv_cache import (
 from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
-from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
+from tabpfn.preprocessing.torch.ops import (
+    categorical_mask_from_inds,
+    categorical_mode_fill,
+    grouped_inds_from_mask,
+    select_features,
+    torch_nanmean,
+)
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
 NAN_INDICATOR = -2.0
@@ -777,6 +783,7 @@ class TabPFNV2p6(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
+        categorical_imputation: Literal["mean", "mode"] = "mean",
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
         kv_cache: TabPFNV2p6Cache | None = None,
@@ -803,7 +810,10 @@ class TabPFNV2p6(Architecture):
             performance_options = self.get_default_performance_options()
         force_recompute_layer = performance_options.force_recompute_layer
         save_peak_memory_factor = performance_options.save_peak_memory_factor
-        del categorical_inds
+        # categorical_inds is only consumed by the mode-imputation path; when mode
+        # is off it stays unused (None keeps the mean path untouched).
+        if categorical_imputation != "mode":
+            categorical_inds = None
 
         using_cache = kv_cache is not None and not kv_cache.is_empty()
         if x_is_test_only and not using_cache:
@@ -854,6 +864,7 @@ class TabPFNV2p6(Architecture):
                 batch_size=batch_size,
                 scaler_cache=kv_cache.scaler_cache,
                 feature_state=kv_cache.feature_state,
+                categorical_inds=categorical_inds,
             )
             # The target column is the embedded all-NaN target, broadcast to all rows.
             test_y_BX = kv_cache.test_y_embedding.to(
@@ -874,6 +885,7 @@ class TabPFNV2p6(Architecture):
                 num_train_labels=num_train_labels,
                 batch_size=batch_size,
                 return_state=return_kv_cache,
+                categorical_inds=categorical_inds,
             )
             embedded_y_BRiX = self._preprocess_and_embed_targets(
                 y=y,
@@ -986,6 +998,7 @@ class TabPFNV2p6(Architecture):
         scaler_cache: dict[str, torch.Tensor] | None = None,
         feature_state: dict[str, torch.Tensor] | None = None,
         return_state: bool = False,
+        categorical_inds: list[list[int]] | None = None,
     ) -> tuple[
         torch.Tensor, dict[str, torch.Tensor] | None, dict[str, torch.Tensor] | None
     ]:
@@ -1009,6 +1022,9 @@ class TabPFNV2p6(Architecture):
                 parameters to reuse (cache path).
             return_state: If True, also return the (newly computed) ``scaler_cache``
                 and ``feature_state`` for building a :class:`TabPFNV2p6Cache`.
+            categorical_inds: Per-batch original categorical column indices; when
+                given, those columns are imputed with the per-column mode (mapped
+                to the grouped layout via :func:`grouped_categorical_inds`).
 
         Returns:
             A tuple ``(embedded_x_BRiGX, scaler_cache, feature_state)`` where the
@@ -1021,9 +1037,24 @@ class TabPFNV2p6(Architecture):
         # Remove constant features. The mask depends on the full train+test input, so
         # it is captured and reused for test-only data.
         column_mask = feature_state["column_mask"] if using_cache else None
+        num_columns = x_RiBC.shape[-1]
         x_RiBC, column_mask = _remove_constant_features(
             x_RiBC=x_RiBC, column_mask=column_mask
         )
+        # Route a categorical mask through the *same* constant-removal + grouping the
+        # data undergoes, so the resulting per-(B*G) indices align with x_RiBgF.
+        grouped_cat_inds = None
+        if categorical_inds is not None and not using_cache:
+            cat_mask = categorical_mask_from_inds(
+                categorical_inds, batch_size, num_columns, x_RiBC
+            )
+            cat_mask, _ = _remove_constant_features(
+                x_RiBC=cat_mask, column_mask=column_mask
+            )
+            cat_mask, _ = _pad_and_reshape_feature_groups(
+                x_RiBC=cat_mask, num_features_per_group=self.features_per_group
+            )
+            grouped_cat_inds = grouped_inds_from_mask(cat_mask)
         # Bg = folded batch size (B * G) and number of feature groups (G)
         x_RiBgF, num_feature_groups = _pad_and_reshape_feature_groups(
             x_RiBC=x_RiBC,
@@ -1035,13 +1066,18 @@ class TabPFNV2p6(Architecture):
         # standard scaler's fitted mean equals the imputation mean and is reused here
         # for the cache path.
         x_RiBgF, _ = _impute_nan_and_inf_with_mean(
-            x=x_RiBgF, num_train_rows=num_train_labels, scaler_cache=scaler_cache
+            x=x_RiBgF,
+            num_train_rows=num_train_labels,
+            scaler_cache=scaler_cache,
+            categorical_inds=grouped_cat_inds,
         )
         if using_cache:
             x_RiBgF = self.standard_scaler.transform(x_RiBgF, fitted_cache=scaler_cache)
         else:
             fit_data = x_RiBgF[:num_train_labels] if num_train_labels > 0 else x_RiBgF
-            scaler_cache = self.standard_scaler.fit(fit_data)
+            scaler_cache = self.standard_scaler.fit(
+                fit_data, categorical_inds=grouped_cat_inds
+            )
             x_RiBgF = self.standard_scaler.transform(x_RiBgF, fitted_cache=scaler_cache)
 
         # Normalize feature groups. The mask and feature counts depend on the full input
@@ -1265,6 +1301,8 @@ def _impute_nan_and_inf_with_mean(
     x: torch.Tensor,
     num_train_rows: int,
     scaler_cache: dict[str, torch.Tensor] | None = None,
+    *,
+    categorical_inds: list[list[int]] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Impute the nan and inf with the mean of the feature.
 
@@ -1273,21 +1311,30 @@ def _impute_nan_and_inf_with_mean(
     imputing NaN/Inf with the train mean preserves that mean, so the scaler's fitted
     mean equals the imputation mean.
 
+    When ``categorical_inds`` is given, those columns are filled with the per-column
+    train mode instead of the mean (on the cache path the mode comes from the scaler
+    cache's ``impute_fill`` key; columns with no finite value keep the mean).
+
     Args:
         x: Tensor of shape [R, ...], where
             R = number of rows
         num_train_rows: The position to use for single evaluation.
         scaler_cache: Fitted standard-scaler statistics to reuse (cache path).
+        categorical_inds: Per-(folded-batch) categorical column indices for the
+            grouped tensor; see :func:`grouped_categorical_inds`.
 
     Returns:
         A tuple of (imputed tensor, nan/inf mask).
     """
     if scaler_cache is not None:
-        feature_means = scaler_cache["mean"].to(device=x.device, dtype=x.dtype)
+        fill = scaler_cache.get("impute_fill", scaler_cache["mean"])
+        fill = fill.to(device=x.device, dtype=x.dtype)
     else:
-        feature_means = torch_nanmean(x=x[:num_train_rows], axis=0, include_inf=True)
+        fill = torch_nanmean(x=x[:num_train_rows], axis=0, include_inf=True)
+        if categorical_inds is not None and num_train_rows > 0:
+            fill = categorical_mode_fill(x, num_train_rows, categorical_inds, fill)
     nan_mask = torch.logical_or(torch.isnan(x), torch.isinf(x))
-    return torch.where(nan_mask, feature_means.unsqueeze(0).expand_as(x), x), nan_mask
+    return torch.where(nan_mask, fill.unsqueeze(0).expand_as(x), x), nan_mask
 
 
 def _impute_target_nan_and_inf(

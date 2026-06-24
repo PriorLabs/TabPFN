@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import torch
 
+from tabpfn.preprocessing.torch.ops import mode
+
 
 def _svd_flip_stable(
     u: torch.Tensor,
@@ -220,7 +222,14 @@ class TorchSafeStandardScaler:
 
     This is designed to be used before SVD, similar to sklearn's
     StandardScaler(with_mean=False) wrapped in make_standard_scaler_safe.
+
+    ``categorical_features`` lists columns whose NaN/inf values are filled with
+    the per-column mode instead of the mean (the std used for scaling stays
+    mean-based).
     """
+
+    def __init__(self, categorical_features: list[int] | None = None) -> None:
+        self.categorical_features = categorical_features
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the standard deviation over the first dimension.
@@ -242,6 +251,16 @@ class TorchSafeStandardScaler:
             torch.tensor(float("nan"), device=x.device, dtype=x.dtype),
             x,
         )
+
+        # Impute categorical columns with the per-column mode first, so the
+        # mean/std below are computed on the mode-imputed data (matching the CPU
+        # path, which imputes the mode before fitting StandardScaler).
+        cats = list(self.categorical_features) if self.categorical_features else None
+        modes: torch.Tensor | None = None
+        if cats:
+            modes = torch.nan_to_num(mode(x_safe[:, cats]))  # 0 if all-nonfinite
+            cat = x_safe[:, cats]
+            x_safe[:, cats] = torch.where(torch.isfinite(cat), cat, modes)
 
         # Compute column means ignoring NaN (matching SimpleImputer(strategy="mean"))
         nan_mask = torch.isnan(x_safe)
@@ -268,7 +287,13 @@ class TorchSafeStandardScaler:
         if x.shape[0] == 1:
             std = torch.ones_like(std)
 
-        return {"std": std, "mean": mean}
+        cache = {"std": std, "mean": mean}
+        if modes is not None:
+            # Imputation fill: mode for categorical columns, mean elsewhere.
+            impute_fill = mean.clone()
+            impute_fill[cats] = modes
+            cache["impute_fill"] = impute_fill
+        return cache
 
     def transform(
         self,
@@ -296,9 +321,12 @@ class TorchSafeStandardScaler:
         chunk_size = self._get_transform_chunk_size(
             x, compute_element_size=max(x.element_size(), std.element_size())
         )
+        # Imputation uses the mode-aware fill when present (mode for categorical
+        # columns, mean elsewhere), else the plain mean.
+        col_fill = fitted_cache.get("impute_fill", fitted_cache.get("mean"))
         col_means = (
-            fitted_cache["mean"].to(device=x.device, dtype=compute_dtype)
-            if "mean" in fitted_cache
+            col_fill.to(device=x.device, dtype=compute_dtype)
+            if col_fill is not None
             else None
         )
 
