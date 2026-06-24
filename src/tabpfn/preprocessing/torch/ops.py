@@ -146,7 +146,7 @@ def _mode_col(x: torch.Tensor) -> float:
     return values[torch.nonzero(counts == counts.max())[0]].item()
 
 
-def mode(x: torch.Tensor) -> torch.Tensor | float:
+def mode(x: torch.Tensor) -> torch.Tensor:
     """Compute the mode of each column along the row dimension (axis 0).
 
     For every column, returns the most frequently occurring value, ignoring
@@ -165,7 +165,7 @@ def mode(x: torch.Tensor) -> torch.Tensor | float:
         Tensor of shape ``(n_features,)`` with the per-column mode.
     """
     if x.ndim == 1:
-        return _mode_col(x)
+        return torch.as_tensor(_mode_col(x), dtype=x.dtype, device=x.device)
     if x.ndim != 2:
         raise ValueError(f"Expected a 1D or 2D Tensor, got {x.ndim}D.")
 
