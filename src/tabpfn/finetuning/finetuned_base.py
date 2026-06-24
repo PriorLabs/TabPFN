@@ -771,9 +771,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         patience_counter = 0
         # Seed with the default weights so a run that never beats the default
         # restores the base model (not the last, degraded epoch) at early stop.
-        # (Non-main DDP ranks overwrite this and their weights are unused.)
+        # Seeded on every rank so DDP weights stay in sync in that case.
         best_model_state: dict[str, torch.Tensor] | None = None
-        if self.early_stopping and is_main_process:
+        if self.early_stopping:
             best_model_state = _snapshot_model_state(self.finetuned_estimator_.model_)
 
         scheduler: LambdaLR | None = None
