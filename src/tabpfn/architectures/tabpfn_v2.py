@@ -338,7 +338,9 @@ class TabPFNBlock(nn.Module):
         Args:
             x_BRCE:
                 The transformer state passed as input to the layer of shape
-                (batch_size, num_items, num_feature_blocks, d_model).
+                (batch_size, num_items, num_feature_blocks, d_model). Note:
+                if gradients are disabled, this will free the memory of the
+                input tensor in place, leaving the caller's reference empty.
             single_eval_pos:
                 The position from which on everything is treated as test set.
             save_peak_memory_factor:
@@ -380,9 +382,14 @@ class TabPFNBlock(nn.Module):
         )
 
         # -- Second Block: Attention between cells.
-        # Call .contiguous() so that _chunk() can operate on x_BCRE in-place, when
-        # memory saving is enabled.
+        # Materialize the transpose as a contiguous copy (chunked_evaluate_maybe_inplace
+        # guards contiguity itself, so this is a memory optimization, not correctness).
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
+        # Under memory saving, x_BRCE aliases the activation the caller holds via
+        # `x = block(x)`, so `del` can't free it; release its storage in place to keep
+        # peak memory at one activation. See the forward docstring.
+        if not torch.is_grad_enabled() and x_BRCE.data_ptr() != x_BCRE.data_ptr():
+            x_BRCE.set_()
         del x_BRCE
         kv_entry: KVCacheEntry | None = None
         if return_kv or cached_kv is not None:
@@ -416,7 +423,8 @@ class TabPFNBlock(nn.Module):
             residual=False,
             batch_dims=3,
         )
-        # Again, call .contiguous() so that _chunk() can operate on x_BCRE in-place.
+        # As above: materialize the transpose contiguously and free the source so the
+        # next chunked evaluation can run in-place with low peak memory.
         x_BRCE = x_BCRE.transpose(1, 2).contiguous()
         del x_BCRE
 
