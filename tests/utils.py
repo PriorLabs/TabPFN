@@ -10,14 +10,6 @@ import pytest
 import torch
 from torch import nn
 
-from tabpfn.constants import ModelVersion
-
-# Fine-tuning defaults to the package default model version (currently V3), but
-# the finetuning tests mock the V2.5 architecture (`TabPFNV2p5`) for speed. They
-# pin the fine-tuned version to V2.5 so that mock stays valid — these tests
-# exercise the fine-tuning loop, not a specific model version.
-FINETUNE_TEST_MODEL_VERSION = ModelVersion.V2_5
-
 
 def get_pytest_devices() -> list[str]:
     exclude_devices = {

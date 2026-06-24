@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures.interface import PerformanceOptions
-from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3
 from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
@@ -43,7 +43,6 @@ from tabpfn.preprocessing import ClassifierEnsembleConfig
 from tabpfn.settings import settings
 
 from .utils import (
-    FINETUNE_TEST_MODEL_VERSION,
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
     mark_mps_configs_as_slow,
@@ -422,7 +421,6 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     epochs = 4 if early_stopping else 2
 
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=epochs,
         learning_rate=1e-4,
@@ -443,7 +441,7 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -486,11 +484,7 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     y_train = np.asarray(y_train)
 
     def build_clf(*, early_stopping: bool) -> FinetunedTabPFNClassifier:
-        # This test mocks forward at the wrapper level (`_forward_with_loss`),
-        # so the pinned version isn't strictly required here — kept for
-        # consistency with the other finetuning tests.
         return FinetunedTabPFNClassifier(
-            model_version=FINETUNE_TEST_MODEL_VERSION,
             device="cpu",
             epochs=3,
             learning_rate=1e-2,
@@ -588,7 +582,6 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     output_folder = tmp_path / "checkpoints"
 
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=4,
         learning_rate=1e-5,
@@ -608,9 +601,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -676,7 +667,6 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
 
     # Train for 2 epochs with checkpoint_interval=2
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=2,
         learning_rate=1e-5,
@@ -696,9 +686,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -718,7 +706,6 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
 
     # Resume training for another 2 epochs (total 4)
     finetuned_clf_resumed = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=4,  # Total epochs = 4
         learning_rate=1e-5,
@@ -736,9 +723,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     )
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -830,7 +815,6 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
 
     # Train for 6 epochs with checkpoint_interval=3
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=6,
         learning_rate=1e-5,
@@ -850,7 +834,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -896,7 +880,6 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
 
     # Train for 3 epochs with checkpoint_interval=None (no interval saves)
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=3,
         learning_rate=1e-5,
@@ -916,9 +899,7 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1395,7 +1376,6 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     n_classes = 4
 
     finetuned_clf = FinetunedTabPFNClassifier(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device="cpu",
         epochs=2,
         learning_rate=1e-4,
@@ -1421,7 +1401,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     )
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,

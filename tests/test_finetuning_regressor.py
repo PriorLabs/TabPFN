@@ -29,6 +29,7 @@ from tabpfn.finetuning.data_util import (
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
+from tabpfn.finetuning.finetuned_base import EvalResult
 from tabpfn.finetuning.finetuned_regressor import (
     FinetunedTabPFNRegressor,
     _compute_regression_loss,
@@ -37,7 +38,6 @@ from tabpfn.preprocessing import RegressorEnsembleConfig
 from tabpfn.regressor import TabPFNRegressor
 
 from .utils import (
-    FINETUNE_TEST_MODEL_VERSION,
     get_pytest_devices,
     get_pytest_devices_with_mps_marked_slow,
     mark_mps_configs_as_slow,
@@ -98,6 +98,24 @@ def create_mock_architecture_forward_regression() -> Callable[..., torch.Tensor]
         )
 
     return mock_forward
+
+
+def make_improving_regression_eval_side_effect() -> Callable[..., EvalResult]:
+    """Side effect for ``_evaluate_model`` returning a strictly improving metric.
+
+    The regressor's primary metric is the mse (lower is better), so a steadily
+    decreasing mse guarantees an improvement over the default model and thus a
+    saved "best" checkpoint — independent of the mocked forward's randomness.
+    """
+    call_count = 0
+
+    def _evaluate(*_args: object, **_kwargs: object) -> EvalResult:
+        nonlocal call_count
+        mse = 1.0 - 0.1 * call_count
+        call_count += 1
+        return EvalResult(primary=mse)
+
+    return _evaluate
 
 
 @pytest.fixture(scope="module")
@@ -176,7 +194,6 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     epochs = 4 if early_stopping else 2
     finetuned_reg = FinetunedTabPFNRegressor(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=epochs,
         learning_rate=1e-4,
@@ -196,7 +213,7 @@ def test__finetuned_tabpfn_regressor__fit_and_predict(
 
     mock_forward = create_mock_architecture_forward_regression()
     with mock.patch(
-        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
+        "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
         autospec=True,
         side_effect=mock_forward,
     ):
@@ -233,7 +250,6 @@ def test__regressor_checkpoint_contains_mse_metric(
     output_folder = tmp_path / "checkpoints_regressor"
 
     finetuned_reg = FinetunedTabPFNRegressor(
-        model_version=FINETUNE_TEST_MODEL_VERSION,
         device=device,
         epochs=2,
         learning_rate=1e-4,
@@ -251,10 +267,18 @@ def test__regressor_checkpoint_contains_mse_metric(
     )
 
     mock_forward = create_mock_architecture_forward_regression()
-    with mock.patch(
-        "tabpfn.architectures.tabpfn_v2_5.TabPFNV2p5.forward",
-        autospec=True,
-        side_effect=mock_forward,
+    with (
+        mock.patch(
+            "tabpfn.architectures.tabpfn_v3.TabPFNV3.forward",
+            autospec=True,
+            side_effect=mock_forward,
+        ),
+        mock.patch.object(
+            FinetunedTabPFNRegressor,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=make_improving_regression_eval_side_effect(),
+        ),
     ):
         finetuned_reg.fit(X_train, y_train, output_dir=output_folder)
 
