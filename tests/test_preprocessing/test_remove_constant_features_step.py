@@ -161,8 +161,8 @@ def test__pipeline__remove_constant_features_step() -> None:
     assert result.feature_schema.indices_for(FeatureModality.NUMERICAL) == [0, 1]
 
 
-def test__pipeline__keeps_non_constant_inf_flagged_column_numpy() -> None:
-    """A column flagged ``non_constant_inf`` is kept even when it looks constant.
+def test__pipeline__keeps_non_constant_with_inf_flagged_column_numpy() -> None:
+    """A column flagged ``non_constant_with_inf`` is kept even when it looks constant.
 
     The flag (set for passthrough_inf columns carrying >1 distinct non-finite
     value) overrides the constant check, so a finite-constant but flagged column
@@ -178,7 +178,9 @@ def test__pipeline__keeps_non_constant_inf_flagged_column_numpy() -> None:
     schema = FeatureSchema(
         features=[
             Feature(
-                name="c0", modality=FeatureModality.NUMERICAL, non_constant_inf=True
+                name="c0",
+                modality=FeatureModality.NUMERICAL,
+                non_constant_with_inf=True,
             ),
             Feature(name="c1", modality=FeatureModality.NUMERICAL),
             Feature(name="c2", modality=FeatureModality.NUMERICAL),
@@ -194,7 +196,7 @@ def test__pipeline__keeps_non_constant_inf_flagged_column_numpy() -> None:
     np.testing.assert_array_equal(result.X, X[:, [0, 2]])
 
 
-def test__pipeline__keeps_non_constant_inf_flagged_column_torch() -> None:
+def test__pipeline__keeps_non_constant_with_inf_flagged_column_torch() -> None:
     """The flag is honoured for torch inputs too (covers the tensor OR branch)."""
     X = torch.tensor(
         [
@@ -206,7 +208,9 @@ def test__pipeline__keeps_non_constant_inf_flagged_column_torch() -> None:
     schema = FeatureSchema(
         features=[
             Feature(
-                name="c0", modality=FeatureModality.NUMERICAL, non_constant_inf=True
+                name="c0",
+                modality=FeatureModality.NUMERICAL,
+                non_constant_with_inf=True,
             ),
             Feature(name="c1", modality=FeatureModality.NUMERICAL),
             Feature(name="c2", modality=FeatureModality.NUMERICAL),
@@ -227,7 +231,7 @@ def test__pipeline__keeps_column_with_multiple_infinities() -> None:
     """End-to-end: a column carrying +inf and -inf survives constant removal.
 
     The pipeline NaN's the infinities before the step runs, which would make an
-    all-inf column look constant. ``_flag_non_constant_infs`` flags it (it has
+    all-inf column look constant. ``_flag_non_constant_with_infs`` flags it (it has
     >1 distinct non-finite value), so the step keeps it; a genuinely constant
     finite column is still dropped, and the infinities are restored on the way
     out.
@@ -250,7 +254,7 @@ def test__pipeline__keeps_column_with_multiple_infinities() -> None:
     # varying columns are kept.
     assert result.X.shape == (3, 2)
     # The kept inf column was flagged as non-constant by the helper ...
-    assert result.feature_schema.features[0].non_constant_inf is True
+    assert result.feature_schema.features[0].non_constant_with_inf is True
     # ... and its infinities round-trip back into the output.
     np.testing.assert_array_equal(result.X[:, 0], np.array([inf, -inf, inf]))
     np.testing.assert_array_equal(result.X[:, 1], np.array([1.0, 2.0, 3.0]))

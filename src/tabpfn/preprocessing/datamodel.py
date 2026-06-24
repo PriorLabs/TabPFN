@@ -127,7 +127,7 @@ class Feature:
             steps (e.g. :class:`ReshapeFeatureDistributionsStep`) and
             cleared by the GPU pipeline after the transform has been applied.
         ancestor: Name of the feature that this feature is derived from, if applicable.
-        non_constant_inf: When True, the column must not be treated as constant
+        non_constant_with_inf: When True, the column must not be treated as constant
             even if it looks constant during preprocessing. Set for
             ``passthrough_inf`` columns whose +/-inf are temporarily NaN'd while
             the steps run but which carry more than one distinct non-finite
@@ -139,7 +139,7 @@ class Feature:
     modality: FeatureModality
     scheduled_gpu_transform: GPUTransformType | None = None
     ancestor: str | None = None
-    non_constant_inf: bool = False
+    non_constant_with_inf: bool = False
 
 
 @dataclasses.dataclass

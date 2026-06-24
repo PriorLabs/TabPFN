@@ -32,7 +32,7 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
-        forced = [feat.non_constant_inf for feat in feature_schema.features]
+        forced = [feat.non_constant_with_inf for feat in feature_schema.features]
         if isinstance(X, torch.Tensor):
             sel_ = (torch.max(X[0:1, :] != X, dim=0)[0] & ~X.isnan().all(dim=0)).cpu()
             if any(forced):

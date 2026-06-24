@@ -72,7 +72,7 @@ def _restore_inf_masks(
         X[bool_mask, idx] = mask[bool_mask]
 
 
-def _flag_non_constant_infs(
+def _flag_non_constant_with_infs(
     feature_schema: FeatureSchema,
     inf_masks: InfMasks,
 ) -> FeatureSchema:
@@ -87,7 +87,7 @@ def _flag_non_constant_infs(
         if mask is None:
             continue
         if bool((mask != mask[0]).any()):
-            new_features[idx] = dataclasses.replace(feat, non_constant_inf=True)
+            new_features[idx] = dataclasses.replace(feat, non_constant_with_inf=True)
             changed = True
 
     if not changed:
@@ -460,7 +460,7 @@ class PreprocessingPipeline:
         # pattern.  A no-op when the input is already finite.
         inf_masks = _extract_inf_masks(X, feature_schema)
         if is_fitting:
-            feature_schema = _flag_non_constant_infs(feature_schema, inf_masks)
+            feature_schema = _flag_non_constant_with_infs(feature_schema, inf_masks)
 
         self.step_timings_ = {} if self.record_timings else None
         for step_idx, (step, modalities) in enumerate(self.steps):
