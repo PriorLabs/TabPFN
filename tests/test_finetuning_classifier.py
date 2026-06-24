@@ -38,6 +38,7 @@ from tabpfn.finetuning.data_util import (
 )
 from tabpfn.finetuning.finetuned_base import EvalResult
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
+from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
 from tabpfn.settings import settings
@@ -477,6 +478,10 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     a constant metric so no epoch ever counts as an improvement. The control
     case (``early_stopping=False``, where no restoration happens) confirms the
     weights really do change, so the early-stopping assertion has teeth.
+
+    This exercises the shared ``FinetunedTabPFNBase._fit`` early-stopping/restore
+    logic. ``FinetunedTabPFNRegressor`` inherits the identical code path, so the
+    behavior is not duplicated for the regressor.
     """
     X, y = synthetic_data
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
@@ -541,21 +546,25 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     )
 
 
-def test__finetuned_tabpfn_classifier__model_version_tracks_package_default() -> None:
+@pytest.mark.parametrize(
+    "estimator_cls", [FinetunedTabPFNClassifier, FinetunedTabPFNRegressor]
+)
+def test__finetuned_tabpfn__model_version_tracks_package_default(estimator_cls) -> None:
     """`model_version` is optional and tracks the package default (GH#1064).
 
     The fine-tuner must not hardcode an older version: by default it fine-tunes
-    the same version a default ``TabPFNClassifier`` uses, so base-vs-fine-tuned
-    comparisons don't silently mix model generations.
+    the same version a default ``TabPFNClassifier``/``TabPFNRegressor`` uses, so
+    base-vs-fine-tuned comparisons don't silently mix model generations. This is
+    shared ``FinetunedTabPFNBase`` behavior, so it is checked for both estimators.
     """
     # Default (None) resolves to the package default version — no stale hardcode.
-    clf = FinetunedTabPFNClassifier(device="cpu")
-    assert clf.model_version is None
-    assert clf.finetune_model_version == settings.tabpfn.model_version
+    est = estimator_cls(device="cpu")
+    assert est.model_version is None
+    assert est.finetune_model_version == settings.tabpfn.model_version
 
     # An explicit version is respected (overrides the package default).
-    clf_v25 = FinetunedTabPFNClassifier(device="cpu", model_version=ModelVersion.V2_5)
-    assert clf_v25.finetune_model_version == ModelVersion.V2_5
+    est_v25 = estimator_cls(device="cpu", model_version=ModelVersion.V2_5)
+    assert est_v25.finetune_model_version == ModelVersion.V2_5
 
 
 # =============================================================================
