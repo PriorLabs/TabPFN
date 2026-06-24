@@ -98,7 +98,6 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.compose import ColumnTransformer
     from torch.types import _dtype
 
     from tabpfn.architectures.interface import (
@@ -108,6 +107,9 @@ if TYPE_CHECKING:
     )
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
 
     try:
         from sklearn.base import Tags
@@ -184,7 +186,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     label_encoder_: TabPFNLabelEncoder
     """The label encoder used to encode the target variable."""
 
-    ordinal_encoder_: ColumnTransformer
+    ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
@@ -657,7 +659,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "Categorical features are not supported for differentiable input."
             )
         n_features = X.shape[1]
-        features = [Feature(name=None, modality=FeatureModality.NUMERICAL)] * n_features
+        features = [
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(n_features)
+        ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
 
@@ -680,6 +685,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -713,7 +719,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         X, ordinal_encoder, feature_schema = clean_data(
-            X=X, feature_schema=feature_schema
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -751,6 +759,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -1157,6 +1166,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = process_text_na_dataframe(
                 X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
+                passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
             )
 
         with handle_oom_errors(

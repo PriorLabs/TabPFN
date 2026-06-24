@@ -16,6 +16,96 @@ from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 
 StepWithModalities: TypeAlias = tuple["PreprocessingStep", set[FeatureModality]]
 
+InfMasks: TypeAlias = dict[str, np.ndarray | torch.Tensor]
+"""Mapping from an *input* feature name to a 1d array recording that feature's
++/-inf values (0 where finite).  Used to pass infinities through preprocessing:
+they are NaN'd before the steps run and written back afterwards."""
+
+
+def _extract_inf_masks(
+    X: np.ndarray | torch.Tensor,
+    feature_schema: FeatureSchema,
+) -> InfMasks:
+    """Record per-feature +/-inf values and replace them with NaN in ``X``.
+
+    Returns a ``{feature_name: signed-inf column}`` mapping for the features that
+    contained infinities (empty when ``X`` is finite, leaving ``X`` untouched).
+    ``X`` is mutated in place.
+    """
+    xp = torch if isinstance(X, torch.Tensor) else np
+    inf_bool = xp.isinf(X)
+    if not bool(inf_bool.any()):
+        return {}
+
+    masks: InfMasks = {}
+    for idx, feat in enumerate(feature_schema.features):
+        col_inf = inf_bool[:, idx]
+        if bool(col_inf.any()):
+            masks[feat.name] = xp.where(col_inf, X[:, idx], 0)
+    X[inf_bool] = float("nan")
+    return masks
+
+
+def _restore_inf_masks(
+    X: np.ndarray | torch.Tensor,
+    feature_schema: FeatureSchema,
+    inf_masks: InfMasks,
+) -> None:
+    """Write recorded infinities back into the columns that still carry them.
+
+    A column is matched to a recorded mask by its own name, or by its
+    :attr:`Feature.ancestor` when a step renamed/derived it (e.g. the
+    ``reshape_{k}`` outputs of :class:`ReshapeFeatureDistributionsStep`). One
+    input feature may map to several output columns; each gets the infinities
+    restored. ``X`` is mutated in place.
+    """
+    xp = torch if isinstance(X, torch.Tensor) else np
+    for idx, feat in enumerate(feature_schema.features):
+        source = feat.name if feat.name in inf_masks else feat.ancestor
+        mask = inf_masks.get(source) if source is not None else None
+        if mask is None:
+            continue
+        # A step may change the array kind (e.g. sklearn steps return numpy even
+        # for torch input), so coerce the recorded mask to ``X`` before indexing.
+        mask = _coerce_like(mask, X)
+        bool_mask = xp.isinf(mask)
+        X[bool_mask, idx] = mask[bool_mask]
+
+
+def _flag_non_constant_with_infs(
+    feature_schema: FeatureSchema,
+    inf_masks: InfMasks,
+) -> FeatureSchema:
+    """Flag inf-carrying features that are genuinely non-constant."""
+    if not inf_masks:
+        return feature_schema
+
+    new_features = list(feature_schema.features)
+    changed = False
+    for idx, feat in enumerate(feature_schema.features):
+        mask = inf_masks.get(feat.name)
+        if mask is None:
+            continue
+        if bool((mask != mask[0]).any()):
+            new_features[idx] = dataclasses.replace(feat, non_constant_with_inf=True)
+            changed = True
+
+    if not changed:
+        return feature_schema
+    return dataclasses.replace(feature_schema, features=new_features)
+
+
+def _coerce_like(
+    arr: np.ndarray | torch.Tensor,
+    reference: np.ndarray | torch.Tensor,
+) -> np.ndarray | torch.Tensor:
+    """Return ``arr`` as ``reference``'s array kind (and torch dtype/device)."""
+    if isinstance(reference, torch.Tensor):
+        return torch.as_tensor(arr, dtype=reference.dtype, device=reference.device)
+    if isinstance(arr, torch.Tensor):
+        return arr.detach().cpu().numpy()
+    return arr
+
 
 @dataclasses.dataclass
 class PreprocessingStepResult:
@@ -193,6 +283,15 @@ class PreprocessingStep:
         del n_samples, feature_schema
         return 0
 
+    def added_feature_prefix(self) -> str:
+        """Name prefix for features this step appends via ``X_added``.
+
+        Used by the pipeline to generate self-describing, unique names for
+        appended columns (e.g. ``svd_0``). Steps that add features should
+        override this with a short identifier of the transform.
+        """
+        return self.__class__.__name__
+
     def has_data_dependent_feature_expansion(self) -> bool:
         """Return True if this step's feature expansion depends on data values.
 
@@ -355,6 +454,14 @@ class PreprocessingPipeline:
         # inside the loop for steps that target specific modalities.
         X = X.copy() if isinstance(X, np.ndarray) else X.clone()
 
+        # Record any +/-inf positions and replace them with NaN so the steps
+        # (which assume finite/NaN input) can run, then write them back at the
+        # end.  Computed per call so train and test each restore their own
+        # pattern.  A no-op when the input is already finite.
+        inf_masks = _extract_inf_masks(X, feature_schema)
+        if is_fitting:
+            feature_schema = _flag_non_constant_with_infs(feature_schema, inf_masks)
+
         self.step_timings_ = {} if self.record_timings else None
         for step_idx, (step, modalities) in enumerate(self.steps):
             if self.record_timings:
@@ -386,7 +493,7 @@ class PreprocessingPipeline:
                 X[:, indices] = result.X
 
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result
+                    X, feature_schema, result, step.added_feature_prefix()
                 )
                 feature_schema = feature_schema.update_from_preprocessing_step_result(
                     indices, result.feature_schema
@@ -403,12 +510,15 @@ class PreprocessingPipeline:
                 X = result.X
                 feature_schema = result.feature_schema
                 X, feature_schema = self._maybe_append_added_columns(
-                    X, feature_schema, result
+                    X, feature_schema, result, step.added_feature_prefix()
                 )
 
             if self.record_timings:
                 step_key = f"{step_idx}_{step.__class__.__name__}"
                 self.step_timings_[step_key] = time.perf_counter() - t0
+
+        if inf_masks:
+            _restore_inf_masks(X, feature_schema, inf_masks)
 
         return X, feature_schema
 
@@ -429,6 +539,7 @@ class PreprocessingPipeline:
         X: np.ndarray | torch.Tensor,
         feature_schema: FeatureSchema,
         result: PreprocessingStepResult,
+        name_prefix: str,
     ) -> tuple[np.ndarray | torch.Tensor, FeatureSchema]:
         """Append added columns from a step result and update schema."""
         if result.X_added is not None:
@@ -440,6 +551,7 @@ class PreprocessingPipeline:
             feature_schema = feature_schema.append_columns(
                 result.modality_added or FeatureModality.NUMERICAL,
                 result.X_added.shape[1],
+                name_prefix=name_prefix,
             )
         return X, feature_schema
 

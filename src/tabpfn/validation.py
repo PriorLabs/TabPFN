@@ -11,7 +11,7 @@ from __future__ import annotations
 import typing
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import pandas as pd
 import torch
@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
+
+    T = TypeVar("T")
 
 
 def ensure_compatible_fit_inputs(
@@ -105,7 +107,9 @@ def ensure_compatible_predict_input_sklearn(
             # Parameters to `check_X_y()`
             accept_sparse=False,
             dtype=None,
-            ensure_all_finite="allow-nan",
+            ensure_all_finite=False
+            if estimator.get_inference_config().PASSTHROUGH_INF
+            else "allow-nan",
             estimator=estimator,
         )
     except (ValueError, TypeError) as e:
@@ -177,7 +181,9 @@ def ensure_compatible_fit_inputs_sklearn(
             # Parameters to `check_X_y()`
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
-            ensure_all_finite="allow-nan",
+            ensure_all_finite=False
+            if estimator.get_inference_config().PASSTHROUGH_INF
+            else "allow-nan",
             ensure_min_samples=2,
             ensure_min_features=1,
             y_numeric=ensure_y_numeric,

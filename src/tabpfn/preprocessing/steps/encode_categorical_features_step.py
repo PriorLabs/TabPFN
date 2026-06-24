@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from typing_extensions import override
 
@@ -11,7 +12,12 @@ import numpy as np
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, OrdinalEncoder
 
-from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.datamodel import (
+    Feature,
+    FeatureModality,
+    FeatureSchema,
+    make_names_unique,
+)
 from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
@@ -19,6 +25,44 @@ from tabpfn.preprocessing.pipeline_interface import (
 from tabpfn.utils import infer_random_state
 
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
+
+# Per-column ``Feature`` metadata carried onto columns that map 1:1 from input to
+# output. ``name`` and ``modality`` are excluded: the rebuilt output schema sets
+# those itself (names from the transform, modality from the encoding result).
+# Derived from the dataclass so a new ``Feature`` field is carried automatically.
+_CARRIED_FEATURE_FIELDS = tuple(
+    f.name for f in dataclasses.fields(Feature) if f.name not in ("name", "modality")
+)
+
+
+def _columntransformer_output_names(
+    ct: ColumnTransformer,
+    input_names: list[str],
+    n_output: int,
+) -> list[str]:
+    """Compute output-order names for a fitted ``ColumnTransformer``.
+
+    Columns that map 1:1 to an input column (passthrough remainder, or a
+    transformer whose output width equals its input width, e.g. ordinal
+    encoding) inherit that input column's name. Expanding transformers (e.g.
+    one-hot) get ``"{transformer_name}_{k}"`` names. The result is de-duplicated
+    so all names are unique. ``remainder="passthrough"`` means every output
+    position is covered, so no name is left unset.
+    """
+    names: list[str] = [""] * n_output
+    all_positions = list(range(n_output))
+    for name, trans, cols in ct.transformers_:
+        if trans == "drop" or name not in ct.output_indices_:
+            continue
+        out_positions = all_positions[ct.output_indices_[name]]
+        col_list = list(cols) if not isinstance(cols, str) else []
+        if len(out_positions) == len(col_list):
+            for k, out_idx in enumerate(out_positions):
+                names[out_idx] = input_names[col_list[k]]
+        else:
+            for k, out_idx in enumerate(out_positions):
+                names[out_idx] = f"{name}_{k}"
+    return make_names_unique(names)
 
 
 def _get_all_cat_indices_after_onehot(
@@ -53,37 +97,39 @@ def _get_least_common_category_count(x_column: np.ndarray) -> int:
     return int(counts.min())
 
 
-def _carry_over_features_scheduled_gpu_transforms(  # noqa: C901
+def _carry_over_input_feature_metadata(
     input_schema: FeatureSchema,
     output_schema: FeatureSchema,
     column_transformer: ColumnTransformer | None,
     n_input_features: int,
 ) -> FeatureSchema:
-    """Carry over ``scheduled_gpu_transform`` flags from input to output schema.
+    """Carry per-column input metadata onto the columns that pass through 1:1.
 
-    When a ``ColumnTransformer`` is used (ordinal or one-hot encoding), columns
-    are reordered: ``[transformer_output, remainder_in_order]``.  Only the
-    *remainder* portion has a 1:1 mapping back to input columns, so marks are
-    carried over through the remainder mapping.  Transformed columns (ordinal-
-    encoded categoricals or one-hot expanded columns) never carry marks.
+    The output schema is rebuilt from names only (via
+    ``from_only_categorical_indices``), which drops input-derived ``Feature``
+    fields. For columns that map 1:1 back to an input column this re-attaches
+    ``scheduled_gpu_transform`` (so the GPU pipeline still sees its targets) and
+    ``ancestor`` (so e.g. ``passthrough_inf`` can map recorded +/-inf positions
+    onto the output column). Transformed columns (ordinal-encoded categoricals,
+    one-hot expansions) keep neither.
 
-    When no ``ColumnTransformer`` is used (``"numeric"`` / ``"none"`` modes)
-    the columns are unchanged and flags are copied by position.
+    When a ``ColumnTransformer`` is used columns are reordered as
+    ``[transformer_output, remainder_in_order]`` and only the *remainder* maps
+    1:1 back to input columns. Without one (``"numeric"`` / ``"none"`` modes)
+    columns are unchanged and the mapping is the identity.
     """
-    if not any(f.scheduled_gpu_transform for f in input_schema.features):
+    if not any(
+        getattr(f, attr) is not None
+        for f in input_schema.features
+        for attr in _CARRIED_FEATURE_FIELDS
+    ):
         return output_schema
 
     new_features = list(output_schema.features)
 
     if column_transformer is None:
-        # No reordering — identity mapping
-        for i in range(min(n_input_features, len(new_features))):
-            mark = input_schema.features[i].scheduled_gpu_transform
-            if mark is not None:
-                f = new_features[i]
-                new_features[i] = Feature(
-                    name=f.name, modality=f.modality, scheduled_gpu_transform=mark
-                )
+        # No reordering — identity mapping.
+        index_pairs = [(i, i) for i in range(min(n_input_features, len(new_features)))]
     else:
         # Use the fitted ColumnTransformer's remainder mapping.
         # The remainder columns have a 1:1 mapping to input columns that
@@ -100,17 +146,19 @@ def _carry_over_features_scheduled_gpu_transforms(  # noqa: C901
             i for i in range(n_input_features) if i not in ct_input_cols
         ]
         remainder_start = column_transformer.output_indices_["remainder"].start
-        for offset, in_idx in enumerate(remainder_input_cols):
-            out_idx = remainder_start + offset
-            if out_idx < len(new_features) and in_idx < len(input_schema.features):
-                mark = input_schema.features[in_idx].scheduled_gpu_transform
-                if mark is not None:
-                    f = new_features[out_idx]
-                    new_features[out_idx] = Feature(
-                        name=f.name,
-                        modality=f.modality,
-                        scheduled_gpu_transform=mark,
-                    )
+        index_pairs = [
+            (in_idx, remainder_start + offset)
+            for offset, in_idx in enumerate(remainder_input_cols)
+            if remainder_start + offset < len(new_features)
+            and in_idx < len(input_schema.features)
+        ]
+
+    for in_idx, out_idx in index_pairs:
+        in_feat = input_schema.features[in_idx]
+        new_features[out_idx] = dataclasses.replace(
+            new_features[out_idx],
+            **{attr: getattr(in_feat, attr) for attr in _CARRIED_FEATURE_FIELDS},
+        )
 
     return FeatureSchema(features=new_features)
 
@@ -230,15 +278,16 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> FeatureSchema:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
+        input_names = [f.name for f in feature_schema.features]
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
             out = FeatureSchema.from_only_categorical_indices(
-                ct_cat_features, n_features
+                ct_cat_features, n_features, names=input_names
             )
-            return _carry_over_features_scheduled_gpu_transforms(
+            return _carry_over_input_feature_metadata(
                 feature_schema, out, None, n_input_features
             )
 
@@ -274,10 +323,15 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
 
         self.categorical_transformer_ = ct
 
-        out = FeatureSchema.from_only_categorical_indices(
-            categorical_features, n_features
+        output_names = (
+            input_names
+            if ct is None
+            else _columntransformer_output_names(ct, input_names, n_features)
         )
-        return _carry_over_features_scheduled_gpu_transforms(
+        out = FeatureSchema.from_only_categorical_indices(
+            categorical_features, n_features, names=output_names
+        )
+        return _carry_over_input_feature_metadata(
             feature_schema, out, ct, n_input_features
         )
 
@@ -287,15 +341,16 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
         feature_schema: FeatureSchema,
     ) -> tuple[np.ndarray, FeatureSchema]:
         input_cat_features = feature_schema.indices_for(FeatureModality.CATEGORICAL)
+        input_names = [f.name for f in feature_schema.features]
         n_input_features = X.shape[1]
         ct, ct_cat_features = self._get_transformer(X, input_cat_features)
         n_features = n_input_features  # Default, may change for one-hot
         if ct is None:
             self.categorical_transformer_ = None
             out = FeatureSchema.from_only_categorical_indices(
-                ct_cat_features, n_features
+                ct_cat_features, n_features, names=input_names
             )
-            return X, _carry_over_features_scheduled_gpu_transforms(
+            return X, _carry_over_input_feature_metadata(
                 feature_schema, out, None, n_input_features
             )
 
@@ -337,10 +392,15 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
         self.categorical_transformer_ = ct
-        out = FeatureSchema.from_only_categorical_indices(
-            categorical_features, n_features
+        output_names = (
+            input_names
+            if ct is None
+            else _columntransformer_output_names(ct, input_names, n_features)
         )
-        return Xt, _carry_over_features_scheduled_gpu_transforms(
+        out = FeatureSchema.from_only_categorical_indices(
+            categorical_features, n_features, names=output_names
+        )
+        return Xt, _carry_over_input_feature_metadata(
             feature_schema, out, ct, n_input_features
         )
 

@@ -61,6 +61,10 @@ class AddSVDFeaturesStep(PreprocessingStep):
         self.is_no_op: bool = False
 
     @override
+    def added_feature_prefix(self) -> str:
+        return "svd"
+
+    @override
     def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
         """Return the number of added features."""
         n_features = feature_schema.num_columns

@@ -90,7 +90,6 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
@@ -102,6 +101,9 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
 
     try:
         from sklearn.base import Tags
@@ -209,7 +211,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    ordinal_encoder_: ColumnTransformer
+    ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913
@@ -693,7 +695,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         X, ordinal_encoder, feature_schema = clean_data(
-            X=X, feature_schema=feature_schema
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -733,6 +737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -1008,7 +1013,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         X = fix_dtypes(X, cat_indices=cat_indices)
         X = process_text_na_dataframe(
-            X, ord_encoder=getattr(self, "ordinal_encoder_", None)
+            X,
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
         n_estimators = 0
