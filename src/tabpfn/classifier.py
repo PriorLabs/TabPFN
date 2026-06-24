@@ -685,7 +685,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
-            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -721,7 +721,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
-            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -759,7 +759,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
-            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         assert len(ensemble_configs) == self.n_estimators_
 
@@ -1166,7 +1166,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X = process_text_na_dataframe(
                 X=X,
                 ord_encoder=getattr(self, "ordinal_encoder_", None),
-                passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
+                passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
             )
 
         with handle_oom_errors(

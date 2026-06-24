@@ -47,8 +47,6 @@ def ensure_compatible_fit_inputs(
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
     """Validate and convert inputs to standardized format.
 
-    Assumes that `estimator._initialize_model_variables` has already been called.
-
     Args:
         X: The input data.
         y: The target data.
@@ -110,7 +108,7 @@ def ensure_compatible_predict_input_sklearn(
             accept_sparse=False,
             dtype=None,
             ensure_all_finite=False
-            if estimator.inference_config_.PASSTHROUGH_INF
+            if estimator.get_inference_config().PASSTHROUGH_INF
             else "allow-nan",
             estimator=estimator,
         )
@@ -184,7 +182,7 @@ def ensure_compatible_fit_inputs_sklearn(
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
             ensure_all_finite=False
-            if estimator.inference_config_.PASSTHROUGH_INF
+            if estimator.get_inference_config().PASSTHROUGH_INF
             else "allow-nan",
             ensure_min_samples=2,
             ensure_min_features=1,
