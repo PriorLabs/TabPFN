@@ -640,6 +640,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
+        self.finetuned_estimator_._initialize_model_variables()
         X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
             ensure_compatible_fit_inputs_sklearn(
                 X,
@@ -669,7 +670,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             len(y_train),
         )
 
-        self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)
 
         finetuning_performance_options = PerformanceOptions(
