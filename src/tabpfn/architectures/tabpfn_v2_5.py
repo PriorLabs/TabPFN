@@ -451,7 +451,12 @@ class TabPFNBlock(nn.Module):
         # Under memory saving, x_BRCE aliases the activation the caller holds via
         # `x = block(x)`, so `del` can't free it; release its storage in place to keep
         # peak memory at one activation. See the forward docstring.
-        if not torch.is_grad_enabled() and x_BRCE.data_ptr() != x_BCRE.data_ptr():
+        if (
+            not torch.compiler.is_compiling()
+            and not torch.jit.is_tracing()
+            and not torch.is_grad_enabled()
+            and x_BRCE.data_ptr() != x_BCRE.data_ptr()
+        ):
             x_BRCE.set_()
         del x_BRCE
         kv_entry: KVCacheEntry | None = None
