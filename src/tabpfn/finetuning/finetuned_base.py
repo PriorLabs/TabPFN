@@ -769,12 +769,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         if is_main_process:
             logger.info("--- 🚀 Starting Fine-tuning ---")
         patience_counter = 0
-        # Seed the best-model snapshot with the default (un-finetuned) weights,
-        # matching ``best_metric`` above (the default model's validation metric).
-        # If no epoch improves over the default model, fine-tuning then restores
-        # the default weights instead of returning the last epoch's degraded
-        # ones. Only the main process drives final inference; other ranks
-        # overwrite this on their first improvement and their weights are unused.
+        # Seed with the default weights so a run that never beats the default
+        # restores the base model (not the last, degraded epoch) at early stop.
+        # (Non-main DDP ranks overwrite this and their weights are unused.)
         best_model_state: dict[str, torch.Tensor] | None = None
         if self.early_stopping and is_main_process:
             best_model_state = _snapshot_model_state(self.finetuned_estimator_.model_)
