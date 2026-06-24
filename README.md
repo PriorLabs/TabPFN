@@ -282,6 +282,7 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 **Model Configuration:**
 - `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
 - `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
+- `TABPFN_MPS_MEMORY_FRACTION`: Fraction of recommended max MPS memory to allow on Apple Silicon (default: `0.7`). Used to prevent macOS system crashes; set before importing TabPFN. Values above `1.0` are not recommended.
 
 **PyTorch Settings:**
 - `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`). See [PyTorch CUDA documentation](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) for more information.
@@ -300,9 +301,9 @@ Or simply set them in your `.env`
 <details>
 <summary><b>Q: How do I save and load a trained TabPFN model?</b></summary>
 
-Use :func:`save_fitted_tabpfn_model` to persist a fitted estimator and reload
-it later with :func:`load_fitted_tabpfn_model` (or the corresponding
-``load_from_fit_state`` class methods).
+Use `save_fitted_tabpfn_model` to persist a fitted estimator and reload
+it later with `load_fitted_tabpfn_model` (or the corresponding
+`load_from_fit_state` class methods).
 
 ```python
 from tabpfn import TabPFNRegressor
