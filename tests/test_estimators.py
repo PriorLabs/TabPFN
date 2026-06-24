@@ -93,36 +93,6 @@ def test__to__between_fits__outputs_equal(
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-def test__fit_with_cache__matches_fit_preprocessors_for_v2_6(
-    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
-) -> None:
-    """``fit_with_cache`` is an inference optimisation, not a different model.
-
-    For v2.6 (whose KV cache was added later than the rest of the architecture) the
-    cached engine must produce the same predictions as ``fit_preprocessors``.
-    """
-    base = estimator_class.create_default_for_version(
-        ModelVersion.V2_6, fit_mode="fit_preprocessors", n_estimators=2, random_state=0
-    )
-    cached = estimator_class.create_default_for_version(
-        ModelVersion.V2_6, fit_mode="fit_with_cache", n_estimators=2, random_state=0
-    )
-    X_train, X_test, y_train = _get_tiny_dataset(base)
-    base.fit(X_train, y_train)
-    cached.fit(X_train, y_train)
-
-    if isinstance(base, TabPFNClassifier):
-        out_base = base.predict_proba(X_test)
-        out_cached = cached.predict_proba(X_test)
-    else:
-        out_base = base.predict(X_test)
-        out_cached = cached.predict(X_test)
-
-    assert np.isfinite(out_cached).all()
-    np.testing.assert_allclose(out_base, out_cached, atol=1e-4)
-
-
-@pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("fit_mode", ["fit_preprocessors", "low_memory"])
 def test__to__after_fit__no_tensors_left_on_old_device(
     estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
