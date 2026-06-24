@@ -169,7 +169,7 @@ def mode(x: torch.Tensor) -> torch.Tensor | float:
     if x.ndim != 2:
         raise ValueError(f"Expected a 1D or 2D Tensor, got {x.ndim}D.")
 
-    return torch.tensor([_mode_col(x[:, col]) for col in range(x.shape[1])])
+    return x.new_tensor([_mode_col(x[:, col]) for col in range(x.shape[1])])
 
 
 def categorical_modes(
@@ -197,9 +197,7 @@ def categorical_modes(
     for b, cats in enumerate(categorical_inds):
         if not cats:
             continue
-        m = torch.as_tensor(  # NaN where all-nonfinite
-            mode(x_train[:, b][:, cats]), device=x_RBC.device, dtype=x_RBC.dtype
-        )
+        m = mode(x_train[:, b][:, cats])
         valid = torch.isfinite(m)
         if valid.any():
             cols = torch.tensor(cats, device=x_RBC.device)[valid]
