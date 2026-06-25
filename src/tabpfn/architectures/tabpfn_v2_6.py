@@ -15,7 +15,6 @@ import pydantic
 import torch
 import torch.utils.checkpoint
 from torch import nn
-from torch.nn.attention import SDPBackend, sdpa_kernel
 
 from tabpfn.architectures.interface import (
     Architecture,
@@ -26,9 +25,11 @@ from tabpfn.architectures.kv_cache import (
     KVCache,
     KVCacheEntry,
 )
-from tabpfn.architectures.shared.attention_gqa_check import gqa_is_supported
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.column_embeddings import load_column_embeddings
+from tabpfn.architectures.shared.scaled_dot_product_attention import (
+    scaled_dot_product_attention,
+)
 from tabpfn.preprocessing.torch.ops import select_features, torch_nanmean
 from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 
@@ -199,7 +200,7 @@ class AlongRowAttention(Attention):
         k_BrCHD = k_flat_BrCHF.view(Br, C, -1, self.head_dim)
         v_BrCHD = v_flat_BrCHF.view(Br, C, -1, self.head_dim)
 
-        output_BrHCD = _batched_scaled_dot_product_attention(q_BrCHD, k_BrCHD, v_BrCHD)
+        output_BrHCD = scaled_dot_product_attention(q_BrCHD, k_BrCHD, v_BrCHD)
         output_BrCF = output_BrHCD.reshape(Br, C, self.head_dim * self.num_heads)
         return self.out_projection(output_BrCF)
 
@@ -270,7 +271,7 @@ class AlongColumnAttention(Attention):
             if k_Bc1.dtype != q_BcRHD.dtype:
                 k_Bc1 = k_Bc1.to(q_BcRHD.dtype)
                 v_Bc1 = v_Bc1.to(q_BcRHD.dtype)
-            output_BcSHD = _batched_scaled_dot_product_attention(q_BcRHD, k_Bc1, v_Bc1)
+            output_BcSHD = scaled_dot_product_attention(q_BcRHD, k_Bc1, v_Bc1)
         else:
             # If no single_eval_pos was specified, then the whole input is training.
             N = R if single_eval_pos is None else single_eval_pos
@@ -278,14 +279,12 @@ class AlongColumnAttention(Attention):
             v_BcNHD = self.v_projection(x_BcRE[:, :N]).view(Bc, N, -1, self.head_dim)
 
             if single_eval_pos == R:
-                output_BcSHD = _batched_scaled_dot_product_attention(
-                    q_BcRHD, k_BcNHD, v_BcNHD
-                )
+                output_BcSHD = scaled_dot_product_attention(q_BcRHD, k_BcNHD, v_BcNHD)
             else:
-                out_train_BcNHD = _batched_scaled_dot_product_attention(
+                out_train_BcNHD = scaled_dot_product_attention(
                     q_BcRHD[:, :N], k_BcNHD, v_BcNHD
                 )
-                out_test_BcMHD = _batched_scaled_dot_product_attention(
+                out_test_BcMHD = scaled_dot_product_attention(
                     q_BcRHD[:, N:], k_BcNHD[:, :, :1], v_BcNHD[:, :, :1]
                 )
                 output_BcSHD = torch.cat([out_train_BcNHD, out_test_BcMHD], dim=1)
@@ -301,84 +300,6 @@ class AlongColumnAttention(Attention):
 
         output_BcSF = output_BcSHD.reshape(Bc, R, self.head_dim * self.num_heads)
         return self.out_projection(output_BcSF), kv_entry
-
-
-def _batched_scaled_dot_product_attention(
-    q_BSHD: torch.Tensor, k_BSJD: torch.Tensor, v_BSJD: torch.Tensor
-) -> torch.Tensor:
-    """Execute scaled dot product attention, chunked over the batch dimension.
-
-    Our between-feature attention can have a large batch size.
-    E.g., for 2048 datapoints, a batch size of 32, and 6 heads,
-    we compute 2048 * 32 * 6 = 393216 attentions.
-    This is larger than the maximum launch grid size of cuda and will raise an error.
-    Thus, we split the inputs into chunks of the maximum batch size, and execute these
-    sequentially.
-    """
-    q_BHSD = q_BSHD.permute(0, 2, 1, 3)
-    k_BJSD = k_BSJD.permute(0, 2, 1, 3)
-    v_BJSD = v_BSJD.permute(0, 2, 1, 3)
-
-    # In the case of multi-query attention, the keys and values will have only one head.
-    # GQA is only supported with fp16/bf16 dtypes - the fused attention kernels
-    # don't support GQA with float32.
-    dtype_supports_gqa = q_BHSD.dtype in {torch.float16, torch.bfloat16}
-    if gqa_is_supported() and dtype_supports_gqa:
-        keys = k_BJSD
-        values = v_BJSD
-        enable_gqa = {"enable_gqa": True}
-    else:
-        # On older GPUs or with float32 dtype, the fused attention kernels don't
-        # support broadcasting, so we manually expand the keys and values to the
-        # same number of heads as the queries.
-        keys = k_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
-        values = v_BJSD.expand(-1, q_BHSD.shape[-3], -1, -1)
-        enable_gqa = {}
-
-    # Enable backends explicitly. MATH is included as a last resort since it
-    # stores attention scores explicitly and uses more memory, but we prefer
-    # a slow fallback over a hard crash (e.g. on T4 GPUs on github runners where
-    # flash/efficient attention kernels may not support all configurations).
-    backends = [
-        SDPBackend.FLASH_ATTENTION,
-        SDPBackend.EFFICIENT_ATTENTION,
-        SDPBackend.CUDNN_ATTENTION,
-        SDPBackend.MATH,
-    ]
-    num_parallel_calls = q_BHSD.shape[:2].numel()
-    CUDA_MAX_GRID = 65536
-    num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
-    sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
-
-    # MPS's scaled_dot_product_attention silently returns wrong values when given
-    # non-contiguous inputs (the permute above and, for multi-query attention, the
-    # expand below both produce non-contiguous tensors). PyTorch bug:
-    # https://github.com/pytorch/pytorch/issues/181133
-    # We apply .contiguous() to the per-chunk slices rather than the full tensors,
-    # to avoid doubling peak memory.
-    on_mps = q_BHSD.device.type == "mps"
-
-    with sdpa_kernel(backends=backends):
-        outputs = []
-        for i in range(num_iterations):
-            q_chunk = q_BHSD[i * sub_batch : (i + 1) * sub_batch]
-            k_chunk = keys[i * sub_batch : (i + 1) * sub_batch]
-            v_chunk = values[i * sub_batch : (i + 1) * sub_batch]
-            if on_mps:
-                q_chunk = q_chunk.contiguous()
-                k_chunk = k_chunk.contiguous()
-                v_chunk = v_chunk.contiguous()
-            outputs.append(
-                torch.nn.functional.scaled_dot_product_attention(
-                    q_chunk,
-                    k_chunk,
-                    v_chunk,
-                    attn_mask=None,
-                    **enable_gqa,
-                )
-            )
-    output_BHSD = outputs[0] if len(outputs) == 1 else torch.cat(outputs)
-    return output_BHSD.permute(0, 2, 1, 3)
 
 
 class LowerPrecisionRMSNorm(torch.nn.RMSNorm):
@@ -459,7 +380,7 @@ class TabPFNBlock(nn.Module):
     @override
     def forward(
         self,
-        x_BRCE: torch.Tensor,
+        x_BRCE_container: list[torch.Tensor],
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
         *,
@@ -476,9 +397,9 @@ class TabPFNBlock(nn.Module):
         E: The embedding size of each cell.
 
         Args:
-            x_BRCE:
-                The transformer state passed as input to the layer of shape
-                (batch_size, num_items, num_feature_blocks, d_model).
+            x_BRCE_container:
+                A length-1 list containing the transformer state passed as input to the
+                layer of shape (batch_size, num_items, num_feature_blocks, d_model).
             single_eval_pos:
                 The position from which on everything is treated as test set.
             save_peak_memory_factor:
@@ -500,6 +421,7 @@ class TabPFNBlock(nn.Module):
         """
         # -- First Block: Attention between features.
         # The row attention has no train/test distinction and is not cached.
+        x_BRCE = x_BRCE_container.pop(0)
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
@@ -520,8 +442,8 @@ class TabPFNBlock(nn.Module):
         )
 
         # -- Second Block: Attention between cells.
-        # Call .contiguous() so that _chunk() can operate on x_BCRE in-place, when
-        # memory saving is enabled.
+        # Materialize the transpose as a contiguous copy (chunked_evaluate_maybe_inplace
+        # guards contiguity itself, so this is a memory optimization, not correctness).
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
         del x_BRCE
         kv_entry: KVCacheEntry | None = None
@@ -556,7 +478,8 @@ class TabPFNBlock(nn.Module):
             residual=False,
             batch_dims=3,
         )
-        # Again, call .contiguous() so that _chunk() can operate on x_BRCE in-place.
+        # As above: materialize the transpose contiguously and free the source so the
+        # next chunked evaluation can run in-place with low peak memory.
         x_BRCE = x_BCRE.transpose(1, 2).contiguous()
         del x_BCRE
 
@@ -904,9 +827,13 @@ class TabPFNV2p6(Architecture):
 
         kv_out: dict[int, KVCacheEntry] = {}
         for layer_idx, block in enumerate(self.blocks):
+            # Note: Using x_BRCD._set() instead of the container approach here leads
+            # to memory issues on some mac hardware.
+            x_BRCD_container = [x_BRCD]
+            del x_BRCD
             if return_kv_cache and not using_cache:
                 x_BRCD, kv_entry = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     return_kv=True,
@@ -914,7 +841,7 @@ class TabPFNV2p6(Architecture):
                 kv_out[layer_idx] = kv_entry
             elif using_cache:
                 x_BRCD, _ = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     cached_kv=kv_cache.kv[layer_idx],
@@ -922,14 +849,14 @@ class TabPFNV2p6(Architecture):
             elif force_recompute_layer:
                 x_BRCD = torch.utils.checkpoint.checkpoint(
                     block,
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     use_reentrant=False,
                 )[0]
             else:
                 x_BRCD, _ = block(
-                    x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                    x_BRCD_container, block_single_eval_pos, save_peak_memory_factor
                 )
 
         # In the cache path every row is a test row; otherwise the test rows start
