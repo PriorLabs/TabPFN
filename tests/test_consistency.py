@@ -40,8 +40,13 @@ logger = logging.getLogger(__name__)
 
 def _get_tiny_classification_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     random_state = check_random_state(0)
-    X = random_state.rand(10, 5)  # 10 samples, 5 features
     y = np.array([0, 1, 0, 1, 0, 1, 0, 1, 0, 1])  # Binary classification
+    # Offset each sample's features by its class label so the two classes occupy
+    # separated regions of feature space (class 0 in ~[0, 0.3], class 1 in
+    # ~[1, 1.3]) rather than overlapping random noise. This keeps predictions off
+    # the 0.5 decision boundary, where softmax amplifies tiny floating-point
+    # differences between hardware/BLAS backends into reference mismatches.
+    X = random_state.rand(10, 5) * 0.3 + y[:, None]  # 10 samples, 5 features
 
     # Split into train/test
     X_train, X_test = X[:7], X[7:]
@@ -53,7 +58,11 @@ def _get_tiny_classification_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]
 def _get_tiny_regression_data() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     random_state = check_random_state(0)
     X = random_state.rand(10, 5)  # 10 samples, 5 features
-    y = random_state.rand(10) * 10  # Continuous target
+    # Make the target a smooth linear function of the features rather than pure
+    # noise, so the model has a learnable signal and produces stable predictions.
+    # Random targets leave the model in a near-degenerate regime whose output is
+    # sensitive to floating-point differences across hardware/BLAS backends.
+    y = X @ np.array([5.0, 2.0, -3.0, 1.0, 4.0])  # Continuous target
 
     # Split into train/test
     X_train, X_test = X[:7], X[7:]
@@ -106,7 +115,12 @@ class _ConsistencyCase:
     model: Callable[[], TabPFNClassifier | TabPFNRegressor]
 
 
-DEFAULT_CONFIG = {"n_estimators": 2, "random_state": 42, "device": "cpu"}
+DEFAULT_CONFIG = {
+    "n_estimators": 2,
+    "random_state": 42,
+    "device": "cpu",
+    "inference_precision": torch.float32,
+}
 
 TEST_CASES = {
     **{
