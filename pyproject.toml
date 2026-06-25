@@ -62,8 +62,6 @@ dev = [
   # This version must be the same as in [tool.ruff] below and in .pre-commit-config.yaml
   "ruff==0.15.12",
   "mypy==2.1.0", # This version must be the same as in .pre-commit-config.yaml
-  # Test
-  "pytest-xdist>=3.8.0",
   # Changelog
   "towncrier>=24.8.0",
   # Docs
@@ -87,6 +85,7 @@ ci = [
   "onnx>=1.19.0",  # We run onnx export in the tests, but not in the production package.
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
+  "pytest-xdist>=3.8.0",  # Parallelises the test run in CI (`pytest -n auto`).
 ]
 
 [tool.uv]
