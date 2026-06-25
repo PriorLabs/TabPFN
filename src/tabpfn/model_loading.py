@@ -30,7 +30,7 @@ from filelock import FileLock
 from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
@@ -875,10 +875,12 @@ def load_model(
     resolved = str(path.resolve())
     checkpoint = _load_checkpoint_cached(resolved, Checkpoint(resolved).identity())
 
-    try:
-        architecture_name = checkpoint["architecture_name"]
-    except KeyError:
-        architecture_name = "base"
+    # V2 models don't have the "architecture_name" key, V2.5 models have the
+    # architecture name set to "base", so we remap. From V2.6 onwards, the architecture
+    # name corresponds to the python file name.
+    architecture_name = checkpoint.get("architecture_name", "tabpfn_v2")
+    if architecture_name == "base":
+        architecture_name = "tabpfn_v2_5"
     architecture = ARCHITECTURES[architecture_name]
     full_state = checkpoint["state_dict"]
     model_config, unused_model_config = architecture.parse_config(checkpoint["config"])
@@ -931,13 +933,15 @@ def _get_inference_config_from_checkpoint(
     v2.5 and get the correct config.
     """
     # This is how we tell the checkpoints apart:
-    #     v2: "architecture_name" not present, as added after the v2 release
+    #     v2: "architecture_name" not present, as added after the v2 release.
+    #         New models might specify "tabpfn_v2".
     #   v2.5: "architecture_name" present, but "inference_config" not present
     #  >v2.5: "inference_config" present, so don't need to guess a default config
     if inference_config := checkpoint.get("inference_config"):
         return InferenceConfig(**_rename_old_inference_config_keys(inference_config))
 
-    if "architecture_name" not in checkpoint:
+    architecture_name = checkpoint.get("architecture_name", "tabpfn_v2")
+    if architecture_name == "tabpfn_v2":
         model_version = ModelVersion.V2
     else:
         model_version = ModelVersion.V2_5
@@ -1085,8 +1089,11 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
         )
 
         # 4. Create the final zip archive
-        shutil.make_archive(str(path).replace(".tabpfn_fit", ""), "zip", tmp)
-        shutil.move(str(path).replace(".tabpfn_fit", "") + ".zip", path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory() as archive_tmpdir:
+            archive_base = Path(archive_tmpdir) / "archive"
+            archive_path = shutil.make_archive(str(archive_base), "zip", tmp)
+            shutil.move(archive_path, path)
 
 
 def _extract_archive(path: Path, tmp: Path) -> None:
@@ -1147,6 +1154,7 @@ def load_fitted_tabpfn_model(
 
 def _resolve_architecture_name(config: ArchitectureConfig) -> str:
     """Resolve the architecture name from the config."""
+    from tabpfn.architectures.tabpfn_v2 import TabPFNV2Config  # noqa: PLC0415
     from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5Config  # noqa: PLC0415
     from tabpfn.architectures.tabpfn_v2_6 import TabPFNV2p6Config  # noqa: PLC0415
     from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config  # noqa: PLC0415
@@ -1157,4 +1165,6 @@ def _resolve_architecture_name(config: ArchitectureConfig) -> str:
         return "tabpfn_v2_6"
     if isinstance(config, TabPFNV2p5Config):
         return "tabpfn_v2_5"
-    return "base"
+    if isinstance(config, TabPFNV2Config):
+        return "tabpfn_v2"
+    return "tabpfn_v2"

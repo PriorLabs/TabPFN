@@ -384,6 +384,10 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         self._svd: TorchTruncatedSVD | None = None
 
     @override
+    def added_feature_prefix(self) -> str:
+        return "svd"
+
+    @override
     def _fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Fit the scaler and SVD on the selected columns.
 
@@ -488,6 +492,10 @@ class TorchAddFingerprintFeaturesStep(TorchPreprocessingStep):
 
     TODO: Implement this on GPU natively.
     """
+
+    @override
+    def added_feature_prefix(self) -> str:
+        return "fingerprint"
 
     @override
     def fit_transform(

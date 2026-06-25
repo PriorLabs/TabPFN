@@ -402,11 +402,13 @@ def _make_schema(
 ) -> FeatureSchema:
     """Create a FeatureSchema from modality counts."""
     numerical = [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)
-    ] * num_numericals
+        Feature(name=f"num{i}", modality=FeatureModality.NUMERICAL)
+        for i in range(num_numericals)
+    ]
     categorical = [
-        Feature(name=None, modality=FeatureModality.CATEGORICAL)
-    ] * num_categoricals
+        Feature(name=f"cat{i}", modality=FeatureModality.CATEGORICAL)
+        for i in range(num_categoricals)
+    ]
     return FeatureSchema(features=numerical + categorical)
 
 

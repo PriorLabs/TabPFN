@@ -1684,7 +1684,7 @@ class TabPFNV3(Architecture):
             torch._dynamo.mark_dynamic(x_RiBC, index=1)
             torch._dynamo.mark_dynamic(x_RiBC, index=2)
 
-        x_BRiClE, inducing_hidden = self._stages_0_to_2(
+        x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
             x_RiBC,
             y,
             performance_options=performance_options,
@@ -1757,7 +1757,10 @@ class TabPFNV3(Architecture):
             if kv_cache is not None and not kv_cache.is_empty():
                 built_cache = kv_cache  # pass through unchanged
             else:
-                scaler_stats = self.standard_scaler.fit(x_RiBC[:num_train])
+                # Reuse the statistics fitted during preprocessing (on the
+                # imputed train rows). Re-fitting on ``x_RiBC`` here would use the
+                # raw input, whose passed-through +/-inf would poison the mean/std
+                # and turn every standardised test cell into NaN at predict time.
                 assert kv_out
                 # Store train_embeddings at the ICL KV cache dtype.
                 cache_dtype = next(iter(kv_out.values())).key.dtype
@@ -1846,13 +1849,19 @@ class TabPFNV3(Architecture):
         x_RiBC: torch.Tensor,
         num_train: int,
         scaler_cache: dict[str, torch.Tensor] | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
         """NaN indicator capture → imputation → standardisation → transpose.
 
         When *scaler_cache* is provided the scaler is applied without refitting
-        (inference mode); otherwise it is fitted on the first *num_train* rows.
+        (inference mode); otherwise it is fitted on the first *num_train* rows
+        *after* imputation, so the statistics are finite even when the raw input
+        carried +/-inf (the ``passthrough_inf`` path).
 
-        Returns ``(x_BRiC, nan_ind_BRiC)`` both of shape ``(B, Ri, C)``.
+        Returns ``(x_BRiC, nan_ind_BRiC, scaler_stats)`` where the first two are
+        of shape ``(B, Ri, C)`` and ``scaler_stats`` is the (finite) scaler cache
+        used for the standardisation. Returning it lets the caller store exactly
+        these statistics in the inference cache, so test rows are standardised
+        with the same statistics the train rows were — see :meth:`forward`.
         """
         nan_ind_BRiC: torch.Tensor | None = None
         if self.use_nan_indicators:
@@ -1861,13 +1870,15 @@ class TabPFNV3(Architecture):
             nan_ind_BRiC = nan_indicator_RiBC.transpose(0, 1)
 
         x_RiBC, _ = _impute_nan_and_inf_with_mean(x_RiBC, num_train, scaler_cache)
-        if scaler_cache is not None:
-            x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache)
-        else:
-            x_RiBC = self.standard_scaler(x=x_RiBC, num_train_rows=num_train)
+        if scaler_cache is None:
+            # Fit on the imputed train rows (matching ``__call__``'s split), so the
+            # returned statistics are exactly those applied here and can be reused.
+            fit_data = x_RiBC[:num_train] if num_train > 0 else x_RiBC
+            scaler_cache = self.standard_scaler.fit(fit_data)
+        x_RiBC = self.standard_scaler.transform(x_RiBC, fitted_cache=scaler_cache)
         x_BRiC = x_RiBC.transpose(0, 1)
 
-        return x_BRiC, nan_ind_BRiC
+        return x_BRiC, nan_ind_BRiC, scaler_cache
 
     def _group_features(
         self,
@@ -1967,22 +1978,25 @@ class TabPFNV3(Architecture):
         y: torch.Tensor,
         num_train: int,
         scaler_cache: dict[str, torch.Tensor] | None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, dict[str, torch.Tensor]]:
         """Preprocess rows, embed y for the col stage, and group features.
 
         Combines the three pre-chunk-loop steps into one compiled pass.
-        Returns the grouped x of shape `(B, Ri, C, G)` tensor and optionally
-        the `(B, N_train, E)` y embedding.
+        Returns the grouped x of shape `(B, Ri, C, G)` tensor, optionally
+        the `(B, N_train, E)` y embedding, and the scaler statistics fitted
+        during preprocessing (for reuse in the inference cache).
         """
         B = rows_RiBC.shape[1]
-        x_BRiC, nan_ind_BRiC = self._preprocess_raw(rows_RiBC, num_train, scaler_cache)
+        x_BRiC, nan_ind_BRiC, scaler_stats = self._preprocess_raw(
+            rows_RiBC, num_train, scaler_cache
+        )
         y_col_emb_BNE: torch.Tensor | None = None
         if scaler_cache is None and num_train > 0:
             y_col_BN = self._prepare_y(y, num_train, B)
             y_col_emb_BNE = self._embed_col_y(y_col_BN)
 
         x_grouped_BRiCG = self._group_features(x_BRiC, nan_ind_BRiC)
-        return x_grouped_BRiCG, y_col_emb_BNE
+        return x_grouped_BRiCG, y_col_emb_BNE, scaler_stats
 
     def _stages_0_to_2(
         self,
@@ -1993,13 +2007,15 @@ class TabPFNV3(Architecture):
         return_inducing_hidden: bool,
         kv_cache: TabPFNV3Cache | None,
         x_is_test_only: bool,
-    ) -> tuple[torch.Tensor, list[torch.Tensor] | None]:
+    ) -> tuple[torch.Tensor, list[torch.Tensor] | None, dict[str, torch.Tensor]]:
         """Stages 0-2: feature embedding, distribution embedding, column aggregation.
 
         Handles all three computation paths (cache / chunked / full) and returns
-        ``(x_BRiClE, inducing_hidden)``.  ``inducing_hidden`` is ``None`` unless
-        ``return_inducing_hidden`` is True (full path) or row-chunking is active
-        (chunked path, where it is always computed as an intermediate).
+        ``(x_BRiClE, inducing_hidden, scaler_stats)``.  ``inducing_hidden`` is
+        ``None`` unless ``return_inducing_hidden`` is True (full path) or
+        row-chunking is active (chunked path, where it is always computed as an
+        intermediate).  ``scaler_stats`` is the scaler cache fitted during
+        preprocessing (on the cache-consumption path it is the passed-in cache).
         """
         num_train = y.shape[0]
         if performance_options.use_chunkwise_inference and not self.training:
@@ -2029,7 +2045,7 @@ class TabPFNV3(Architecture):
             if performance_options.enable_torch_compile
             else self._preprocess_and_group
         )
-        x_grouped_BRiCG, y_col_emb_BNE = preprocess_fn(
+        x_grouped_BRiCG, y_col_emb_BNE, scaler_stats = preprocess_fn(
             rows_RiBC, y, num_train, scaler_cache
         )
         num_rows, C = x_grouped_BRiCG.shape[1], x_grouped_BRiCG.shape[2]
@@ -2118,7 +2134,7 @@ class TabPFNV3(Architecture):
         if use_chunks:
             inducing_hidden = precomputed_hidden
         x_BRiClE = parts[0] if len(parts) == 1 else torch.cat(parts, dim=1)
-        return x_BRiClE, inducing_hidden
+        return x_BRiClE, inducing_hidden, scaler_stats
 
     def _process_col_chunk(
         self,

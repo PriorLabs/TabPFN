@@ -23,8 +23,7 @@ from sklearn.utils.estimator_checks import parametrize_with_checks
 from torch import nn
 
 from tabpfn import TabPFNClassifier
-from tabpfn.architectures import base
-from tabpfn.architectures.base.config import ModelConfig
+from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngineExplicitKVCache
@@ -531,7 +530,8 @@ def test_balance_probabilities_alters_proba_output() -> None:
 
 
 @pytest.mark.parametrize(
-    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V3]
+    "model_version",
+    [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6, ModelVersion.V3],
 )
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])
@@ -1308,16 +1308,15 @@ def test__fit_with_roc_auc_metric_with_threshold_tuning__warns() -> None:
 def _create_dummy_classifier_model_specs(
     max_num_classes: int = 10,
 ) -> ClassifierModelSpecs:
-    minimal_config = ModelConfig(
+    minimal_config = tabpfn_v2_5.TabPFNV2p5Config(
         emsize=8,
         features_per_group=1,
         max_num_classes=max_num_classes,
         nhead=2,
         nlayers=2,
-        remove_duplicate_features=True,
         num_buckets=100,
     )
-    model = base.get_architecture(
+    model = tabpfn_v2_5.get_architecture(
         config=minimal_config,
         cache_trainset_representation=False,
     )

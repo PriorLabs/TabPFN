@@ -99,21 +99,6 @@ def test__to__between_fits__outputs_equal(
 
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
-def test__fit_with_cache__raises_error_for_v2_6(
-    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
-) -> None:
-    estimator = estimator_class.create_default_for_version(
-        ModelVersion.V2_6, fit_mode="fit_with_cache", n_estimators=2
-    )
-    X_train, _, y_train = _get_tiny_dataset(estimator)
-
-    with pytest.raises(
-        ValueError, match="fit_with_cache is not supported for TabPFN v2"
-    ):
-        estimator.fit(X_train, y_train)
-
-
-@pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize(
     "fit_mode", ["fit_preprocessors", "low_memory", "fit_with_cache"]
 )

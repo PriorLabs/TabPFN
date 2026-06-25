@@ -38,7 +38,7 @@ from sklearn.base import (
 )
 from tqdm.auto import tqdm
 
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import (
     RegressorModelSpecs,
     create_inference_engine,
@@ -52,7 +52,7 @@ from tabpfn.constants import (
     ModelVersion,
 )
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
-from tabpfn.inference import InferenceEngine, InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -90,19 +90,20 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
-    from sklearn.compose import ColumnTransformer
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
-    from tabpfn.architectures.base.memory import MemorySavingMode
     from tabpfn.architectures.interface import (
         Architecture,
         ArchitectureConfig,
         PerformanceOptions,
     )
-    from tabpfn.constants import XType, YType
+    from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.steps.preprocessing_helpers import (
+        OrderPreservingColumnTransformer,
+    )
 
     try:
         from sklearn.base import Tags
@@ -210,7 +211,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     executor_: InferenceEngine
     """The inference engine used to make predictions."""
 
-    ordinal_encoder_: ColumnTransformer
+    ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
     def __init__(  # noqa: PLR0913
@@ -694,7 +695,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
         )
         X, ordinal_encoder, feature_schema = clean_data(
-            X=X, feature_schema=feature_schema
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
@@ -734,6 +737,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             outlier_removal_std=self.inference_config_.get_resolved_outlier_removal_std(
                 estimator_type=self.estimator_type
             ),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
         self.znorm_space_bardist_ = self.znorm_space_bardist_.to(self.devices_[0])
@@ -829,9 +833,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "prediction. The model will be re-initialized."
             )
             self.fit_mode = "fit_preprocessors"
-
-        if self.fit_mode == "fit_with_cache" and "v2.6" in str(self.model_path):
-            raise ValueError("fit_with_cache is not supported for TabPFN v2.6 yet.")
 
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
@@ -1009,7 +1010,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         X = fix_dtypes(X, cat_indices=cat_indices)
         X = process_text_na_dataframe(
-            X, ord_encoder=getattr(self, "ordinal_encoder_", None)
+            X,
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
+            passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
 
         n_estimators = 0

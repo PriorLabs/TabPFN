@@ -18,45 +18,42 @@ from pydantic.dataclasses import dataclass
 from torch import Tensor
 
 from tabpfn import model_loading
-from tabpfn.architectures import ARCHITECTURES, base, tabpfn_v3
-from tabpfn.architectures.base.bar_distribution import FullSupportBarDistribution
-from tabpfn.architectures.base.config import ModelConfig
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
+from tabpfn.architectures import ARCHITECTURES, tabpfn_v2, tabpfn_v3
 from tabpfn.architectures.interface import (
     Architecture,
     ArchitectureConfig,
     ArchitectureModule,
 )
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
 from tabpfn.constants import ModelVersion
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
 
 
-def test__load_model__no_architecture_name_in_checkpoint__loads_base_architecture(
-    tmp_path: Path,
-) -> None:
-    config = _get_minimal_base_architecture_config()
-    model = base.get_architecture(config, cache_trainset_representation=True)
-    checkpoint = {"state_dict": model.state_dict(), "config": asdict(config)}
-    checkpoint_path = tmp_path / "checkpoint.ckpt"
-    torch.save(checkpoint, checkpoint_path)
-
-    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
-    assert isinstance(loaded_model, PerFeatureTransformer)
-    assert isinstance(loaded_config, ModelConfig)
-
-
-def _get_minimal_base_architecture_config() -> ModelConfig:
-    return ModelConfig(
+def _get_minimal_v2_config() -> tabpfn_v2.TabPFNV2Config:
+    return tabpfn_v2.TabPFNV2Config(
         emsize=8,
         features_per_group=1,
         max_num_classes=10,
         nhead=2,
         nlayers=2,
-        remove_duplicate_features=True,
         num_buckets=1000,
     )
+
+
+def test__load_model__no_architecture_name_in_checkpoint__loads_v2_architecture(
+    tmp_path: Path,
+) -> None:
+    config = _get_minimal_v2_config()
+    model = tabpfn_v2.get_architecture(config, cache_trainset_representation=True)
+    checkpoint = {"state_dict": model.state_dict(), "config": asdict(config)}
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
+    assert isinstance(loaded_model, tabpfn_v2.TabPFNV2)
+    assert isinstance(loaded_config, tabpfn_v2.TabPFNV2Config)
 
 
 class FakeArchitectureModule(ArchitectureModule):
@@ -169,8 +166,8 @@ def test__save_tabpfn_model__stores_v3_architecture_and_inference_config(
 def test__load_v2_checkpoint__returns_v2_preprocessings(
     tmp_path: Path,
 ) -> None:
-    architecture_config = _get_minimal_base_architecture_config()
-    model = base.get_architecture(
+    architecture_config = _get_minimal_v2_config()
+    model = tabpfn_v2.get_architecture(
         architecture_config, cache_trainset_representation=True
     )
     # v2 checkpoints have no "architecture_name" key
@@ -208,6 +205,25 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
         inference_config.PREPROCESS_TRANSFORMS[1].max_features_per_estimator
         == 1_000_000
     )
+
+
+def test__get_inference_config_from_checkpoint__tabpfn_v2_name__uses_v2_config() -> (
+    None
+):
+    """The single-file v2 re-implementation must resolve to the v2 config."""
+    checkpoint = {"state_dict": {}, "config": {}, "architecture_name": "tabpfn_v2"}
+
+    clf_config = model_loading._get_inference_config_from_checkpoint(
+        checkpoint, torch.nn.CrossEntropyLoss()
+    )
+    assert clf_config == InferenceConfig.get_default("multiclass", ModelVersion.V2)
+    assert clf_config.PREPROCESS_TRANSFORMS[0].name == "quantile_uni_coarse"
+
+    bar_distribution = FullSupportBarDistribution(torch.linspace(-1.0, 1.0, 6))
+    reg_config = model_loading._get_inference_config_from_checkpoint(
+        checkpoint, bar_distribution
+    )
+    assert reg_config == InferenceConfig.get_default("regression", ModelVersion.V2)
 
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())

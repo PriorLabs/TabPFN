@@ -286,7 +286,8 @@ def test__fit_predict__specify_inference_config__outputs_correct_shape(
 
 
 @pytest.mark.parametrize(
-    "model_version", [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V3]
+    "model_version",
+    [ModelVersion.V2, ModelVersion.V2_5, ModelVersion.V2_6, ModelVersion.V3],
 )
 # Disable MPS as it doesn't support float64.
 @pytest.mark.parametrize("device", [d for d in get_pytest_devices() if d != "mps"])

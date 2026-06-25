@@ -7,33 +7,6 @@ from __future__ import annotations
 import torch
 
 
-def torch_nansum(
-    x: torch.Tensor,
-    axis: int | tuple[int, ...] | None = None,
-    *,
-    keepdim: bool = False,
-    dtype: torch.dtype | None = None,
-) -> torch.Tensor:
-    """Compute the sum of a tensor, treating NaNs as zero.
-
-    Args:
-        x: The input tensor.
-        axis: The dimension or dimensions to reduce.
-        keepdim: Whether the output tensor has `dims` retained or not.
-        dtype: The desired data type of the returned tensor.
-
-    Returns:
-        The sum of the tensor with NaNs treated as zero.
-    """
-    nan_mask = torch.isnan(x)
-    masked_input = torch.where(
-        nan_mask,
-        torch.tensor(0.0, device=x.device, dtype=x.dtype),
-        x,
-    )
-    return torch.sum(masked_input, dim=axis, keepdim=keepdim, dtype=dtype)
-
-
 def torch_nanmean(
     x: torch.Tensor,
     axis: int = 0,
@@ -50,9 +23,7 @@ def torch_nanmean(
     Returns:
         The mean of the input tensor, ignoring NaNs.
     """
-    nan_mask = torch.isnan(x)
-    if include_inf:
-        nan_mask = torch.logical_or(nan_mask, torch.isinf(x))
+    nan_mask = ~x.isfinite() if include_inf else x.isnan()
 
     num_valid = torch.where(
         nan_mask,
@@ -98,3 +69,67 @@ def torch_nanstd(x: torch.Tensor, axis: int = 0) -> torch.Tensor:
     variance = sq_diff / (num_valid - 1).clamp(min=1.0)
 
     return torch.sqrt(variance)
+
+
+def select_features(x: torch.Tensor, sel: torch.Tensor) -> torch.Tensor:
+    """Select features from the input tensor based on the selection mask,
+    and arrange them contiguously in the last dimension.
+    If batch size is bigger than 1, we pad the features with zeros to make the number of
+    features fixed.
+
+    Args:
+        x: The input tensor of shape (sequence_length, batch_size, total_features)
+        sel: The boolean selection mask indicating which features to keep of shape
+        (batch_size, total_features)
+
+    Returns:
+        The tensor with selected features.
+        The shape is (sequence_length, batch_size, number_of_selected_features) if
+        batch_size is 1.
+        The shape is (sequence_length, batch_size, total_features) if batch_size is
+        greater than 1.
+    """
+    B, total_features = sel.shape
+
+    # Do nothing if we need to select all of the features
+    if torch.all(sel):
+        return x
+
+    # If B == 1, we don't need to append zeros, as the number of features don't need to
+    # be fixed.
+    if B == 1:
+        return x[:, :, sel[0]]
+
+    num_rows = x.shape[0]
+
+    # Compute destination indices using cumsum
+    # (It would be easier to do argsort but that's not ONNX compatible).
+    # Selected features go to positions [0, num_selected), unselected go to
+    # [num_selected, total_features).
+    sel_cumsum_BF = sel.cumsum(dim=-1)
+    not_sel_cumsum_BF = (~sel).cumsum(dim=-1)
+    num_selected_B1 = sel.sum(dim=-1, keepdim=True)
+
+    # For selected features: destination = cumsum - 1
+    # For unselected features: destination = num_selected + not_sel_cumsum - 1
+    dest_indices_BF = torch.where(
+        sel,
+        sel_cumsum_BF - 1,
+        num_selected_B1 + not_sel_cumsum_BF - 1,
+    )
+
+    # Compute source indices (inverse permutation) using scatter.
+    # For each destination position, this tells us which source position it comes from.
+    source_positions_BF = torch.arange(total_features, device=x.device).expand(B, -1)
+    src_indices_BF = torch.zeros(B, total_features, dtype=torch.long, device=x.device)
+    src_indices_BF.scatter_(dim=-1, index=dest_indices_BF, src=source_positions_BF)
+
+    # Use gather to reorder features
+    src_indices_RBF = src_indices_BF.unsqueeze(0).expand(num_rows, -1, -1)
+    new_x_RBF = torch.gather(x, dim=2, index=src_indices_RBF)
+
+    # Create a mask to zero out the padding positions.
+    position_indices_F = torch.arange(total_features, device=x.device)
+    padding_mask_BF = position_indices_F >= num_selected_B1
+
+    return new_x_RBF.masked_fill(padding_mask_BF.unsqueeze(0), 0)

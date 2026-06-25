@@ -18,12 +18,8 @@ from typing_extensions import override
 import joblib
 import torch
 
-from tabpfn.architectures.base.memory import (
-    DEFAULT_SAVE_PEAK_MEMORY_FACTOR,
-    MemorySavingMode,
-    should_save_peak_mem,
-)
-from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
+from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.utils import get_autocast_context
@@ -31,7 +27,7 @@ from tabpfn.utils import get_autocast_context
 if TYPE_CHECKING:
     import numpy as np
 
-    from tabpfn.architectures.interface import Architecture
+    from tabpfn.architectures.interface import Architecture, PerformanceOptions
     from tabpfn.architectures.kv_cache import KVCache
     from tabpfn.preprocessing import EnsembleConfig
     from tabpfn.preprocessing.ensemble import (
@@ -795,255 +791,12 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = use_inference
 
 
-class InferenceEngineCacheKV(SingleDeviceInferenceEngine):
-    """Inference engine that caches the actual KV cache calculated from the context
-    of the processed training data.
-
-    This is by far the most memory intensive inference engine, as for each ensemble
-    member we store the full KV cache of that model. For now this is held in CPU RAM.
-    """
-
-    def __init__(
-        self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        *,
-        ensemble_preprocessor: TabPFNEnsemblePreprocessor,
-        models: list[Architecture],
-        devices: Sequence[torch.device],
-        dtype_byte_size: int,
-        force_inference_dtype: torch.dtype | None,
-        save_peak_mem: MemorySavingMode,
-        autocast: bool,
-        only_return_standard_out: bool = True,
-    ) -> None:
-        """Initialize the KV cache inference engine.
-
-        Args:
-            X_train: The training data.
-            y_train: The training target.
-            ensemble_preprocessor: The ensemble configurations to use.
-            models: The models to use.
-            devices: A list of devices, the first of which will be used to run the
-                model. The other devices will be ignored.
-            dtype_byte_size: Size of the dtype in bytes.
-            force_inference_dtype: The dtype to force inference to.
-            save_peak_mem: Whether to save peak memory usage.
-            autocast: Whether to use torch.autocast during inference.
-            only_return_standard_out: Whether to only return the standard output
-        """
-        # This engine currently only supports one device, so just take the first.
-        device = devices[0]
-
-        ensemble_members_iterator = (
-            ensemble_preprocessor.fit_transform_ensemble_members_iterator(
-                X_train=X_train,
-                y_train=y_train,
-                parallel_mode="as-ready",
-            )
-        )
-
-        ens_models: list[Architecture] = []
-        ensemble_members: list[TabPFNEnsembleMember] = []
-        # Wrap the iterator to capture CPU preprocessing time (which runs
-        # inside __next__ of the ensemble_members_iterator).
-        timed_cpu_preprocess = _TimedIterator(ensemble_members_iterator)
-        fit_gpu_preprocess_time = 0.0
-        fit_forward_time = 0.0
-
-        for ensemble_member in timed_cpu_preprocess:
-            ensemble_members.append(ensemble_member)
-
-            ens_model = deepcopy(models[ensemble_member.config._model_index])
-            ens_model = ens_model.to(device)
-
-            gpu_preprocess_start = time.perf_counter()
-            X = ensemble_member.X_train
-            y = ensemble_member.y_train
-
-            # Use force_inference_dtype when set (e.g. float64) so GPU
-            # preprocessing sees the same precision as fit_preprocessors mode.
-            tensor_dtype = force_inference_dtype or torch.float32
-            if not isinstance(X, torch.Tensor):
-                X = torch.as_tensor(X, dtype=tensor_dtype, device=device)
-            X = X.unsqueeze(1)
-            if not isinstance(y, torch.Tensor):
-                y = torch.as_tensor(y, dtype=tensor_dtype, device=device)
-
-            X, updated_schema = _maybe_run_gpu_preprocessing(
-                X,
-                gpu_preprocessor=ensemble_member.gpu_preprocessor,
-                feature_schema=ensemble_member.feature_schema,
-            )
-            batched_preprocessor_cat_ix = [
-                updated_schema.indices_for(FeatureModality.CATEGORICAL)
-            ]
-
-            if force_inference_dtype is not None:
-                ens_model.type(force_inference_dtype)
-                X = X.type(force_inference_dtype)
-                y = y.type(force_inference_dtype)
-            fit_gpu_preprocess_time += time.perf_counter() - gpu_preprocess_start
-
-            # We do not reset the peak memory for cache_kv mode
-            # because the entire data has to be passed through the model
-            # at once to generate the KV cache
-            forward_start = time.perf_counter()
-            with (
-                get_autocast_context(device, enabled=autocast),
-                torch.inference_mode(),
-            ):
-                ens_model.forward(
-                    X,
-                    y,
-                    only_return_standard_out=only_return_standard_out,
-                    categorical_inds=batched_preprocessor_cat_ix,
-                )
-            fit_forward_time += time.perf_counter() - forward_start
-
-            ens_model.cpu()
-
-            ens_models.append(ens_model)
-
-        super().__init__(
-            models=ens_models,
-            save_peak_mem=save_peak_mem,
-            dtype_byte_size=dtype_byte_size,
-            force_inference_dtype=force_inference_dtype,
-        )
-        self._speed_metrics["fit_preprocessing_seconds"] = (
-            timed_cpu_preprocess.elapsed_seconds + fit_gpu_preprocess_time
-        )
-        self._speed_metrics["fit_model_forward_seconds"] = fit_forward_time
-
-        self.device = device
-        self.ensemble_members = ensemble_members
-
-    @override
-    def iter_outputs(
-        self,
-        X: np.ndarray,
-        *,
-        autocast: bool,
-        task_type: str,
-        only_return_standard_out: bool = True,
-    ) -> Iterator[tuple[torch.Tensor | dict, EnsembleConfig]]:
-        preprocess_time = 0.0
-        forward_time = 0.0
-        for ensemble_member, model in zip(
-            self.ensemble_members, self.models, strict=True
-        ):
-            preprocess_start = time.perf_counter()
-            model.to(self.device)
-            X_test = ensemble_member.transform_X_test(X)
-            tensor_dtype = self.force_inference_dtype or torch.float32
-            X_test = torch.as_tensor(X_test, dtype=tensor_dtype, device=self.device)
-            X_test = X_test.unsqueeze(1)
-            X_test, updated_schema = _maybe_run_gpu_preprocessing(
-                X_test,
-                gpu_preprocessor=ensemble_member.gpu_preprocessor,
-                num_train_rows=0,
-                use_fitted_cache=True,
-                feature_schema=ensemble_member.feature_schema,
-            )
-            batched_cat_ix = [updated_schema.indices_for(FeatureModality.CATEGORICAL)]
-
-            if self.force_inference_dtype is not None:
-                model.type(self.force_inference_dtype)
-                X_test = X_test.type(self.force_inference_dtype)
-            preprocess_time += time.perf_counter() - preprocess_start
-
-            kwargs = {}
-            if _model_expectes_task_type_arg(model):
-                kwargs["task_type"] = task_type
-
-            forward_start = time.perf_counter()
-            with (
-                get_autocast_context(self.device, enabled=autocast),
-                torch.inference_mode(),
-            ):
-                output = model(
-                    X_test,
-                    y=None,
-                    only_return_standard_out=only_return_standard_out,
-                    categorical_inds=batched_cat_ix,
-                    # When the KV cache is enabled, we assume we are under memory
-                    # pressure and enable the saving mode.
-                    # TODO: Use the heuristic in this case also.
-                    performance_options=PerformanceOptions(
-                        save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
-                    ),
-                    **kwargs,
-                )
-            forward_time += time.perf_counter() - forward_start
-
-            model.cpu()
-
-            output = output if isinstance(output, dict) else output.squeeze(1)
-
-            yield output, ensemble_member.config
-
-        self._speed_metrics["predict_preprocessing_seconds"] = preprocess_time
-        self._speed_metrics["predict_model_forward_seconds"] = forward_time
-
-    @override
-    def _create_copy_for_pickling(self) -> InferenceEngine:
-        # Strip nn.Parameter data before deepcopy to avoid duplicating large
-        # weights across N ensemble models just to discard them.
-        saved_param_data: list[list[torch.Tensor]] = []
-        for model in self.models:
-            model.cpu()
-            params_for_model: list[torch.Tensor] = []
-            for param in model.parameters():
-                params_for_model.append(param.data)
-                param.data = torch.empty(0, device="cpu")
-            saved_param_data.append(params_for_model)
-
-        try:
-            state_copy = deepcopy(self)
-        finally:
-            # Restore original parameter data so the engine remains usable.
-            for model, params in zip(self.models, saved_param_data, strict=True):
-                for param, data in zip(model.parameters(), params, strict=True):
-                    param.data = data
-
-        return state_copy
-
-    @override
-    def _set_models(self, models: list[Architecture]) -> None:
-        # self.models contains weight-stripped shells from the pickle.
-        # Inject fresh weights from the base models.
-        for stripped_model, ensemble_member in zip(
-            self.models, self.ensemble_members, strict=True
-        ):
-            fresh = models[ensemble_member.config._model_index]
-            fresh_params = dict(fresh.named_parameters())
-            for name, stripped_param in stripped_model.named_parameters():
-                if name not in fresh_params:
-                    raise RuntimeError(
-                        f"Parameter '{name}' not found in the base model. "
-                        "The saved fit state is incompatible with the current "
-                        "model checkpoint."
-                    )
-                stripped_param.data = fresh_params[name].data.clone()
-            if self.force_inference_dtype is not None:
-                stripped_model.type(self.force_inference_dtype)
-            stripped_model.cpu()
-
-    @override
-    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
-        # Models are kept on CPU between predictions;
-        # iter_outputs() handles CPU-to-device transfers.
-        self.device = devices[0]
-
-
 class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     """Inference engine with explicit KV cache passed through forward().
 
-    Unlike :class:`InferenceEngineCacheKV`, the KV cache is stored externally
-    (not inside the model) and passed explicitly to the model's forward pass.
-    This avoids deepcopying the model per ensemble member and keeps the model
-    stateless.
+    The KV cache is stored externally (not inside the model) and passed explicitly to
+    the model's forward pass. This avoids deepcopying the model per ensemble member and
+    keeps the model stateless.
 
     Each ensemble member (estimator) has its own KV cache.
     Ensemble members are dispatched across available GPUs
@@ -1173,7 +926,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         model = self.model_caches[model_index].get(device)
 
         # Cast model weights to match force_inference_dtype (else linear
-        # layers throw a Half/Float mismatch — matches CacheKV).
+        # layers throw a Half/Float mismatch).
         if self.force_inference_dtype is not None:
             model.type(self.force_inference_dtype)
 
@@ -1329,7 +1082,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         # Cast post-preproc tensors back to force_inference_dtype if set —
         # GPU preprocessing may emit fp32 internally (SVD/quantile for
-        # numerical stability) even under a fp16 run. Matches CacheKV.
+        # numerical stability) even under a fp16 run.
         if self.force_inference_dtype is not None:
             X_test_tensor = X_test_tensor.type(self.force_inference_dtype)
             y_train = y_train.type(self.force_inference_dtype)

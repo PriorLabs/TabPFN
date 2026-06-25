@@ -27,14 +27,15 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
-from tabpfn.architectures.base.transformer import PerFeatureTransformer
 from tabpfn.architectures.interface import PerformanceOptions
+from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
     DatasetCollectionWithPreprocessing,
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
+from tabpfn.finetuning.finetuned_base import EvalResult
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
@@ -193,6 +194,25 @@ def create_mock_architecture_forward(
         )
 
     return mock_forward
+
+
+def make_improving_eval_side_effect() -> Callable[..., EvalResult]:
+    """Side effect for ``_evaluate_model`` returning a strictly improving metric.
+
+    This ensures that a "best" checkpoint is always saved during tests.
+    """
+    call_count = 0
+
+    def _evaluate(*_args: Any, **_kwargs: Any) -> EvalResult:
+        nonlocal call_count
+        roc_auc = 0.5 + 0.05 * call_count
+        call_count += 1
+        return EvalResult(
+            primary=roc_auc,
+            secondary={"roc_auc": roc_auc, "log_loss": 1.5 - 0.1 * call_count},
+        )
+
+    return _evaluate
 
 
 @pytest.fixture(scope="module")
@@ -373,7 +393,7 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        PerFeatureTransformer,
+        TabPFNV2p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -436,11 +456,16 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch.object(
-        PerFeatureTransformer,
-        "forward",
-        autospec=True,
-        side_effect=mock_forward,
+    with (
+        mock.patch.object(
+            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=make_improving_eval_side_effect(),
+        ),
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
 
@@ -518,11 +543,16 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch.object(
-        PerFeatureTransformer,
-        "forward",
-        autospec=True,
-        side_effect=mock_forward,
+    with (
+        mock.patch.object(
+            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=make_improving_eval_side_effect(),
+        ),
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
 
@@ -552,11 +582,16 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
         save_checkpoint_interval=2,
     )
 
-    with mock.patch.object(
-        PerFeatureTransformer,
-        "forward",
-        autospec=True,
-        side_effect=mock_forward,
+    with (
+        mock.patch.object(
+            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=make_improving_eval_side_effect(),
+        ),
     ):
         finetuned_clf_resumed.fit(X_train, y_train, output_dir=output_folder)
 
@@ -661,7 +696,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        PerFeatureTransformer,
+        TabPFNV2p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -725,11 +760,16 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
 
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
-    with mock.patch.object(
-        PerFeatureTransformer,
-        "forward",
-        autospec=True,
-        side_effect=mock_forward,
+    with (
+        mock.patch.object(
+            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=make_improving_eval_side_effect(),
+        ),
     ):
         finetuned_clf.fit(X_train, y_train, output_dir=output_folder)
 
@@ -1225,7 +1265,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     )
 
     with mock.patch.object(
-        PerFeatureTransformer,
+        TabPFNV2p5,
         "forward",
         autospec=True,
         side_effect=mock_forward,

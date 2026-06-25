@@ -73,13 +73,13 @@ def _get_random_data_with_categoricals(
 
     # Build column metadata
     features = [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)  # type: ignore
-        for _ in range(n_numerical)
+        Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+        for i in range(n_numerical)
     ] + [
-        Feature(name=None, modality=FeatureModality.CATEGORICAL)  # type: ignore
-        for _ in range(n_categorical)
+        Feature(name=f"f{n_numerical + i}", modality=FeatureModality.CATEGORICAL)
+        for i in range(n_categorical)
     ]
-    schema = FeatureSchema(features=features)  # type: ignore
+    schema = FeatureSchema(features=features)
     return X, schema
 
 
@@ -100,6 +100,7 @@ def _create_ensemble_config(
         feature_shift_decoder=feature_shift_decoder,
         outlier_removal_std=None,
         _model_index=0,
+        passthrough_inf=False,
     )
 
 
