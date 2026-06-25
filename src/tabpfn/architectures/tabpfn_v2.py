@@ -394,7 +394,7 @@ class TabPFNBlock(nn.Module):
             and not torch.is_grad_enabled()
             and x_BRCE.data_ptr() != x_BCRE.data_ptr()
         ):
-            x_BRCE.set_()
+            pass  #  x_BRCE.set_()
         del x_BRCE
         kv_entry: KVCacheEntry | None = None
         if return_kv or cached_kv is not None:
