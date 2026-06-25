@@ -1138,6 +1138,16 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
         return state_copy
 
+    @override
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        super()._move_models_to_devices(devices)
+        # kv_caches don't exist yet during the .to() call in __init__ (it runs
+        # before the caches are built). Once they do and are kept on device,
+        # move them with the models so .to() leaves nothing on the old device;
+        # iter_outputs redistributes them across devices on the next predict.
+        if self.keep_cache_on_device and getattr(self, "kv_caches", None):
+            self.kv_caches = [cache.to(devices[0]) for cache in self.kv_caches]
+
 
 def _prepare_model_inputs(
     device: torch.device,
