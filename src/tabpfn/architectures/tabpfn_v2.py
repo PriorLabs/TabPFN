@@ -360,7 +360,7 @@ class TabPFNBlock(nn.Module):
         """
         # -- First Block: Attention between features.
         # The row attention has no train/test distinction and is not cached.
-        x_BRCE = x_BRCE_container[0]
+        x_BRCE = x_BRCE_container.pop(0)
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
