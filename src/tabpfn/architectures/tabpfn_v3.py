@@ -158,6 +158,10 @@ class TabPFNV3Config(ArchitectureConfig):
     inference_col_chunk_size: int = 4
     """Max output groups per chunk for inducing hidden state computation."""
 
+    categorical_imputation: Literal["mean", "mode"] = "mean"
+    """Imputation strategy for categorical inputs. Can be overriden at inference time.
+    """
+
     def __post_init__(self) -> None:
         """Validate config constraints."""
         if self.icl_num_kv_heads is not None and (
@@ -1603,6 +1607,7 @@ class TabPFNV3(Architecture):
         self.emsize = config.embed_dim
         self.inference_row_chunk_size = config.inference_row_chunk_size
         self.inference_col_chunk_size = config.inference_col_chunk_size
+        self.categorical_imputation = config.categorical_imputation
 
     @property
     @override
@@ -1617,7 +1622,7 @@ class TabPFNV3(Architecture):
         *,
         only_return_standard_out: bool = True,
         categorical_inds: list[list[int]] | None = None,
-        categorical_imputation: Literal["mean", "mode"] = "mean",
+        categorical_imputation: Literal["mean", "mode"] | None = None,
         performance_options: PerformanceOptions | None = None,
         task_type: str | None = None,
         kv_cache: TabPFNV3Cache | None = None,
@@ -1644,6 +1649,7 @@ class TabPFNV3(Architecture):
         del test_targets_MB
         # categorical_inds is only consumed by the mode-imputation path; when mode
         # is off it stays unused (and None keeps the compiled mean path untouched).
+        categorical_imputation = categorical_imputation or self.categorical_imputation
         if categorical_imputation != "mode":
             categorical_inds = None
         if isinstance(x, dict):
