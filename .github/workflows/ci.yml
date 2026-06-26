@@ -63,13 +63,6 @@ jobs:
     env:
       HF_TOKEN: ${{ secrets.HF_TOKEN }}
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
-      # The test runs use pytest-xdist (`-n auto`), so each worker gets one core.
-      # Pin BLAS/torch to a single thread per process; otherwise each worker spawns
-      # its own multi-threaded torch and they oversubscribe the cores, which is
-      # dramatically *slower* than serial.
-      OMP_NUM_THREADS: 1
-      MKL_NUM_THREADS: 1
-      OPENBLAS_NUM_THREADS: 1
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
@@ -137,57 +130,51 @@ jobs:
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         shell: bash
         run: |
-          set -e
-          if [ "$RUNNER_OS" != "macOS" ]; then
-            uv run --no-sync pytest tests/ -n auto --dist worksteal
-            exit 0
+          # macOS runs the MPS device tests; under pytest-xdist each worker opens
+          # its own MPS context and they exhaust the shared GPU memory. Keep macOS
+          # serial; parallelise on the CPU-only runners with one thread per worker
+          # (without the thread pinning the workers oversubscribe the cores and the
+          # run is slower than serial).
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            uv run --no-sync pytest tests/
+          else
+            OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+              uv run --no-sync pytest tests/ -n auto --dist worksteal
           fi
-          # The CI macOS runner's MPS device is virtualised with a tiny memory budget
-          # and can't host concurrent contexts, so the MPS tests can't run under
-          # pytest-xdist. Run the CPU tests in parallel with MPS excluded (so
-          # device="auto" resolves to CPU), then run the MPS tests serially. The
-          # mlx-backend tests gate on torch.backends.mps.is_available() directly
-          # (ignoring TABPFN_EXCLUDE_DEVICES), so they go in the serial pass too.
-          # `|| [ $? -eq 5 ]` tolerates a pass that collected no tests.
-          mlx=tests/test_architectures/test_mlx_backend.py
-          TABPFN_EXCLUDE_DEVICES=mps \
-            uv run --no-sync pytest tests/ --ignore="$mlx" -n auto --dist worksteal
-          uv run --no-sync pytest tests/ -k mps --ignore="$mlx" || [ $? -eq 5 ]
-          uv run --no-sync pytest "$mlx" || [ $? -eq 5 ]
 
       - name: Run Tests (PR tests only)
         if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         shell: bash
         run: |
-          set -e
-          if [ "$RUNNER_OS" != "macOS" ]; then
-            uv run --no-sync pytest -m "not slow" tests/ -n auto --dist worksteal
-            exit 0
+          # See "Run Tests (all tests)": macOS stays serial (MPS), CPU runners parallelise.
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            uv run --no-sync pytest -m "not slow" tests/
+          else
+            OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+              uv run --no-sync pytest -m "not slow" tests/ -n auto --dist worksteal
           fi
-          # See "Run Tests (all tests)": on macOS the MPS device can't be shared by
-          # xdist workers, so run CPU tests in parallel (MPS excluded) then MPS
-          # tests serially. `|| [ $? -eq 5 ]` tolerates a pass with no tests.
-          mlx=tests/test_architectures/test_mlx_backend.py
-          TABPFN_EXCLUDE_DEVICES=mps \
-            uv run --no-sync pytest -m "not slow" tests/ --ignore="$mlx" -n auto --dist worksteal
-          uv run --no-sync pytest -m "not slow" tests/ -k mps --ignore="$mlx" || [ $? -eq 5 ]
-          uv run --no-sync pytest -m "not slow" "$mlx" || [ $? -eq 5 ]
 
       # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
 
       # The lowest-direct matrix entries are CPU-only (Linux/Windows, MPS excluded),
-      # so we always parallelise (thread pinning is set at the job level).
+      # so we always parallelise. One thread per worker avoids core oversubscription.
       - name: Run Tests (all tests, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
+          OMP_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
         run: uv run --no-sync pytest tests/ -n auto --dist worksteal
 
       - name: Run Tests (PR tests only, MPS disabled)
         if: ${{ matrix.dependency-set == 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         env:
           TABPFN_EXCLUDE_DEVICES: mps
+          OMP_NUM_THREADS: 1
+          MKL_NUM_THREADS: 1
+          OPENBLAS_NUM_THREADS: 1
         run: uv run --no-sync pytest -m "not slow" tests/ -n auto --dist worksteal
 
         # Save even if tests failed: partial downloads avoid future runs hitting the
