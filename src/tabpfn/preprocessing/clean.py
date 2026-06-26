@@ -398,6 +398,7 @@ def process_text_na_dataframe(
     if passthrough_inf:
         pos_inf, neg_inf = inf_masks_dataframe(X)
 
+        X = X.copy()
         # coerce columns to NaN:
         X[neg_inf | pos_inf] = np.nan
 
