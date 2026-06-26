@@ -23,6 +23,7 @@ from tabpfn.preprocessing.torch.steps import TorchAddSVDFeaturesStep
 from tabpfn.preprocessing.torch.torch_svd import (
     TorchSafeStandardScaler,
     TorchTruncatedSVD,
+    _exact_svd,
     _svd_flip_stable,
 )
 
@@ -214,6 +215,54 @@ class TestTorchTruncatedSVD:
 
         # Second row (with NaN input) should be all NaN
         assert torch.isnan(x_transformed[1]).all()
+
+    def test__fit__non_finite_input_does_not_crash(self):
+        """Fit must not crash on +/-inf input and must return finite components.
+
+        Regression for #1044: fit previously masked only NaN, so infinities
+        flowed into torch.linalg.svd / torch.svd_lowrank and raised a
+        non-convergence LinAlgError.
+        """
+        svd = TorchTruncatedSVD(n_components=4)
+
+        x = torch.randn(20, 8)
+        x[0, 0] = float("inf")
+        x[1, 3] = float("-inf")
+        x[2, 5] = float("nan")
+
+        cache = svd.fit(x)
+
+        assert torch.isfinite(cache["components"]).all()
+        assert torch.isfinite(cache["singular_values"]).all()
+        assert cache["components"].shape[0] == 4
+
+    def test__exact_svd__retries_in_float64_on_non_convergence(self, monkeypatch):
+        """_exact_svd falls back to a float64 recompute when the SVD fails.
+
+        Regression for #1044: degenerate data can make the default driver
+        raise a non-convergence LinAlgError. Forcing the float32 call to
+        raise must trigger the double-precision retry, which succeeds and
+        casts results back to the input dtype.
+        """
+        real_svd = torch.linalg.svd
+        calls = {"n": 0}
+
+        def flaky_svd(x: torch.Tensor, *args: object, **kwargs: object) -> object:
+            calls["n"] += 1
+            if x.dtype == torch.float32:
+                raise torch.linalg.LinAlgError("forced non-convergence")
+            return real_svd(x, *args, **kwargs)
+
+        monkeypatch.setattr(torch.linalg, "svd", flaky_svd)
+
+        x = torch.randn(12, 6, dtype=torch.float32)
+        u, s, vh = _exact_svd(x, n_components=3)
+
+        assert calls["n"] == 2  # float32 raised, float64 retried
+        assert u.dtype == torch.float32
+        assert s.dtype == torch.float32
+        assert vh.shape == (3, 6)
+        assert torch.isfinite(s).all()
 
     def test__transform__missing_cache_raises(self):
         """Test that transform raises ValueError with invalid cache."""

@@ -7,6 +7,27 @@ from __future__ import annotations
 import torch
 
 
+def _exact_svd(
+    x: torch.Tensor,
+    n_components: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Exact truncated SVD, retrying in float64 if it fails to converge.
+
+    On degenerate (near rank-deficient) data the default LAPACK/cuSOLVER
+    ``gesdd`` driver can raise a non-convergence ``LinAlgError``. Recomputing
+    in double precision is more numerically stable and succeeds where the
+    single-precision decomposition does not.
+
+    Returns the components truncated to the top ``n_components``.
+    """
+    try:
+        u, s, vh = torch.linalg.svd(x, full_matrices=False)
+    except torch.linalg.LinAlgError:
+        u, s, vh = torch.linalg.svd(x.double(), full_matrices=False)
+        u, s, vh = u.to(x.dtype), s.to(x.dtype), vh.to(x.dtype)
+    return u[:, :n_components], s[:n_components], vh[:n_components, :]
+
+
 def _svd_flip_stable(
     u: torch.Tensor,
     v: torch.Tensor,
@@ -84,9 +105,10 @@ class TorchTruncatedSVD:
 
         n_samples, n_features = x.shape
 
-        # Handle NaN values by replacing with 0 for SVD computation
-        nan_mask = torch.isnan(x)
-        x_filled = torch.where(nan_mask, torch.zeros_like(x), x)
+        # Replace non-finite values (NaN and +/-inf) with 0 for the SVD
+        # computation. Leaving infinities in deterministically crashes
+        # torch.linalg.svd / torch.svd_lowrank with a non-convergence error.
+        x_filled = torch.where(torch.isfinite(x), x, torch.zeros_like(x))
 
         # Clamp n_components to valid range
         n_components = min(self.n_components, n_samples, n_features)
@@ -111,17 +133,20 @@ class TorchTruncatedSVD:
         )
 
         if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T
-            u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
-            # Truncate oversampling dimensions
-            u = u[:, :n_components]
-            s = s[:n_components]
-            vh = v[:, :n_components].T  # V [n_features, q] → V^T [n_comp, n_features]
+            try:
+                # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T
+                u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
+                # Truncate oversampling dimensions
+                u = u[:, :n_components]
+                s = s[:n_components]
+                vh = v[:, :n_components].T  # V [n_feat, q] → V^T [n_comp, n_feat]
+            except torch.linalg.LinAlgError:
+                # Randomized SVD can fail to converge on degenerate (near
+                # rank-deficient) data; fall back to the exact, more robust
+                # decomposition.
+                u, s, vh = _exact_svd(x_filled, n_components)
         else:
-            u, s, vh = torch.linalg.svd(x_filled, full_matrices=False)
-            u = u[:, :n_components]
-            s = s[:n_components]
-            vh = vh[:n_components, :]
+            u, s, vh = _exact_svd(x_filled, n_components)
 
         # Apply sign flip for deterministic output.
         # We use the same convention as sklearn (u_based_decision=False:
