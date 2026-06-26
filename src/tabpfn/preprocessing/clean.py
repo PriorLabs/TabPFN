@@ -394,10 +394,12 @@ def process_text_na_dataframe(
     # Record +/-inf positions (numeric columns only) and replace them with NaN so the
     # ordinal encoder doesn't crash; they are restored into the output further below.
     pos_inf = neg_inf = None
+    X_input = X
 
     if passthrough_inf:
         pos_inf, neg_inf = inf_masks_dataframe(X)
 
+        X = X.copy()
         # coerce columns to NaN:
         X[neg_inf | pos_inf] = np.nan
 
@@ -412,6 +414,8 @@ def process_text_na_dataframe(
     # with placeholder NAN value. Later placeholder NAN values are transformed to np.nan
     string_cols = X.select_dtypes(include=["string", "object"]).columns
     if len(string_cols) > 0:
+        if X is X_input:
+            X = X.copy()
         X[string_cols] = X[string_cols].fillna(placeholder)
 
     if fit_encoder and ord_encoder is not None:
