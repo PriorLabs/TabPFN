@@ -44,11 +44,12 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.10"
             dependency-set: lowest-direct
-          # The MacOS tests are failing on macos-26, so pin to 15 for now. See
-          # https://linear.app/priorlabs/issue/PRI-331/ci-failing-when-runner-is-macos-26
-          - os: macos-15
-            python-version: "3.10"
-            dependency-set: lowest-direct
+          # Note that new pytorch versions >= 2.5 don't support x86 on mac anymore,
+          # and macos-latest (ARM) is python >= 3.11 only, so we disable this runner.
+          # https://github.com/actions/setup-python/issues/855
+          # - os: macos-15-intel # We need x86 as ARM is python>= 3.11 only.
+          #  python-version: "3.10"
+          #  dependency-set: lowest-direct
           - os: windows-latest
             python-version: "3.10"
             dependency-set: lowest-direct
