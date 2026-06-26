@@ -23,6 +23,8 @@ def _exact_svd(
     try:
         u, s, vh = torch.linalg.svd(x, full_matrices=False)
     except torch.linalg.LinAlgError:
+        if x.dtype == torch.float64:
+            raise
         u, s, vh = torch.linalg.svd(x.double(), full_matrices=False)
         u, s, vh = u.to(x.dtype), s.to(x.dtype), vh.to(x.dtype)
     return u[:, :n_components], s[:n_components], vh[:n_components, :]
