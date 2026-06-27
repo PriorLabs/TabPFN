@@ -12,6 +12,7 @@ on:
     paths:
       - .github/workflows/debug-macos-26.yml
       - scripts/repro_mps_batched_sdpa.py
+      - scripts/bisect_mps_tabpfn.py
 
 jobs:
   diagnose:
@@ -132,6 +133,10 @@ jobs:
       - name: Reproduce pytorch#170837 (MPS batched non-contig SDPA dispatch bug)
         if: always()
         run: uv run --no-sync python scripts/repro_mps_batched_sdpa.py
+
+      - name: Bisect TabPFN forward — find first MPS-divergent module
+        if: always()
+        run: uv run --no-sync python scripts/bisect_mps_tabpfn.py v2
 
       - name: Reproduce a known-failing test (cheap, deterministic)
         if: always()
