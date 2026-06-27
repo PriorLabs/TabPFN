@@ -11,6 +11,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/debug-macos-26.yml
+      - scripts/repro_mps_batched_sdpa.py
 
 jobs:
   diagnose:
@@ -127,6 +128,10 @@ jobs:
           cmp("sdpa big",       big, lambda a: torch.nn.functional.scaled_dot_product_attention(a, a, a))
           cmp("matmul big",     torch.randn(512, 768), lambda a: a @ a.T)
           PY
+
+      - name: Reproduce pytorch#170837 (MPS batched non-contig SDPA dispatch bug)
+        if: always()
+        run: uv run --no-sync python scripts/repro_mps_batched_sdpa.py
 
       - name: Reproduce a known-failing test (cheap, deterministic)
         if: always()
