@@ -25,9 +25,23 @@
 pip install tabpfn
 ```
 
-Note: For best performance on Apple Silicon/MPS, consider installing a pytorch version after
-the nightly "2.13.0.dev20260510". This enables flash attention without relying on MLX
-(the latter requires a GPU-CPU-GPU roundtrip).
+TabPFN supports Python 3.10+ and is primarily tested on Linux and macOS. Windows
+users should prefer WSL2 for GPU workloads because PyTorch CUDA support is
+better aligned with Linux environments.
+
+`pip install tabpfn` installs a compatible PyTorch build automatically. If you
+want a smaller CPU-only install, or need a PyTorch build for a specific CUDA
+version, install PyTorch first with the command from the
+[PyTorch installation selector](https://pytorch.org/get-started/locally/), then
+install TabPFN:
+
+```bash
+pip install tabpfn
+```
+
+Note: For best performance on Apple Silicon/MPS, consider installing a PyTorch
+version after the nightly "2.13.0.dev20260510". This enables flash attention
+without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
 
 
 ### Basic Usage
