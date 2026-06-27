@@ -4,10 +4,12 @@
 The macos-26 runner produces silently-wrong TabPFN predictions but a per-op
 MPS-vs-CPU ladder is clean. This script narrows it down by running the same
 fit+predict twice — once on CPU, once on MPS — with a forward_hook on every
-nn.Module in the loaded architecture. Each module's output tensor is moved
-to CPU in float32 and recorded in call order; afterwards CPU and MPS lists
-are compared module-by-module. The first module whose relative max-abs-diff
-exceeds TOL is the entry point to look at.
+nn.Module in the loaded architecture. For each module we capture BOTH its
+input tensors and its output tensor, recorded in call order; afterwards CPU
+and MPS lists are compared entry-by-entry. The first tensor whose relative
+max-abs-diff exceeds TOL is the entry point to look at — and if it's an
+input (kind="in[i]") the bug is upstream of that module, while if it's an
+output (kind="out") the bug is inside that module's forward.
 
 We force `inference_precision=torch.float32` and `n_estimators=1` to keep the
 forward deterministic and one-shot; if the bug needs the ensemble pattern or
@@ -41,13 +43,13 @@ VERSION_MAP = {
 }
 
 
-def run_with_hooks(
+def run_with_hooks(  # noqa: C901
     device: str,
     x_train: np.ndarray,
     y_train: np.ndarray,
     x_test: np.ndarray,
     version: str,
-) -> tuple[list[tuple[int, str, torch.Tensor]], np.ndarray]:
+) -> tuple[list[tuple[int, str, str, torch.Tensor]], np.ndarray]:
     """Fit+predict on device, return (captured activations, proba)."""
     model_version = getattr(ModelVersion, VERSION_MAP[version])
     clf = TabPFNClassifier.create_default_for_version(
@@ -64,25 +66,29 @@ def run_with_hooks(
         warnings.simplefilter("ignore")
         clf.fit(x_train, y_train)
 
-    captured: list[tuple[int, str, torch.Tensor]] = []
+    # Each entry: (call_idx, module_name, kind, tensor)
+    # `kind` is "in[i]" for the i-th positional input, "out" for a single
+    # output tensor, or "out[i]" for the i-th element of a tuple/list output.
+    # Capturing both inputs and outputs lets us see whether a divergence at
+    # module N is caused by N's own forward or by a wrong input handed to it.
+    captured: list[tuple[int, str, str, torch.Tensor]] = []
     counter = [0]
 
+    def stash(name: str, kind: str, t: torch.Tensor) -> None:
+        captured.append((counter[0], name, kind, t.detach().cpu().float().clone()))
+        counter[0] += 1
+
     def make_hook(name: str):  # noqa: ANN202
-        def hook(_module: torch.nn.Module, _inp, out) -> None:  # noqa: ANN001
+        def hook(_module: torch.nn.Module, inp, out) -> None:  # noqa: ANN001
+            for i, t in enumerate(inp):
+                if isinstance(t, torch.Tensor):
+                    stash(name, f"in[{i}]", t)
             if isinstance(out, torch.Tensor):
-                captured.append((counter[0], name, out.detach().cpu().float().clone()))
-                counter[0] += 1
+                stash(name, "out", out)
             elif isinstance(out, (tuple, list)):
                 for i, t in enumerate(out):
                     if isinstance(t, torch.Tensor):
-                        captured.append(
-                            (
-                                counter[0],
-                                f"{name}[{i}]",
-                                t.detach().cpu().float().clone(),
-                            )
-                        )
-                        counter[0] += 1
+                        stash(name, f"out[{i}]", t)
 
         return hook
 
@@ -135,11 +141,11 @@ def main(argv: list[str]) -> int:
 
     print(f"=== TabPFN-{version} CPU forward ===")  # noqa: T201
     cpu_act, cpu_proba = run_with_hooks("cpu", x_train, y_train, x_test, version)
-    print(f"  captured {len(cpu_act)} module outputs")  # noqa: T201
+    print(f"  captured {len(cpu_act)} tensors (inputs + outputs)")  # noqa: T201
 
     print(f"=== TabPFN-{version} MPS forward ===")  # noqa: T201
     mps_act, mps_proba = run_with_hooks("mps", x_train, y_train, x_test, version)
-    print(f"  captured {len(mps_act)} module outputs")  # noqa: T201
+    print(f"  captured {len(mps_act)} tensors (inputs + outputs)")  # noqa: T201
 
     if len(cpu_act) != len(mps_act):
         print(  # noqa: T201
@@ -149,18 +155,20 @@ def main(argv: list[str]) -> int:
 
     print(  # noqa: T201
         f"\n=== per-module CPU vs MPS divergence (sorted by call order) ===\n"
-        f"{'#':>4s} {'module':50s} {'shape':25s} {'max_abs':>11s} {'rel':>11s}"
+        f"{'#':>4s} {'module':50s} {'kind':6s} {'shape':25s} "
+        f"{'max_abs':>11s} {'rel':>11s}"
     )
-    first_diverge: tuple[int, str] | None = None
+    first_diverge: tuple[int, str, str] | None = None
     n_compared = min(len(cpu_act), len(mps_act))
     printed = 0
     for idx in range(n_compared):
-        c_idx, c_name, c_tensor = cpu_act[idx]
-        _, m_name, m_tensor = mps_act[idx]
-        if c_name != m_name or c_tensor.shape != m_tensor.shape:
+        c_idx, c_name, c_kind, c_tensor = cpu_act[idx]
+        _, m_name, m_kind, m_tensor = mps_act[idx]
+        if c_name != m_name or c_kind != m_kind or c_tensor.shape != m_tensor.shape:
             print(  # noqa: T201
-                f"  MISALIGN at idx {idx}: cpu='{c_name}' {tuple(c_tensor.shape)} "
-                f"vs mps='{m_name}' {tuple(m_tensor.shape)}"
+                f"  MISALIGN at idx {idx}: "
+                f"cpu='{c_name}/{c_kind}' {tuple(c_tensor.shape)} "
+                f"vs mps='{m_name}/{m_kind}' {tuple(m_tensor.shape)}"
             )
             break
         abs_diff, rel_diff = diff_summary(c_tensor, m_tensor)
@@ -168,13 +176,14 @@ def main(argv: list[str]) -> int:
         if rel_diff > TOL:
             if first_diverge is None:
                 flag = "  <-- FIRST DIVERGENCE"
-                first_diverge = (idx, c_name)
+                first_diverge = (idx, c_name, c_kind)
             else:
                 flag = "  <-- diverged"
         # Always print divergences; cap clean rows to keep output readable.
         if rel_diff > TOL or printed < MAX_ROWS_PRINTED:
             print(  # noqa: T201
-                f"{c_idx:>4d} {c_name:50s} {tuple(c_tensor.shape)!s:25s} "
+                f"{c_idx:>4d} {c_name:50s} {c_kind:6s} "
+                f"{tuple(c_tensor.shape)!s:25s} "
                 f"{abs_diff:11.3e} {rel_diff:11.3e}{flag}"
             )
             printed += 1
@@ -187,8 +196,14 @@ def main(argv: list[str]) -> int:
     )
 
     if first_diverge is not None:
+        idx, name, kind = first_diverge
+        explanation = (
+            "INPUT already wrong → bug is UPSTREAM of this module"
+            if kind.startswith("in[")
+            else "input clean → bug is INSIDE this module's forward"
+        )
         print(  # noqa: T201
-            f"\nFIRST DIVERGENT MODULE: call #{first_diverge[0]} '{first_diverge[1]}'"
+            f"\nFIRST DIVERGENT TENSOR: call #{idx} '{name}/{kind}' — {explanation}"
         )
         return 1
     print("\nAll modules agree to within tolerance.")  # noqa: T201

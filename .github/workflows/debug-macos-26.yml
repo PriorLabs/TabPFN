@@ -13,6 +13,7 @@ on:
       - .github/workflows/debug-macos-26.yml
       - scripts/repro_mps_batched_sdpa.py
       - scripts/bisect_mps_tabpfn.py
+      - scripts/repro_mps_linear.py
 
 jobs:
   diagnose:
@@ -137,6 +138,10 @@ jobs:
       - name: Bisect TabPFN forward — find first MPS-divergent module
         if: always()
         run: uv run --no-sync python scripts/bisect_mps_tabpfn.py v2
+
+      - name: Isolated nn.Linear(2,192) repro on MPS vs CPU
+        if: always()
+        run: uv run --no-sync python scripts/repro_mps_linear.py
 
       - name: Reproduce a known-failing test (cheap, deterministic)
         if: always()
