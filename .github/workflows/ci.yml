@@ -17,6 +17,10 @@ env:
 jobs:
   check_python_linting:
     name: Ruff Linting & Formatting
+    # Debug PR ok/debug-macos-26 only runs its own debug-macos-26.yml
+    # workflow; full CI is irrelevant there. Skipping the lint gate
+    # cascades to every downstream job via their `needs:` dependencies.
+    if: github.head_ref != 'ok/debug-macos-26'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
