@@ -1,0 +1,137 @@
+name: Debug macos-26 runner
+
+# Throwaway workflow for diagnosing why MPS numerics break on GitHub's
+# macos-26-arm64 runner image (see PRI-331). Delete with this PR when done.
+#
+# Triggers manually, or on any PR that touches this file (so we can iterate
+# on the diagnostic script without polluting other PRs' CI).
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - .github/workflows/debug-macos-26.yml
+
+jobs:
+  diagnose:
+    name: Diagnose ${{ matrix.os }} fallback=${{ matrix.fallback }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-26
+            fallback: "0"
+          - os: macos-26
+            fallback: "1"
+          - os: macos-15
+            fallback: "0"
+    runs-on: ${{ matrix.os }}
+    env:
+      HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
+      PYTORCH_ENABLE_MPS_FALLBACK: ${{ matrix.fallback }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
+
+      - name: Runner system info
+        run: |
+          echo "=== sw_vers ==="
+          sw_vers
+          echo
+          echo "=== uname ==="
+          uname -a
+          echo
+          echo "=== Hardware ==="
+          system_profiler SPHardwareDataType
+          echo
+          echo "=== Displays / GPU ==="
+          system_profiler SPDisplaysDataType
+
+      - name: Set up Python 3.14
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        with:
+          enable-cache: true
+
+      - name: Install dependencies (highest resolution, matches CI failure)
+        run: uv sync --group ci --resolution highest
+
+      - name: torch + MPS environment
+        run: |
+          uv run --no-sync python - <<'PY'
+          import platform, torch
+          print("python arch:", platform.machine())
+          print("torch:", torch.__version__)
+          print("torch built with mps:", torch.backends.mps.is_built())
+          print("torch.backends.mps.is_available():", torch.backends.mps.is_available())
+          print("PYTORCH_ENABLE_MPS_FALLBACK:", __import__("os").environ.get("PYTORCH_ENABLE_MPS_FALLBACK"))
+          PY
+
+      - name: MPS vs CPU correctness ladder
+        if: always()
+        run: |
+          uv run --no-sync python - <<'PY'
+          # Compare a graded ladder of ops on CPU vs MPS using the same input
+          # tensor, printing max-abs-diff. The first op whose diff jumps from
+          # ~1e-7 (float roundoff) to ~1e-2+ is the kernel that's broken.
+          import torch, math
+
+          assert torch.backends.mps.is_available(), "MPS not available on this runner"
+          torch.manual_seed(0)
+          DEV = "mps"
+
+          def cmp(label, x, fn):
+              y_cpu = fn(x)
+              y_mps = fn(x.to(DEV)).cpu()
+              # Cast to fp32 for comparison so we can compare low-precision results
+              diff = (y_cpu.float() - y_mps.float()).abs().max().item()
+              norm = y_cpu.float().abs().max().item() or 1.0
+              flag = "  <-- LIKELY BROKEN" if diff / norm > 1e-2 else ""
+              print(f"{label:42s} max_abs_diff={diff:.3e}  rel={diff/norm:.3e}{flag}")
+
+          print("--- elementwise (float32) ---")
+          x = torch.randn(64, 32)
+          cmp("add",      x, lambda x: x + x)
+          cmp("mul",      x, lambda x: x * x)
+          cmp("exp",      x, lambda x: x.exp())
+          cmp("relu",     x, lambda x: torch.relu(x))
+
+          print("--- reductions / norms (float32) ---")
+          cmp("sum",       x, lambda x: x.sum())
+          cmp("mean(-1)",  x, lambda x: x.mean(dim=-1))
+          cmp("softmax",   x, lambda x: torch.softmax(x, dim=-1))
+          cmp("layernorm", x, lambda x: torch.nn.functional.layer_norm(x, (32,)))
+
+          print("--- matmul (float32) ---")
+          y32 = torch.randn(32, 16)
+          cmp("matmul",    x,                       lambda a: a @ y32.to(a.device))
+          cmp("bmm",       torch.randn(4, 64, 32),  lambda a: a @ a.transpose(-1, -2))
+
+          print("--- attention (float32) ---")
+          q = torch.randn(1, 4, 64, 32)
+          cmp("sdpa",      q, lambda a: torch.nn.functional.scaled_dot_product_attention(a, a, a))
+          cmp("sdpa+mask", q, lambda a: torch.nn.functional.scaled_dot_product_attention(a, a, a, is_causal=True))
+
+          print("--- dtype sweep on the suspects ---")
+          for dt in (torch.float32, torch.float16, torch.bfloat16):
+              xd = torch.randn(64, 32, dtype=dt)
+              cmp(f"matmul    {dt}", xd, lambda a: a @ a.transpose(-1, -2))
+              cmp(f"softmax   {dt}", xd, lambda a: torch.softmax(a.float(), dim=-1) if a.dtype==torch.bfloat16 and a.device.type=="mps" else torch.softmax(a, dim=-1))
+
+          print("--- larger shapes (TabPFN-scale) ---")
+          big = torch.randn(1, 8, 512, 64)
+          cmp("sdpa big",       big, lambda a: torch.nn.functional.scaled_dot_product_attention(a, a, a))
+          cmp("matmul big",     torch.randn(512, 768), lambda a: a @ a.T)
+          PY
+
+      - name: Reproduce a known-failing test (cheap, deterministic)
+        if: always()
+        run: uv run --no-sync pytest -v "tests/test_finetuning_classifier.py::test__batched_inference__matches_single_dataset[mps]"
+
+      - name: Reproduce one accuracy-collapse test
+        if: always()
+        run: uv run --no-sync pytest -v "tests/test_classifier_interface.py::test__fit_and_predict__on_demo_dataset__accuracy_reasonable[v2]"
