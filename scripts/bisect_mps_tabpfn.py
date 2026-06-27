@@ -55,6 +55,9 @@ def run_with_hooks(
         device=device,
         n_estimators=1,
         inference_precision=torch.float32,
+        # Disable memory-saving chunking so CPU and MPS execute the same
+        # whole-batch forward and we can pair hook outputs by index.
+        memory_saving_mode=False,
         random_state=0,
     )
     with warnings.catch_warnings():
