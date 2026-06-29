@@ -309,7 +309,7 @@ reg_cpu = load_fitted_tabpfn_model("my_reg.tabpfn_fit", device="cpu")
 ```
 
 To store just the foundation model weights (without a fitted estimator) use
-``save_tabpfn_model(reg, "my_tabpfn.ckpt")``. This merely saves a
+``save_tabpfn_model(reg, "my_tabpfn.ckpt")`` (imported from ``tabpfn.model_loading``). This merely saves a
 checkpoint of the pre-trained weights so you can later create and fit a fresh
 estimator. Reload the checkpoint with ``load_model_criterion_config``.
 
