@@ -53,6 +53,29 @@ def test__factor_not_none__is_inplace(residual: bool) -> None:
     assert output.data_ptr() == x.data_ptr()
 
 
+@pytest.mark.parametrize("residual", [False, True])
+def test__non_contiguous_input__output_equal_to_normal_evaluation(
+    residual: bool,
+) -> None:
+    # A non-contiguous input previously caused a silent no-op: `x.flatten(...)` returned
+    # a copy rather than a view, so the in-place chunk writes never reached `x`. Mimic a
+    # transposed activation tensor and check the in-place path still computes f.
+    x_contig = torch.randn(
+        size=(2, 7, 3, 5), generator=torch.Generator().manual_seed(0)
+    )
+    x = x_contig.transpose(1, 2)  # (2, 3, 7, 5), non-contiguous
+    assert not x.is_contiguous()
+
+    def f(x: torch.Tensor) -> torch.Tensor:
+        return torch.ones_like(x)
+
+    expected = x + f(x) if residual else f(x)
+    output = chunked_evaluate_maybe_inplace(
+        f, x, save_peak_memory_factor=2, residual=residual, batch_dims=2
+    )
+    assert torch.equal(output, expected)
+
+
 def test__chunks_have_correct_size_and_kwargs_passed() -> None:
     x = torch.randn(size=(100, 5), generator=torch.Generator().manual_seed(0))
 

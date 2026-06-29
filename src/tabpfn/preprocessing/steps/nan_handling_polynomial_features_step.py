@@ -90,6 +90,10 @@ class NanHandlingPolynomialFeaturesStep(PreprocessingStep):
         return feature_schema
 
     @override
+    def added_feature_prefix(self) -> str:
+        return "poly"
+
+    @override
     def num_added_features(self, n_samples: int, feature_schema: FeatureSchema) -> int:
         """Return the number of added polynomial features."""
         del n_samples

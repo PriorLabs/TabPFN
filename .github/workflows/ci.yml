@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
       - uses: astral-sh/ruff-action@0ce1b0bf8b818ef400413f810f8a11cdbda0034b # v4.0.0
         with:
           version-file: pyproject.toml
@@ -53,7 +53,9 @@ jobs:
           - os: windows-latest
             python-version: "3.10"
             dependency-set: lowest-direct
-          - os: macos-latest
+          # The MacOS tests are failing on macos-26, so pin to 15 for now. See
+          # https://linear.app/priorlabs/issue/PRI-331/ci-failing-when-runner-is-macos-26
+          - os: macos-15
             python-version: "3.14"
             dependency-set: highest
           - os: windows-latest
@@ -65,13 +67,12 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
-          architecture: x64
 
       - name: Install uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
@@ -173,13 +174,12 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
 
       - name: Set up Python 3.14
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.14"
-          architecture: x64
 
       - name: Install uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
@@ -233,12 +233,12 @@ jobs:
 
     steps:
       - name: Checkout TabPFN at current ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
         with:
           path: TabPFN
 
       - name: Checkout ${{ matrix.repo-name }}
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
         with:
           repository: PriorLabs/${{ matrix.repo-name }}
           path: ${{ matrix.repo-name }}
@@ -327,13 +327,12 @@ jobs:
       TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
 
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v4.3.1
 
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
-          architecture: x64
 
       - name: Install uv
         uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0

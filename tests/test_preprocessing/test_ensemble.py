@@ -41,8 +41,8 @@ skip_on_macos = pytest.mark.skipif(
 
 def _get_schema(n_features: int) -> FeatureSchema:
     features = [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)
-        for _ in range(n_features)
+        Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+        for i in range(n_features)
     ]
     return FeatureSchema(features=features)
 

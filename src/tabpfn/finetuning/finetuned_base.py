@@ -610,13 +610,13 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         _estimator_kwargs = copy.deepcopy(self._estimator_kwargs)
         model_path = _estimator_kwargs.pop("model_path", None)
-        inference_config = copy.deepcopy(_estimator_kwargs.get("inference_config", {}))
+        # Any inference_config (e.g. {"PASSTHROUGH_INF": True}) the user supplied via
+        # extra_*_kwargs flows through the spread below unchanged.
         base_estimator_config: dict[str, Any] = {
             **_estimator_kwargs,
             "ignore_pretraining_limits": True,
             "device": self.device,
             "random_state": self.random_state,
-            "inference_config": inference_config,
         }
 
         # Config used for the finetuning loop.
@@ -667,6 +667,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.finetuned_estimator_ = self._create_estimator(finetuning_estimator_config)
         self._setup_estimator()
 
+        self.finetuned_estimator_._initialize_model_variables()
         X_validated, y_validated, self.feature_names_in_, self.n_features_in_ = (
             ensure_compatible_fit_inputs_sklearn(
                 X,
@@ -696,7 +697,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             len(y_train),
         )
 
-        self.finetuned_estimator_._initialize_model_variables()
         self.finetuned_estimator_.model_.to(self.device)
 
         finetuning_performance_options = PerformanceOptions(

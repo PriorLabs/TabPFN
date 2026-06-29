@@ -221,6 +221,11 @@ class InferenceConfig:
      after the transformation. This can happen due to multiple reasons and should in
      general always be done."""
 
+    PASSTHROUGH_INF: bool = False
+    """Whether to pass infinite values through to the model instead of rejecting them.
+    When True, +/-inf are temporarily replaced with NaN for preprocessing and restored
+    afterwards; when False, infinities are rejected at input validation."""
+
     _REGRESSION_DEFAULT_OUTLIER_REMOVAL_STD: float | None = None
     _CLASSIFICATION_DEFAULT_OUTLIER_REMOVAL_STD: float = 12.0
 

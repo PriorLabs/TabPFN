@@ -30,9 +30,9 @@ def feature_schema():
     """Provides a sample feature modalities dictionary."""
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL),
-            Feature(name=None, modality=FeatureModality.CATEGORICAL),
-            Feature(name=None, modality=FeatureModality.CATEGORICAL),
+            Feature(name="num0", modality=FeatureModality.NUMERICAL),
+            Feature(name="cat0", modality=FeatureModality.CATEGORICAL),
+            Feature(name="cat1", modality=FeatureModality.CATEGORICAL),
         ]
     )
 

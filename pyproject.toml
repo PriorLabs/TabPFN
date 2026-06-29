@@ -83,7 +83,7 @@ dev = [
 # The minimum subset of the dev dependencies required to run the tests on the CI.
 # The idea is to be as close to the deployment environment as possible.
 ci = [
-  "licensecheck>=2025.1.0",
+  "licensecheck>=2025.1.0,!=2026.0.2,!=2026.0.3",  # 2026.0.2 and 2026.0.3 are borked and crash the CI
   "onnx>=1.19.0",  # We run onnx export in the tests, but not in the production package.
   "pytest-mock>=3.14.1",
   "pytest>=8.4.2",
