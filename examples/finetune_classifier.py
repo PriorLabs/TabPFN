@@ -46,7 +46,8 @@ logging.basicConfig(
 
 # Training hyperparameters
 NUM_EPOCHS = 30
-LEARNING_RATE = 2e-5
+LEARNING_RATE = 1e-5
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 30_000
 
 # Ensemble configuration
 # number of estimators to use during finetuning
@@ -124,6 +125,7 @@ def main() -> None:
         device="cuda",
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
+        n_finetune_ctx_plus_query_samples=N_FINETUNE_CTX_PLUS_QUERY_SAMPLES,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,

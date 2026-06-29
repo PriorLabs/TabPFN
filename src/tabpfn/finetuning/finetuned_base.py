@@ -48,13 +48,14 @@ from tabpfn.finetuning.train_util import (
     get_cosine_schedule_with_warmup,
     save_checkpoint,
 )
+from tabpfn.settings import settings
 from tabpfn.utils import infer_devices, infer_random_state
 from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from tabpfn.constants import XType, YType
+    from tabpfn.constants import ModelVersion, XType, YType
 
 # Currently, we only support a batch size of 1 for finetuning.
 META_BATCH_SIZE = 1
@@ -148,6 +149,11 @@ def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:
         executor.y_trains = [
             t.to(target) if t.device != target else t for t in y_trains
         ]
+
+
+def _snapshot_model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
+    """Return a detached CPU copy of a model's weights."""
+    return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
 class _TabPFNDDPWrapper(torch.nn.Module):
@@ -245,6 +251,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         experiment_logger: An optional logger implementing the ``FinetuningLogger``
             protocol (e.g., ``WandbLogger``) for experiment tracking. If None,
             a no-op ``NullLogger`` is used. Defaults to None.
+        model_version: Which TabPFN model version to fine-tune. If None
+            (default), uses the package default version
+            (``settings.tabpfn.model_version``) — the same version a default
+            ``TabPFNClassifier``/``TabPFNRegressor`` loads — so fine-tuning
+            tracks the current default model rather than a hardcoded one.
+            Defaults to None.
     """
 
     def __init__(  # noqa: PLR0913
@@ -273,9 +285,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
         experiment_logger: FinetuningLogger | None = None,
+        model_version: ModelVersion | None = None,
     ):
         super().__init__()
         self.experiment_logger = experiment_logger
+        self.model_version = model_version
         self.device = device
         self.epochs = epochs
         self.time_limit = time_limit
@@ -315,6 +329,19 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 UserWarning,
                 stacklevel=2,
             )
+
+    @property
+    def finetune_model_version(self) -> ModelVersion:
+        """Model version to fine-tune; falls back to the package default version.
+
+        When ``model_version`` is not set explicitly, this resolves to
+        ``settings.tabpfn.model_version`` (the same default a plain
+        ``TabPFNClassifier``/``TabPFNRegressor`` uses), so fine-tuning tracks the
+        current default model version instead of a hardcoded one.
+        """
+        if self.model_version is not None:
+            return self.model_version
+        return settings.tabpfn.model_version
 
     def _build_estimator_config(
         self,
@@ -742,7 +769,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         if is_main_process:
             logger.info("--- 🚀 Starting Fine-tuning ---")
         patience_counter = 0
+        # Seed with the default weights so a run that never beats the default
+        # restores the base model (not the last, degraded epoch) at early stop.
+        # Seeded on every rank so DDP weights stay in sync in that case.
         best_model_state: dict[str, torch.Tensor] | None = None
+        if self.early_stopping:
+            best_model_state = _snapshot_model_state(self.finetuned_estimator_.model_)
 
         scheduler: LambdaLR | None = None
 
@@ -997,10 +1029,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 if self._is_improvement(primary_metric, best_metric):
                     best_metric = primary_metric
                     patience_counter = 0
-                    model_sd = self.finetuned_estimator_.model_.state_dict()
-                    best_model_state = {
-                        k: v.detach().cpu().clone() for k, v in model_sd.items()
-                    }
+                    best_model_state = _snapshot_model_state(
+                        self.finetuned_estimator_.model_
+                    )
                 else:
                     patience_counter += 1
                     if is_main_process:

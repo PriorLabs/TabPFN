@@ -28,7 +28,8 @@ from torch.utils.data import DataLoader
 
 from tabpfn import TabPFNClassifier
 from tabpfn.architectures.interface import PerformanceOptions
-from tabpfn.architectures.tabpfn_v2_5 import TabPFNV2p5
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3
+from tabpfn.constants import ModelVersion
 from tabpfn.finetuning.data_util import (
     ClassifierBatch,
     DatasetCollectionWithPreprocessing,
@@ -37,8 +38,10 @@ from tabpfn.finetuning.data_util import (
 )
 from tabpfn.finetuning.finetuned_base import EvalResult
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
+from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
 from tabpfn.preprocessing import ClassifierEnsembleConfig
+from tabpfn.settings import settings
 
 from .utils import (
     get_pytest_devices,
@@ -213,6 +216,52 @@ def make_improving_eval_side_effect() -> Callable[..., EvalResult]:
         )
 
     return _evaluate
+
+
+def make_capturing_nonimproving_eval_side_effect(
+    captured: dict[str, Any],
+) -> Callable[..., EvalResult]:
+    """Side effect for ``_evaluate_model`` that never improves.
+
+    Returns the same metric on every call (so no epoch ever counts as an
+    improvement over the default model) and, on the first call (the
+    "Eval default model" step, before any optimizer step), snapshots the
+    un-finetuned model weights into ``captured['default_state']``.
+    """
+
+    def _evaluate(instance: Any, *_args: Any, **_kwargs: Any) -> EvalResult:
+        if "default_state" not in captured:
+            model_sd = instance.finetuned_estimator_.model_.state_dict()
+            captured["default_state"] = {
+                k: v.detach().cpu().clone() for k, v in model_sd.items()
+            }
+        return EvalResult(primary=0.5, secondary={"roc_auc": 0.5, "log_loss": 1.0})
+
+    return _evaluate
+
+
+def make_param_dependent_loss_side_effect() -> Callable[..., torch.Tensor]:
+    """Side effect for ``_forward_with_loss`` that moves every weight.
+
+    Returns a loss tied to the live model parameters so ``loss.backward()``
+    yields a nonzero gradient for every trainable parameter and the optimizer
+    actually updates the weights during training. This makes the
+    "restore the base model" regression test meaningful: if nothing is
+    restored, the weights are guaranteed to have changed.
+    """
+
+    def _loss(instance: Any, _batch: Any) -> torch.Tensor:
+        params = instance.finetuned_estimator_.model_.parameters()
+        return 1e-2 * sum((p**2).sum() for p in params if p.requires_grad)
+
+    return _loss
+
+
+def _state_dicts_equal(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> bool:
+    """Return True iff two state dicts have identical keys and tensor values."""
+    if a.keys() != b.keys():
+        return False
+    return all(torch.equal(a[k], b[k].cpu()) for k in a)
 
 
 @pytest.fixture(scope="module")
@@ -393,7 +442,7 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -412,6 +461,110 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     predictions = finetuned_clf.predict(X_test)
     assert predictions.shape[0] == X_test.shape[0]
     assert all(pred in np.unique(y_train) for pred in predictions)
+
+
+def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Regression test for GH#1064: never return a model worse than the base.
+
+    When no fine-tuning epoch beats the default model on the validation metric,
+    early stopping must restore the original (un-finetuned) weights instead of
+    leaving the last epoch's (degraded) weights in place. Otherwise the wrapper
+    can return a model strictly worse than the base TabPFN it started from.
+
+    The fine-tuning loss is mocked to a parameter-dependent value so the
+    optimizer genuinely moves the weights, and ``_evaluate_model`` is mocked to
+    a constant metric so no epoch ever counts as an improvement. The control
+    case (``early_stopping=False``, where no restoration happens) confirms the
+    weights really do change, so the early-stopping assertion has teeth.
+
+    This exercises the shared ``FinetunedTabPFNBase._fit`` early-stopping/restore
+    logic. ``FinetunedTabPFNRegressor`` inherits the identical code path, so the
+    behavior is not duplicated for the regressor.
+    """
+    X, y = synthetic_data
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+
+    def build_clf(*, early_stopping: bool) -> FinetunedTabPFNClassifier:
+        return FinetunedTabPFNClassifier(
+            device="cpu",
+            epochs=3,
+            learning_rate=1e-2,
+            weight_decay=0.0,
+            validation_split_ratio=0.2,
+            n_finetune_ctx_plus_query_samples=50,
+            finetune_ctx_query_split_ratio=0.1,
+            n_inference_subsample_samples=100,
+            random_state=42,
+            early_stopping=early_stopping,
+            early_stopping_patience=10,  # high, so we exhaust all epochs
+            n_estimators_finetune=1,
+            n_estimators_validation=1,
+            n_estimators_final_inference=1,
+            use_lr_scheduler=False,
+        )
+
+    def run_fit(clf: FinetunedTabPFNClassifier, captured: dict[str, Any]) -> None:
+        with (
+            mock.patch.object(
+                FinetunedTabPFNClassifier,
+                "_forward_with_loss",
+                autospec=True,
+                side_effect=make_param_dependent_loss_side_effect(),
+            ),
+            mock.patch.object(
+                FinetunedTabPFNClassifier,
+                "_evaluate_model",
+                autospec=True,
+                side_effect=make_capturing_nonimproving_eval_side_effect(captured),
+            ),
+        ):
+            clf.fit(X_train, y_train)
+
+    # Control: no early stopping -> no restoration -> weights must have changed.
+    control_captured: dict[str, Any] = {}
+    clf_no_es = build_clf(early_stopping=False)
+    run_fit(clf_no_es, control_captured)
+    final_no_es = clf_no_es.finetuned_estimator_.model_.state_dict()
+    assert not _state_dicts_equal(control_captured["default_state"], final_no_es), (
+        "Mocked fine-tuning did not change any weights; the regression test "
+        "cannot detect whether the base model is restored."
+    )
+
+    # Fix under test: early stopping ON and no epoch beats the default model ->
+    # the final weights must be exactly the original (base) weights.
+    captured: dict[str, Any] = {}
+    clf_es = build_clf(early_stopping=True)
+    run_fit(clf_es, captured)
+    final_es = clf_es.finetuned_estimator_.model_.state_dict()
+    assert _state_dicts_equal(captured["default_state"], final_es), (
+        "Fine-tuning that never beat the default model returned modified weights "
+        "instead of restoring the base model (GH#1064)."
+    )
+
+
+@pytest.mark.parametrize(
+    "estimator_cls", [FinetunedTabPFNClassifier, FinetunedTabPFNRegressor]
+)
+def test__finetuned_tabpfn__model_version_tracks_package_default(estimator_cls) -> None:
+    """`model_version` is optional and tracks the package default (GH#1064).
+
+    The fine-tuner must not hardcode an older version: by default it fine-tunes
+    the same version a default ``TabPFNClassifier``/``TabPFNRegressor`` uses, so
+    base-vs-fine-tuned comparisons don't silently mix model generations. This is
+    shared ``FinetunedTabPFNBase`` behavior, so it is checked for both estimators.
+    """
+    # Default (None) resolves to the package default version — no stale hardcode.
+    est = estimator_cls(device="cpu")
+    assert est.model_version is None
+    assert est.finetune_model_version == settings.tabpfn.model_version
+
+    # An explicit version is respected (overrides the package default).
+    est_v25 = estimator_cls(device="cpu", model_version=ModelVersion.V2_5)
+    assert est_v25.finetune_model_version == ModelVersion.V2_5
 
 
 # =============================================================================
@@ -457,9 +610,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -544,9 +695,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -583,9 +732,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     )
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -696,7 +843,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,
@@ -761,9 +908,7 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
     mock_forward = create_mock_architecture_forward(n_classes=n_classes)
 
     with (
-        mock.patch.object(
-            TabPFNV2p5, "forward", autospec=True, side_effect=mock_forward
-        ),
+        mock.patch.object(TabPFNV3, "forward", autospec=True, side_effect=mock_forward),
         mock.patch.object(
             FinetunedTabPFNClassifier,
             "_evaluate_model",
@@ -1265,7 +1410,7 @@ def test__finetuned_tabpfn_classifier__use_fixed_preprocessing_seed(
     )
 
     with mock.patch.object(
-        TabPFNV2p5,
+        TabPFNV3,
         "forward",
         autospec=True,
         side_effect=mock_forward,
