@@ -25,6 +25,7 @@ VARIANTS = [
 
 def main() -> int:
     """Run the variant sweep, return exit code."""
+    print(f"torch: {torch.__version__}")  # noqa: T201
     if not torch.backends.mps.is_available():
         return 0
     fails = 0

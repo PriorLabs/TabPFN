@@ -63,6 +63,11 @@ jobs:
       - name: Install dependencies (highest resolution, matches CI failure)
         run: uv sync --group ci --resolution highest
 
+      - name: Override torch with nightly (test upstream MPS fix)
+        run: |
+          uv pip install --pre --upgrade torch \
+            --index-url https://download.pytorch.org/whl/nightly/cpu
+
       - name: torch + MPS environment
         run: |
           uv run --no-sync python - <<'PY'
