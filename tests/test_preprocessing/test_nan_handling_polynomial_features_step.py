@@ -16,8 +16,8 @@ from tabpfn.preprocessing.steps.nan_handling_polynomial_features_step import (
 def _get_schema(num_columns: int) -> FeatureSchema:
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(num_columns)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_columns)
         ]
     )
 

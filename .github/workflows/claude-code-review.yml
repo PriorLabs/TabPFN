@@ -1,8 +1,13 @@
 name: Claude Code Review
 
 on:
+  # `synchronize` intentionally excluded: the auto-review is for PR
+  # terminal states (first open / marked-ready / reopened), not every
+  # commit push. At ~$1 per run this previously billed once per force-push
+  # × every open PR. Re-reviews after a push are available on demand by
+  # commenting `@claude review` (handled by claude.yml).
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    types: [opened, ready_for_review, reopened]
     # Restrict review to actual code changes; skip docs / generated files /
     # config-only PRs to bound Anthropic API spend on each PR event.
     paths:
@@ -11,19 +16,29 @@ on:
       - "pyproject.toml"
       - "uv.lock"
 
+# Default to no permissions; the claude-review job grants what it needs.
+permissions: {}
+
 jobs:
   claude-review:
     # Skip fork PRs entirely. Fork-origin runs cannot access the
     # ANTHROPIC_API_KEY secret (GitHub policy), so the review would no-op
     # anyway — gating here avoids wasting Actions minutes and produces a
     # cleaner workflow-run history.
-    if: github.event.pull_request.head.repo.fork == false
+    #
+    # Skip Dependabot PRs: the Claude action will fail by default on them.
+    if: github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
-      pull-requests: read
+      # `write` required to post the review back to the PR. Without it the
+      # action runs (and bills) but silently fails on the post step —
+      # `permission_denials_count > 0` in the SDK result and no review on
+      # the PR. `claude.yml` (the opt-in `@claude` mention workflow) sets
+      # this for the same reason.
+      pull-requests: write
       issues: read
       # Required by claude-code-action to mint a short-lived OIDC token that attests
       # that this is a real GitHub action run to Anthropic's backend. Despite being
@@ -33,8 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        # Pinned to v4 commit SHA to mitigate moving-tag supply-chain risk.
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -49,6 +63,23 @@ jobs:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          # By default "--comment" causes Claude to comment even when there are no
+          # issues. We extend the prompt to try and persuade it to stay silent.
+          # "Step 7" comes from https://github.com/anthropics/claude-code/blob/main/plugins/code-review/commands/code-review.md
+          prompt: |
+            /code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment
+
+            Override step 7 of the /code-review:code-review command: if no
+            validated issues are found, do not post any comment (skip the
+            "No issues found" summary). Only post inline comments when issues
+            exist.
+          # Allow Claude to post comments back to the PR. Various other tools are
+          # allowed in addition by default.
+          claude_args: |
+            --allowedTools "mcp__github_inline_comment__create_inline_comment"
+          # Log the actual model output when the job was re-run with
+          # "Enable debug logging" ticked. We normally keep this off to avoid writing
+          # secrets to the logs.
+          show_full_output: ${{ runner.debug == '1' }}
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options

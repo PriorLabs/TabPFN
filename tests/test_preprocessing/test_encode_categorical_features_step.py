@@ -403,7 +403,7 @@ def _make_schema_with_gpu_marks(
         )
         mark = GPUTransformType.QUANTILE if i in gpu_set else None
         features.append(
-            Feature(name=None, modality=modality, scheduled_gpu_transform=mark)
+            Feature(name=f"f{i}", modality=modality, scheduled_gpu_transform=mark)
         )
     return FeatureSchema(features=features)
 

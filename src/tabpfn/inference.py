@@ -162,12 +162,7 @@ class InferenceEngine(ABC):
         )
 
     def save_state_except_model_weights(self, path: str | Path) -> None:
-        """Persist the executor state to ``path`` without the model weights.
-
-        This does not support the KV cache, and will raise an error if this is an
-        InferenceEngineExplicitKVCache.
-        """
-        _raise_if_kv_cache_enabled_on_save_or_load(self)
+        """Persist the executor state to ``path`` without the model weights."""
         joblib.dump(self._create_copy_for_pickling(), path)
 
     @abstractmethod
@@ -187,7 +182,6 @@ class InferenceEngine(ABC):
         `models` parameter.
         """
         engine: InferenceEngine = joblib.load(Path(path))
-        _raise_if_kv_cache_enabled_on_save_or_load(engine)
         engine._set_models(models)
         return engine
 
@@ -222,14 +216,6 @@ class InferenceEngine(ABC):
     def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
         """Move the models to the given devices. Used when .to() is called."""
         ...
-
-
-def _raise_if_kv_cache_enabled_on_save_or_load(engine: InferenceEngine) -> None:
-    if isinstance(engine, InferenceEngineExplicitKVCache):
-        raise NotImplementedError(
-            "Saving and loading fitted models that use "
-            '`fit_mode="fit_with_cache"` is not currently supported.'
-        )
 
 
 class SingleDeviceInferenceEngine(InferenceEngine):
@@ -524,11 +510,15 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             performance_options: Performance and memory options forwarded to
                 the model on each forward call.
         """
+        # Each entry of ``ensemble_configs`` is one estimator slot holding one
+        # config per dataset in the batch (length == batch size). A single fused
+        # forward is run per estimator over the whole dataset batch, so all
+        # datasets in a batch must use the same underlying model.
         for ensemble_config in ensemble_configs:
-            if len(ensemble_config) > 1:
+            if len({cfg._model_index for cfg in ensemble_config}) > 1:
                 raise ValueError(
-                    "Batched inference does not support multiple ensemble"
-                    " configurations because no preprocessing is applied."
+                    "Batched inference requires all datasets in a batch to use the"
+                    " same model; got multiple model indices in one estimator slot."
                 )
 
         super().__init__(
@@ -940,7 +930,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         model = self.model_caches[model_index].get(device)
 
         # Cast model weights to match force_inference_dtype (else linear
-        # layers throw a Half/Float mismatch — matches CacheKV).
+        # layers throw a Half/Float mismatch).
         if self.force_inference_dtype is not None:
             model.type(self.force_inference_dtype)
 
@@ -1096,7 +1086,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         # Cast post-preproc tensors back to force_inference_dtype if set —
         # GPU preprocessing may emit fp32 internally (SVD/quantile for
-        # numerical stability) even under a fp16 run. Matches CacheKV.
+        # numerical stability) even under a fp16 run.
         if self.force_inference_dtype is not None:
             X_test_tensor = X_test_tensor.type(self.force_inference_dtype)
             y_train = y_train.type(self.force_inference_dtype)
@@ -1136,6 +1126,31 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 x_is_test_only=True,
                 **kwargs,
             )
+
+    @override
+    def _create_copy_for_pickling(self) -> InferenceEngine:
+        # Temporarily detach KV caches before deepcopy to avoid a memory
+        # spike from copying GPU tensors that we discard.
+        saved_kv_caches = self.kv_caches
+        self.kv_caches = []  # type: ignore
+        try:
+            state_copy = super()._create_copy_for_pickling()
+        finally:
+            self.kv_caches = saved_kv_caches
+
+        # Attach CPU copies of KV caches for portable serialization.
+        state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
+        return state_copy
+
+    @override
+    def _move_models_to_devices(self, devices: Sequence[torch.device]) -> None:
+        super()._move_models_to_devices(devices)
+        # kv_caches don't exist yet during the .to() call in __init__ (it runs
+        # before the caches are built). Once they do and are kept on device,
+        # move them with the models so .to() leaves nothing on the old device;
+        # iter_outputs redistributes them across devices on the next predict.
+        if self.keep_cache_on_device and getattr(self, "kv_caches", None):
+            self.kv_caches = [cache.to(devices[0]) for cache in self.kv_caches]
 
 
 def _prepare_model_inputs(

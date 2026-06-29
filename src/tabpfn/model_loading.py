@@ -1040,9 +1040,6 @@ def save_fitted_tabpfn_model(estimator: BaseEstimator, path: Path | str) -> None
 
     This stores the initialization parameters and the fitted state, but crucially
     omits the large foundation model weights for efficiency.
-
-    This does not support estimators using `fit_mode="fit_with_cache"`, and will raise
-    NotImplementedError in this case.
     """
     if not hasattr(estimator, "executor_"):
         raise RuntimeError("Estimator must be fitted before saving.")

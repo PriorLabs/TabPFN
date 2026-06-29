@@ -30,14 +30,14 @@ class TestFeatureSchema:
         """Test from_feature_modalities factory method."""
         schema = FeatureSchema(
             features=[
-                Feature(name=None, modality=FeatureModality.NUMERICAL),
-                Feature(name=None, modality=FeatureModality.CATEGORICAL),
-                Feature(name=None, modality=FeatureModality.NUMERICAL),
+                Feature(name="num0", modality=FeatureModality.NUMERICAL),
+                Feature(name="cat0", modality=FeatureModality.CATEGORICAL),
+                Feature(name="num1", modality=FeatureModality.NUMERICAL),
             ]
         )
 
         assert schema.num_columns == 3
-        assert schema.feature_names == [None, None, None]
+        assert schema.feature_names == ["num0", "cat0", "num1"]
         assert schema.indices_for(FeatureModality.NUMERICAL) == [0, 2]
         assert schema.indices_for(FeatureModality.CATEGORICAL) == [1]
 
@@ -86,7 +86,9 @@ class TestFeatureSchemaAddColumns:
         new_schema = schema.append_columns(FeatureModality.CATEGORICAL, num_new=2)
 
         assert new_schema.num_columns == 3
-        assert new_schema.feature_names == ["a", None, None]
+        # Without explicit names or a prefix, appended columns get unique
+        # generated names rather than ``None``.
+        assert new_schema.feature_names == ["a", "added_0", "added_1"]
         assert new_schema.indices_for(FeatureModality.NUMERICAL) == [0]
         assert new_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
 

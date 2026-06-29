@@ -319,7 +319,7 @@ class TabPFNBlock(nn.Module):
 
     def forward(
         self,
-        x_BRCE: torch.Tensor,
+        x_BRCE_container: list[torch.Tensor],
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
         *,
@@ -336,9 +336,9 @@ class TabPFNBlock(nn.Module):
         E: The embedding size of each cell.
 
         Args:
-            x_BRCE:
-                The transformer state passed as input to the layer of shape
-                (batch_size, num_items, num_feature_blocks, d_model).
+            x_BRCE_container:
+                A length-1 list containing the transformer state passed as input to the
+                layer of shape (batch_size, num_items, num_feature_blocks, d_model).
             single_eval_pos:
                 The position from which on everything is treated as test set.
             save_peak_memory_factor:
@@ -360,6 +360,7 @@ class TabPFNBlock(nn.Module):
         """
         # -- First Block: Attention between features.
         # The row attention has no train/test distinction and is not cached.
+        x_BRCE = x_BRCE_container.pop(0)
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
@@ -380,8 +381,8 @@ class TabPFNBlock(nn.Module):
         )
 
         # -- Second Block: Attention between cells.
-        # Call .contiguous() so that _chunk() can operate on x_BCRE in-place, when
-        # memory saving is enabled.
+        # Materialize the transpose as a contiguous copy (chunked_evaluate_maybe_inplace
+        # guards contiguity itself, so this is a memory optimization, not correctness).
         x_BCRE = x_BRCE.transpose(1, 2).contiguous()
         del x_BRCE
         kv_entry: KVCacheEntry | None = None
@@ -416,7 +417,8 @@ class TabPFNBlock(nn.Module):
             residual=False,
             batch_dims=3,
         )
-        # Again, call .contiguous() so that _chunk() can operate on x_BCRE in-place.
+        # As above: materialize the transpose contiguously and free the source so the
+        # next chunked evaluation can run in-place with low peak memory.
         x_BRCE = x_BCRE.transpose(1, 2).contiguous()
         del x_BCRE
 
@@ -924,9 +926,13 @@ class TabPFNV2(Architecture):
             {} if (return_kv_cache and not using_cache) else None
         )
         for layer_idx, block in enumerate(self.blocks):
+            # Note: Using x_BRCD._set() instead of the container approach here leads
+            # to memory issues on some mac hardware.
+            x_BRCD_container = [x_BRCD]
+            del x_BRCD
             if return_kv_cache and not using_cache:
                 x_BRCD, kv_entry = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     return_kv=True,
@@ -934,18 +940,21 @@ class TabPFNV2(Architecture):
                 kv_out[layer_idx] = kv_entry
             elif using_cache:
                 x_BRCD, _ = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     cached_kv=kv_cache.kv[layer_idx],
                 )
             elif force_recompute_layer:
                 x_BRCD = torch.utils.checkpoint.checkpoint(
-                    block, x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                    block,
+                    x_BRCD_container,
+                    block_single_eval_pos,
+                    save_peak_memory_factor,
                 )[0]
             else:
                 x_BRCD, _ = block(
-                    x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                    x_BRCD_container, block_single_eval_pos, save_peak_memory_factor
                 )
 
         # In the cache path every row is a test row; otherwise test rows start after the

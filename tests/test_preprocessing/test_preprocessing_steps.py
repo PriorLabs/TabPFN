@@ -41,8 +41,8 @@ def _get_schema(num_columns: int) -> FeatureSchema:
     """Create a schema with all numerical features."""
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(num_columns)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_columns)
         ]
     )
 
@@ -216,8 +216,8 @@ def test__pipeline__handles_added_columns_from_fingerprint_step():
     X = rng.random((n_samples, n_features))
     schema = FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(n_features)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(n_features)
         ]
     )
 
@@ -249,8 +249,8 @@ def test__pipeline__transform_also_handles_added_columns():
     X_test = rng.random((5, n_features))
     schema = FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(n_features)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(n_features)
         ]
     )
 
@@ -288,7 +288,7 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
     X = rng.random((10, 3))
     schema = FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL) for _ in range(3)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL) for i in range(3)
         ]
     )
 

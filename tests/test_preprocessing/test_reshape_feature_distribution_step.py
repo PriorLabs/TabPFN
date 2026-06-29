@@ -26,8 +26,8 @@ def _get_schema(num_columns: int) -> FeatureSchema:
     """Create a schema with all numerical features."""
     return FeatureSchema(
         features=[
-            Feature(name=None, modality=FeatureModality.NUMERICAL)
-            for _ in range(num_columns)
+            Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+            for i in range(num_columns)
         ]
     )
 
@@ -463,12 +463,12 @@ def test__reshape_step_append_original_logic(
         apply_to_categorical=apply_to_categorical,
     )
 
+    half = num_features // 2
     features = [
-        Feature(name=None, modality=FeatureModality.NUMERICAL)
-        for _ in range(num_features // 2)
+        Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL) for i in range(half)
     ] + [
-        Feature(name=None, modality=FeatureModality.CATEGORICAL)
-        for _ in range(num_features // 2)
+        Feature(name=f"f{half + i}", modality=FeatureModality.CATEGORICAL)
+        for i in range(half)
     ]
     feature_schema = FeatureSchema(features=features)
     result = preprocessing_step.fit_transform(X, feature_schema)  # type: ignore

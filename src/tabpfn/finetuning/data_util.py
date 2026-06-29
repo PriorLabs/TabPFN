@@ -619,12 +619,20 @@ def meta_dataset_collator(
         A collated ClassifierBatch or RegressorBatch with stacked/padded data.
 
     Note:
-        Currently only implemented and tested for `batch_size = 1`,
-        as enforced by an internal assertion.
+        ``batch_size > 1`` stacks several datasets along the model's batch
+        dimension (used by batched inference). Tensors are padded to a common
+        shape, so callers that need exact, per-dataset-equivalent results must
+        pass same-shaped datasets (padded context/query rows are not masked).
+        For ``RegressorBatch`` the bar distributions are taken from the first
+        item only; batched regressor decoding applies each dataset's own bar
+        distribution downstream, after the fused forward.
     """
-    batch_sz = len(batch)
-    assert batch_sz == 1, "Only Implemented and tested for batch size of 1"
-
+    # batch_size > 1 stacks multiple independent datasets along the model's batch
+    # dimension, enabling a single fused forward over all of them (the transformer
+    # batch dim is independent). Tensors are padded to a common shape; when the
+    # datasets share a shape (the common case) no padding occurs and results are
+    # exact. Ragged datasets are padded with ``padding_val`` (see pad_tensors);
+    # masking of padded context positions is left to the model/preprocessing.
     first_item = batch[0]
     num_estimators = len(first_item.X_context)
 
