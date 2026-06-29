@@ -79,6 +79,12 @@ jobs:
           print("PYTORCH_ENABLE_MPS_FALLBACK:", __import__("os").environ.get("PYTORCH_ENABLE_MPS_FALLBACK"))
           PY
 
+      - name: collect_env (for PyTorch issue report)
+        if: always()
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/pytorch/pytorch/main/torch/utils/collect_env.py -o /tmp/collect_env.py
+          uv run --no-sync python /tmp/collect_env.py
+
       - name: MPS vs CPU correctness ladder
         if: always()
         run: |
