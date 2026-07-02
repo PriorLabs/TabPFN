@@ -31,6 +31,9 @@ from torch import nn
 
 from tabpfn.architectures import ARCHITECTURES
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
+from tabpfn.architectures.shared.workaround_mps_linear_bug import (
+    maybe_replace_linears_on_mps,
+)
 from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
@@ -892,6 +895,9 @@ def load_model(
         model_config,
         cache_trainset_representation=cache_trainset_representation,
     )
+
+    # Work around a bug with nn.Linear on some Macs. No-op elsewhere.
+    maybe_replace_linears_on_mps(model)
 
     if "test_targets_MB" in inspect.signature(model.forward).parameters:
         # The model computes the loss internally. Strip criterion keys that
