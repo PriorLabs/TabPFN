@@ -53,9 +53,9 @@ jobs:
           - os: windows-latest
             python-version: "3.10"
             dependency-set: lowest-direct
-          # The MacOS tests are failing on macos-26, so pin to 15 for now. See
-          # https://linear.app/priorlabs/issue/PRI-331/ci-failing-when-runner-is-macos-26
-          - os: macos-15
+          # TEMPORARY: forced to macos-26 to test the MPS Linear workaround on the
+          # affected runner. Revert to macos-latest before merging.
+          - os: macos-26
             python-version: "3.14"
             dependency-set: highest
           - os: windows-latest
