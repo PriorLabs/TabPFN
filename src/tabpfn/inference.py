@@ -557,8 +557,6 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             if self.force_inference_dtype is not None:
                 train_x_full = train_x_full.type(self.force_inference_dtype)
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
-                # Cast the model too, not just the inputs, so weights and
-                # activations share a dtype (other engines do this via ModelCache).
                 model.type(self.force_inference_dtype)
 
             kwargs = {}
