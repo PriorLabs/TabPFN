@@ -30,14 +30,14 @@ def _mps_linear_bias_is_buggy() -> bool:
     if not torch.backends.mps.is_available():
         return False
     with torch.no_grad():
-        torch.manual_seed(0)
-        cpu = nn.Linear(2, 192, bias=True)
-        mps = nn.Linear(2, 192, bias=True).to("mps")
-        mps.load_state_dict(cpu.state_dict())
-        x = torch.randn(80, 1, 2)
-        rel = (
-            (cpu(x) - mps(x.to("mps")).cpu()).abs().max() / cpu(x).abs().max()
-        ).item()
+        # Use a local generator so we don't disturb the global RNG state.
+        gen = torch.Generator().manual_seed(0)
+        weight = torch.randn(192, 2, generator=gen)
+        bias = torch.randn(192, generator=gen)
+        x = torch.randn(80, 1, 2, generator=gen)
+        cpu = F.linear(x, weight, bias)
+        mps = F.linear(x.to("mps"), weight.to("mps"), bias.to("mps")).cpu()
+        rel = ((cpu - mps).abs().max() / cpu.abs().max()).item()
     return rel > 1e-3
 
 
