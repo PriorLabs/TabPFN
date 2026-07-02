@@ -557,11 +557,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             if self.force_inference_dtype is not None:
                 train_x_full = train_x_full.type(self.force_inference_dtype)
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
-                # Cast the model too, not just the inputs: otherwise fp16 inputs
-                # meet fp32 weights (e.g. in the feature embedding Linear) and the
-                # forward raises "mat1 and mat2 must have the same dtype". The
-                # other engines cast the model via ModelCache.set_dtype; this
-                # engine holds the models directly, so cast them here.
+                # Cast the model too, not just the inputs, so weights and
+                # activations share a dtype (other engines do this via ModelCache).
                 model.type(self.force_inference_dtype)
 
             kwargs = {}
