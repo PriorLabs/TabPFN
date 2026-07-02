@@ -26,11 +26,11 @@ pip install tabpfn
 ```
 
 TabPFN supports Python 3.10+. `pip install tabpfn` installs a compatible
-PyTorch build automatically. If you want a smaller CPU-only install, or need a
-PyTorch build for a specific accelerator or CUDA version, install PyTorch first
-with the command from the
-[PyTorch installation selector](https://pytorch.org/get-started/locally/), then
-run `pip install tabpfn`.
+PyTorch build automatically. If you want a smaller CPU-only install, need a
+PyTorch build for a specific accelerator or CUDA version, or want platform
+notes for Windows and WSL, choose the matching command from the
+[PyTorch installation selector](https://pytorch.org/get-started/locally/) before
+installing TabPFN.
 
 Note: For best performance on Apple Silicon/MPS, consider installing a PyTorch
 version after the nightly "2.13.0.dev20260510". This enables flash attention
