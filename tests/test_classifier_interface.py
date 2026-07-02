@@ -1434,6 +1434,49 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
         np.testing.assert_allclose(proba[i], ref, atol=atol)
 
 
+def test__predict_proba_batched__fp16_matches_fp32() -> None:
+    """predict_proba_batched works with inference_precision=float16 (regression).
+
+    The batched engine used to cast only the inputs to the forced dtype, leaving
+    the model in fp32, so an fp16 forward raised "mat1 and mat2 must have the same
+    dtype, but got Half and Float". Standard predict_proba fp16 was unaffected.
+    fp16 matmul is only reliably supported on CUDA, so this is GPU-only.
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("float16 batched inference requires CUDA.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] + 0.3 * r.randn(n) > 0).astype(int)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+    X_tests = [d[0][:5] for d in data]
+
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        device="cuda",
+        random_state=42,
+        inference_precision=torch.float16,
+    )
+    # Regression: this call raised RuntimeError before the fix.
+    proba = clf.predict_proba_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests
+    )
+    assert proba.shape == (3, 5, 2)
+    assert np.allclose(proba.sum(-1), 1.0, atol=1e-3)
+
+    # And it should track the fp32 batched result within fp16 tolerance.
+    ref = TabPFNClassifier(
+        n_estimators=2,
+        device="cuda",
+        random_state=42,
+        inference_precision=torch.float32,
+    ).predict_proba_batched([d[0] for d in data], [d[1] for d in data], X_tests)
+    np.testing.assert_allclose(proba, ref, atol=2e-2)
+
+
 def test__predict_proba_batched__rejects_mismatched_classes() -> None:
     """predict_proba_batched raises if datasets do not share the same classes."""
     r = np.random.RandomState(0)

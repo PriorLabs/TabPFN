@@ -553,11 +553,12 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
             train_y_batch = self.y_trains[i]
             train_x_full = train_x_full.to(device)
             train_y_batch = train_y_batch.to(device)
+            model = self.models[self.ensemble_configs[i][0]._model_index]
             if self.force_inference_dtype is not None:
                 train_x_full = train_x_full.type(self.force_inference_dtype)
                 train_y_batch = train_y_batch.type(self.force_inference_dtype)  # type: ignore
+                model.type(self.force_inference_dtype)
 
-            model = self.models[self.ensemble_configs[i][0]._model_index]
             kwargs = {}
             if _model_expectes_task_type_arg(model):
                 kwargs["task_type"] = task_type
