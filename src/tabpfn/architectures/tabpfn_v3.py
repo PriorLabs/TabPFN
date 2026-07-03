@@ -267,8 +267,7 @@ def estimate_cache_size(
 ) -> int:
     """Estimate the cached memory in bytes for a TabPFN v3 inference run.
 
-    Analytical counterpart of the (removed) ``TabPFNV3Cache.cache_size_mb``:
-    it works from shapes alone, so it can be called before fitting to size an
+    Works from shapes alone, so it can be called before fitting to size an
     inference run. Two terms are counted:
 
     1. The ICL transformer KV cache (always). Per layer it caches a key and a
