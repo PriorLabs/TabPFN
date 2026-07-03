@@ -206,7 +206,17 @@ def ensure_compatible_fit_inputs_sklearn(
                 ensure_2d=False,
             )
     except (ValueError, TypeError) as e:
-        raise TabPFNValidationError(str(e)) from e
+        e_str = str(e)
+        if "X contains infinity" in e_str:
+            e_str += (
+                "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
+                "(MCAR) markers. If this matches your use case, try using "
+                f"{estimator.__class__.__name__}"
+                '(inference_config={"PASSTHROUGH_INF": True}).\n'
+                "Otherwise, replace your infinite values with NaN to indicate "
+                "missingness."
+            )
+        raise TabPFNValidationError(e_str) from e
 
     # NOTE: Theoretically we don't need to return the feature names and number,
     # but it makes it clearer in the calling code that these variables now exist
