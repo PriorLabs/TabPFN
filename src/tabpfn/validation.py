@@ -207,7 +207,7 @@ def ensure_compatible_fit_inputs_sklearn(
             )
     except (ValueError, TypeError) as e:
         e_str = str(e)
-        if "infinity" in e_str:
+        if "X contains infinity" in e_str:
             e_str += (
                 "\nHint: TabPFN uses infinite values as missing completely at random "  # noqa: S608
                 "(MCAR) markers. If this matches your use case, try using "
