@@ -7,13 +7,14 @@ from __future__ import annotations
 import pytest
 import torch
 
+from tabpfn import TabPFNClassifier
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, estimate_cache_size
 
 
 def _get_model() -> tabpfn_v3.TabPFNV3:
@@ -525,3 +526,172 @@ def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
         f"Quantized multiclass cache output too far from non-quantized cached "
         f"(max diff: {(out_cached - out_quantized).abs().max().item():.2e})"
     )
+
+
+def _actual_cache_bytes(cache: TabPFNV3Cache, *, include_activations: bool) -> int:
+    """Sum the real byte size of a built cache's KV (and optional activations)."""
+    total = 0
+    for entry in cache.kv.values():
+        assert entry.key is not None
+        assert entry.value is not None
+        total += entry.key.numel() * entry.key.element_size()
+        total += entry.value.numel() * entry.value.element_size()
+    if include_activations and cache.train_embeddings is not None:
+        total += cache.train_embeddings.numel() * cache.train_embeddings.element_size()
+    return total
+
+
+def _build_cache(
+    arch: tabpfn_v3.TabPFNV3,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    *,
+    quantize_kv_cache: bool,
+) -> TabPFNV3Cache:
+    """Build a cache the way the inference engine does: forward to populate it,
+    then apply the ``maybe_quantize_kv_cache`` step (``cache.quantize()``).
+    """
+    _, cache = arch(x, y, return_kv_cache=True)
+    return cache.quantize() if quantize_kv_cache else cache
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("quantize_kv_cache", [True, False])
+def test__estimate_cache_size__matches_actual_multiclass(
+    quantize_kv_cache: bool,
+) -> None:
+    """Estimate matches a real multiclass cache, with the engine's quantization
+    step applied or not (default: quantized).
+    """
+    arch = _get_model()
+    cfg = arch.config
+    n_train = 10
+
+    torch.manual_seed(0)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, (n_train,), dtype=torch.float32)
+    cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
+    x_train = torch.zeros(n_train, 5)
+
+    est_kv = estimate_cache_size(
+        x_train,
+        model_config=cfg,
+        ensemble_size=1,
+        dtype=torch.float32,
+        quantize_kv_cache=quantize_kv_cache,
+        include_decoder_activations=False,
+    )
+    est_all = estimate_cache_size(
+        x_train,
+        model_config=cfg,
+        ensemble_size=1,
+        dtype=torch.float32,
+        quantize_kv_cache=quantize_kv_cache,
+        include_decoder_activations=True,
+    )
+
+    # _actual_cache_bytes counts K/V at their stored dtype (int8 when quantized,
+    # else float32) + float32 activations, ignoring the tiny per-tensor quant
+    # scales that the estimate also omits.
+    assert est_kv == _actual_cache_bytes(cache, include_activations=False)
+    assert est_all == _actual_cache_bytes(cache, include_activations=True)
+    # Activations must add something for a classifier.
+    assert est_all > est_kv
+    # ensemble_size is a linear multiplier over the per-estimator cache.
+    est_ensemble = estimate_cache_size(
+        x_train,
+        model_config=cfg,
+        ensemble_size=3,
+        dtype=torch.float32,
+        quantize_kv_cache=quantize_kv_cache,
+        include_decoder_activations=True,
+    )
+    assert est_ensemble == 3 * est_all
+
+
+@torch.no_grad()
+def test__estimate_cache_size__regression_excludes_activations() -> None:
+    """Regression never caches decoder activations, even with the flag on."""
+    arch = _get_regression_model()
+    cfg = arch.config
+    n_train = 10
+
+    torch.manual_seed(0)
+    x = torch.randn(20, 1, 5, dtype=torch.float32)
+    y = torch.randn(n_train, dtype=torch.float32)
+    # Engine default: build then quantize the KV cache.
+    cache = _build_cache(arch, x, y, quantize_kv_cache=True)
+    x_train = torch.zeros(n_train, 5)
+
+    est_on = estimate_cache_size(
+        x_train,
+        model_config=cfg,
+        ensemble_size=1,
+        dtype=torch.float32,
+        include_decoder_activations=True,
+    )
+    est_off = estimate_cache_size(
+        x_train,
+        model_config=cfg,
+        ensemble_size=1,
+        dtype=torch.float32,
+        include_decoder_activations=False,
+    )
+    assert est_on == est_off  # flag is a no-op for regression
+    assert est_on == _actual_cache_bytes(cache, include_activations=False)
+
+
+def test__estimate_cache_size__mqa_smaller_than_mha() -> None:
+    """Fewer cached KV heads (MQA on the test partition) shrinks the KV term."""
+    common = {
+        "max_num_classes": -1,
+        "num_buckets": 5,
+        "embed_dim": 48,
+        "nlayers": 1,
+        "icl_num_heads": 4,
+        "dist_embed_num_heads": 4,
+        "feat_agg_num_heads": 4,
+    }
+    mha = tabpfn_v3.TabPFNV3Config(**common)  # H_kv = icl_num_heads = 4
+    mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
+    x_train = torch.zeros(50, 5)
+    est_mha = estimate_cache_size(
+        x_train,
+        model_config=mha,
+        ensemble_size=1,
+        dtype=torch.int8,
+    )
+    est_mqa = estimate_cache_size(
+        x_train,
+        model_config=mqa,
+        ensemble_size=1,
+        dtype=torch.int8,
+    )
+    assert est_mqa * 4 == est_mha
+
+
+@pytest.mark.slow
+def test__estimate_cache_size__tabpfn3_classifier_1000_rows() -> None:
+    """Pin the KV-cache estimate for the real Prior-Labs/tabpfn_3 classifier at
+    1,000 train rows (1 estimator, engine defaults: int8 KV, fp16 activations).
+    """
+    clf = TabPFNClassifier()
+    # Loads the checkpoint (config + weights) without needing fit data.
+    clf._initialize_model_variables()
+    config = clf.model_.config
+
+    x_train = torch.zeros(1000, 1)
+    common = {
+        "model_config": config,
+        "ensemble_size": 1,
+        "dtype": torch.float16,
+        "quantize_kv_cache": True,
+    }
+    # KV int8: nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000.
+    # + fp16 train_embeddings: icl_emsize * N * 2 = 512 * 1000 * 2 = 1,024,000.
+    kv_only = estimate_cache_size(x_train, include_decoder_activations=False, **common)
+    with_emb = estimate_cache_size(x_train, include_decoder_activations=True, **common)
+
+    # Numbers need manual update if we bump the default architecture
+    assert kv_only == 3_072_000
+    assert with_emb == 4_096_000

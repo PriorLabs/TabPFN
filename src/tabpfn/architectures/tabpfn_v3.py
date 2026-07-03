@@ -45,7 +45,12 @@ from tabpfn.architectures.interface import (
     ArchitectureConfig,
     PerformanceOptions,
 )
-from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry, QuantizedKVCacheEntry
+from tabpfn.architectures.kv_cache import (
+    QUANTIZED_KV_DTYPE,
+    KVCache,
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
+)
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -229,14 +234,14 @@ class TabPFNV3Cache(KVCache):
             inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
         )
 
-    def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV3Cache:
+    def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3Cache:
         """Return a new cache with quantized ICL KV entries.
 
         Only the ICL KV cache is quantized; ``train_embeddings``,
         ``scaler_cache``, and ``inducing_hidden`` stay in full precision.
 
         Args:
-            dtype: Target integer dtype (default ``torch.int8``).
+            dtype: Target integer dtype (default :data:`QUANTIZED_KV_DTYPE`).
         """
         quantized_kv = {
             idx: (entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry)
@@ -249,6 +254,90 @@ class TabPFNV3Cache(KVCache):
             scaler_cache=self.scaler_cache,
             inducing_hidden=self.inducing_hidden,
         )
+
+
+def estimate_cache_size(
+    X_train: Any,
+    *,
+    model_config: TabPFNV3Config,
+    ensemble_size: int,
+    dtype: torch.dtype,
+    quantize_kv_cache: bool = True,
+    include_decoder_activations: bool = True,
+) -> int:
+    """Estimate the cached memory in bytes for a TabPFN v3 inference run.
+
+    Analytical counterpart of the (removed) ``TabPFNV3Cache.cache_size_mb``:
+    it works from shapes alone, so it can be called before fitting to size an
+    inference run. Two terms are counted:
+
+    1. The ICL transformer KV cache (always). Per layer it caches a key and a
+       value tensor each of shape ``(N_train, H_kv, head_dim)`` per estimator;
+       only training rows are cached (test rows produce queries only), where:
+
+       * ``head_dim = embed_dim * feat_agg_num_cls_tokens // icl_num_heads``,
+       * ``H_kv`` is the number of *cached* KV heads: ``icl_num_kv_heads_test``
+         if set (MQA/GQA for the test partition), else ``icl_num_kv_heads``
+         (GQA), else ``icl_num_heads`` (plain MHA).
+
+    2. The last-layer train activations ``train_embeddings`` of shape
+       ``(N_train, embed_dim * feat_agg_num_cls_tokens)`` per estimator -- **only
+       for classification** (binary or multiclass), where the ``ManyClassDecoder``
+       attends test queries to them as retrieval keys. Regression never uses
+       them. Controlled by ``include_decoder_activations`` (on by default).
+
+    The KV cache and the activations are stored at *different* dtypes: the
+    default engine int8-quantizes the KV cache (``quantize_kv_cache``) but leaves
+    ``train_embeddings`` at the compute dtype. Each term is therefore sized with
+    its own dtype rather than a single shared one. The ``scaler_cache`` /
+    ``inducing_hidden`` entries are small and not counted.
+
+    Args:
+        X_train: Training features; only ``X_train.shape[0]`` (the row count)
+            is used.
+        model_config: The v3 architecture config.
+        ensemble_size: Number of ensemble members (estimators). At inference
+            each estimator runs its own forward and holds a separate cache, so
+            the total scales linearly with this.
+        dtype: The compute dtype (e.g. from autocast / ``inference_precision``).
+            Sizes the decoder activations, and the KV cache too when
+            ``quantize_kv_cache`` is False.
+        quantize_kv_cache: If True (default), the KV cache is sized at
+            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
+            the engine's ``maybe_quantize_kv_cache``); if False, at ``dtype``.
+        include_decoder_activations: If True (default), add the classification
+            ``train_embeddings`` term. Has no effect for regression configs,
+            which do not cache decoder activations.
+
+    Returns:
+        Estimated cache size in bytes. Divide by ``1024 ** 2`` for MB.
+    """
+    n_train = int(X_train.shape[0])
+    icl_emsize = model_config.embed_dim * model_config.feat_agg_num_cls_tokens
+    head_dim = icl_emsize // model_config.icl_num_heads
+    if model_config.icl_num_kv_heads_test is not None:
+        num_kv_heads = model_config.icl_num_kv_heads_test
+    elif model_config.icl_num_kv_heads is not None:
+        num_kv_heads = model_config.icl_num_kv_heads
+    else:
+        num_kv_heads = model_config.icl_num_heads
+
+    kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else dtype
+
+    # ICL KV cache: key + value (the factor of 2), per layer, over all layers,
+    # per ensemble member.
+    kv_elements = model_config.nlayers * 2 * n_train * num_kv_heads * head_dim
+    total_bytes = kv_elements * kv_dtype.itemsize
+
+    # Classification (binary or multiclass) runs the ManyClassDecoder, which
+    # attends to the cached train activations as retrieval keys; regression
+    # (max_num_classes == 0) does not. classification == "has any classes".
+    # These activations are not quantized with the KV cache -> sized at dtype.
+    is_classification = model_config.max_num_classes > 0
+    if include_decoder_activations and is_classification:
+        total_bytes += n_train * icl_emsize * dtype.itemsize
+
+    return ensemble_size * total_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -1480,6 +1569,7 @@ class TabPFNV3(Architecture):
         dtype: torch.dtype | str | None = None,
     ):
         super().__init__()
+        self.config = config
         self.ff_factor = config.ff_factor
         self.icl_emsize = config.embed_dim * config.feat_agg_num_cls_tokens
         self.n_out = n_out
