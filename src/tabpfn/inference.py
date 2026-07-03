@@ -18,6 +18,9 @@ from typing_extensions import override
 import joblib
 import torch
 
+from tabpfn.architectures.shared.workaround_mps_linear_bug import (
+    maybe_replace_linears_on_mps,
+)
 from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
 from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
@@ -594,6 +597,8 @@ class InferenceEngineBatchedNoPreprocessing(SingleDeviceInferenceEngine):
         # As this inference engine only supports one device, just take the first.
         device = devices[0]
         for model in self.models:
+            # Apply a workaround for a nn.Linear bug on MPS. No-op if MPS not selected.
+            maybe_replace_linears_on_mps(model, [device])
             model.to(device)
 
 
@@ -1226,6 +1231,10 @@ class _PerDeviceModelCache:
         any references to models previously obtained with .get_model() after calling
         this function.
         """
+        # Apply a workaround for a nn.Linear bug on MPS. No-op if MPS not selected.
+        for model in self._models.values():
+            maybe_replace_linears_on_mps(model, devices)
+
         spare_models = [
             model for device, model in self._models.items() if device not in devices
         ]

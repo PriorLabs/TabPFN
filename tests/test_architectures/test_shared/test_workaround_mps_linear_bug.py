@@ -28,26 +28,40 @@ def _make_model() -> nn.Module:
     )
 
 
-def test__maybe_replace_linears_on_mps__noop_when_not_buggy(
+def test__maybe_replace_linears_on_mps__mps_not_selected__does_not_test_for_bug(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        workaround_mps_linear_bug,
+        "_mps_linear_bias_is_buggy",
+        lambda: pytest.fail("self-test must not run without an MPS device"),
+    )
+    model = _make_model()
+    maybe_replace_linears_on_mps(model, [torch.device("cpu")])
+    linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    assert all(type(m) is nn.Linear for m in linears)
+
+
+def test__maybe_replace_linears_on_mps__bug_not_present__model_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: False
     )
     model = _make_model()
-    maybe_replace_linears_on_mps(model)
+    maybe_replace_linears_on_mps(model, [torch.device("mps")])
     linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
     assert all(type(m) is nn.Linear for m in linears)
 
 
-def test__maybe_replace_linears_on_mps__retypes_only_linears_with_bias(
+def test__maybe_replace_linears_on_mps__retypes_only_bias_linears(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
         workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
     )
     model = _make_model()
-    maybe_replace_linears_on_mps(model)
+    maybe_replace_linears_on_mps(model, [torch.device("mps")])
 
     linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
     with_bias = [m for m in linears if m.bias is not None]
@@ -58,10 +72,9 @@ def test__maybe_replace_linears_on_mps__retypes_only_linears_with_bias(
     assert all(type(m) is nn.Linear for m in without_bias)
 
 
-def test__maybe_replace_linears_on_mps__on_cpu__does_not_affect_model_output(
+def test__maybe_replace_linears_on_mps__force_replac__output_unchanged_when_on_cpu(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """On CPU the swapped model must produce identical output (fall-through path)."""
     monkeypatch.setattr(
         workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
     )
@@ -70,7 +83,7 @@ def test__maybe_replace_linears_on_mps__on_cpu__does_not_affect_model_output(
     x = torch.randn(*_TRIGGER_SHAPE)
     before = model(x)
 
-    maybe_replace_linears_on_mps(model)
+    maybe_replace_linears_on_mps(model, [torch.device("mps")])
     after = model(x)
 
     torch.testing.assert_close(before, after, rtol=0, atol=0)

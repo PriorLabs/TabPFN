@@ -18,10 +18,14 @@ longer supported.
 from __future__ import annotations
 
 import functools
+import logging
+from collections.abc import Sequence
 
 import torch
 from torch import nn
 from torch.nn import functional as F  # noqa: N812
+
+logger = logging.getLogger(__name__)
 
 
 @functools.cache
@@ -54,15 +58,19 @@ class MpsSafeLinear(nn.Linear):
         return super().forward(input)
 
 
-def maybe_replace_linears_on_mps(model: nn.Module) -> nn.Module:
+def maybe_replace_linears_on_mps(
+    model: nn.Module, devices: Sequence[torch.device]
+) -> nn.Module:
     """Retype bias-enabled Linear layers in-place if MPS is buggy on this machine.
 
-    No-op unless the MPS self-test finds the bug. Only vanilla bias-enabled
-    nn.Linear modules are affected; bias=False layers are left untouched (they are
-    not affected by the bug). Mutates and returns model.
+    If devices does not contain an MPS device, does nothing. Otherwise, checks if this
+    device suffers from the MPS bug (see module docstring), and applies the workaround.
     """
+    if not any(device.type == "mps" for device in devices):
+        return model
     if not _mps_linear_bias_is_buggy():
         return model
+    logger.debug("Detected MPS nn.Linear bug. Applying workaround")
     for module in model.modules():
         if type(module) is nn.Linear and module.bias is not None:
             # Same memory layout and parameters, so re-typing in place is safe and
