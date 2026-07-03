@@ -10,16 +10,20 @@ from typing_extensions import override
 import pytest
 import torch
 from numpy.random import default_rng
-from torch import Tensor
+from torch import Tensor, nn
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
 from tabpfn.architectures.kv_cache import KVCacheEntry
+from tabpfn.architectures.shared import workaround_mps_linear_bug
+from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
+from tabpfn.base import create_inference_engine
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
+    MultiDeviceInferenceEngine,
 )
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
@@ -648,3 +652,125 @@ def test__public_keep_cache_on_device__controls_cache_placement(
     # Prediction still works end-to-end (caches moved to device on demand).
     preds = est.predict(X[:5])
     assert len(preds) == 5
+
+
+class _TestModelWithLinear(_TestModelWithKVCache):
+    """A test model with Linear layers that also supports the KV-cache forward."""
+
+    def __init__(self) -> None:
+        """Create a new instance."""
+        super().__init__()
+        self.linear = nn.Linear(2, 3, bias=True)
+        self.linear_no_bias = nn.Linear(3, 2, bias=False)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires the MPS backend"
+)
+@pytest.mark.parametrize(
+    "fit_mode", ["low_memory", "fit_preprocessors", "fit_with_cache"]
+)
+def test__init__mps_target_device__applies_mps_linear_bug_workaround(
+    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Moving an engine to MPS replaces Linears with MpsSafeLinear.
+
+    See tabpfn.architectures.shared.workaround_mps_linear_bug.
+    """
+    monkeypatch.setattr(
+        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
+    )
+    rng = default_rng(seed=0)
+    X_train = rng.standard_normal((20, 4))
+    y_train = rng.integers(0, 3, (20, 1))
+    mps = torch.device("mps")
+    engine = create_inference_engine(
+        fit_mode=fit_mode,
+        X_train=X_train,
+        y_train=y_train,
+        ensemble_preprocessor=TabPFNEnsemblePreprocessor(
+            configs=_create_test_ensemble_configs(
+                n_configs=2, n_classes=3, num_models=1
+            ),
+            n_samples=X_train.shape[0],
+            feature_schema=FeatureSchema.from_only_categorical_indices([], 4),
+            random_state=rng,
+            n_preprocessing_jobs=1,
+        ),
+        models=[_TestModelWithLinear()],
+        devices_=[mps],
+        byte_size=4,
+        forced_inference_dtype_=None,
+        memory_saving_mode=True,
+        use_autocast_=False,
+        inference_mode=True,
+    )
+
+    engine.to([torch.device(mps)], force_inference_dtype=None, dtype_byte_size=4)
+
+    assert isinstance(engine, MultiDeviceInferenceEngine)
+    model = engine.model_caches[0].get(torch.device(mps))
+    linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    bias_linears = [m for m in linears if m.bias is not None]
+    no_bias_linears = [m for m in linears if m.bias is None]
+
+    assert bias_linears, "expected at least one bias-enabled Linear"
+    assert all(isinstance(m, MpsSafeLinear) for m in bias_linears)
+    assert all(type(m) is nn.Linear for m in no_bias_linears)
+
+
+@pytest.mark.skipif(
+    not torch.backends.mps.is_available(), reason="requires the MPS backend"
+)
+@pytest.mark.parametrize(
+    "fit_mode", ["low_memory", "fit_preprocessors", "fit_with_cache"]
+)
+def test__to__mps_target_device__applies_mps_linear_bug_workaround(
+    fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Moving an engine to MPS replaces Linears with MpsSafeLinear.
+
+    See tabpfn.architectures.shared.workaround_mps_linear_bug.
+    """
+    monkeypatch.setattr(
+        workaround_mps_linear_bug, "_mps_linear_bias_is_buggy", lambda: True
+    )
+    rng = default_rng(seed=0)
+    X_train = rng.standard_normal((20, 4))
+    y_train = rng.integers(0, 3, (20, 1))
+    engine = create_inference_engine(
+        fit_mode=fit_mode,
+        X_train=X_train,
+        y_train=y_train,
+        ensemble_preprocessor=TabPFNEnsemblePreprocessor(
+            configs=_create_test_ensemble_configs(
+                n_configs=2, n_classes=3, num_models=1
+            ),
+            n_samples=X_train.shape[0],
+            feature_schema=FeatureSchema.from_only_categorical_indices([], 4),
+            random_state=rng,
+            n_preprocessing_jobs=1,
+        ),
+        models=[_TestModelWithLinear()],
+        devices_=[torch.device("cpu")],
+        byte_size=4,
+        forced_inference_dtype_=None,
+        memory_saving_mode=True,
+        use_autocast_=False,
+        inference_mode=True,
+    )
+
+    mps = torch.device("mps")
+    engine.to([torch.device(mps)], force_inference_dtype=None, dtype_byte_size=4)
+
+    assert isinstance(engine, MultiDeviceInferenceEngine)
+    model = engine.model_caches[0].get(torch.device(mps))
+    linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    bias_linears = [m for m in linears if m.bias is not None]
+    no_bias_linears = [m for m in linears if m.bias is None]
+
+    assert bias_linears, "expected at least one bias-enabled Linear"
+    assert all(isinstance(m, MpsSafeLinear) for m in bias_linears)
+    assert all(type(m) is nn.Linear for m in no_bias_linears)
