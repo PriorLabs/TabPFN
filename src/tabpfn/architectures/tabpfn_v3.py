@@ -260,7 +260,7 @@ def get_cache_size(
     X_train: Any,
     *,
     model_config: TabPFNV3Config,
-    dtype: torch.dtype | Literal["autocast"],
+    base_dtype: torch.dtype | Literal["autocast"],
     quantize_kv_cache: bool = True,
 ) -> int:
     """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
@@ -299,7 +299,7 @@ def get_cache_size(
             end-to-end runs preprocessing may change it (SVD features, categorical
             expansion, per-member subsampling), making those terms approximate.
         model_config: The v3 architecture config.
-        dtype: Either a ``torch.dtype`` (forced-precision path -- every term is
+        base_dtype: Either a ``torch.dtype`` (forced-precision path -- every term is
             sized at this dtype; on CPU this is usually Float32) or the string
             ``"autocast"`` (GPU autocast path -- KV and ``train_embeddings`` are
             sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
@@ -317,7 +317,7 @@ def get_cache_size(
     # Set the stored dtype of each cached component up front. On the forced-
     # precision path the model and inputs are cast to ``dtype``, so every
     # component is ``dtype``. Under autocast the cache is mixed precision.
-    if dtype == "autocast":
+    if base_dtype == "autocast":
         # Autocast keeps fp32 weights and casts ops to fp16 at runtime, so KV and
         # train_embeddings (matmul outputs) are fp16, while inducing_hidden and
         # the scaler (fp32 reduction/norm ops, scaler fit on the fp32 input) stay
@@ -328,11 +328,11 @@ def get_cache_size(
         inducing_dtype = torch.float32
         scaler_dtype = torch.float32
     else:
-        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else dtype
-        kv_scale_dtype = dtype
-        train_emb_dtype = dtype
-        inducing_dtype = dtype
-        scaler_dtype = dtype
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else base_dtype
+        kv_scale_dtype = base_dtype
+        train_emb_dtype = base_dtype
+        inducing_dtype = base_dtype
+        scaler_dtype = base_dtype
 
     # Accept either an array-like (read ``.shape``) or a (n_rows, n_features) tuple.
     if hasattr(X_train, "shape"):

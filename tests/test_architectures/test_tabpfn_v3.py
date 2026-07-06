@@ -596,7 +596,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     total = get_cache_size(
         x_train,
         model_config=cfg,
-        dtype=dtype,
+        base_dtype=dtype,
         quantize_kv_cache=quantize_kv_cache,
     )
     # Exact: accounts for every tensor the real cache holds.
@@ -606,7 +606,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
         get_cache_size(
             (n_train, n_features),
             model_config=cfg,
-            dtype=dtype,
+            base_dtype=dtype,
             quantize_kv_cache=quantize_kv_cache,
         )
         == total
@@ -654,7 +654,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
         x_train,
         model_config=cfg,
         # "autocast": KV/train_embeddings sized at fp16, inducing/scaler at fp32.
-        dtype="autocast",
+        base_dtype="autocast",
         quantize_kv_cache=quantize_kv_cache,
     )
     assert total == _sum_cache_tensors(cache)
@@ -684,7 +684,7 @@ def test__calculate_cache_size__matches_whole_regression_cache(
     cache = _build_cache(arch, x, y, quantize_kv_cache=True)
     x_train = torch.zeros(n_train, n_features)
 
-    total = get_cache_size(x_train, model_config=cfg, dtype=dtype)
+    total = get_cache_size(x_train, model_config=cfg, base_dtype=dtype)
     assert total == _sum_cache_tensors(cache)
 
 
@@ -703,7 +703,9 @@ def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
     n_train = 50
     x_train = torch.zeros(n_train, 5)
-    kw = {"dtype": torch.int8}
+    # quantize_kv_cache defaults to True, so the KV cache is int8 (1 byte)
+    # regardless of base_dtype; base_dtype only sizes the (cancelling) non-KV terms.
+    kw = {"base_dtype": torch.float32}
     est_mha = get_cache_size(x_train, model_config=mha, **kw)
     est_mqa = get_cache_size(x_train, model_config=mqa, **kw)
 
@@ -711,7 +713,7 @@ def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     # (activations, inducing, scaler) is identical, so it cancels in the diff.
     icl_emsize = mha.embed_dim * mha.feat_agg_num_cls_tokens
     head_dim = icl_emsize // mha.icl_num_heads
-    kv_per_head = mha.nlayers * 2 * n_train * head_dim  # int8 -> 1 byte
+    kv_per_head = mha.nlayers * 2 * n_train * head_dim  # int8 KV -> 1 byte/element
     assert est_mqa < est_mha
     assert est_mha - est_mqa == (4 - 1) * kv_per_head
 
@@ -729,7 +731,7 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     x_train = torch.zeros(1000, 1)  # n_features = 1
     common = {
         "model_config": config,
-        "dtype": torch.float16,
+        "base_dtype": torch.float16,
         "quantize_kv_cache": True,
     }
     # get_cache_size always sums the full cache. Fixed terms (n_features = 1):
