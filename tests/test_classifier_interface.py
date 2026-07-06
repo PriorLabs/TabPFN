@@ -1434,6 +1434,55 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
         np.testing.assert_allclose(proba[i], ref, atol=atol)
 
 
+@pytest.mark.parametrize("device", devices)
+def test__predict_proba_batched__fp16_matches_fp32(device: str) -> None:
+    """predict_proba_batched works with inference_precision=float16 (regression).
+
+    The batched engine used to cast only the inputs to the forced dtype, leaving
+    the model in fp32, so an fp16 forward raised "mat1 and mat2 must have the same
+    dtype, but got Half and Float" on CPU (and a hard Metal assertion abort on MPS).
+    Standard predict_proba fp16 was unaffected. The crash reproduces on any device
+    once fp16 matmul is available, so we run it everywhere; older torch lacks CPU
+    fp16 matmul, so skip CPU there.
+    """
+    if torch.device(device).type == "cpu" and not is_cpu_float16_supported():
+        pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
+
+    def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
+        r = np.random.RandomState(seed)
+        X = r.randn(n, f).astype(np.float32)
+        y = (X[:, 0] + 0.3 * r.randn(n) > 0).astype(int)
+        return X, y
+
+    data = [mkds(s) for s in range(3)]
+    X_tests = [d[0][:5] for d in data]
+
+    clf = TabPFNClassifier(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float16,
+    )
+    # Regression: this call raised RuntimeError (CPU) / aborted (MPS) before the fix.
+    proba = clf.predict_proba_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests
+    )
+    assert proba.shape == (3, 5, 2)
+    assert np.allclose(proba.sum(-1), 1.0, atol=1e-3)
+
+    # And it should track the fp32 batched result.
+    ref = TabPFNClassifier(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    ).predict_proba_batched([d[0] for d in data], [d[1] for d in data], X_tests)
+    if torch.device(device).type == "cuda":
+        np.testing.assert_allclose(proba, ref, atol=2e-2)
+    else:
+        assert np.abs(proba - ref).mean() < 5e-2
+
+
 def test__predict_proba_batched__rejects_mismatched_classes() -> None:
     """predict_proba_batched raises if datasets do not share the same classes."""
     r = np.random.RandomState(0)
