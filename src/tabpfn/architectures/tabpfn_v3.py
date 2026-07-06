@@ -256,50 +256,24 @@ class TabPFNV3Cache(KVCache):
         )
 
 
-def calculate_cache_size(
+def get_cache_size(
     X_train: Any,
     *,
     model_config: TabPFNV3Config,
-    ensemble_size: int,
     dtype: torch.dtype,
     quantize_kv_cache: bool = True,
-    include_decoder_activations: bool = True,
-    include_inducing_points: bool = True,
 ) -> int:
-    """Calculate the cached memory in bytes for a TabPFN v3 inference run.
+    """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
 
     Works from shapes alone, so it can be called before fitting to size an
-    inference run. With all terms enabled it is the exact resident cache size
-    (``TabPFNV3Cache``), summing:
+    inference run. It is the exact resident cache size (``TabPFNV3Cache``) for
+    one estimator, summing every tensor a built cache holds:
 
-    1. The ICL transformer KV cache (always). Per layer it caches a key and a
-       value tensor each of shape ``(N_train, H_kv, head_dim)`` per estimator;
-       only training rows are cached (test rows produce queries only), where:
-
-       * ``head_dim = embed_dim * feat_agg_num_cls_tokens // icl_num_heads``,
-       * ``H_kv`` is the number of *cached* KV heads: ``icl_num_kv_heads_test``
-         if set (MQA/GQA for the test partition), else ``icl_num_kv_heads``
-         (GQA), else ``icl_num_heads`` (plain MHA).
-
-       When ``quantize_kv_cache`` is True the K/V are int8 plus one scalar scale
-       per key and per value tensor (``nlayers * 2`` scalars at ``dtype``).
-
-    2. The last-layer train activations ``train_embeddings`` of shape
-       ``(N_train, embed_dim * feat_agg_num_cls_tokens)`` per estimator -- **only
-       for classification** (binary or multiclass), where the ``ManyClassDecoder``
-       attends test queries to them as retrieval keys. Regression never uses
-       them. Controlled by ``include_decoder_activations`` (on by default).
-
-    3. The distribution-embedder ``inducing_hidden`` states: one
-       ``(n_features, dist_embed_num_inducing_points, embed_dim)`` tensor per
-       block (``dist_embed_num_blocks``), per estimator, for both tasks. Unlike
-       the other terms this is **independent of ``N_train``** (inducing points
-       compress the train rows into a fixed set) and instead scales with the
-       column count, so it can dominate on wide, small-``N`` datasets. Controlled
-       by ``include_inducing_points`` (on by default).
-
-    4. The fitted scaler stats ``scaler_cache`` (``mean`` + ``std``), of shape
-       ``(2, n_features)`` per estimator. Always counted (small).
+    1. The ICL transformer KV cache (int8 + per-tensor scales when quantized).
+    2. The last-layer train activations (cached for both tasks; regression
+       stores but ignores them).
+    3. The distribution-embedder ``inducing_hidden`` states.
+    4. The fitted scaler stats ``scaler_cache`` (``mean`` + ``std``).
 
     Each term is sized with its own dtype: the default engine int8-quantizes the
     KV cache (``quantize_kv_cache``) but leaves everything else at the compute
@@ -313,9 +287,6 @@ def calculate_cache_size(
             end-to-end runs preprocessing may change it (SVD features, categorical
             expansion, per-member subsampling), making those terms approximate.
         model_config: The v3 architecture config.
-        ensemble_size: Number of ensemble members (estimators). At inference
-            each estimator runs its own forward and holds a separate cache, so
-            the total scales linearly with this.
         dtype: The compute dtype (e.g. from autocast / ``inference_precision``).
             On GPUs this is usually FP16, otherwise Float32.
             Sizes every term except the int8 KV cache when ``quantize_kv_cache``
@@ -324,14 +295,10 @@ def calculate_cache_size(
             :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
             the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales; if
             False, the K/V are sized at ``dtype`` with no scales.
-        include_decoder_activations: If True (default), add the classification
-            ``train_embeddings`` term. Has no effect for regression configs,
-            which do not use decoder activations.
-        include_inducing_points: If True (default), add the distribution-embedder
-            ``inducing_hidden`` term (see point 3).
 
     Returns:
-        Cache size in bytes. Divide by ``1024 ** 2`` for MB.
+        Per-estimator cache size in bytes. Multiply by the ensemble size for the
+        total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
     # Accept either an array-like (read ``.shape``) or a (n_rows, n_features) tuple.
     if hasattr(X_train, "shape"):
@@ -349,38 +316,29 @@ def calculate_cache_size(
 
     kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else dtype
 
-    # ICL KV cache: key + value (the factor of 2), per layer, over all layers,
-    # per ensemble member.
+    # 1. ICL KV cache: key + value (the factor of 2), per layer, over all layers.
     kv_elements = model_config.nlayers * 2 * n_train * num_kv_heads * head_dim
     total_bytes = kv_elements * kv_dtype.itemsize
     if quantize_kv_cache:
         # One scalar scale per key and per value tensor, stored at ``dtype``.
         total_bytes += model_config.nlayers * 2 * dtype.itemsize
 
-    # Classification (binary or multiclass) runs the ManyClassDecoder, which
-    # attends to the cached train activations as retrieval keys; regression
-    # (max_num_classes == 0) does not. classification == "has any classes".
-    # These activations are not quantized with the KV cache -> sized at dtype.
-    is_classification = model_config.max_num_classes > 0
-    if include_decoder_activations and is_classification:
-        total_bytes += n_train * icl_emsize * dtype.itemsize
+    # 2. Train activations, (N_train, icl_emsize). Cached for both tasks.
+    total_bytes += n_train * icl_emsize * dtype.itemsize
 
-    # Distribution-embedder inducing states: one
+    # 3. Distribution-embedder inducing states: one
     # (n_features, dist_embed_num_inducing_points, embed_dim) tensor per block.
-    # Independent of N_train; scales with the column count. Not quantized.
-    if include_inducing_points:
-        inducing_elements = (
-            model_config.dist_embed_num_blocks
-            * n_features
-            * model_config.dist_embed_num_inducing_points
-            * model_config.embed_dim
-        )
-        total_bytes += inducing_elements * dtype.itemsize
+    total_bytes += (
+        model_config.dist_embed_num_blocks
+        * n_features
+        * model_config.dist_embed_num_inducing_points
+        * model_config.embed_dim
+    ) * dtype.itemsize
 
-    # Fitted scaler stats: mean + std, each (n_features,). Always cached.
+    # 4. Fitted scaler stats: mean + std, each (n_features,).
     total_bytes += 2 * n_features * dtype.itemsize
 
-    return ensemble_size * total_bytes
+    return total_bytes
 
 
 # ---------------------------------------------------------------------------

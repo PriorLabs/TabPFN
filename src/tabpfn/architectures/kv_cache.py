@@ -19,9 +19,7 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-# Default integer dtype the KV cache is quantized to. Single source of truth
-# shared by :meth:`KVCacheEntry.quantize` and any cache-size estimation, so the
-# stored dtype is never hardcoded in two places.
+# only supported KV quantization so far
 QUANTIZED_KV_DTYPE: torch.dtype = torch.int8
 
 # Low, high, max-magnitude value for each dtype.
@@ -89,7 +87,7 @@ class KVCacheEntry:
         """Quantize this entry with per-tensor symmetric scaling.
 
         Args:
-            dtype: Target integer dtype (default :data:`QUANTIZED_KV_DTYPE`).
+            dtype: Target integer dtype (default `QUANTIZED_KV_DTYPE`).
         """
         assert self.is_valid()
         k_q, k_s = _quantize_tensor(self.key, dtype)

@@ -16,7 +16,7 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, calculate_cache_size
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, get_cache_size
 
 
 def _get_model() -> tabpfn_v3.TabPFNV3:
@@ -582,10 +582,9 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
     x_train = torch.zeros(n_train, n_features)
 
-    total = calculate_cache_size(
+    total = get_cache_size(
         x_train,
         model_config=cfg,
-        ensemble_size=1,
         dtype=torch.float32,
         quantize_kv_cache=quantize_kv_cache,
     )
@@ -593,33 +592,25 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     assert total == _sum_cache_tensors(cache)
     # A (n_rows, n_features) tuple is accepted in place of an array.
     assert (
-        calculate_cache_size(
+        get_cache_size(
             (n_train, n_features),
             model_config=cfg,
-            ensemble_size=1,
             dtype=torch.float32,
             quantize_kv_cache=quantize_kv_cache,
         )
         == total
     )
-    # ensemble_size is a linear multiplier over the per-estimator cache.
-    assert (
-        calculate_cache_size(
-            x_train,
-            model_config=cfg,
-            ensemble_size=3,
-            dtype=torch.float32,
-            quantize_kv_cache=quantize_kv_cache,
-        )
-        == 3 * total
-    )
 
 
 @torch.no_grad()
-def test__calculate_cache_size__regression_omits_unused_activations() -> None:
-    """Regression physically caches train_embeddings but never uses them, so
-    calculate_cache_size omits exactly that term (and the activations flag is a
-    no-op for regression).
+def test__calculate_cache_size__matches_whole_regression_cache() -> None:
+    """get_cache_size equals the exact byte size of every tensor in a real
+    regression cache.
+
+    Regression currently *stores* train_embeddings even though it never uses
+    them, so counting the full physical cache is correct today. If a future
+    change stops caching those for regression, this exact-equality assert breaks
+    -- signalling that get_cache_size should then drop that term for regression.
     """
     arch = _get_regression_model()
     cfg = arch.config
@@ -631,21 +622,8 @@ def test__calculate_cache_size__regression_omits_unused_activations() -> None:
     cache = _build_cache(arch, x, y, quantize_kv_cache=True)
     x_train = torch.zeros(n_train, n_features)
 
-    total = calculate_cache_size(
-        x_train, model_config=cfg, ensemble_size=1, dtype=torch.float32
-    )
-    # Activation flag is a no-op for regression.
-    assert total == calculate_cache_size(
-        x_train,
-        model_config=cfg,
-        ensemble_size=1,
-        dtype=torch.float32,
-        include_decoder_activations=False,
-    )
-    # Everything in the cache except the (unused) train_embeddings.
-    assert cache.train_embeddings is not None
-    dead = cache.train_embeddings.numel() * cache.train_embeddings.element_size()
-    assert total == _sum_cache_tensors(cache) - dead
+    total = get_cache_size(x_train, model_config=cfg, dtype=torch.float32)
+    assert total == _sum_cache_tensors(cache)
 
 
 def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
@@ -663,11 +641,12 @@ def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
     n_train = 50
     x_train = torch.zeros(n_train, 5)
-    kw = {"ensemble_size": 1, "dtype": torch.int8, "include_inducing_points": False}
-    est_mha = calculate_cache_size(x_train, model_config=mha, **kw)
-    est_mqa = calculate_cache_size(x_train, model_config=mqa, **kw)
+    kw = {"dtype": torch.int8}
+    est_mha = get_cache_size(x_train, model_config=mha, **kw)
+    est_mqa = get_cache_size(x_train, model_config=mqa, **kw)
 
-    # mha and mqa differ ONLY in the KV term (H_kv 4 vs 1); scales/scaler match.
+    # mha and mqa differ ONLY in the KV term (H_kv 4 vs 1); every other term
+    # (activations, inducing, scaler) is identical, so it cancels in the diff.
     icl_emsize = mha.embed_dim * mha.feat_agg_num_cls_tokens
     head_dim = icl_emsize // mha.icl_num_heads
     kv_per_head = mha.nlayers * 2 * n_train * head_dim  # int8 -> 1 byte
@@ -688,24 +667,25 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     x_train = torch.zeros(1000, 1)  # n_features = 1
     common = {
         "model_config": config,
-        "ensemble_size": 1,
         "dtype": torch.float16,
         "quantize_kv_cache": True,
-        # Inducing points off: their size depends on the shipped checkpoint's
-        # dist-embedder config, which we don't want to hardcode here.
-        "include_inducing_points": False,
     }
-    # KV int8:            nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000
-    # + int8 KV scales:   nlayers*2 * 2 bytes         = 24*2*2           =        96
-    # + scaler stats:     2 * n_features(1) * 2 bytes                    =         4
-    kv_and_scaler = calculate_cache_size(
-        x_train, include_decoder_activations=False, **common
-    )
-    # + fp16 train_embeddings: icl_emsize * N * 2 = 512 * 1000 * 2 = 1,024,000
-    with_activations = calculate_cache_size(
-        x_train, include_decoder_activations=True, **common
-    )
+    # get_cache_size always sums the full cache. Fixed terms (n_features = 1):
+    #   KV int8:            nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000
+    #   + int8 KV scales:   nlayers*2 * 2 bytes         = 24*2*2           =        96
+    #   + scaler stats:     2 * n_features(1) * 2 bytes                    =         4
+    #   + fp16 activations: icl_emsize * N * 2 = 512 * 1000 * 2            = 1,024,000
+    # The inducing term depends on the shipped dist-embedder config, so derive it
+    # from the config instead of hardcoding it.
+    n_features = 1
+    inducing = (
+        config.dist_embed_num_blocks
+        * n_features
+        * config.dist_embed_num_inducing_points
+        * config.embed_dim
+    ) * torch.float16.itemsize
+
+    total = get_cache_size(x_train, **common)
 
     # Numbers need manual update if we bump the default architecture.
-    assert kv_and_scaler == 3_072_100
-    assert with_activations == 4_096_100
+    assert total == 3_072_000 + 96 + 4 + 1_024_000 + inducing
