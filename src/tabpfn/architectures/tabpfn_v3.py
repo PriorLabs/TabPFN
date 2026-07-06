@@ -317,13 +317,13 @@ def calculate_cache_size(
             each estimator runs its own forward and holds a separate cache, so
             the total scales linearly with this.
         dtype: The compute dtype (e.g. from autocast / ``inference_precision``).
+            On GPUs this is usually FP16, otherwise Float32.
             Sizes every term except the int8 KV cache when ``quantize_kv_cache``
             is True (the KV keys/values are then int8, their scales at ``dtype``).
         quantize_kv_cache: If True (default), the KV cache is sized at
             :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
             the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales; if
             False, the K/V are sized at ``dtype`` with no scales.
-            On GPUs this is usually FP16, otherwise Float32.
         include_decoder_activations: If True (default), add the classification
             ``train_embeddings`` term. Has no effect for regression configs,
             which do not use decoder activations.
