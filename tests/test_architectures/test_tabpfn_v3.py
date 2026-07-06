@@ -17,6 +17,7 @@ from tabpfn.architectures.kv_cache import (
     QuantizedKVCacheEntry,
 )
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, get_cache_size
+from tabpfn.utils import get_autocast_context
 
 
 def _get_model() -> tabpfn_v3.TabPFNV3:
@@ -564,28 +565,38 @@ def _build_cache(
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
 @pytest.mark.parametrize("quantize_kv_cache", [True, False])
 def test__calculate_cache_size__matches_whole_classifier_cache(
     quantize_kv_cache: bool,
+    dtype: torch.dtype,
 ) -> None:
-    """calculate_cache_size (all terms on) equals the exact byte size of every
-    tensor in a real classifier cache -- KV (+ int8 scales), decoder activations,
-    inducing states, and scaler stats.
+    """get_cache_size equals the exact byte size of every tensor in a real
+    classifier cache -- KV (+ int8 scales), decoder activations, inducing states,
+    and scaler stats.
+
+    Parametrized over ``dtype`` to cover the engine's forced-precision path
+    (``inference_precision`` set to a ``torch.dtype``): the engine casts the model
+    (``set_dtype`` -> ``model.type``) and inputs to that dtype and runs the forward
+    with autocast disabled, so every non-KV term lands at that one dtype -- exactly
+    what get_cache_size models. (The autocast default is a separate, mixed-dtype
+    path this exact-equality check does not cover.)
     """
     arch = _get_model()
+    arch.type(dtype)  # mirror the engine's set_dtype for forced precision.
     cfg = arch.config
     n_train, n_features = 10, 5
 
     torch.manual_seed(0)
-    x = torch.randn(20, 1, n_features, dtype=torch.float32) * 0.1
-    y = torch.randint(0, 10, (n_train,), dtype=torch.float32)
+    x = (torch.randn(20, 1, n_features, dtype=torch.float32) * 0.1).to(dtype)
+    y = torch.randint(0, 10, (n_train,), dtype=torch.float32).to(dtype)
     cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
     x_train = torch.zeros(n_train, n_features)
 
     total = get_cache_size(
         x_train,
         model_config=cfg,
-        dtype=torch.float32,
+        dtype=dtype,
         quantize_kv_cache=quantize_kv_cache,
     )
     # Exact: accounts for every tensor the real cache holds.
@@ -595,7 +606,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
         get_cache_size(
             (n_train, n_features),
             model_config=cfg,
-            dtype=torch.float32,
+            dtype=dtype,
             quantize_kv_cache=quantize_kv_cache,
         )
         == total
@@ -603,9 +614,59 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
 
 
 @torch.no_grad()
-def test__calculate_cache_size__matches_whole_regression_cache() -> None:
+@pytest.mark.skipif(
+    not torch.cuda.is_available(),
+    reason="Autocast inference is only enabled on CUDA (disabled on CPU/MPS), so "
+    "the mixed-precision cache it produces can only be built on a GPU.",
+)
+@pytest.mark.parametrize("quantize_kv_cache", [True, False])
+def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
+    quantize_kv_cache: bool,
+) -> None:
+    """get_cache_size matches the exact byte size of a real classifier cache built
+    on the GPU autocast path (the default for ``inference_precision='auto'`` on a
+    GPU).
+
+    Unlike the forced-precision path, autocast keeps fp32 model weights and casts
+    ops at runtime -- matmul-lineage tensors (KV, and ``train_embeddings`` via its
+    explicit cast to the KV dtype) become the 2-byte compute dtype, while
+    reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``) stay
+    fp32. ``get_cache_size(autocast=True)`` must size each term at its real
+    precision and still match to the byte.
+    """
+    device = torch.device("cuda")
+    # fp32 weights: autocast casts individual ops at runtime, it does not force a
+    # model dtype (mirrors force_inference_dtype=None on the autocast path).
+    arch = _get_model().to(device)
+    cfg = arch.config
+    n_train, n_features = 10, 5
+
+    torch.manual_seed(0)
+    x = torch.randn(20, 1, n_features, dtype=torch.float32, device=device) * 0.1
+    y = torch.randint(0, 10, (n_train,), dtype=torch.float32, device=device)
+    with get_autocast_context(device, enabled=True):
+        _, cache = arch(x, y, return_kv_cache=True)
+    if quantize_kv_cache:
+        cache = cache.quantize()
+    x_train = torch.zeros(n_train, n_features)
+
+    total = get_cache_size(
+        x_train,
+        model_config=cfg,
+        # CUDA autocast computes in fp16 (2-byte); inducing/scaler remain fp32.
+        dtype=torch.float16,
+        quantize_kv_cache=quantize_kv_cache,
+    )
+    assert total == _sum_cache_tensors(cache)
+
+
+@torch.no_grad()
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
+def test__calculate_cache_size__matches_whole_regression_cache(
+    dtype: torch.dtype,
+) -> None:
     """get_cache_size equals the exact byte size of every tensor in a real
-    regression cache.
+    regression cache, across the engine's forced-precision dtypes.
 
     Regression currently *stores* train_embeddings even though it never uses
     them, so counting the full physical cache is correct today. If a future
@@ -613,16 +674,17 @@ def test__calculate_cache_size__matches_whole_regression_cache() -> None:
     -- signalling that get_cache_size should then drop that term for regression.
     """
     arch = _get_regression_model()
+    arch.type(dtype)  # mirror the engine's set_dtype for forced precision.
     cfg = arch.config
     n_train, n_features = 10, 5
 
     torch.manual_seed(0)
-    x = torch.randn(20, 1, n_features, dtype=torch.float32)
-    y = torch.randn(n_train, dtype=torch.float32)
+    x = torch.randn(20, 1, n_features, dtype=torch.float32).to(dtype)
+    y = torch.randn(n_train, dtype=torch.float32).to(dtype)
     cache = _build_cache(arch, x, y, quantize_kv_cache=True)
     x_train = torch.zeros(n_train, n_features)
 
-    total = get_cache_size(x_train, model_config=cfg, dtype=torch.float32)
+    total = get_cache_size(x_train, model_config=cfg, dtype=dtype)
     assert total == _sum_cache_tensors(cache)
 
 
