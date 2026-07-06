@@ -631,7 +631,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
     ops at runtime -- matmul-lineage tensors (KV, and ``train_embeddings`` via its
     explicit cast to the KV dtype) become the 2-byte compute dtype, while
     reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``) stay
-    fp32. ``get_cache_size(autocast=True)`` must size each term at its real
+    fp32. ``get_cache_size(dtype="autocast")`` must size each term at its real
     precision and still match to the byte.
     """
     device = torch.device("cuda")
@@ -653,8 +653,8 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
     total = get_cache_size(
         x_train,
         model_config=cfg,
-        # CUDA autocast computes in fp16 (2-byte); inducing/scaler remain fp32.
-        dtype=torch.float16,
+        # "autocast": KV/train_embeddings sized at fp16, inducing/scaler at fp32.
+        dtype="autocast",
         quantize_kv_cache=quantize_kv_cache,
     )
     assert total == _sum_cache_tensors(cache)

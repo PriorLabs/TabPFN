@@ -30,7 +30,7 @@ import logging as _logging
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
 import numpy as np
@@ -260,7 +260,7 @@ def get_cache_size(
     X_train: Any,
     *,
     model_config: TabPFNV3Config,
-    dtype: torch.dtype,
+    dtype: torch.dtype | Literal["autocast"],
     quantize_kv_cache: bool = True,
 ) -> int:
     """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
@@ -275,9 +275,21 @@ def get_cache_size(
     3. The distribution-embedder ``inducing_hidden`` states.
     4. The fitted scaler stats ``scaler_cache`` (``mean`` + ``std``).
 
-    Each term is sized with its own dtype: the default engine int8-quantizes the
-    KV cache (``quantize_kv_cache``) but leaves everything else at the compute
-    ``dtype``.
+    The cache is not uniformly one dtype, so each term is sized at its own
+    precision. This depends on the inference mode, selected via ``dtype``:
+
+    * **Forced precision** (``dtype`` a ``torch.dtype``, mirroring
+      ``inference_precision`` set to a dtype): the model and inputs are cast to
+      ``dtype``, so every non-KV term lands at ``dtype``.
+    * **Autocast** (``dtype="autocast"``, the GPU default for
+      ``inference_precision='auto'``): weights stay fp32 and ops are cast at
+      runtime to fp16. The matmul-lineage tensors (KV, and ``train_embeddings``
+      via its explicit cast to the KV dtype) take fp16, while the
+      reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``)
+      stay fp32.
+
+    The KV cache is additionally int8-quantized when ``quantize_kv_cache`` is
+    True (mirroring the engine's ``maybe_quantize_kv_cache``).
 
     Args:
         X_train: Either the training features (a 2-D array/tensor/DataFrame, read
@@ -287,19 +299,41 @@ def get_cache_size(
             end-to-end runs preprocessing may change it (SVD features, categorical
             expansion, per-member subsampling), making those terms approximate.
         model_config: The v3 architecture config.
-        dtype: The compute dtype (e.g. from autocast / ``inference_precision``).
-            On GPUs this is usually FP16, otherwise Float32.
-            Sizes every term except the int8 KV cache when ``quantize_kv_cache``
-            is True (the KV keys/values are then int8, their scales at ``dtype``).
+        dtype: Either a ``torch.dtype`` (forced-precision path -- every term is
+            sized at this dtype; on CPU this is usually Float32) or the string
+            ``"autocast"`` (GPU autocast path -- KV and ``train_embeddings`` are
+            sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
+            fp32, since autocast keeps those ops in fp32).
         quantize_kv_cache: If True (default), the KV cache is sized at
             :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
-            the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales; if
-            False, the K/V are sized at ``dtype`` with no scales.
+            the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales at
+            the KV compute dtype; if False, the K/V are sized at the compute
+            dtype with no scales.
 
     Returns:
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
+    # Set the stored dtype of each cached component up front. On the forced-
+    # precision path the model and inputs are cast to ``dtype``, so every
+    # component is ``dtype``. Under autocast the cache is mixed precision.
+    if dtype == "autocast":
+        # Autocast keeps fp32 weights and casts ops to fp16 at runtime, so KV and
+        # train_embeddings (matmul outputs) are fp16, while inducing_hidden and
+        # the scaler (fp32 reduction/norm ops, scaler fit on the fp32 input) stay
+        # fp32.
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else torch.float16
+        kv_scale_dtype = torch.float16  # per-tensor scales, at the KV fp16 dtype
+        train_emb_dtype = torch.float16
+        inducing_dtype = torch.float32
+        scaler_dtype = torch.float32
+    else:
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else dtype
+        kv_scale_dtype = dtype
+        train_emb_dtype = dtype
+        inducing_dtype = dtype
+        scaler_dtype = dtype
+
     # Accept either an array-like (read ``.shape``) or a (n_rows, n_features) tuple.
     if hasattr(X_train, "shape"):
         n_train, n_features = int(X_train.shape[0]), int(X_train.shape[1])
@@ -314,17 +348,15 @@ def get_cache_size(
     else:
         num_kv_heads = model_config.icl_num_heads
 
-    kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else dtype
-
     # 1. ICL KV cache: key + value (the factor of 2), per layer, over all layers.
     kv_elements = model_config.nlayers * 2 * n_train * num_kv_heads * head_dim
     total_bytes = kv_elements * kv_dtype.itemsize
     if quantize_kv_cache:
-        # One scalar scale per key and per value tensor, stored at ``dtype``.
-        total_bytes += model_config.nlayers * 2 * dtype.itemsize
+        # One scalar scale per key and per value tensor.
+        total_bytes += model_config.nlayers * 2 * kv_scale_dtype.itemsize
 
     # 2. Train activations, (N_train, icl_emsize). Cached for both tasks.
-    total_bytes += n_train * icl_emsize * dtype.itemsize
+    total_bytes += n_train * icl_emsize * train_emb_dtype.itemsize
 
     # 3. Distribution-embedder inducing states: one
     # (n_features, dist_embed_num_inducing_points, embed_dim) tensor per block.
@@ -333,10 +365,10 @@ def get_cache_size(
         * n_features
         * model_config.dist_embed_num_inducing_points
         * model_config.embed_dim
-    ) * dtype.itemsize
+    ) * inducing_dtype.itemsize
 
     # 4. Fitted scaler stats: mean + std, each (n_features,).
-    total_bytes += 2 * n_features * dtype.itemsize
+    total_bytes += 2 * n_features * scaler_dtype.itemsize
 
     return total_bytes
 
