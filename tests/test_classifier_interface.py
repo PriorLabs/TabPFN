@@ -1434,16 +1434,19 @@ def test__predict_proba_batched__matches_per_dataset(device: str) -> None:
         np.testing.assert_allclose(proba[i], ref, atol=atol)
 
 
-def test__predict_proba_batched__fp16_matches_fp32() -> None:
+@pytest.mark.parametrize("device", devices)
+def test__predict_proba_batched__fp16_matches_fp32(device: str) -> None:
     """predict_proba_batched works with inference_precision=float16 (regression).
 
     The batched engine used to cast only the inputs to the forced dtype, leaving
     the model in fp32, so an fp16 forward raised "mat1 and mat2 must have the same
-    dtype, but got Half and Float". Standard predict_proba fp16 was unaffected.
-    fp16 matmul is only reliably supported on CUDA, so this is GPU-only.
+    dtype, but got Half and Float" on CPU (and a hard Metal assertion abort on MPS).
+    Standard predict_proba fp16 was unaffected. This reproduces on any device once
+    fp16 matmul is available, so we run it everywhere; older torch lacks CPU fp16
+    matmul, so skip CPU there.
     """
-    if not torch.cuda.is_available():
-        pytest.skip("float16 batched inference requires CUDA.")
+    if torch.device(device).type == "cpu" and not is_cpu_float16_supported():
+        pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
 
     def mkds(seed: int, n: int = 60, f: int = 5) -> tuple[np.ndarray, np.ndarray]:
         r = np.random.RandomState(seed)
@@ -1456,11 +1459,11 @@ def test__predict_proba_batched__fp16_matches_fp32() -> None:
 
     clf = TabPFNClassifier(
         n_estimators=2,
-        device="cuda",
+        device=device,
         random_state=42,
         inference_precision=torch.float16,
     )
-    # Regression: this call raised RuntimeError before the fix.
+    # Regression: this call raised RuntimeError (CPU) / aborted (MPS) before the fix.
     proba = clf.predict_proba_batched(
         [d[0] for d in data], [d[1] for d in data], X_tests
     )
@@ -1470,7 +1473,7 @@ def test__predict_proba_batched__fp16_matches_fp32() -> None:
     # And it should track the fp32 batched result within fp16 tolerance.
     ref = TabPFNClassifier(
         n_estimators=2,
-        device="cuda",
+        device=device,
         random_state=42,
         inference_precision=torch.float32,
     ).predict_proba_batched([d[0] for d in data], [d[1] for d in data], X_tests)
