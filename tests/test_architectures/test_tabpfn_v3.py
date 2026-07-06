@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 import torch
 
@@ -14,7 +16,7 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
-from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, estimate_cache_size
+from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache, calculate_cache_size
 
 
 def _get_model() -> tabpfn_v3.TabPFNV3:
@@ -528,17 +530,23 @@ def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
     )
 
 
-def _actual_cache_bytes(cache: TabPFNV3Cache, *, include_activations: bool) -> int:
-    """Sum the real byte size of a built cache's KV (and optional activations)."""
-    total = 0
-    for entry in cache.kv.values():
-        assert entry.key is not None
-        assert entry.value is not None
-        total += entry.key.numel() * entry.key.element_size()
-        total += entry.value.numel() * entry.value.element_size()
-    if include_activations and cache.train_embeddings is not None:
-        total += cache.train_embeddings.numel() * cache.train_embeddings.element_size()
-    return total
+def _sum_cache_tensors(obj: object) -> int:
+    """Recursively sum ``numel * element_size`` over every tensor in a cache.
+
+    Walks dataclasses / dicts / lists so a newly-added cached tensor field is
+    automatically included -- the completeness guard for ``calculate_cache_size``.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.numel() * obj.element_size()
+    if isinstance(obj, dict):
+        return sum(_sum_cache_tensors(v) for v in obj.values())
+    if isinstance(obj, (list, tuple)):
+        return sum(_sum_cache_tensors(v) for v in obj)
+    if dataclasses.is_dataclass(obj):
+        return sum(
+            _sum_cache_tensors(getattr(obj, f.name)) for f in dataclasses.fields(obj)
+        )
+    return 0
 
 
 def _build_cache(
@@ -557,91 +565,90 @@ def _build_cache(
 
 @torch.no_grad()
 @pytest.mark.parametrize("quantize_kv_cache", [True, False])
-def test__estimate_cache_size__matches_actual_multiclass(
+def test__calculate_cache_size__matches_whole_classifier_cache(
     quantize_kv_cache: bool,
 ) -> None:
-    """Estimate matches a real multiclass cache, with the engine's quantization
-    step applied or not (default: quantized).
+    """calculate_cache_size (all terms on) equals the exact byte size of every
+    tensor in a real classifier cache -- KV (+ int8 scales), decoder activations,
+    inducing states, and scaler stats.
     """
     arch = _get_model()
     cfg = arch.config
-    n_train = 10
+    n_train, n_features = 10, 5
 
     torch.manual_seed(0)
-    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    x = torch.randn(20, 1, n_features, dtype=torch.float32) * 0.1
     y = torch.randint(0, 10, (n_train,), dtype=torch.float32)
     cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
-    x_train = torch.zeros(n_train, 5)
+    x_train = torch.zeros(n_train, n_features)
 
-    est_kv = estimate_cache_size(
+    total = calculate_cache_size(
         x_train,
         model_config=cfg,
         ensemble_size=1,
         dtype=torch.float32,
         quantize_kv_cache=quantize_kv_cache,
-        include_decoder_activations=False,
     )
-    est_all = estimate_cache_size(
-        x_train,
-        model_config=cfg,
-        ensemble_size=1,
-        dtype=torch.float32,
-        quantize_kv_cache=quantize_kv_cache,
-        include_decoder_activations=True,
+    # Exact: accounts for every tensor the real cache holds.
+    assert total == _sum_cache_tensors(cache)
+    # A (n_rows, n_features) tuple is accepted in place of an array.
+    assert (
+        calculate_cache_size(
+            (n_train, n_features),
+            model_config=cfg,
+            ensemble_size=1,
+            dtype=torch.float32,
+            quantize_kv_cache=quantize_kv_cache,
+        )
+        == total
     )
-
-    # _actual_cache_bytes counts K/V at their stored dtype (int8 when quantized,
-    # else float32) + float32 activations, ignoring the tiny per-tensor quant
-    # scales that the estimate also omits.
-    assert est_kv == _actual_cache_bytes(cache, include_activations=False)
-    assert est_all == _actual_cache_bytes(cache, include_activations=True)
-    # Activations must add something for a classifier.
-    assert est_all > est_kv
     # ensemble_size is a linear multiplier over the per-estimator cache.
-    est_ensemble = estimate_cache_size(
-        x_train,
-        model_config=cfg,
-        ensemble_size=3,
-        dtype=torch.float32,
-        quantize_kv_cache=quantize_kv_cache,
-        include_decoder_activations=True,
+    assert (
+        calculate_cache_size(
+            x_train,
+            model_config=cfg,
+            ensemble_size=3,
+            dtype=torch.float32,
+            quantize_kv_cache=quantize_kv_cache,
+        )
+        == 3 * total
     )
-    assert est_ensemble == 3 * est_all
 
 
 @torch.no_grad()
-def test__estimate_cache_size__regression_excludes_activations() -> None:
-    """Regression never caches decoder activations, even with the flag on."""
+def test__calculate_cache_size__regression_omits_unused_activations() -> None:
+    """Regression physically caches train_embeddings but never uses them, so
+    calculate_cache_size omits exactly that term (and the activations flag is a
+    no-op for regression).
+    """
     arch = _get_regression_model()
     cfg = arch.config
-    n_train = 10
+    n_train, n_features = 10, 5
 
     torch.manual_seed(0)
-    x = torch.randn(20, 1, 5, dtype=torch.float32)
+    x = torch.randn(20, 1, n_features, dtype=torch.float32)
     y = torch.randn(n_train, dtype=torch.float32)
-    # Engine default: build then quantize the KV cache.
     cache = _build_cache(arch, x, y, quantize_kv_cache=True)
-    x_train = torch.zeros(n_train, 5)
+    x_train = torch.zeros(n_train, n_features)
 
-    est_on = estimate_cache_size(
-        x_train,
-        model_config=cfg,
-        ensemble_size=1,
-        dtype=torch.float32,
-        include_decoder_activations=True,
+    total = calculate_cache_size(
+        x_train, model_config=cfg, ensemble_size=1, dtype=torch.float32
     )
-    est_off = estimate_cache_size(
+    # Activation flag is a no-op for regression.
+    assert total == calculate_cache_size(
         x_train,
         model_config=cfg,
         ensemble_size=1,
         dtype=torch.float32,
         include_decoder_activations=False,
     )
-    assert est_on == est_off  # flag is a no-op for regression
-    assert est_on == _actual_cache_bytes(cache, include_activations=False)
+    # Everything in the cache except the (unused) train_embeddings.
+    assert cache.train_embeddings is not None
+    dead = cache.train_embeddings.numel() * cache.train_embeddings.element_size()
+    assert total == _sum_cache_tensors(cache) - dead
 
 
-def test__estimate_cache_size__mqa_smaller_than_mha() -> None:
+def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     """Fewer cached KV heads (MQA on the test partition) shrinks the KV term."""
     common = {
         "max_num_classes": -1,
@@ -654,44 +661,51 @@ def test__estimate_cache_size__mqa_smaller_than_mha() -> None:
     }
     mha = tabpfn_v3.TabPFNV3Config(**common)  # H_kv = icl_num_heads = 4
     mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
-    x_train = torch.zeros(50, 5)
-    est_mha = estimate_cache_size(
-        x_train,
-        model_config=mha,
-        ensemble_size=1,
-        dtype=torch.int8,
-    )
-    est_mqa = estimate_cache_size(
-        x_train,
-        model_config=mqa,
-        ensemble_size=1,
-        dtype=torch.int8,
-    )
-    assert est_mqa * 4 == est_mha
+    n_train = 50
+    x_train = torch.zeros(n_train, 5)
+    kw = {"ensemble_size": 1, "dtype": torch.int8, "include_inducing_points": False}
+    est_mha = calculate_cache_size(x_train, model_config=mha, **kw)
+    est_mqa = calculate_cache_size(x_train, model_config=mqa, **kw)
+
+    # mha and mqa differ ONLY in the KV term (H_kv 4 vs 1); scales/scaler match.
+    icl_emsize = mha.embed_dim * mha.feat_agg_num_cls_tokens
+    head_dim = icl_emsize // mha.icl_num_heads
+    kv_per_head = mha.nlayers * 2 * n_train * head_dim  # int8 -> 1 byte
+    assert est_mqa < est_mha
+    assert est_mha - est_mqa == (4 - 1) * kv_per_head
 
 
 @pytest.mark.slow
-def test__estimate_cache_size__tabpfn3_classifier_1000_rows() -> None:
-    """Pin the KV-cache estimate for the real Prior-Labs/tabpfn_3 classifier at
-    1,000 train rows (1 estimator, engine defaults: int8 KV, fp16 activations).
+def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
+    """Pin calculate_cache_size for the real Prior-Labs/tabpfn_3 classifier at
+    1,000 train rows (1 estimator, engine defaults: int8 KV, fp16 rest).
     """
     clf = TabPFNClassifier()
     # Loads the checkpoint (config + weights) without needing fit data.
     clf._initialize_model_variables()
     config = clf.model_.config
 
-    x_train = torch.zeros(1000, 1)
+    x_train = torch.zeros(1000, 1)  # n_features = 1
     common = {
         "model_config": config,
         "ensemble_size": 1,
         "dtype": torch.float16,
         "quantize_kv_cache": True,
+        # Inducing points off: their size depends on the shipped checkpoint's
+        # dist-embedder config, which we don't want to hardcode here.
+        "include_inducing_points": False,
     }
-    # KV int8: nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000.
-    # + fp16 train_embeddings: icl_emsize * N * 2 = 512 * 1000 * 2 = 1,024,000.
-    kv_only = estimate_cache_size(x_train, include_decoder_activations=False, **common)
-    with_emb = estimate_cache_size(x_train, include_decoder_activations=True, **common)
+    # KV int8:            nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000
+    # + int8 KV scales:   nlayers*2 * 2 bytes         = 24*2*2           =        96
+    # + scaler stats:     2 * n_features(1) * 2 bytes                    =         4
+    kv_and_scaler = calculate_cache_size(
+        x_train, include_decoder_activations=False, **common
+    )
+    # + fp16 train_embeddings: icl_emsize * N * 2 = 512 * 1000 * 2 = 1,024,000
+    with_activations = calculate_cache_size(
+        x_train, include_decoder_activations=True, **common
+    )
 
-    # Numbers need manual update if we bump the default architecture
-    assert kv_only == 3_072_000
-    assert with_emb == 4_096_000
+    # Numbers need manual update if we bump the default architecture.
+    assert kv_and_scaler == 3_072_100
+    assert with_activations == 4_096_100
