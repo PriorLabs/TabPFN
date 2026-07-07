@@ -16,6 +16,7 @@ import os
 import time
 import warnings
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path
@@ -55,6 +56,8 @@ from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from tabpfn.constants import ModelVersion, XType, YType
 
 # Currently, we only support a batch size of 1 for finetuning.
@@ -126,6 +129,35 @@ def _maybe_setup_ddp(
         device_str,
         is_main_process,
     )
+
+
+@contextmanager
+def main_process_first() -> Iterator[None]:
+    """Run the with-block on the main process before all other ranks.
+
+    Useful under ``torchrun`` for work that should happen once and be read
+    from a shared cache afterwards, such as dataset downloads: the main
+    process runs the block while the other ranks wait at a barrier, then the
+    other ranks run it against the warm cache.
+
+    Initializes the process group from the torchrun env vars if needed, and
+    leaves it initialized so that a subsequent ``fit()`` reuses it. Call
+    ``torch.distributed.destroy_process_group()`` at the end of your script.
+    No-op when running with a single process.
+    """
+    if int(os.environ.get("WORLD_SIZE", "1")) <= 1:
+        yield
+        return
+
+    _init_distributed_if_needed("cuda")
+    is_main_process = dist.get_rank() == 0
+    if not is_main_process:
+        dist.barrier()
+    try:
+        yield
+    finally:
+        if is_main_process:
+            dist.barrier()
 
 
 def _move_tabpfn_cached_contexts_to_device(estimator: Any, device: str) -> None:

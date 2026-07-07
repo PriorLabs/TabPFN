@@ -17,10 +17,12 @@ import warnings
 import numpy as np
 import sklearn.datasets
 import torch
+import torch.distributed as dist
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNClassifier
+from tabpfn.finetuning import main_process_first
 from tabpfn.finetuning.finetuned_classifier import (
     FinetunedTabPFNClassifier,
 )
@@ -73,7 +75,15 @@ def main() -> None:
 
     # We use the "Higgs" dataset (see https://www.openml.org/search?type=data&sort=runs&id=44129&status=active)
     # but only take a random subset of 100k samples for this example.
-    data = sklearn.datasets.fetch_openml(data_id=44129, as_frame=True, parser="auto")
+    # Under torchrun, the main process downloads the dataset first and the
+    # other ranks then read it from the warm sklearn cache — otherwise every
+    # rank would download it, and not all sklearn fetchers write their cache
+    # atomically.
+    with main_process_first():
+        data = sklearn.datasets.fetch_openml(
+            data_id=44129, as_frame=True, parser="auto"
+        )
+
     _, X_all, _, y_all = train_test_split(
         data.data,
         data.target,
@@ -145,6 +155,9 @@ def main() -> None:
 
         print(f"📊 Finetuned TabPFN Test ROC: {roc_auc:.4f}")
         print(f"📊 Finetuned TabPFN Test Log Loss: {loss:.4f}")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":

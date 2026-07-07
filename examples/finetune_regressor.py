@@ -16,10 +16,12 @@ import warnings
 
 import sklearn.datasets
 import torch
+import torch.distributed as dist
 from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.model_selection import train_test_split
 
 from tabpfn import TabPFNRegressor
+from tabpfn.finetuning import main_process_first
 from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 
 warnings.filterwarnings(
@@ -64,7 +66,13 @@ RANDOM_STATE = 0
 def main() -> None:
     is_main_process = int(os.environ.get("LOCAL_RANK", "0")) == 0
 
-    data = sklearn.datasets.fetch_california_housing(as_frame=True)
+    # Under torchrun, the main process downloads the dataset first and the
+    # other ranks then read it from the warm sklearn cache — otherwise every
+    # rank would download it, and not all sklearn fetchers write their cache
+    # atomically.
+    with main_process_first():
+        data = sklearn.datasets.fetch_california_housing(as_frame=True)
+
     X_all = data.data
     y_all = data.target
 
@@ -130,6 +138,9 @@ def main() -> None:
 
         print(f"📊 Finetuned TabPFN Test MSE: {mse:.4f}")
         print(f"📊 Finetuned TabPFN Test R²: {r2:.4f}")
+
+    if dist.is_initialized():
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
