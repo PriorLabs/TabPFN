@@ -9,3 +9,7 @@
 # supply-chain surface meaningfully.
 .github/workflows/claude.yml             @PriorLabs/release-maintainers
 .github/workflows/claude-code-review.yml @PriorLabs/release-maintainers
+
+# This file contains the list of people who will be automatically assigned as reviewers
+# for external PRs.
+.github/pr-reviewers.txt                 @PriorLabs/release-maintainers
