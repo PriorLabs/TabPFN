@@ -16,6 +16,7 @@ import os
 import time
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -56,8 +57,6 @@ from tabpfn.validation import ensure_compatible_fit_inputs_sklearn
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
-
     from tabpfn.constants import ModelVersion, XType, YType
 
 # Currently, we only support a batch size of 1 for finetuning.
