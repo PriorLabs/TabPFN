@@ -1,9 +1,13 @@
-# When a PR is opened from a fork or by dependabot, request a review from the
-# opensource-review-team so a reviewer is randomly assigned.
+# When a PR is opened from a fork or by dependabot, request a review from a randomly
+# chosen reviewer so the PR gets picked up.
 #
 # We use this workflow instead of GitHub's built-in auto-assignment system because we
 # want to avoid auto assigning reviewers to PRs from Prior Labs team members, and GitHub
 # does not support this.
+#
+# The list of eligible reviewers lives in .github/pr-reviewers.txt (one username per
+# line). Using this rather than a GitHub team avoids needing a PAT to access the
+# organisation.
 #
 # UNDER NO CIRCUMSTANCES MAY ACTIONS/CHECKOUT BE ADDED TO THIS WORKFLOW. IT INTRODUCES
 # A CRITICAL SECURITY HOLE. DO NOT REMOVE THIS WARNING!
@@ -16,10 +20,8 @@ on:
   # This is safe, as we do not check out any code. See
   # https://docs.github.com/en/enterprise-cloud@latest/actions/reference/security/secure-use#mitigating-the-risks-of-untrusted-code-checkout
   # DO NOT ADD ACTIONS/CHECKOUT TO THIS WORKFLOW.
-  # pull_request_target:
-  #   types: [opened, reopened, ready_for_review]
-  # Disable the workflow while we fix it.
-  workflow_dispatch:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review]
 
 permissions:
   pull-requests: write
@@ -39,12 +41,33 @@ jobs:
       )
     runs-on: ubuntu-slim
     steps:
-      - name: Request review from opensource-review-team
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          gh api \
-            --method POST \
-            "repos/${{ github.repository }}/pulls/$PR_NUMBER/requested_reviewers" \
-            -f 'team_reviewers[]=opensource-review-team'
+      - name: Request review from a random reviewer
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Read the reviewer list from the main branch, never from the PR head, so a
+            // fork cannot swap in an attacker-controlled list via pull_request_target.
+            const url = "https://raw.githubusercontent.com/PriorLabs/TabPFN/main/.github/pr-reviewers.txt";
+            const response = await fetch(url);
+            if (!response.ok) {
+              throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+            }
+
+            const reviewers = (await response.text())
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean);
+
+            if (reviewers.length === 0) {
+              throw new Error("pr-reviewers.txt is empty; cannot assign a reviewer.");
+            }
+
+            const reviewer = reviewers[Math.floor(Math.random() * reviewers.length)];
+            core.info(`Requesting review from ${reviewer}`);
+
+            await github.rest.pulls.requestReviewers({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              reviewers: [reviewer],
+            });
