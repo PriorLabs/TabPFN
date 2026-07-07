@@ -149,7 +149,13 @@ def main_process_first() -> Iterator[None]:
         yield
         return
 
-    _init_distributed_if_needed("cuda")
+    using_ddp, _, _ = _init_distributed_if_needed("cuda")
+    if not using_ddp:
+        # WORLD_SIZE was set by something other than torchrun (no LOCAL_RANK),
+        # so there is no process group to coordinate through.
+        yield
+        return
+
     is_main_process = dist.get_rank() == 0
     if not is_main_process:
         dist.barrier()
