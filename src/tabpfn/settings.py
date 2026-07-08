@@ -66,14 +66,8 @@ class TabPFNSettings(BaseSettings):
         ge=0,
         description="Maximum number of test rows fed through the model in a single "
         "forward pass during cached ('fit_with_cache') inference. Larger test sets "
-        "are split into independent chunks of at most this size and concatenated. "
-        "Test rows are conditionally independent given the KV cache, so chunking is "
-        "mathematically equivalent; results may still differ slightly due to "
-        "floating-point non-associativity (see "
-        "https://github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425). "
-        "Performance is close to optimal at the default of 32768: the hardware is "
-        "already saturated at that chunk size and, since the computations are "
-        "independent, larger chunks bring no speedup. Set to 0 to disable chunking.",
+        "are chunked. Performance is close to optimal at the default of 32768. "
+        "Set to 0 to disable chunking.",
     )
 
     def model_post_init(self, _: Any) -> None:
