@@ -61,6 +61,14 @@ class TabPFNSettings(BaseSettings):
         "Used to prevent macOS system crashes on Apple Silicon. "
         "Values > 1.0 are not recommended.",
     )
+    max_batched_test_rows: int = Field(
+        default=32768,
+        ge=0,
+        description="Maximum number of test rows fed through the model in a single "
+        "forward pass during cached ('fit_with_cache') inference. Larger test sets "
+        "are chunked. Performance is close to optimal at the default of 32768. "
+        "Set to 0 to disable chunking.",
+    )
 
     def model_post_init(self, _: Any) -> None:
         """Configure MPS memory limits after settings are initialized.

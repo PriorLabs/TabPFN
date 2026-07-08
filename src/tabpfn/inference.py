@@ -25,6 +25,7 @@ from tabpfn.constants import DEFAULT_SAVE_PEAK_MEMORY_FACTOR, MemorySavingMode
 from tabpfn.memory import should_save_peak_mem
 from tabpfn.parallel_execute import parallel_execute
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.settings import settings
 from tabpfn.utils import get_autocast_context
 
 if TYPE_CHECKING:
@@ -1118,20 +1119,52 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             # Persist on-device copy so subsequent calls skip the transfer
             self.kv_caches[cache_index] = cache_on_device
 
-        with (
-            get_autocast_context(device, enabled=autocast),
-            torch.inference_mode(),
-        ):
-            return model(
-                X_test_tensor,
-                y_train,
-                only_return_standard_out=only_return_standard_out,
-                categorical_inds=batched_cat_ix,
-                performance_options=performance_options,
-                kv_cache=cache_on_device,
-                x_is_test_only=True,
-                **kwargs,
+        def run(x_test: torch.Tensor) -> torch.Tensor | dict[str, torch.Tensor]:
+            with (
+                get_autocast_context(device, enabled=autocast),
+                torch.inference_mode(),
+            ):
+                return model(
+                    x_test,
+                    y_train,
+                    only_return_standard_out=only_return_standard_out,
+                    categorical_inds=batched_cat_ix,
+                    performance_options=performance_options,
+                    kv_cache=cache_on_device,
+                    x_is_test_only=True,
+                    **kwargs,
+                )
+
+        # Test rows are independent given the KV cache, so we run the
+        # forward pass in chunks of at most max_batched_test_rows and concatenate
+        # to bound peak activation memory. Chunking is mathematically equivalent;
+        # outputs may differ slightly due to floating-point non-associativity
+        # (see github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425).
+        # 32768 already saturates the hardware, so larger chunks give tiny speedup.
+        max_rows = settings.tabpfn.max_batched_test_rows
+        n_test = X_test_tensor.shape[0]
+        if max_rows <= 0 or n_test <= max_rows:
+            return run(X_test_tensor)
+
+        outputs = [
+            run(X_test_tensor[i : i + max_rows]) for i in range(0, n_test, max_rows)
+        ]
+        if not isinstance(outputs[0], dict):
+            return torch.cat(outputs)
+
+        concat_keys = {"standard", "test_embeddings"}
+        shared_keys = {"train_embeddings"}  # replicated across chunk
+        unexpected = outputs[0].keys() - concat_keys - shared_keys
+        if unexpected:
+            raise RuntimeError(
+                f"KV-cache test-row chunking has no reassembly rule for model "
+                f"output key(s) {sorted(unexpected)}; update the chunk-merge logic "
+                f"in InferenceEngineExplicitKVCache._call_model."
             )
+        return {
+            k: outputs[0][k] if k in shared_keys else torch.cat([o[k] for o in outputs])
+            for k in outputs[0]
+        }
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
