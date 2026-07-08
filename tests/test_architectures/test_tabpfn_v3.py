@@ -591,26 +591,16 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     x = (torch.randn(20, 1, n_features, dtype=torch.float32) * 0.1).to(dtype)
     y = torch.randint(0, 10, (n_train,), dtype=torch.float32).to(dtype)
     cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
-    x_train = torch.zeros(n_train, n_features)
 
     total = get_cache_size(
-        x_train,
+        n_train=n_train,
+        n_features=n_features,
         model_config=cfg,
         base_dtype=dtype,
         quantize_kv_cache=quantize_kv_cache,
     )
     # Exact: accounts for every tensor the real cache holds.
     assert total == _sum_cache_tensors(cache)
-    # A (n_rows, n_features) tuple is accepted in place of an array.
-    assert (
-        get_cache_size(
-            (n_train, n_features),
-            model_config=cfg,
-            base_dtype=dtype,
-            quantize_kv_cache=quantize_kv_cache,
-        )
-        == total
-    )
 
 
 @torch.no_grad()
@@ -648,10 +638,10 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
         _, cache = arch(x, y, return_kv_cache=True)
     if quantize_kv_cache:
         cache = cache.quantize()
-    x_train = torch.zeros(n_train, n_features)
 
     total = get_cache_size(
-        x_train,
+        n_train=n_train,
+        n_features=n_features,
         model_config=cfg,
         # "autocast": KV/train_embeddings sized at fp16, inducing/scaler at fp32.
         base_dtype="autocast",
@@ -682,9 +672,10 @@ def test__calculate_cache_size__matches_whole_regression_cache(
     x = torch.randn(20, 1, n_features, dtype=torch.float32).to(dtype)
     y = torch.randn(n_train, dtype=torch.float32).to(dtype)
     cache = _build_cache(arch, x, y, quantize_kv_cache=True)
-    x_train = torch.zeros(n_train, n_features)
 
-    total = get_cache_size(x_train, model_config=cfg, base_dtype=dtype)
+    total = get_cache_size(
+        n_train=n_train, n_features=n_features, model_config=cfg, base_dtype=dtype
+    )
     assert total == _sum_cache_tensors(cache)
 
 
@@ -702,12 +693,11 @@ def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     mha = tabpfn_v3.TabPFNV3Config(**common)  # H_kv = icl_num_heads = 4
     mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
     n_train = 50
-    x_train = torch.zeros(n_train, 5)
     # quantize_kv_cache defaults to True, so the KV cache is int8 (1 byte)
     # regardless of base_dtype; base_dtype only sizes the (cancelling) non-KV terms.
-    kw = {"base_dtype": torch.float32}
-    est_mha = get_cache_size(x_train, model_config=mha, **kw)
-    est_mqa = get_cache_size(x_train, model_config=mqa, **kw)
+    kw = {"n_train": n_train, "n_features": 5, "base_dtype": torch.float32}
+    est_mha = get_cache_size(model_config=mha, **kw)
+    est_mqa = get_cache_size(model_config=mqa, **kw)
 
     # mha and mqa differ ONLY in the KV term (H_kv 4 vs 1); every other term
     # (activations, inducing, scaler) is identical, so it cancels in the diff.
@@ -728,8 +718,9 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     clf._initialize_model_variables()
     config = clf.model_.config
 
-    x_train = torch.zeros(1000, 1)  # n_features = 1
     common = {
+        "n_train": 1000,
+        "n_features": 1,
         "model_config": config,
         "base_dtype": torch.float16,
         "quantize_kv_cache": True,
@@ -749,7 +740,7 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
         * config.embed_dim
     ) * torch.float16.itemsize
 
-    total = get_cache_size(x_train, **common)
+    total = get_cache_size(**common)
 
     # Numbers need manual update if we bump the default architecture.
     assert total == 3_072_000 + 96 + 4 + 1_024_000 + inducing

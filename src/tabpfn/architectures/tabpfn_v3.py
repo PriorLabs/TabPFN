@@ -257,8 +257,9 @@ class TabPFNV3Cache(KVCache):
 
 
 def get_cache_size(
-    X_train: Any,
     *,
+    n_train: int,
+    n_features: int,
     model_config: TabPFNV3Config,
     base_dtype: torch.dtype | Literal["autocast"],
     quantize_kv_cache: bool = True,
@@ -292,12 +293,13 @@ def get_cache_size(
     True (mirroring the engine's ``maybe_quantize_kv_cache``).
 
     Args:
-        X_train: Either the training features (a 2-D array/tensor/DataFrame, read
-            via ``.shape``) or a ``(n_rows, n_features)`` tuple. Gives ``N_train``
-            and the column count (used by the inducing-point and scaler terms).
-            The column count is exact for the columns the model sees; for real
-            end-to-end runs preprocessing may change it (SVD features, categorical
-            expansion, per-member subsampling), making those terms approximate.
+        n_train: Number of training rows. The KV cache and train activations
+            scale with this; test rows are not cached.
+        n_features: Number of feature columns the model sees (used by the
+            inducing-point and scaler terms). Exact for the columns the model
+            sees; for real end-to-end runs preprocessing may change it (SVD
+            features, categorical expansion, per-member subsampling), making
+            those terms approximate.
         model_config: The v3 architecture config.
         base_dtype: Either a ``torch.dtype`` (forced-precision path -- every term is
             sized at this dtype; on CPU this is usually Float32) or the string
@@ -334,11 +336,6 @@ def get_cache_size(
         inducing_dtype = base_dtype
         scaler_dtype = base_dtype
 
-    # Accept either an array-like (read ``.shape``) or a (n_rows, n_features) tuple.
-    if hasattr(X_train, "shape"):
-        n_train, n_features = int(X_train.shape[0]), int(X_train.shape[1])
-    else:
-        n_train, n_features = (int(v) for v in X_train)
     icl_emsize = model_config.embed_dim * model_config.feat_agg_num_cls_tokens
     head_dim = icl_emsize // model_config.icl_num_heads
     if model_config.icl_num_kv_heads_test is not None:
