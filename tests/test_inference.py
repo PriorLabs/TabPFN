@@ -814,7 +814,8 @@ def test__kv_cache_chunking__matches_unchunked(
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
         )
-        predict = lambda m, x: m.predict_proba(x)
+        def predict(m, x):
+            return m.predict_proba(x)
     else:
         X, y, _ = sklearn.datasets.make_regression(
             n_samples=n_train + n_test,
