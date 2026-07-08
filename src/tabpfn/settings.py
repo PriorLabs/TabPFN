@@ -63,6 +63,7 @@ class TabPFNSettings(BaseSettings):
     )
     max_batched_test_rows: int = Field(
         default=32768,
+        ge=0,
         description="Maximum number of test rows fed through the model in a single "
         "forward pass during cached ('fit_with_cache') inference. Larger test sets "
         "are split into independent chunks of at most this size and concatenated. "
