@@ -30,7 +30,7 @@ import logging as _logging
 import math
 from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from typing_extensions import override
 
 import numpy as np
@@ -45,7 +45,12 @@ from tabpfn.architectures.interface import (
     ArchitectureConfig,
     PerformanceOptions,
 )
-from tabpfn.architectures.kv_cache import KVCache, KVCacheEntry, QuantizedKVCacheEntry
+from tabpfn.architectures.kv_cache import (
+    QUANTIZED_KV_DTYPE,
+    KVCache,
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
+)
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -229,14 +234,14 @@ class TabPFNV3Cache(KVCache):
             inducing_hidden=self._list_of_tensors_to(self.inducing_hidden, device),
         )
 
-    def quantize(self, dtype: torch.dtype = torch.int8) -> TabPFNV3Cache:
+    def quantize(self, dtype: torch.dtype = QUANTIZED_KV_DTYPE) -> TabPFNV3Cache:
         """Return a new cache with quantized ICL KV entries.
 
         Only the ICL KV cache is quantized; ``train_embeddings``,
         ``scaler_cache``, and ``inducing_hidden`` stay in full precision.
 
         Args:
-            dtype: Target integer dtype (default ``torch.int8``).
+            dtype: Target integer dtype (default :data:`QUANTIZED_KV_DTYPE`).
         """
         quantized_kv = {
             idx: (entry.quantize(dtype) if isinstance(entry, KVCacheEntry) else entry)
@@ -249,6 +254,120 @@ class TabPFNV3Cache(KVCache):
             scaler_cache=self.scaler_cache,
             inducing_hidden=self.inducing_hidden,
         )
+
+
+def get_cache_size(
+    *,
+    n_train: int,
+    n_features: int,
+    model_config: TabPFNV3Config,
+    base_dtype: torch.dtype | Literal["autocast"],
+    quantize_kv_cache: bool = True,
+) -> int:
+    """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
+
+    Works from shapes alone, so it can be called before fitting to size an
+    inference run. It is the exact resident cache size (``TabPFNV3Cache``) for
+    one estimator, summing every tensor a built cache holds:
+
+    1. The ICL transformer KV cache (int8 + per-tensor scales when quantized).
+    2. The last-layer train activations (cached for both tasks; regression
+       stores but ignores them).
+    3. The distribution-embedder ``inducing_hidden`` states.
+    4. The fitted scaler stats ``scaler_cache`` (``mean`` + ``std``).
+
+    The cache is not uniformly one dtype, so each term is sized at its own
+    precision. This depends on the inference mode, selected via ``dtype``:
+
+    * **Forced precision** (``dtype`` a ``torch.dtype``, mirroring
+      ``inference_precision`` set to a dtype): the model and inputs are cast to
+      ``dtype``, so every non-KV term lands at ``dtype``.
+    * **Autocast** (``dtype="autocast"``, the GPU default for
+      ``inference_precision='auto'``): weights stay fp32 and ops are cast at
+      runtime to fp16. The matmul-lineage tensors (KV, and ``train_embeddings``
+      via its explicit cast to the KV dtype) take fp16, while the
+      reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``)
+      stay fp32.
+
+    The KV cache is additionally int8-quantized when ``quantize_kv_cache`` is
+    True (mirroring the engine's ``maybe_quantize_kv_cache``).
+
+    Args:
+        n_train: Number of training rows. The KV cache and train activations
+            scale with this; test rows are not cached.
+        n_features: Number of feature columns the model sees (used by the
+            inducing-point and scaler terms). Exact for the columns the model
+            sees; for real end-to-end runs preprocessing may change it (SVD
+            features, categorical expansion, per-member subsampling), making
+            those terms approximate.
+        model_config: The v3 architecture config.
+        base_dtype: Either a ``torch.dtype`` (forced-precision path -- every term is
+            sized at this dtype; on CPU this is usually Float32) or the string
+            ``"autocast"`` (GPU autocast path -- KV and ``train_embeddings`` are
+            sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
+            fp32, since autocast keeps those ops in fp32).
+        quantize_kv_cache: If True (default), the KV cache is sized at
+            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
+            the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales at
+            the KV compute dtype; if False, the K/V are sized at the compute
+            dtype with no scales.
+
+    Returns:
+        Per-estimator cache size in bytes. Multiply by the ensemble size for the
+        total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
+    """
+    # Set the stored dtype of each cached component up front. On the forced-
+    # precision path the model and inputs are cast to ``dtype``, so every
+    # component is ``dtype``. Under autocast the cache is mixed precision.
+    if base_dtype == "autocast":
+        # Autocast keeps fp32 weights and casts ops to fp16 at runtime, so KV and
+        # train_embeddings (matmul outputs) are fp16, while inducing_hidden and
+        # the scaler (fp32 reduction/norm ops, scaler fit on the fp32 input) stay
+        # fp32.
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else torch.float16
+        kv_scale_dtype = torch.float16  # per-tensor scales, at the KV fp16 dtype
+        train_emb_dtype = torch.float16
+        inducing_dtype = torch.float32
+        scaler_dtype = torch.float32
+    else:
+        kv_dtype = QUANTIZED_KV_DTYPE if quantize_kv_cache else base_dtype
+        kv_scale_dtype = base_dtype
+        train_emb_dtype = base_dtype
+        inducing_dtype = base_dtype
+        scaler_dtype = base_dtype
+
+    icl_emsize = model_config.embed_dim * model_config.feat_agg_num_cls_tokens
+    head_dim = icl_emsize // model_config.icl_num_heads
+    if model_config.icl_num_kv_heads_test is not None:
+        num_kv_heads = model_config.icl_num_kv_heads_test
+    elif model_config.icl_num_kv_heads is not None:
+        num_kv_heads = model_config.icl_num_kv_heads
+    else:
+        num_kv_heads = model_config.icl_num_heads
+
+    # 1. ICL KV cache: key + value (the factor of 2), per layer, over all layers.
+    kv_elements = model_config.nlayers * 2 * n_train * num_kv_heads * head_dim
+    total_bytes = kv_elements * kv_dtype.itemsize
+    if quantize_kv_cache:
+        # One scalar scale per key and per value tensor.
+        total_bytes += model_config.nlayers * 2 * kv_scale_dtype.itemsize
+
+    # 2. Train activations, (N_train, icl_emsize). Cached for both tasks.
+    total_bytes += n_train * icl_emsize * train_emb_dtype.itemsize
+
+    # 3. Distribution-embedder inducing states: one
+    # (n_features, dist_embed_num_inducing_points, embed_dim) tensor per block.
+    total_bytes += (
+        model_config.dist_embed_num_blocks
+        * n_features
+        * model_config.dist_embed_num_inducing_points
+        * model_config.embed_dim
+    ) * inducing_dtype.itemsize
+
+    # 4. Fitted scaler stats: mean + std, each (n_features,).
+    total_bytes += 2 * n_features * scaler_dtype.itemsize
+
+    return total_bytes
 
 
 # ---------------------------------------------------------------------------
@@ -1480,6 +1599,7 @@ class TabPFNV3(Architecture):
         dtype: torch.dtype | str | None = None,
     ):
         super().__init__()
+        self.config = config
         self.ff_factor = config.ff_factor
         self.icl_emsize = config.embed_dim * config.feat_agg_num_cls_tokens
         self.n_out = n_out

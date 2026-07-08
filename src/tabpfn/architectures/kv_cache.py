@@ -19,6 +19,9 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
+# only supported KV quantization so far
+QUANTIZED_KV_DTYPE: torch.dtype = torch.int8
+
 # Low, high, max-magnitude value for each dtype.
 # int8 uses the symmetric range [-127, 127] (one code below the full int8
 # range) so that ``-max * scale`` equals ``+max * scale`` and dequantization
@@ -78,11 +81,13 @@ class KVCacheEntry:
             return KVCacheEntry()
         return KVCacheEntry(key=self.key.to(device), value=self.value.to(device))
 
-    def quantize(self, dtype: torch.dtype = torch.int8) -> QuantizedKVCacheEntry:
+    def quantize(
+        self, dtype: torch.dtype = QUANTIZED_KV_DTYPE
+    ) -> QuantizedKVCacheEntry:
         """Quantize this entry with per-tensor symmetric scaling.
 
         Args:
-            dtype: Target integer dtype (default ``torch.int8``).
+            dtype: Target integer dtype (default `QUANTIZED_KV_DTYPE`).
         """
         assert self.is_valid()
         k_q, k_s = _quantize_tensor(self.key, dtype)
