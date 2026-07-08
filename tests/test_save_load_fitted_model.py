@@ -71,6 +71,9 @@ def _assert_roundtrip_predictions(
         np.testing.assert_array_equal(original.classes_, loaded.classes_)
 
     if cross_device:
+        # Values differ across hardware, but non-finite entries must line up.
+        np.testing.assert_array_equal(np.isnan(original_preds), np.isnan(loaded_preds))
+        np.testing.assert_array_equal(np.isinf(original_preds), np.isinf(loaded_preds))
         return
 
     # Same device: the round-trip must be numerically faithful.
