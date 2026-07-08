@@ -829,7 +829,8 @@ def test__kv_cache_chunking__matches_unchunked(
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
         )
-        predict = lambda m, x: m.predict(x, output_type="mean")
+        def predict(m, x):
+            return m.predict(x, output_type="mean")
 
     X_train, X_test = X[:n_train], X[n_train:]
     y_train = y[:n_train]
