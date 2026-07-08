@@ -7,7 +7,9 @@ from __future__ import annotations
 from typing import Literal, overload
 from typing_extensions import override
 
+import numpy as np
 import pytest
+import sklearn.datasets
 import torch
 from numpy.random import default_rng
 from torch import Tensor, nn
@@ -33,6 +35,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
 from tabpfn.preprocessing.torch import FeatureSchema
+from tabpfn.settings import settings
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
 
@@ -774,3 +777,70 @@ def test__to__mps_target_device__applies_mps_linear_bug_workaround(
     assert bias_linears, "expected at least one bias-enabled Linear"
     assert all(isinstance(m, MpsSafeLinear) for m in bias_linears)
     assert all(type(m) is nn.Linear for m in no_bias_linears)
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("estimator", ["classifier", "regressor"])
+def test__kv_cache_chunking__matches_unchunked(
+    estimator: str,
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chunked cached inference must equal unchunked inference.
+
+    We run in float64 so the only remaining
+    differences are sub-tolerance floating-point rounding (in lower precisions
+    GEMM rounding across differing batch sizes can accumulate beyond tolerance).
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    # n_test must exceed the chunk size, and not be a multiple of it, so that
+    # chunking actually triggers and the final (ragged) chunk is exercised.
+    n_train, n_test, chunk = 32, 37, 8
+
+    if estimator == "classifier":
+        X, y = sklearn.datasets.make_classification(
+            n_samples=n_train + n_test,
+            n_features=5,
+            n_informative=3,
+            n_classes=3,
+            random_state=0,
+        )
+        model = TabPFNClassifier(
+            n_estimators=1,
+            random_state=42,
+            device=device,
+            inference_precision=torch.float64,
+            fit_mode="fit_with_cache",
+        )
+        predict = lambda m, x: m.predict_proba(x)
+    else:
+        X, y, _ = sklearn.datasets.make_regression(
+            n_samples=n_train + n_test,
+            n_features=5,
+            random_state=0,
+            coef=True,
+        )
+        model = TabPFNRegressor(
+            n_estimators=1,
+            random_state=42,
+            device=device,
+            inference_precision=torch.float64,
+            fit_mode="fit_with_cache",
+        )
+        predict = lambda m, x: m.predict(x, output_type="mean")
+
+    X_train, X_test = X[:n_train], X[n_train:]
+    y_train = y[:n_train]
+    model.fit(X_train, y_train)
+
+    # Reference: chunking disabled -> a single forward pass over all test rows.
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 0)
+    pred_unchunked = predict(model, X_test)
+
+    # Chunked: several forward passes over test-row chunks, then concatenated.
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
+    pred_chunked = predict(model, X_test)
+
+    np.testing.assert_allclose(pred_chunked, pred_unchunked, rtol=1e-10, atol=1e-10)
