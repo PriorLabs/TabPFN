@@ -814,7 +814,8 @@ def test__kv_cache_chunking__matches_unchunked(
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
         )
-        def predict(m, x):
+
+        def predict(m, x) -> np.ndarray:
             return m.predict_proba(x)
     else:
         X, y, _ = sklearn.datasets.make_regression(
@@ -830,7 +831,8 @@ def test__kv_cache_chunking__matches_unchunked(
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
         )
-        def predict(m, x):
+
+        def predict(m, x) -> np.ndarray:
             return m.predict(x, output_type="mean")
 
     X_train, X_test = X[:n_train], X[n_train:]
