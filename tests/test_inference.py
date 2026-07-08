@@ -20,7 +20,7 @@ from tabpfn.architectures.kv_cache import KVCacheEntry
 from tabpfn.architectures.shared import workaround_mps_linear_bug
 from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
-from tabpfn.base import create_inference_engine
+from tabpfn.base import create_inference_engine, get_embeddings
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
@@ -848,3 +848,39 @@ def test__kv_cache_chunking__matches_unchunked(
     pred_chunked = predict(model, X_test)
 
     np.testing.assert_allclose(pred_chunked, pred_unchunked, rtol=1e-10, atol=1e-10)
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__kv_cache_chunking__train_embeddings_not_duplicated(
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Chunking must not inflate the dict (only_return_standard_out=False) path.
+
+    Test embeddings are test-indexed and get concatenated across chunks, but
+    train embeddings are read from the KV cache and are identical per chunk, so
+    naively concatenating them would yield n_chunks * n_train rows.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    n_train, n_test, chunk = 32, 37, 8
+    X, y = sklearn.datasets.make_classification(
+        n_samples=n_train + n_test, n_features=5, n_informative=3, random_state=0
+    )
+    model = TabPFNClassifier(
+        n_estimators=1,
+        random_state=42,
+        device=device,
+        inference_precision=torch.float64,
+        fit_mode="fit_with_cache",
+    )
+    model.fit(X[:n_train], y[:n_train])
+    X_test = X[n_train:]
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
+    train_emb = get_embeddings(model, X_test, data_source="train")
+    test_emb = get_embeddings(model, X_test, data_source="test")
+
+    assert train_emb.shape[-2] == n_train
+    assert test_emb.shape[-2] == n_test

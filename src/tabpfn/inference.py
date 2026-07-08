@@ -1149,9 +1149,22 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         outputs = [
             run(X_test_tensor[i : i + max_rows]) for i in range(0, n_test, max_rows)
         ]
-        if isinstance(outputs[0], dict):
-            return {k: torch.cat([o[k] for o in outputs]) for k in outputs[0]}
-        return torch.cat(outputs)
+        if not isinstance(outputs[0], dict):
+            return torch.cat(outputs)
+
+        concat_keys = {"standard", "test_embeddings"}
+        shared_keys = {"train_embeddings"}  # replicated across chunk
+        unexpected = outputs[0].keys() - concat_keys - shared_keys
+        if unexpected:
+            raise RuntimeError(
+                f"KV-cache test-row chunking has no reassembly rule for model "
+                f"output key(s) {sorted(unexpected)}; update the chunk-merge logic "
+                f"in InferenceEngineExplicitKVCache._call_model."
+            )
+        return {
+            k: outputs[0][k] if k in shared_keys else torch.cat([o[k] for o in outputs])
+            for k in outputs[0]
+        }
 
     @override
     def _create_copy_for_pickling(self) -> InferenceEngine:
