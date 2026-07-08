@@ -1143,7 +1143,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # 32768 already saturates the hardware, so larger chunks give tiny speedup.
         max_rows = settings.tabpfn.max_batched_test_rows
         n_test = X_test_tensor.shape[0]
-        if not max_rows or n_test <= max_rows:
+        if max_rows <= 0 or n_test <= max_rows:
             return run(X_test_tensor)
 
         outputs = [
