@@ -639,6 +639,55 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     )
 
 
+def test__finetuned_tabpfn_classifier__validation_frequency_skips_epochs(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """`validation_frequency=N` runs validation only every N epochs (GH#811).
+
+    ``_evaluate_model`` is called once before the training loop starts
+    (the "eval default model" step) regardless of ``validation_frequency``,
+    plus once per epoch where ``(epoch + 1) % validation_frequency == 0``.
+    """
+    X, y = synthetic_data
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+
+    call_count = 0
+
+    def _evaluate(*_args: Any, **_kwargs: Any) -> EvalResult:
+        nonlocal call_count
+        call_count += 1
+        return EvalResult(primary=0.5, secondary={"roc_auc": 0.5, "log_loss": 1.0})
+
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=4,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=False,
+        validation_frequency=2,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+    )
+
+    with mock.patch.object(
+        FinetunedTabPFNClassifier,
+        "_evaluate_model",
+        autospec=True,
+        side_effect=_evaluate,
+    ):
+        clf.fit(X_train, y_train)
+    # 1 initial eval + validation on epochs 2 and 4 (i.e. epoch index 1 and 3).
+    assert call_count == 3
+
+
 @pytest.mark.parametrize(
     "estimator_cls", [FinetunedTabPFNClassifier, FinetunedTabPFNRegressor]
 )

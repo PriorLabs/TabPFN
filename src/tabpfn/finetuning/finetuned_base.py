@@ -293,6 +293,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             early stopping. Defaults to 8.
         min_delta: Minimum change in metric to be considered as an improvement.
             Defaults to 1e-4.
+        validation_frequency: Number of epochs between validation runs. If 1
+            (default), validation runs every epoch, preserving existing
+            behavior. If N > 1, validation (and any early-stopping check)
+            only runs every N epochs. Must be a positive integer. When
+            ``validation_frequency > 1``, ``early_stopping_patience`` counts
+            validation runs, not epochs.
         grad_clip_value: Maximum norm for gradient clipping. If None, gradient
             clipping is disabled. Gradient clipping helps stabilize training by
             preventing exploding gradients. Defaults to 1.0.
@@ -352,6 +358,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
         min_delta: float = 1e-4,
+        validation_frequency: int = 1,
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
         lr_warmup_only: bool = False,
@@ -380,6 +387,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.early_stopping = early_stopping
         self.early_stopping_patience = early_stopping_patience
         self.min_delta = min_delta
+        self.validation_frequency = validation_frequency
         self.grad_clip_value = grad_clip_value
         self.use_lr_scheduler = use_lr_scheduler
         self.lr_warmup_only = lr_warmup_only
@@ -405,6 +413,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 f"as `n_estimators_finetune`(={self.n_estimators_finetune}).",
                 UserWarning,
                 stacklevel=2,
+            )
+
+        if isinstance(self.validation_frequency, bool) or self.validation_frequency < 1:
+            raise ValueError(
+                "`validation_frequency` must be a positive integer, "
+                f"got {self.validation_frequency!r}."
             )
 
     @property
@@ -775,6 +789,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         do_validation = X_val is not None
         # Early stopping needs a validation metric to act on.
         early_stopping_enabled = self.early_stopping and do_validation
+        if early_stopping_enabled and self.validation_frequency > self.epochs:
+            early_stopping_enabled = False
+            if is_main_process:
+                logger.info(
+                    "validation_frequency=%d > epochs=%d, so no in-loop "
+                    "validation will run; early stopping is disabled.",
+                    self.validation_frequency,
+                    self.epochs,
+                )
         if is_main_process and self.early_stopping and not do_validation:
             logger.info(
                 "Validation is disabled (validation_split_ratio=%s); "
@@ -1078,7 +1101,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             )
 
             # --- Validation (rank 0 only), broadcast metric ---
-            if is_main_process and do_validation:
+            run_validation = (
+                do_validation and (epoch + 1) % self.validation_frequency == 0
+            )
+            if run_validation and is_main_process:
                 eval_result = self._evaluate_model(
                     validation_eval_config,
                     X_train,  # pyright: ignore[reportArgumentType]
@@ -1099,11 +1125,16 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 _logger.log_epoch(epoch_log_metrics, step=global_step)
 
                 primary_metric = eval_result.primary
-            else:
+            elif run_validation:
                 primary_metric = self._get_initial_best_metric()
                 eval_result = EvalResult(primary=primary_metric)
+            else:
+                # Validation skipped this epoch (validation_frequency > 1).
+                # NaN is the sentinel the checkpoint/early-stopping
+                # blocks below already treat as "no metric available".
+                primary_metric = float("nan")
+                eval_result = EvalResult(primary=primary_metric)
                 if is_main_process and mean_train_loss is not None:
-                    # Validation disabled: log training progress only.
                     logger.info(
                         "📊 Epoch %d | Train Loss: %.4f", epoch + 1, mean_train_loss
                     )
@@ -1116,7 +1147,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
             if (
                 output_dir is not None
-                and not np.isnan(primary_metric)
                 and (not using_ddp or is_main_process)
             ):
                 save_interval_checkpoint = (
@@ -1124,15 +1154,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     and (epoch + 1) % self.save_checkpoint_interval == 0
                 )
 
-                # The "best model" concept only exists under early stopping
-                # (which requires validation): without it the last epoch is
-                # the result, so only interval checkpoints are saved.
-                is_best = early_stopping_enabled and self._is_improvement(
-                    primary_metric, best_metric
+                is_best = (
+                    early_stopping_enabled
+                    and not np.isnan(primary_metric)
+                    and self._is_improvement(primary_metric, best_metric)
                 )
 
                 if save_interval_checkpoint or is_best:
-                    if do_validation:
+                    if run_validation:
                         checkpoint_metrics = self._get_checkpoint_metrics(eval_result)
                     elif mean_train_loss is not None:
                         checkpoint_metrics = {"train_loss": mean_train_loss}
