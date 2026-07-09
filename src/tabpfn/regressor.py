@@ -388,6 +388,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                   faster inference on the same data at a large cost of memory.
                   Ideal with very high GPU memory and multiple calls to `.predict()`
                   with the same training data.
+                  By default, the key-value cache is quantized to 8 bits. We have not
+                  observed this to reduce performance, but it can lead to slight
+                  differences in the predictions compared to the other fit modes.
+                  Setting `inference_precision` to a value other than "auto" disables
+                  quantisation.
                 - If `"batched"`, the already pre-processed data is iterated over in
                   batches. This can only be done after the data has been preprocessed
                   with the get_preprocessed_datasets function. This is primarily used
