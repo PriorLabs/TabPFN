@@ -150,7 +150,8 @@ def _yeojohnson_inverse_transform(x: np.ndarray, lmbda: float) -> np.ndarray:
     # Leave a small margin below log(max): expm1's float64 round-trip on the
     # clipped value can land a few ULPs over dtype's max, which then overflows
     # when cast back into x_inv (dtype). Nudge the bound down to absorb that.
-    max_arg = np.log(np.finfo(dtype).max) - 4 * np.spacing(np.log(np.finfo(dtype).max))
+    log_max = np.log(np.finfo(dtype).max)
+    max_arg = log_max - 4 * np.spacing(log_max)
 
     # when x >= 0
     if abs(lmbda) < np.spacing(1.0):
