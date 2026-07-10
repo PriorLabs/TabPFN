@@ -36,6 +36,21 @@ Note: For best performance on Apple Silicon/MPS, consider installing a PyTorch
 version after the nightly "2.13.0.dev20260510". This enables flash attention
 without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
 
+> [!NOTE]
+> **CUDA driver / PyTorch build mismatch:** `pip install tabpfn` resolves whatever
+> is the latest PyTorch wheel at install time, which is built against a recent CUDA
+> toolkit. If your NVIDIA driver is older than that toolkit (a common case on many
+> cloud/Colab GPUs, e.g. driver `550.x` only supports up to CUDA 12.4), CUDA
+> initialization fails and TabPFN **silently falls back to CPU** (see below) instead
+> of raising an error. If you have a GPU, pick a matching build for your driver's
+> CUDA version from the
+> [PyTorch installation selector](https://pytorch.org/get-started/locally/) — for
+> example, for a CUDA-12.4-only driver: `pip install torch --index-url
+> https://download.pytorch.org/whl/cu124` — and verify it worked before installing
+> TabPFN:
+> ```bash
+> python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+> ```
 
 ### Basic Usage
 
@@ -43,8 +58,16 @@ without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
 > On CPU, only small datasets (≲1000 samples) are feasible.
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
+>
+> Note: `device="auto"` (the default) picks CPU with no warning if
+> `torch.cuda.is_available()` is `False` — check the command above if you expect
+> GPU inference and it seems slow.
 
-To use our default TabPFN-3 model:
+To use our default TabPFN-3 model. Note: the TabPFN-3 checkpoint is
+license-gated — on first use it needs a one-time interactive browser login (or a
+`TABPFN_TOKEN`, see the Installation & Setup FAQ below for headless/CI setups). If
+you don't want to do that up front, use the ungated Apache-2.0 TabPFN-2 weights
+instead (`ModelVersion.V2`, see the [License](#license) section below):
 
 ```python
 from tabpfn import TabPFNClassifier, TabPFNRegressor
