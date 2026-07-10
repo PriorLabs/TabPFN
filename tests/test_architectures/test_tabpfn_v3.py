@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+import sys
 
 import pytest
 import torch
@@ -344,7 +345,22 @@ def test__kv_cache__gqa_matches_standard() -> None:
 
 @torch.no_grad()
 @pytest.mark.parametrize("use_chunkwise", [False, True])
-@pytest.mark.parametrize("autocast_dtype", [torch.float16, torch.bfloat16])
+@pytest.mark.parametrize(
+    "autocast_dtype",
+    [
+        torch.float16,
+        pytest.param(
+            torch.bfloat16,
+            marks=pytest.mark.skipif(
+                sys.platform == "win32" and not torch.cuda.is_available(),
+                reason=(
+                    "bf16 CPU kernels crash with STATUS_ILLEGAL_INSTRUCTION "
+                    "(0xc000001d) on Windows CI runners"
+                ),
+            ),
+        ),
+    ],
+)
 def test__kv_cache__works_under_autocast(
     use_chunkwise: bool, autocast_dtype: torch.dtype
 ) -> None:
