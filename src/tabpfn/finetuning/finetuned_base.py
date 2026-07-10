@@ -193,6 +193,37 @@ def _snapshot_model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
+def _ratio_ctx_query_split(
+    X: Any,
+    y: Any,
+    *,
+    query_ratio: float,
+    min_query_size: int,
+    random_state: int,
+    stratify: Any = None,
+) -> list[Any]:
+    """Split a chunk into context and query sets, sized relative to the chunk.
+
+    Chunks can be smaller than the configured context+query size (the remainder
+    chunk of an epoch's chunking, or a small dataset), so the query size is
+    computed per chunk as ``query_ratio`` of the chunk rather than from the
+    configured maximum. ``min_query_size`` bounds it from below (e.g. the number
+    of classes). Falls back to an unstratified split when the chunk cannot
+    satisfy stratification.
+    """
+    test_size = max(int(len(X) * query_ratio), min_query_size)
+    try:
+        return train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=stratify
+        )
+    except ValueError:
+        if stratify is None:
+            raise
+        return train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=None
+        )
+
+
 class _TabPFNDDPWrapper(torch.nn.Module):
     """Thin wrapper that registers estimator.model_ as a submodule for DDP."""
 
@@ -305,9 +336,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         validation_split_ratio: float = 0.1,
-        n_finetune_ctx_plus_query_samples: int = 10_000,
+        n_finetune_ctx_plus_query_samples: int = 50_000,
         finetune_ctx_query_split_ratio: float = 0.2,
-        n_inference_subsample_samples: int = 50_000,
+        n_inference_subsample_samples: int | None = None,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
@@ -817,10 +848,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         start_time = _synchronize_epoch_timer()
 
-        finetuning_query_size = self._get_valid_finetuning_query_size(
-            query_size=int(
-                n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
-            ),
+        # Lower bound for the per-chunk query size (e.g. >= n_classes for
+        # classification); the actual size is computed per chunk by the splitter.
+        min_finetuning_query_size = self._get_valid_finetuning_query_size(
+            query_size=1,
             y_train=y_train,
         )
         for epoch in range(epoch_to_start_from, self.epochs):
@@ -832,8 +863,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
             # Regenerate datasets each epoch with a different random_state
             training_splitter = partial(
-                train_test_split,
-                test_size=finetuning_query_size,
+                _ratio_ctx_query_split,
+                query_ratio=self.finetune_ctx_query_split_ratio,
+                min_query_size=min_finetuning_query_size,
                 random_state=epoch_random_state,
             )
 
@@ -874,15 +906,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     generator=dataloader_generator,
                 )
 
+            steps_per_epoch = len(finetuning_dataloader)
+            if steps_per_epoch == 0:
+                logger.warning(
+                    "No training batches available; ending training early.",
+                )
+                break
+
             # Instantiate the LR scheduler only once
             if self.use_lr_scheduler and scheduler is None:
-                steps_per_epoch = len(finetuning_dataloader)
-                if steps_per_epoch == 0:
-                    logger.warning(
-                        "No training batches available; ending training early.",
-                    )
-                    break
-
                 total_steps = steps_per_epoch * self.epochs
                 warmup_steps = int(total_steps * 0.1)
 
