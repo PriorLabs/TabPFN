@@ -54,11 +54,11 @@ EARLY_STOPPING_PATIENCE = 15
 
 # Ensemble configuration
 # number of estimators to use during finetuning
-NUM_ESTIMATORS_FINETUNE = 2
+NUM_ESTIMATORS_FINETUNE = 4
 # number of estimators to use during trian time validation
-NUM_ESTIMATORS_VALIDATION = 2
+NUM_ESTIMATORS_VALIDATION = 4
 # number of estimators to use during final inference
-NUM_ESTIMATORS_FINAL_INFERENCE = 2
+NUM_ESTIMATORS_FINAL_INFERENCE = 4
 
 # Reproducibility
 RANDOM_STATE = 0
