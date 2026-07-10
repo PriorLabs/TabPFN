@@ -241,13 +241,14 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             Defaults to 0.1.
         n_finetune_ctx_plus_query_samples: The total number of samples per
             meta-dataset during fine-tuning (context plus query) before applying
-            the `finetune_ctx_query_split_ratio`. Defaults to 10_000.
+            the `finetune_ctx_query_split_ratio`. Defaults to 50_000.
         finetune_ctx_query_split_ratio: The proportion of each fine-tuning
             meta-dataset to use as query samples for calculating the loss. The
             remainder is used as context. Defaults to 0.2.
         n_inference_subsample_samples: The total number of subsampled training
-            samples per estimator during validation and final inference.
-            Defaults to 50_000.
+            samples per estimator during validation and final inference. If
+            None, no subsampling is applied and the full training set is used
+            as context. Defaults to None.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
@@ -323,9 +324,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
         validation_split_ratio: float | None = 0.1,
-        n_finetune_ctx_plus_query_samples: int = 10_000,
+        n_finetune_ctx_plus_query_samples: int = 50_000,
         finetune_ctx_query_split_ratio: float = 0.2,
-        n_inference_subsample_samples: int = 50_000,
+        n_inference_subsample_samples: int | None = None,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,

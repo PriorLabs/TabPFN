@@ -273,13 +273,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             Defaults to 0.1.
         n_finetune_ctx_plus_query_samples: The total number of samples per
             meta-dataset during fine-tuning (context plus query) before applying
-            the `finetune_ctx_query_split_ratio`. Defaults to 10_000.
+            the `finetune_ctx_query_split_ratio`. Defaults to 50_000.
         finetune_ctx_query_split_ratio: The proportion of each fine-tuning
             meta-dataset to use as query samples for calculating the loss. The
             remainder is used as context. Defaults to 0.2.
         n_inference_subsample_samples: The total number of subsampled training
-            samples per estimator during validation and final inference.
-            Defaults to 50_000.
+            samples per estimator during validation and final inference. If
+            None, no subsampling is applied and the full training set is used
+            as context. Defaults to None.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
