@@ -5,7 +5,7 @@ This directory contains tests for the TabPFN project.
 ## Test Files
 
 - `test_classifier_interface.py`: Tests for the TabPFNClassifier interface
-- `test_regressor_interface.py`: Tests for the TabPFNRegressor interface 
+- `test_regressor_interface.py`: Tests for the TabPFNRegressor interface
 - `test_utils.py`: Tests for utility functions
 - `test_consistency.py`: Tests to ensure prediction consistency across code changes
 
@@ -14,7 +14,7 @@ This directory contains tests for the TabPFN project.
 The consistency tests verify TabPFN models produce consistent predictions across code changes, ensuring:
 
 1. Changes don't unexpectedly alter model behavior
-2. Core algorithms remain stable and reproducible 
+2. Core algorithms remain stable and reproducible
 3. Intentional behavior changes are explicitly acknowledged
 
 ### How It Works
