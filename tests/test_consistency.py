@@ -119,7 +119,9 @@ DEFAULT_CONFIG = {
     "n_estimators": 2,
     "random_state": 42,
     "device": "cpu",
-    "inference_precision": torch.float32,
+    # float64 minimises floating-point divergence across hardware/BLAS backends,
+    # keeping predictions comparable to the stored references.
+    "inference_precision": torch.float64,
 }
 
 TEST_CASES = {
