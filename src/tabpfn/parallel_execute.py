@@ -100,6 +100,8 @@ def _execute_in_current_thread(
         # Negligible overhead
         if device.type == "cuda":
             torch.cuda.synchronize(device)
+        elif device.type == "mps" and hasattr(torch, "mps"):
+            torch.mps.synchronize()
         yield output
 
 
