@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.0.9] - 2026-07-13
+
+### Added
+
+- KV Cache support for 2.5 and 2.6 single file models. ([#1039](https://github.com/PriorLabs/TabPFN/pull/1039))
+- Add `TabPFNClassifier.predict_proba_batched(X_list, y_list, X_test_list)` to score several independent datasets in a single fused forward per estimator (stacking them on the model's batch dimension), equivalent to fitting and predicting each dataset separately but much faster when launching many small predicts. ([#1045](https://github.com/PriorLabs/TabPFN/pull/1045))
+- Add an opt-in `PASSTHROUGH_INF` inference-config option (default `False`), set via the `inference_config` argument of `TabPFNClassifier`/`TabPFNRegressor` (or, for the finetuned estimators, via the `inference_config` entry of their `extra_*_kwargs`). When enabled, `±inf` values are no longer rejected during `fit()`/`predict()`; they are carried through preprocessing (replaced with `NaN` for the steps that cannot handle them and restored afterwards) so they reach the model, which handles them natively. ([#1055](https://github.com/PriorLabs/TabPFN/pull/1055))
+- README architecture and attention diagrams for TabPFN-3 (Prior Labs colour scheme). ([#1060](https://github.com/PriorLabs/TabPFN/pull/1060))
+- Add `calculate_cache_size` for TabPFN v3 to compute the resident cache memory (ICL KV cache, decoder activations, distribution-embedder inducing states, and scaler stats) for a given train-set size, column count, ensemble size, and dtype — without running inference. ([#1087](https://github.com/PriorLabs/TabPFN/pull/1087))
+- Add a public `tabpfn.finetuning.main_process_first()` context manager for multi-GPU (`torchrun`) scripts: the main process runs the with-block first while the other ranks wait at a barrier, then the other ranks run it — useful for one-time work such as dataset downloads that should warm a shared cache. The process group it initializes is reused by the subsequent `fit()`. ([#1094](https://github.com/PriorLabs/TabPFN/pull/1094))
+- Chunk large test sets during cached (`fit_mode="fit_with_cache"`) inference to bound peak GPU memory, controlled by the new `TABPFN_MAX_BATCHED_TEST_ROWS` setting (default `32768`; set to `0` to disable). Chunking is mathematically equivalent. ([#1096](https://github.com/PriorLabs/TabPFN/pull/1096))
+
+### Changed
+
+- TabPFN-2 and TabPFN2.5 now use the single file implementation, deprecate 'base'. ([#1052](https://github.com/PriorLabs/TabPFN/pull/1052))
+- Fine-tuning now targets the package default model version (`settings.tabpfn.model_version`) instead of a hardcoded older one, and `FinetunedTabPFNClassifier`/`FinetunedTabPFNRegressor` accept an optional `model_version` to override it — so a fine-tuned model is no longer silently compared against a different-generation base. ([#1064](https://github.com/PriorLabs/TabPFN/pull/1064))
+- Reduce memory usage for v2.x architectures. Enable flash attention on MPS for v2_6. ([#1070](https://github.com/PriorLabs/TabPFN/pull/1070))
+
+### Fixed
+
+- Add `TabPFNRegressor.fit_with_differentiable_input(X, y)` so gradients can flow from a downstream loss back through the regressor into upstream torch modules feeding `X` (and `y`, when it carries grads). Mirrors the existing classifier-side path — previously `TabPFNRegressor.fit` raised `ValueError("Differentiable input is not supported for regressors yet.")` and there was no differentiable counterpart. ([#923](https://github.com/PriorLabs/TabPFN/pull/923))
+- Support save/load for estimators fitted with `fit_mode="fit_with_cache"`. Previously `save_fit_state` / `load_from_fit_state` raised `NotImplementedError` for KV-cache inference engines. ([#977](https://github.com/PriorLabs/TabPFN/pull/977))
+- Fix `save_fitted_tabpfn_model`/`save_fit_state` moving the live estimator's bar distribution modules to CPU, which broke subsequent `predict` calls (e.g. `output_type="median"`/`"quantiles"`) on CUDA/MPS devices. ([#1030](https://github.com/PriorLabs/TabPFN/pull/1030))
+- Fixed `AdaptiveQuantileTransformer` losing `output_distribution` and `random_state` when cloned by sklearn (e.g. inside `ColumnTransformer.fit`), which made the `quantile_norm*` presets silently produce uniform output. All transformers now run sklearn's standard estimator checks. ([#1031](https://github.com/PriorLabs/TabPFN/pull/1031))
+- Fixed `fit()` hanging forever when stratified row subsampling allocates a class more slots than it has rows (e.g. an ultra-rare class with `SUBSAMPLE_SAMPLES` set); such classes are now minimally oversampled instead. ([#1034](https://github.com/PriorLabs/TabPFN/pull/1034))
+- Fixed `norm_and_kdi` returning a feature schema that undercounts the output columns: the FeatureUnion emits two columns per input column, so the schema and `num_added_features` under-reported, letting the ensemble's feature-budget planning silently exceed `max_features_per_estimator`. ([#1035](https://github.com/PriorLabs/TabPFN/pull/1035))
+- Fixed an inverted `enable_gqa` condition in the torch-MPS attention fast path that would crash every forward of models with asymmetric query/KV head counts (including the default TabPFN v3 checkpoint) on Apple Silicon once torch satisfies the MPS flash-attention version gate (>= 2.13). ([#1037](https://github.com/PriorLabs/TabPFN/pull/1037))
+- Fix fitted model saving for paths whose parent directories contain `.tabpfn_fit`. ([#1048](https://github.com/PriorLabs/TabPFN/pull/1048))
+- Fix the README's save/load example to call `save_tabpfn_model(reg, ...)` with the estimator instead of `reg.model_`, which would have raised at runtime. ([#1053](https://github.com/PriorLabs/TabPFN/pull/1053))
+- Remove all-NaN columns as constant features so they no longer leak NaNs into downstream preprocessing. ([#1061](https://github.com/PriorLabs/TabPFN/pull/1061))
+- Fine-tuning with early stopping no longer returns a model worse than the base when no epoch improves over the default; the original weights are now restored. ([#1064](https://github.com/PriorLabs/TabPFN/pull/1064))
+- Fix the README save/load FAQ to render correctly on GitHub (replace Sphinx `:func:` roles with code spans) and document the `TABPFN_MPS_MEMORY_FRACTION` environment variable. ([#1065](https://github.com/PriorLabs/TabPFN/pull/1065))
+- Fix incorrect model output on MacOS 26 on M1 when using the MPS device. ([#1077](https://github.com/PriorLabs/TabPFN/pull/1077))
+- Fix `predict_proba_batched` raising `RuntimeError: mat1 and mat2 must have the same dtype, but got Half and Float` under `inference_precision=torch.float16` on GPU. The batched inference engine now casts the model to the forced dtype, not just the inputs. ([#1083](https://github.com/PriorLabs/TabPFN/pull/1083))
+- Fix the fine-tuning examples crashing or redundantly downloading their dataset once per rank when launched with `torchrun --nproc-per-node=N` on a cold sklearn cache; the dataset fetch is now wrapped in `main_process_first()` so only the main process downloads. ([#1094](https://github.com/PriorLabs/TabPFN/pull/1094))
+- Fix cross-device save/load tests failing on GPU by only requiring functional equivalence, not bit-identical predictions, across devices. ([#1097](https://github.com/PriorLabs/TabPFN/pull/1097))
+- Fix Windows CI crash (illegal instruction) by skipping the bfloat16 autocast KV-cache test on Windows without CUDA. ([#1103](https://github.com/PriorLabs/TabPFN/pull/1103))
+
+### Deprecated
+
+- Remove base architecture - per-model file implementations are now the single source of truth. ([#1056](https://github.com/PriorLabs/TabPFN/pull/1056))
+- Remove the now unused InferenceEngineCacheKV. All models now use InferenceEngineExplicitKVCache. ([#1057](https://github.com/PriorLabs/TabPFN/pull/1057))
+
+
 ## [8.0.8] - 2026-06-10
 
 ### Breaking Changes
