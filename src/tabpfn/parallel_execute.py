@@ -94,15 +94,7 @@ def _execute_in_current_thread(
     device: torch.device, functions: Iterable[ParallelFunction[R_co]]
 ) -> Generator[R_co]:
     for function in functions:
-        output = function(device=device)
-        # Force GPU completion before yielding so a _TimedIterator around this
-        # measures real compute, not just kernel-launch time.
-        # Negligible overhead
-        if device.type == "cuda":
-            torch.cuda.synchronize(device)
-        elif device.type == "mps" and hasattr(torch, "mps"):
-            torch.mps.synchronize()
-        yield output
+        yield function(device=device)
 
 
 def _execute_with_multithreading(
