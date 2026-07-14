@@ -28,25 +28,17 @@ Tests use small, fixed datasets with reproducible random seeds to ensure consist
 
 ### Platform Compatibility
 
-Models can produce slightly different predictions across platforms due to:
-- Different CPU architectures (x86 vs ARM)
-- Different operating systems (Linux, macOS, Windows)
-- Different Python versions
-
-For this reason:
-1. Reference predictions are platform-specific (stored in `reference_predictions/`)
-2. Platform information is tracked in metadata
-3. Tests only run on matching platforms by default
+The tests run inference in float64, which we expect to produce consistent
+predictions across CPU architectures (x86 vs ARM) and operating systems (Linux,
+macOS, Windows). All supported platforms therefore share a single reference set
+(stored in `reference_predictions/`). Tests are skipped on platforms not listed in
+`ENABLED_PLATFORMS`.
 
 ### CI Compatibility
 
 We test against specific CI platform configurations:
 - Linux, Windows, and macOS
 - Python 3.10 and 3.14
-
-To ensure reliable CI testing:
-1. Reference values should be generated on a CI-compatible platform
-2. Tests will skip with warnings if reference platform doesn't match
 
 ### Commands
 
