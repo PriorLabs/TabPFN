@@ -284,7 +284,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
-            performance. Defaults to True.
+            performance. When enabled, the best-performing weights are restored
+            at the end of training and a best checkpoint is saved alongside the
+            interval checkpoints. When disabled, training runs all epochs and
+            the last-epoch weights are kept (no best checkpoint is saved).
+            Defaults to True.
         early_stopping_patience: Number of epochs to wait for improvement before
             early stopping. Defaults to 8.
         min_delta: Minimum change in metric to be considered as an improvement.
@@ -1120,15 +1124,26 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     and (epoch + 1) % self.save_checkpoint_interval == 0
                 )
 
-                is_best = self._is_improvement(primary_metric, best_metric)
+                # The "best model" concept only exists under early stopping
+                # (which requires validation): without it the last epoch is
+                # the result, so only interval checkpoints are saved.
+                is_best = early_stopping_enabled and self._is_improvement(
+                    primary_metric, best_metric
+                )
 
                 if save_interval_checkpoint or is_best:
+                    if do_validation:
+                        checkpoint_metrics = self._get_checkpoint_metrics(eval_result)
+                    elif mean_train_loss is not None:
+                        checkpoint_metrics = {"train_loss": mean_train_loss}
+                    else:
+                        checkpoint_metrics = {}
                     save_checkpoint(
                         estimator=self.finetuned_estimator_,
                         output_dir=output_dir,
                         epoch=epoch + 1,
                         optimizer=optimizer,
-                        metrics=self._get_checkpoint_metrics(eval_result),
+                        metrics=checkpoint_metrics,
                         train_size=train_size,
                         is_best=is_best,
                         save_interval_checkpoint=save_interval_checkpoint,
