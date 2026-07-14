@@ -258,7 +258,9 @@ def test__regressor_checkpoint_contains_mse_metric(
         finetune_ctx_query_split_ratio=0.2,
         n_inference_subsample_samples=120,
         random_state=42,
-        early_stopping=False,
+        # Best checkpoints are only saved under early stopping; the improving
+        # eval side effect below keeps it from actually triggering.
+        early_stopping=True,
         use_lr_scheduler=False,
         n_estimators_finetune=1,
         n_estimators_validation=1,

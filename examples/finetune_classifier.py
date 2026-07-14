@@ -47,17 +47,18 @@ logging.basicConfig(
 # =============================================================================
 
 # Training hyperparameters
-NUM_EPOCHS = 30
+NUM_EPOCHS = 100
 LEARNING_RATE = 1e-5
-N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 30_000
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 50_000
+EARLY_STOPPING_PATIENCE = 15
 
 # Ensemble configuration
 # number of estimators to use during finetuning
-NUM_ESTIMATORS_FINETUNE = 2
+NUM_ESTIMATORS_FINETUNE = 4
 # number of estimators to use during trian time validation
-NUM_ESTIMATORS_VALIDATION = 2
+NUM_ESTIMATORS_VALIDATION = 4
 # number of estimators to use during final inference
-NUM_ESTIMATORS_FINAL_INFERENCE = 2
+NUM_ESTIMATORS_FINAL_INFERENCE = 4
 
 # Reproducibility
 RANDOM_STATE = 0
@@ -107,7 +108,6 @@ def main() -> None:
             device=[f"cuda:{i}" for i in range(torch.cuda.device_count())],
             n_estimators=NUM_ESTIMATORS_FINAL_INFERENCE,
             ignore_pretraining_limits=True,
-            inference_config={"SUBSAMPLE_SAMPLES": 50_000},
             random_state=RANDOM_STATE,
         )
         base_clf.fit(X_train, y_train)
@@ -135,6 +135,9 @@ def main() -> None:
         device="cuda",
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
+        lr_warmup_only=True,
+        eval_metric="log_loss",
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
         n_finetune_ctx_plus_query_samples=N_FINETUNE_CTX_PLUS_QUERY_SAMPLES,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,

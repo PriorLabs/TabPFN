@@ -44,12 +44,14 @@ logging.basicConfig(
 # =============================================================================
 
 # Training hyperparameters
-NUM_EPOCHS = 30
+NUM_EPOCHS = 100
 LEARNING_RATE = 1e-5
 
-# We can fine-tune using almost the entire housing dataset
-# in the context of the train batches.
-N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 20_000
+# Small meta-dataset chunks give several optimizer steps per epoch with varied
+# contexts. On a dataset this size (~18.6k rows), fine-tuning overfits within a
+# few epochs; diverse small contexts delay that, and early stopping (on the
+# validation MSE) picks the checkpoint just before it sets in.
+N_FINETUNE_CTX_PLUS_QUERY_SAMPLES = 5_000
 
 # Ensemble configuration
 # number of estimators to use during finetuning
@@ -58,6 +60,9 @@ NUM_ESTIMATORS_FINETUNE = 8
 NUM_ESTIMATORS_VALIDATION = 8
 # number of estimators to use during final inference
 NUM_ESTIMATORS_FINAL_INFERENCE = 8
+
+# early stopping patience
+EARLY_STOPPING_PATIENCE = 15
 
 # Reproducibility
 RANDOM_STATE = 0
@@ -91,7 +96,6 @@ def main() -> None:
             device=[f"cuda:{i}" for i in range(torch.cuda.device_count())],
             n_estimators=NUM_ESTIMATORS_FINAL_INFERENCE,
             ignore_pretraining_limits=True,
-            inference_config={"SUBSAMPLE_SAMPLES": 50_000},
         )
         base_reg.fit(X_train, y_train)
 
@@ -118,11 +122,13 @@ def main() -> None:
         device="cuda",
         epochs=NUM_EPOCHS,
         learning_rate=LEARNING_RATE,
+        lr_warmup_only=True,
         random_state=RANDOM_STATE,
         n_finetune_ctx_plus_query_samples=N_FINETUNE_CTX_PLUS_QUERY_SAMPLES,
         n_estimators_finetune=NUM_ESTIMATORS_FINETUNE,
         n_estimators_validation=NUM_ESTIMATORS_VALIDATION,
         n_estimators_final_inference=NUM_ESTIMATORS_FINAL_INFERENCE,
+        early_stopping_patience=EARLY_STOPPING_PATIENCE,
     )
 
     # 4. Call .fit() to start the fine-tuning process on the training data

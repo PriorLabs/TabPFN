@@ -11,6 +11,7 @@ This module contains tests for:
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
@@ -463,6 +464,98 @@ def test__finetuned_tabpfn_classifier__fit_and_predict(
     assert all(pred in np.unique(y_train) for pred in predictions)
 
 
+@pytest.mark.parametrize("validation_split_ratio", [None, 0])
+def test__finetuned_tabpfn_classifier__fit_without_validation(
+    validation_split_ratio: float | None,
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """Disabling validation trains on all data and skips evaluation entirely.
+
+    With ``validation_split_ratio=None`` (or ``0``), ``fit`` must run end to
+    end without ever calling ``_evaluate_model``, and ``early_stopping=True``
+    must be silently downgraded (with a log message) rather than acting on a
+    non-existent validation metric: with ``early_stopping_patience=1`` and no
+    validation, all epochs still run.
+
+    Checkpointing must not carry the "best model" concept over from the
+    validation mode: only interval checkpoints are written (never a best
+    checkpoint), and they record the train loss rather than placeholder
+    validation metrics.
+
+    This covers the shared ``FinetunedTabPFNBase._fit`` no-validation branch;
+    ``FinetunedTabPFNRegressor`` inherits the identical code path.
+    """
+    X, y = synthetic_data
+    n_classes = len(np.unique(y))
+    X_train, X_test, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    X_test = np.asarray(X_test)
+    y_train = np.asarray(y_train)
+
+    epochs = 3
+    finetuned_clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=epochs,
+        learning_rate=1e-4,
+        validation_split_ratio=validation_split_ratio,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=True,
+        early_stopping_patience=1,
+        save_checkpoint_interval=1,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+    )
+
+    mock_forward = create_mock_architecture_forward(n_classes=n_classes)
+
+    caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
+    with (
+        mock.patch.object(
+            TabPFNV3,
+            "forward",
+            autospec=True,
+            side_effect=mock_forward,
+        ),
+        mock.patch.object(
+            finetuned_clf,
+            "_evaluate_model",
+            wraps=finetuned_clf._evaluate_model,
+        ) as evaluate_model_spy,
+    ):
+        finetuned_clf.fit(X_train, y_train, output_dir=tmp_path)
+
+    assert finetuned_clf.is_fitted_
+    evaluate_model_spy.assert_not_called()
+    assert "early stopping is disabled" in caplog.text
+
+    epoch_records = [
+        record for record in caplog.records if "Train Loss" in record.getMessage()
+    ]
+    assert len(epoch_records) == epochs
+
+    # No "best" checkpoint without validation, one interval checkpoint per
+    # epoch, and the stored metrics reflect training (no placeholder values).
+    assert not list(tmp_path.glob("*_best.pth"))
+    interval_checkpoints = sorted(tmp_path.glob("checkpoint_*.pth"))
+    assert len(interval_checkpoints) == epochs
+    checkpoint = torch.load(
+        interval_checkpoints[-1], map_location="cpu", weights_only=False
+    )
+    assert np.isfinite(checkpoint["train_loss"])
+    assert "primary_metric" not in checkpoint
+
+    probabilities = finetuned_clf.predict_proba(X_test)
+    assert probabilities.shape == (X_test.shape[0], n_classes)
+    assert np.allclose(probabilities.sum(axis=1), 1.0, atol=1e-5)
+
+
 def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     synthetic_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
@@ -599,7 +692,9 @@ def test__finetuned_tabpfn_classifier__checkpoint_saving_and_loading(
         finetune_ctx_query_split_ratio=0.1,
         n_inference_subsample_samples=100,
         random_state=42,
-        early_stopping=False,
+        # Best checkpoints are only saved under early stopping; the improving
+        # eval side effect below keeps it from actually triggering.
+        early_stopping=True,
         use_lr_scheduler=False,
         n_estimators_finetune=1,
         n_estimators_validation=1,
@@ -708,9 +803,10 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
     epoch_2_checkpoint = output_folder / "checkpoint_70_2.pth"
     assert epoch_2_checkpoint.exists(), "Checkpoint at epoch 2 should exist"
 
+    # Without early stopping the last epoch is the result: no best checkpoint.
     best_checkpoint_path = output_folder / "checkpoint_70_best.pth"
-    assert best_checkpoint_path.exists(), (
-        "Best checkpoint should exist after first training"
+    assert not best_checkpoint_path.exists(), (
+        "No best checkpoint should be saved when early stopping is disabled"
     )
 
     # Resume training for another 2 epochs (total 4)
@@ -747,7 +843,7 @@ def test__finetuned_tabpfn_classifier__checkpoint_resumption(
         "Checkpoint at epoch 4 should exist after resumption"
     )
 
-    assert best_checkpoint_path.exists()
+    assert not best_checkpoint_path.exists()
 
     # Verify predictions work
     y_pred_proba = finetuned_clf_resumed.predict_proba(X_test)
@@ -864,9 +960,11 @@ def test__finetuned_tabpfn_classifier__checkpoint_interval_configuration(
             f"Checkpoint at epoch {epoch} should not exist"
         )
 
-    # Verify best checkpoint exists
+    # Without early stopping the last epoch is the result: no best checkpoint.
     best_checkpoint_path = output_folder / "checkpoint_70_best.pth"
-    assert best_checkpoint_path.exists(), "Best checkpoint should exist"
+    assert not best_checkpoint_path.exists(), (
+        "No best checkpoint should be saved when early stopping is disabled"
+    )
 
 
 @pytest.mark.parametrize("device", get_pytest_devices_with_mps_marked_slow())
@@ -897,7 +995,9 @@ def test__finetuned_tabpfn_classifier__best_checkpoint_saving(
         finetune_ctx_query_split_ratio=0.1,
         n_inference_subsample_samples=100,
         random_state=42,
-        early_stopping=False,
+        # Best checkpoints are only saved under early stopping; the improving
+        # eval side effect below keeps it from actually triggering.
+        early_stopping=True,
         use_lr_scheduler=False,
         n_estimators_finetune=1,
         n_estimators_validation=1,
