@@ -574,7 +574,7 @@ def _build_cache(
     quantize_kv_cache: bool,
 ) -> TabPFNV3Cache:
     """Build a cache the way the inference engine does: forward to populate it,
-    then apply the ``maybe_quantize_kv_cache`` step (``cache.quantize()``).
+    then apply the ``kv_cache_dtype="int8"`` step (``cache.quantize()``).
     """
     _, cache = arch(x, y, return_kv_cache=True)
     return cache.quantize() if quantize_kv_cache else cache

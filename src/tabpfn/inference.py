@@ -12,7 +12,7 @@ from copy import deepcopy
 from functools import partial
 from inspect import signature
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Literal, TypeVar
 from typing_extensions import override
 
 import joblib
@@ -835,9 +835,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     When ``keep_cache_on_device=True``, each per-estimator cache is kept
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
 
-    For TabPFN-3 models, the KV cache is stored as int8 (per-tensor symmetric
-    quantization) to reduce memory footprint; dequantization happens on-the-fly
-    in the attention layer.
+    For TabPFN-3 models, the KV cache can be stored as int8 (per-tensor
+    symmetric quantization) to reduce memory footprint, selected via
+    ``kv_cache_dtype="int8"`` (the default); dequantization then happens
+    on-the-fly in the attention layer. With ``kv_cache_dtype="auto"`` the
+    cache keeps whatever dtype it was computed in.
 
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
@@ -857,7 +859,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         autocast: bool,
         keep_cache_on_device: bool = True,
-        maybe_quantize_kv_cache: bool = True,
+        kv_cache_dtype: Literal["auto", "int8"] = "int8",
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -882,9 +884,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 memory but avoids CPU↔GPU transfers, giving lower latency.
                 When False, caches are moved to CPU after building and
                 transferred to the target device on every predict call.
-            maybe_quantize_kv_cache: If True (default), quantize the KV cache
-                to reduce memory footprint if it is supported by the architecture.
-                If False, the KV cache is not quantized.
+            kv_cache_dtype: Dtype the KV cache is stored in. ``"int8"``
+                (default) quantizes the cache with per-tensor symmetric
+                quantization to reduce memory footprint, if supported by the
+                architecture. ``"auto"`` keeps the cache in whatever dtype it
+                was computed in (no quantization).
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -894,7 +898,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
-        self.maybe_quantize_kv_cache = maybe_quantize_kv_cache
+        self.kv_cache_dtype = kv_cache_dtype
         self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
@@ -1007,7 +1011,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if self.maybe_quantize_kv_cache and hasattr(cache, "quantize"):
+        if self.kv_cache_dtype == "int8" and hasattr(cache, "quantize"):
             cache = cache.quantize()
         if self.keep_cache_on_device:
             return cache

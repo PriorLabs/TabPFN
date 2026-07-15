@@ -7,7 +7,7 @@ import itertools
 import os
 import typing
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Literal
 from unittest import mock
 
 import numpy as np
@@ -26,7 +26,6 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
-from tabpfn.inference import InferenceEngineExplicitKVCache
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -295,7 +294,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
     model_version: ModelVersion,
     device: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kwargs = {
         "version": model_version,
@@ -313,21 +311,11 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
 
-    original_init = InferenceEngineExplicitKVCache.__init__
-
-    def _init_without_kv_quantization(
-        self: InferenceEngineExplicitKVCache, *args: Any, **kwargs: Any
-    ) -> None:
-        kwargs.setdefault("maybe_quantize_kv_cache", False)
-        original_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(
-        InferenceEngineExplicitKVCache, "__init__", _init_without_kv_quantization
-    )
-
+    # kv_cache_dtype="auto" keeps the cache un-quantized, so the cached path
+    # matches the non-cached path (int8 quantization would perturb it).
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor.create_default_for_version(
-        fit_mode="fit_with_cache", **kwargs
+        fit_mode="fit_with_cache", kv_cache_dtype="auto", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=2)

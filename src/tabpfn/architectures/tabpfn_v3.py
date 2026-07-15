@@ -290,7 +290,7 @@ def get_cache_size(
       stay fp32.
 
     The KV cache is additionally int8-quantized when ``quantize_kv_cache`` is
-    True (mirroring the engine's ``maybe_quantize_kv_cache``).
+    True (mirroring the engine's ``kv_cache_dtype="int8"``).
 
     Args:
         n_train: Number of training rows. The KV cache and train activations
@@ -308,7 +308,7 @@ def get_cache_size(
             fp32, since autocast keeps those ops in fp32).
         quantize_kv_cache: If True (default), the KV cache is sized at
             :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
-            the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales at
+            the engine's ``kv_cache_dtype="int8"``) plus per-tensor scales at
             the KV compute dtype; if False, the K/V are sized at the compute
             dtype with no scales.
 

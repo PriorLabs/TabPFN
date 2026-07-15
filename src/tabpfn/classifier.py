@@ -40,6 +40,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    warn_if_kv_cache_dtype_overrides_inference_precision,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -233,6 +234,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         ] = "fit_preprocessors",
         memory_saving_mode: MemorySavingMode = "auto",
         keep_cache_on_device: bool = True,
+        kv_cache_dtype: Literal["auto", "int8"] = "int8",
         random_state: int | np.random.RandomState | np.random.Generator | None = 0,
         n_jobs: Annotated[int | None, deprecated("Use n_preprocessing_jobs")] = None,
         n_preprocessing_jobs: int = 1,
@@ -419,6 +421,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 device (e.g. GPU). Uses more device
                 memory but gives lower latency. If False, the cache is stored on CPU.
 
+            kv_cache_dtype:
+                Only relevant when `fit_mode="fit_with_cache"`. Dtype the
+                key-value cache is stored in. `"int8"` (default) quantizes the
+                cache with per-tensor symmetric quantization to reduce memory
+                footprint (if supported by the architecture); `"auto"` keeps
+                the cache in the dtype it was computed in (no quantization).
+                Note that with the default `"int8"` the cache stays int8 even
+                when `inference_precision` forces another dtype; pass `"auto"`
+                to keep the KV cache in the forced dtype.
+
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible
                 results and see the scikit-learn glossary for more information. If
@@ -503,6 +515,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.show_progress_bar = show_progress_bar
         self.memory_saving_mode: MemorySavingMode = memory_saving_mode
         self.keep_cache_on_device = keep_cache_on_device
+        self.kv_cache_dtype = kv_cache_dtype
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
@@ -815,6 +828,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "batched",
             ] = "fit_preprocessors"
 
+        warn_if_kv_cache_dtype_overrides_inference_precision(
+            fit_mode=self.fit_mode,
+            kv_cache_dtype=self.kv_cache_dtype,
+            inference_precision=self.inference_precision,
+        )
+
         static_seed, _ = infer_random_state(self.random_state)
         byte_size = self._initialize_model_variables()
         ensemble_configs, X, y = self._initialize_dataset_preprocessing(
@@ -858,6 +877,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             use_autocast_=self.use_autocast_,
             inference_mode=True,
             keep_cache_on_device=self.keep_cache_on_device,
+            kv_cache_dtype=self.kv_cache_dtype,
         )
 
         return self
