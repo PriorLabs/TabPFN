@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+from typing import Literal
 
 import pytest
 import torch
@@ -571,20 +572,20 @@ def _build_cache(
     x: torch.Tensor,
     y: torch.Tensor,
     *,
-    quantize_kv_cache: bool,
+    kv_cache_dtype: Literal["auto", "int8"],
 ) -> TabPFNV3Cache:
     """Build a cache the way the inference engine does: forward to populate it,
     then apply the ``kv_cache_dtype="int8"`` step (``cache.quantize()``).
     """
     _, cache = arch(x, y, return_kv_cache=True)
-    return cache.quantize() if quantize_kv_cache else cache
+    return cache.quantize() if kv_cache_dtype == "int8" else cache
 
 
 @torch.no_grad()
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
-@pytest.mark.parametrize("quantize_kv_cache", [True, False])
+@pytest.mark.parametrize("kv_cache_dtype", ["int8", "auto"])
 def test__calculate_cache_size__matches_whole_classifier_cache(
-    quantize_kv_cache: bool,
+    kv_cache_dtype: Literal["auto", "int8"],
     dtype: torch.dtype,
 ) -> None:
     """get_cache_size equals the exact byte size of every tensor in a real
@@ -606,14 +607,14 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     torch.manual_seed(0)
     x = (torch.randn(20, 1, n_features, dtype=torch.float32) * 0.1).to(dtype)
     y = torch.randint(0, 10, (n_train,), dtype=torch.float32).to(dtype)
-    cache = _build_cache(arch, x, y, quantize_kv_cache=quantize_kv_cache)
+    cache = _build_cache(arch, x, y, kv_cache_dtype=kv_cache_dtype)
 
     total = get_cache_size(
         n_train=n_train,
         n_features=n_features,
         model_config=cfg,
         base_dtype=dtype,
-        quantize_kv_cache=quantize_kv_cache,
+        kv_cache_dtype=kv_cache_dtype,
     )
     # Exact: accounts for every tensor the real cache holds.
     assert total == _sum_cache_tensors(cache)
@@ -625,9 +626,9 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     reason="Autocast inference is only enabled on CUDA (disabled on CPU/MPS), so "
     "the mixed-precision cache it produces can only be built on a GPU.",
 )
-@pytest.mark.parametrize("quantize_kv_cache", [True, False])
+@pytest.mark.parametrize("kv_cache_dtype", ["int8", "auto"])
 def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
-    quantize_kv_cache: bool,
+    kv_cache_dtype: Literal["auto", "int8"],
 ) -> None:
     """get_cache_size matches the exact byte size of a real classifier cache built
     on the GPU autocast path (the default for ``inference_precision='auto'`` on a
@@ -652,7 +653,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
     y = torch.randint(0, 10, (n_train,), dtype=torch.float32, device=device)
     with get_autocast_context(device, enabled=True):
         _, cache = arch(x, y, return_kv_cache=True)
-    if quantize_kv_cache:
+    if kv_cache_dtype == "int8":
         cache = cache.quantize()
 
     total = get_cache_size(
@@ -661,7 +662,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
         model_config=cfg,
         # "autocast": KV/train_embeddings sized at fp16, inducing/scaler at fp32.
         base_dtype="autocast",
-        quantize_kv_cache=quantize_kv_cache,
+        kv_cache_dtype=kv_cache_dtype,
     )
     assert total == _sum_cache_tensors(cache)
 
@@ -687,7 +688,7 @@ def test__calculate_cache_size__matches_whole_regression_cache(
     torch.manual_seed(0)
     x = torch.randn(20, 1, n_features, dtype=torch.float32).to(dtype)
     y = torch.randn(n_train, dtype=torch.float32).to(dtype)
-    cache = _build_cache(arch, x, y, quantize_kv_cache=True)
+    cache = _build_cache(arch, x, y, kv_cache_dtype="int8")
 
     total = get_cache_size(
         n_train=n_train, n_features=n_features, model_config=cfg, base_dtype=dtype
@@ -709,7 +710,7 @@ def test__calculate_cache_size__mqa_smaller_than_mha() -> None:
     mha = tabpfn_v3.TabPFNV3Config(**common)  # H_kv = icl_num_heads = 4
     mqa = tabpfn_v3.TabPFNV3Config(**common, icl_num_kv_heads_test=1)  # H_kv = 1
     n_train = 50
-    # quantize_kv_cache defaults to True, so the KV cache is int8 (1 byte)
+    # kv_cache_dtype defaults to "int8", so the KV cache is int8 (1 byte)
     # regardless of base_dtype; base_dtype only sizes the (cancelling) non-KV terms.
     kw = {"n_train": n_train, "n_features": 5, "base_dtype": torch.float32}
     est_mha = get_cache_size(model_config=mha, **kw)
@@ -739,7 +740,7 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
         "n_features": 1,
         "model_config": config,
         "base_dtype": torch.float16,
-        "quantize_kv_cache": True,
+        "kv_cache_dtype": "int8",
     }
     # get_cache_size always sums the full cache. Fixed terms (n_features = 1):
     #   KV int8:            nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000
