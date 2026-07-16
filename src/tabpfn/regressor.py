@@ -423,14 +423,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 memory but gives lower latency. If False, the cache is stored on CPU.
 
             kv_cache_dtype:
-                Only relevant when `fit_mode="fit_with_cache"`. Dtype the
-                key-value cache is stored in. `"int8"` (default) quantizes the
-                cache with per-tensor symmetric quantization to reduce memory
-                footprint (if supported by the architecture); `"auto"` keeps
-                the cache in the dtype it was computed in (no quantization).
-                Note that with the default `"int8"` the cache stays int8 even
-                when `inference_precision` forces another dtype; pass `"auto"`
-                to keep the KV cache in the forced dtype.
+                Only relevant when `fit_mode="fit_with_cache"`. `"int8"`
+                (default) quantizes the key-value cache to save memory; `"auto"`
+                keeps the computed dtype. With `"int8"` the cache stays int8
+                even when `inference_precision` forces another dtype — pass
+                `"auto"` to keep it in the forced dtype.
 
             random_state:
                 Controls the randomness of the model. Pass an int for reproducible

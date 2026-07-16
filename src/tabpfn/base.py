@@ -335,10 +335,9 @@ def create_inference_engine(  # noqa: PLR0913
             inference device. If False, caches are offloaded to CPU as they
             are built and moved back on demand during inference, lowering
             resident device memory at the cost of per-call transfers.
-        kv_cache_dtype: Only relevant for ``fit_mode="fit_with_cache"``. Dtype
-            the KV cache is stored in. ``"int8"`` (default) quantizes the cache
-            to reduce memory footprint (if supported by the architecture);
-            ``"auto"`` keeps the cache in the dtype it was computed in.
+        kv_cache_dtype: Only for ``fit_mode="fit_with_cache"``. ``"int8"``
+            (default) quantizes the KV cache to save memory; ``"auto"`` keeps
+            the computed dtype.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(

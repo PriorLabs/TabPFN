@@ -835,11 +835,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     When ``keep_cache_on_device=True``, each per-estimator cache is kept
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
 
-    For TabPFN-3 models, the KV cache can be stored as int8 (per-tensor
-    symmetric quantization) to reduce memory footprint, selected via
-    ``kv_cache_dtype="int8"`` (the default); dequantization then happens
-    on-the-fly in the attention layer. With ``kv_cache_dtype="auto"`` the
-    cache keeps whatever dtype it was computed in.
+    For TabPFN-3 models, ``kv_cache_dtype="int8"`` (the default) stores the KV
+    cache with per-tensor symmetric quantization to save memory, dequantizing
+    on-the-fly in the attention layer; ``"auto"`` keeps the computed dtype.
 
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
@@ -885,10 +883,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 When False, caches are moved to CPU after building and
                 transferred to the target device on every predict call.
             kv_cache_dtype: Dtype the KV cache is stored in. ``"int8"``
-                (default) quantizes the cache with per-tensor symmetric
-                quantization to reduce memory footprint, if supported by the
-                architecture. ``"auto"`` keeps the cache in whatever dtype it
-                was computed in (no quantization).
+                (default) quantizes it to save memory (if the architecture
+                supports it); ``"auto"`` keeps the computed dtype.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],

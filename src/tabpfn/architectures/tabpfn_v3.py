@@ -307,10 +307,9 @@ def get_cache_size(
             sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
             fp32, since autocast keeps those ops in fp32).
         kv_cache_dtype: If ``"int8"`` (default), the KV cache is sized at
-            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
-            the engine's ``kv_cache_dtype="int8"``) plus per-tensor scales at
-            the KV compute dtype; if ``"auto"``, the K/V are sized at the
-            compute dtype with no scales.
+            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` plus
+            per-tensor scales; if ``"auto"``, K/V are sized at the compute
+            dtype with no scales.
 
     Returns:
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
