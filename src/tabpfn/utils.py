@@ -5,8 +5,10 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 from collections.abc import Sequence
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -222,10 +224,43 @@ def is_autocast_available(device_type: str) -> bool:
         )
 
 
+@functools.lru_cache(maxsize=1)
+def cpu_supports_fast_bf16() -> bool:
+    """Whether the host CPU has native bfloat16 matmul acceleration.
+
+    ``torch.autocast("cpu")`` runs in bfloat16. That is a meaningful speed-up
+    (~2x on TabPFN inference) only when the CPU has hardware bf16 support
+    (Intel AMX or AVX512-BF16, AMD Zen 4+); on other CPUs bf16 is emulated and
+    can be *slower* than float32. We therefore only report support when such
+    hardware is positively detected, and otherwise stay in float32 so ``"auto"``
+    never regresses.
+
+    Returns:
+        True if the CPU is known to accelerate bfloat16, False when unsure.
+    """
+    # 1) PyTorch's own view of the usable CPU ISA. Portable across OSes and
+    #    catches Intel AMX (which reports as "AMX"). Probing must never hard-fail.
+    with contextlib.suppress(Exception):
+        capability = torch.backends.cpu.get_cpu_capability()
+        if isinstance(capability, str) and capability.upper() == "AMX":
+            return True
+    # 2) Linux CPU flags. Catches AVX512-BF16 (Cooper Lake, AMD Zen 4+), which
+    #    (1) only reports coarsely as "AVX512".
+    with contextlib.suppress(OSError):
+        flags = Path("/proc/cpuinfo").read_bytes()
+        if b"amx_bf16" in flags or b"avx512_bf16" in flags:
+            return True
+    return False
+
+
 def infer_fp16_inference_mode(
     devices: Sequence[torch.device], *, enable: bool | None
 ) -> bool:
-    """Infer whether fp16 inference should be enabled.
+    """Infer whether reduced-precision (autocast) inference should be enabled.
+
+    On GPU this is fp16 autocast; on CPU ``torch.autocast`` runs in bfloat16,
+    which is enabled only on CPUs with native bf16 support (see
+    :func:`cpu_supports_fast_bf16`).
 
     Args:
         devices: The devices to validate against.
@@ -234,17 +269,26 @@ def infer_fp16_inference_mode(
             detect if it's possible and use it if so.
 
     Returns:
-        Whether to use fp16 inference or not.
+        Whether to use autocast inference or not.
 
     Raises:
-        ValueError: If fp16 inference was enabled and any of the selected devices do
+        ValueError: If autocast was enabled and any of the selected devices do
             not support it.
     """
     is_cpu = any(device.type.lower() == "cpu" for device in devices)
-    fp16_available = (
-        not is_cpu  # CPU can show enabled, yet it kills inference speed
-        and any(is_autocast_available(device.type) for device in devices)
-    )
+    if is_cpu:
+        # Historically CPU was excluded outright because fp16 autocast kills
+        # inference speed there. But CPU autocast uses *bfloat16*, which is
+        # hardware-accelerated on AMX/AVX512-BF16/Zen4+ for a ~2x speed-up at
+        # negligible accuracy cost. Enable it only when every device is a CPU
+        # with fast bf16; otherwise keep float32 (no regression).
+        fp16_available = (
+            all(device.type.lower() == "cpu" for device in devices)
+            and is_autocast_available("cpu")
+            and cpu_supports_fast_bf16()
+        )
+    else:
+        fp16_available = any(is_autocast_available(device.type) for device in devices)
 
     if enable is None:
         return fp16_available

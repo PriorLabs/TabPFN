@@ -13,7 +13,9 @@ from torch.torch_version import TorchVersion
 from tabpfn.utils import (
     _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
+    cpu_supports_fast_bf16,
     infer_devices,
+    infer_fp16_inference_mode,
     translate_probs_across_borders,
 )
 
@@ -269,3 +271,64 @@ def test__translate_probs_across_borders__forces_chunking(
     assert call_counter["n"] == total_rows  # chunk_size == 1 row here
     assert out_chunked.shape == out_unchunked.shape
     assert torch.equal(out_chunked, out_unchunked)
+
+
+class TestCpuSupportsFastBf16:
+    """Detection of native CPU bfloat16 acceleration (AMX / AVX512-BF16)."""
+
+    def test__amx_reported_by_torch__returns_true(self, mocker: MagicMock) -> None:
+        cpu_supports_fast_bf16.cache_clear()
+        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AMX")
+        assert cpu_supports_fast_bf16() is True
+
+    def test__avx512_bf16_in_cpuinfo__returns_true(self, mocker: MagicMock) -> None:
+        cpu_supports_fast_bf16.cache_clear()
+        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX512")
+        mocker.patch(
+            "builtins.open",
+            mocker.mock_open(read_data=b"flags\t: avx512f avx512_bf16 amx_tile"),
+        )
+        assert cpu_supports_fast_bf16() is True
+
+    def test__no_bf16_hardware__returns_false(self, mocker: MagicMock) -> None:
+        cpu_supports_fast_bf16.cache_clear()
+        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX2")
+        mocker.patch(
+            "builtins.open", mocker.mock_open(read_data=b"flags\t: avx2 sse4_2")
+        )
+        assert cpu_supports_fast_bf16() is False
+
+    def test__probing_raises__returns_false(self, mocker: MagicMock) -> None:
+        cpu_supports_fast_bf16.cache_clear()
+        mocker.patch(
+            "torch.backends.cpu.get_cpu_capability",
+            side_effect=RuntimeError("boom"),
+        )
+        mocker.patch("builtins.open", side_effect=OSError("no /proc"))
+        assert cpu_supports_fast_bf16() is False
+
+
+class TestInferFp16InferenceModeCpu:
+    """CPU branch: autocast (bf16) enabled only on fast-bf16 hardware."""
+
+    def test__cpu_with_fast_bf16__auto__enabled(self, mocker: MagicMock) -> None:
+        mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=True)
+        mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
+        assert infer_fp16_inference_mode([torch.device("cpu")], enable=None) is True
+
+    def test__cpu_without_fast_bf16__auto__disabled(self, mocker: MagicMock) -> None:
+        mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=False)
+        mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
+        assert infer_fp16_inference_mode([torch.device("cpu")], enable=None) is False
+
+    def test__cpu_without_fast_bf16__explicit_enable__raises(
+        self, mocker: MagicMock
+    ) -> None:
+        mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=False)
+        mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
+        with pytest.raises(ValueError, match="does not support it"):
+            infer_fp16_inference_mode([torch.device("cpu")], enable=True)
+
+    def test__cpu_explicit_disable__stays_false(self, mocker: MagicMock) -> None:
+        mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=True)
+        assert infer_fp16_inference_mode([torch.device("cpu")], enable=False) is False
