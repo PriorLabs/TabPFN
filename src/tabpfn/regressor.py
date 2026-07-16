@@ -732,7 +732,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
             keep_cache_on_device=self.keep_cache_on_device,
-            kv_cache_dtype=self.kv_cache_dtype,
+            kv_cache_dtype=getattr(self, "kv_cache_dtype", "int8"),
             inference_mode=inference_mode,
         )
 
