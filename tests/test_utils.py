@@ -285,8 +285,8 @@ class TestCpuSupportsFastBf16:
         cpu_supports_fast_bf16.cache_clear()
         mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX512")
         mocker.patch(
-            "builtins.open",
-            mocker.mock_open(read_data=b"flags\t: avx512f avx512_bf16 amx_tile"),
+            "tabpfn.utils.Path.read_bytes",
+            return_value=b"flags\t: avx512f avx512_bf16 amx_tile",
         )
         assert cpu_supports_fast_bf16() is True
 
@@ -294,7 +294,7 @@ class TestCpuSupportsFastBf16:
         cpu_supports_fast_bf16.cache_clear()
         mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX2")
         mocker.patch(
-            "builtins.open", mocker.mock_open(read_data=b"flags\t: avx2 sse4_2")
+            "tabpfn.utils.Path.read_bytes", return_value=b"flags\t: avx2 sse4_2"
         )
         assert cpu_supports_fast_bf16() is False
 
@@ -304,7 +304,7 @@ class TestCpuSupportsFastBf16:
             "torch.backends.cpu.get_cpu_capability",
             side_effect=RuntimeError("boom"),
         )
-        mocker.patch("builtins.open", side_effect=OSError("no /proc"))
+        mocker.patch("tabpfn.utils.Path.read_bytes", side_effect=OSError("no /proc"))
         assert cpu_supports_fast_bf16() is False
 
 
