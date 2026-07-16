@@ -827,7 +827,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         warn_if_kv_cache_dtype_overrides_inference_precision(
             fit_mode=self.fit_mode,
-            kv_cache_dtype=self.kv_cache_dtype,
+            kv_cache_dtype=getattr(self, "kv_cache_dtype", "int8"),
             inference_precision=self.inference_precision,
         )
 
