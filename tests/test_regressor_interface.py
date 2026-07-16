@@ -684,14 +684,14 @@ def test_cpu_large_dataset_warning():
     # Create a CPU model
     model = TabPFNRegressor(device="cpu")
 
-    # Create synthetic data slightly above the warning threshold
+    # Create synthetic data slightly above the warning threshold (1000 for v3)
     rng = np.random.default_rng(seed=42)
-    X_large = rng.random((201, 10))
-    y_large = rng.random(201)
+    X_large = rng.random((1001, 10))
+    y_large = rng.random(1001)
 
     # Check that a warning is raised
     with pytest.warns(
-        UserWarning, match="Running on CPU with more than 200 samples may be slow"
+        UserWarning, match="Running on CPU with more than 1000 samples may be slow"
     ):
         model.fit(X_large, y_large)
 

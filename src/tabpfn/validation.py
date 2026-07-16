@@ -41,10 +41,10 @@ def ensure_compatible_fit_inputs(
     estimator: TabPFNRegressor | TabPFNClassifier,
     max_num_samples: int,
     max_num_features: int,
-    max_cpu_samples: int,
     ignore_pretraining_limits: bool,
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
+    max_cpu_samples: int = 1000,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
     """Validate and convert inputs to standardized format.
 
@@ -54,11 +54,11 @@ def ensure_compatible_fit_inputs(
         estimator: The estimator to validate the data for.
         max_num_samples: The maximum number of samples to allow.
         max_num_features: The maximum number of features to allow.
-        max_cpu_samples: Sample count above which CPU inference raises by default.
         ignore_pretraining_limits: Whether to ignore the pretraining limits.
         ensure_y_numeric: Whether to ensure the target data is numeric, e.g. for
             regression tasks.
         devices: The devices to use for the input data.
+        max_cpu_samples: Sample count above which CPU inference raises by default.
 
     Returns:
         A tuple of five elements:
@@ -126,9 +126,9 @@ def validate_dataset_size(
     *,
     max_num_samples: int,
     max_num_features: int,
-    max_cpu_samples: int,
     devices: tuple[torch.device, ...],
     ignore_pretraining_limits: bool = False,
+    max_cpu_samples: int = 1000,
 ) -> None:
     """Validate the dataset size."""
     if len(X) != len(y):
@@ -310,9 +310,11 @@ def _validate_num_samples_for_cpu(
                 "Alternatively, consider using a GPU or the tabpfn-client API: "
                 "https://github.com/PriorLabs/tabpfn-client"
             )
-        if num_samples > 200:
+        # Warn at a fifth of the hard limit, matching the pre-existing 200:1000 ratio.
+        warn_threshold = max_cpu_samples // 5
+        if num_samples > warn_threshold:
             warnings.warn(
-                "Running on CPU with more than 200 samples may be slow.\n"
+                f"Running on CPU with more than {warn_threshold} samples may be slow.\n"
                 "Consider using a GPU or the tabpfn-client API: "
                 "https://github.com/PriorLabs/tabpfn-client",
                 stacklevel=2,
