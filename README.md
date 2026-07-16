@@ -41,7 +41,7 @@ without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
 
 > ⚡ **GPU Recommended**:
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
-> On CPU, only small datasets (≲1000 samples) are feasible.
+> On CPU, only moderate datasets are feasible (the default TabPFN-3 allows up to 5000 samples; older versions up to 1000).
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
 To use our default TabPFN-3 model:
@@ -288,7 +288,7 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 
 **Model Configuration:**
 - `TABPFN_MODEL_CACHE_DIR`: Custom directory for caching downloaded TabPFN models (default: platform-specific user cache directory)
-- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU with large datasets (>1000 samples). Set to `true` to override the CPU limitation. Note: This will be very slow!
+- `TABPFN_ALLOW_CPU_LARGE_DATASET`: Allow running TabPFN on CPU above the per-model sample limit (5000 for the default TabPFN-3, 1000 for older versions). Set to `true` to override the CPU limitation. Note: large datasets can still be slow on CPU!
 - `TABPFN_MPS_MEMORY_FRACTION`: Fraction of recommended max MPS memory to allow on Apple Silicon (default: `0.7`). Used to prevent macOS system crashes; set before importing TabPFN. Values above `1.0` are not recommended.
 - `TABPFN_MAX_BATCHED_TEST_ROWS`: Maximum number of test rows fed through the model in a single forward pass during cached (`fit_mode="fit_with_cache"`) inference (default: `32768`). Larger test sets are split into independent chunks of at most this size and concatenated, bounding peak memory. Test rows are conditionally independent given the KV cache, so chunking is mathematically equivalent — results may still differ slightly due to floating-point non-associativity (see [#800](https://github.com/PriorLabs/TabPFN/issues/800#issuecomment-4903444425)). Performance should be close to optimal at the default of `32768`: the hardware is already saturated at that chunk size and, since the computations are independent, larger chunks bring no speedup. Set to `0` to disable chunking.
 
