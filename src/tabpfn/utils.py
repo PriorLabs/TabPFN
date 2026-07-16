@@ -29,7 +29,7 @@ MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 def get_autocast_context(
     device: torch.device, *, enabled: bool
 ) -> contextlib.AbstractContextManager:
-    """Returns a torch.autocast context manager, disabling it for MPS devices.
+    """Returns a torch.autocast context manager.
 
     Args:
         device: The torch device being used.
