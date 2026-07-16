@@ -71,6 +71,7 @@ class TestEnsureCompatibleFitInputsBasic:
             estimator=classifier,
             max_num_samples=10_000,
             max_num_features=500,
+            max_cpu_samples=1000,
             ignore_pretraining_limits=False,
             devices=cpu_devices,
         )
@@ -94,6 +95,7 @@ class TestEnsureCompatibleFitInputsBasic:
             estimator=classifier,
             max_num_samples=10_000,
             max_num_features=500,
+            max_cpu_samples=1000,
             ignore_pretraining_limits=False,
             devices=cpu_devices,
         )
@@ -113,6 +115,7 @@ class TestEnsureCompatibleFitInputsBasic:
             estimator=classifier,
             max_num_samples=10_000,
             max_num_features=500,
+            max_cpu_samples=1000,
             ignore_pretraining_limits=False,
             devices=cpu_devices,
         )
@@ -137,6 +140,7 @@ class TestEnsureCompatibleFitInputsValidation:
                 estimator=classifier,
                 max_num_samples=10_000,
                 max_num_features=5,  # Less than 10 features
+                max_cpu_samples=1000,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
@@ -155,6 +159,7 @@ class TestEnsureCompatibleFitInputsValidation:
                 estimator=classifier,
                 max_num_samples=50,  # Less than 100 samples
                 max_num_features=500,
+                max_cpu_samples=1000,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
@@ -173,6 +178,7 @@ class TestEnsureCompatibleFitInputsValidation:
             estimator=classifier,
             max_num_samples=50,
             max_num_features=5,
+            max_cpu_samples=1000,
             ignore_pretraining_limits=True,
             devices=cpu_devices,
         )
@@ -193,6 +199,7 @@ class TestEnsureCompatibleFitInputsValidation:
                 estimator=classifier,
                 max_num_samples=10_000,
                 max_num_features=500,
+                max_cpu_samples=1000,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
@@ -211,6 +218,7 @@ class TestEnsureCompatibleFitInputsValidation:
                 estimator=classifier,
                 max_num_samples=10_000,
                 max_num_features=500,
+                max_cpu_samples=1000,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
@@ -229,6 +237,7 @@ class TestEnsureCompatibleFitInputsValidation:
                 estimator=classifier,
                 max_num_samples=10_000,
                 max_num_features=500,
+                max_cpu_samples=1000,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
@@ -250,6 +259,7 @@ class TestEnsureCompatibleFitInputsWithNaN:
             estimator=classifier,
             max_num_samples=10_000,
             max_num_features=500,
+            max_cpu_samples=1000,
             ignore_pretraining_limits=False,
             devices=cpu_devices,
         )
