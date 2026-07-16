@@ -38,8 +38,6 @@ def get_autocast_context(
     Returns:
         A context manager for autocasting.
     """
-    if device.type == "mps":
-        return contextlib.nullcontext()
     return torch.autocast(device.type, enabled=enabled)
 
 
