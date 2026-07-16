@@ -58,7 +58,7 @@ jobs:
         # Pinned to v1 commit SHA to mitigate moving-tag supply-chain risk.
         # When updating, resolve the new tag's underlying commit via
         #   gh api /repos/anthropics/claude-code-action/git/refs/tags/<tag>
-        uses: anthropics/claude-code-action@e90deca47693f9457b72f2b53c17d7c445a87342  # v1
+        uses: anthropics/claude-code-action@1298632ce7736903d02a1435002705aa2a594a6c  # v1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
