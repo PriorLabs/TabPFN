@@ -293,9 +293,9 @@ def _validate_num_samples_for_cpu(
         return
 
     if any(device.type == "cpu" for device in devices):
-        if num_samples > 1000:
+        if num_samples > 5000:
             raise RuntimeError(
-                "Running on CPU with more than 1000 samples is not allowed "
+                "Running on CPU with more than 5000 samples is not allowed "
                 "by default due to slow performance.\n"
                 "To override this behavior, set the environment variable "
                 "TABPFN_ALLOW_CPU_LARGE_DATASET=1 or "
