@@ -226,26 +226,11 @@ def is_autocast_available(device_type: str) -> bool:
 
 @functools.lru_cache(maxsize=1)
 def cpu_supports_fast_bf16() -> bool:
-    """Whether the host CPU has native bfloat16 matmul acceleration.
+    """Whether the CPU accelerates bfloat16 (Intel AMX / AVX512-BF16, AMD Zen 4+).
 
-    ``torch.autocast("cpu")`` runs in bfloat16. That is a meaningful speed-up
-    (~2x on TabPFN inference) only when the CPU has hardware bf16 support
-    (Intel AMX or AVX512-BF16, AMD Zen 4+); on other CPUs bf16 is emulated and
-    can be *slower* than float32. We therefore only report support when such
-    hardware is positively detected, and otherwise stay in float32 so ``"auto"``
-    never regresses.
-
-    Returns:
-        True if the CPU is known to accelerate bfloat16, False when unsure.
+    Reads Linux CPU flags; returns False when they are unavailable (e.g. non-Linux)
+    so autocast stays off rather than falling back to emulated, slower bf16.
     """
-    # 1) PyTorch's own view of the usable CPU ISA. Portable across OSes and
-    #    catches Intel AMX (which reports as "AMX"). Probing must never hard-fail.
-    with contextlib.suppress(Exception):
-        capability = torch.backends.cpu.get_cpu_capability()
-        if isinstance(capability, str) and capability.upper() == "AMX":
-            return True
-    # 2) Linux CPU flags. Catches AVX512-BF16 (Cooper Lake, AMD Zen 4+), which
-    #    (1) only reports coarsely as "AVX512".
     with contextlib.suppress(OSError):
         flags = Path("/proc/cpuinfo").read_bytes()
         if b"amx_bf16" in flags or b"avx512_bf16" in flags:
@@ -277,11 +262,8 @@ def infer_fp16_inference_mode(
     """
     is_cpu = any(device.type.lower() == "cpu" for device in devices)
     if is_cpu:
-        # Historically CPU was excluded outright because fp16 autocast kills
-        # inference speed there. But CPU autocast uses *bfloat16*, which is
-        # hardware-accelerated on AMX/AVX512-BF16/Zen4+ for a ~2x speed-up at
-        # negligible accuracy cost. Enable it only when every device is a CPU
-        # with fast bf16; otherwise keep float32 (no regression).
+        # CPU autocast runs in bfloat16, which is only faster than float32 on CPUs
+        # with native bf16 support.
         fp16_available = (
             all(device.type.lower() == "cpu" for device in devices)
             and is_autocast_available("cpu")

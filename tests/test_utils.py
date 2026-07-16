@@ -276,34 +276,31 @@ def test__translate_probs_across_borders__forces_chunking(
 class TestCpuSupportsFastBf16:
     """Detection of native CPU bfloat16 acceleration (AMX / AVX512-BF16)."""
 
-    def test__amx_reported_by_torch__returns_true(self, mocker: MagicMock) -> None:
+    def test__amx_bf16_flag__returns_true(self, mocker: MagicMock) -> None:
         cpu_supports_fast_bf16.cache_clear()
-        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AMX")
-        assert cpu_supports_fast_bf16() is True
-
-    def test__avx512_bf16_in_cpuinfo__returns_true(self, mocker: MagicMock) -> None:
-        cpu_supports_fast_bf16.cache_clear()
-        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX512")
         mocker.patch(
             "tabpfn.utils.Path.read_bytes",
-            return_value=b"flags\t: avx512f avx512_bf16 amx_tile",
+            return_value=b"flags\t: avx512f amx_tile amx_bf16",
         )
         assert cpu_supports_fast_bf16() is True
 
-    def test__no_bf16_hardware__returns_false(self, mocker: MagicMock) -> None:
+    def test__avx512_bf16_flag__returns_true(self, mocker: MagicMock) -> None:
         cpu_supports_fast_bf16.cache_clear()
-        mocker.patch("torch.backends.cpu.get_cpu_capability", return_value="AVX2")
+        mocker.patch(
+            "tabpfn.utils.Path.read_bytes",
+            return_value=b"flags\t: avx512f avx512_bf16",
+        )
+        assert cpu_supports_fast_bf16() is True
+
+    def test__no_bf16_flag__returns_false(self, mocker: MagicMock) -> None:
+        cpu_supports_fast_bf16.cache_clear()
         mocker.patch(
             "tabpfn.utils.Path.read_bytes", return_value=b"flags\t: avx2 sse4_2"
         )
         assert cpu_supports_fast_bf16() is False
 
-    def test__probing_raises__returns_false(self, mocker: MagicMock) -> None:
+    def test__cpuinfo_unreadable__returns_false(self, mocker: MagicMock) -> None:
         cpu_supports_fast_bf16.cache_clear()
-        mocker.patch(
-            "torch.backends.cpu.get_cpu_capability",
-            side_effect=RuntimeError("boom"),
-        )
         mocker.patch("tabpfn.utils.Path.read_bytes", side_effect=OSError("no /proc"))
         assert cpu_supports_fast_bf16() is False
 
