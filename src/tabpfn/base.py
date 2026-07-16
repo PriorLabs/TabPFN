@@ -279,6 +279,10 @@ def warn_if_kv_cache_dtype_overrides_inference_precision(
     inference_precision: torch.dtype | Literal["autocast", "auto"],
 ) -> None:
     """Warn when a forced ``inference_precision`` is ignored by the int8 KV cache."""
+    if kv_cache_dtype not in ("auto", "int8"):
+        raise ValueError(
+            f"Invalid kv_cache_dtype: {kv_cache_dtype}. Expected 'auto' or 'int8'."
+        )
     if (
         fit_mode == "fit_with_cache"
         and kv_cache_dtype == "int8"

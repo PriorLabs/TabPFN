@@ -315,6 +315,11 @@ def get_cache_size(
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
+    if kv_cache_dtype not in ("auto", "int8"):
+        raise ValueError(
+            f"Invalid kv_cache_dtype: {kv_cache_dtype}. "
+            "Must be one of 'auto' or 'int8'."
+        )
     quantize_kv_cache = kv_cache_dtype == "int8"
 
     # Set the stored dtype of each cached component up front. On the forced-
