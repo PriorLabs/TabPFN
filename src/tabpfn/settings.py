@@ -52,7 +52,7 @@ class TabPFNSettings(BaseSettings):
     # Performance/Memory Settings
     allow_cpu_large_dataset: bool = Field(
         default=False,
-        description="Allow running TabPFN on CPU with large datasets (>5000 samples). "
+        description="Allow running TabPFN on CPU with large datasets. "
         "Set to True to override the CPU limitation.",
     )
     mps_memory_fraction: float = Field(

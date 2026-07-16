@@ -216,6 +216,11 @@ class InferenceConfig:
     is not the number of samples seen by the model during pretraining but also accounts
     for expected generalization (i.e., length extrapolation)."""
 
+    MAX_CPU_SAMPLES: int = 1000
+    """The number of samples above which CPU inference is disallowed by default due to
+    slow performance. Raise via ignore_pretraining_limits or the
+    TABPFN_ALLOW_CPU_LARGE_DATASET setting."""
+
     FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM: bool = True
     """Whether to repair any borders of the bar distribution in regression that are NaN
      after the transformation. This can happen due to multiple reasons and should in
@@ -293,6 +298,11 @@ class InferenceConfig:
             "Please make sure you are using a correct model checkpoint that contains "
             "the inference config."
         )
+
+
+def cpu_sample_limit(model_version: ModelVersion) -> int:
+    """Max sample count allowed for CPU inference by default, per model version."""
+    return 5000 if model_version == ModelVersion.V3 else 1000
 
 
 def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
