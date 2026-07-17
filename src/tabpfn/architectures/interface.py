@@ -255,9 +255,7 @@ class Architecture(nn.Module, ABC):
 
         ``"auto"`` (keep the computed dtype) is always supported. Architectures
         whose cache implements quantization override this to additionally list
-        e.g. ``"int8"``. Used to resolve the estimator's ``kv_cache_precision``:
-        ``None`` picks the most compact supported value, and an unsupported
-        request falls back to ``"auto"``.
+        e.g. ``"int8"``.
         """
         return ("auto",)
 

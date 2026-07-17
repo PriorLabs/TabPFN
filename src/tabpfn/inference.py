@@ -919,9 +919,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
-        self.kv_cache_precision = resolve_kv_cache_precision(
-            kv_cache_precision, architecture=models[0]
-        )
+        # Kept as the raw request; resolved per ensemble member in _build_cache
+        # against that member's own architecture (see resolve_kv_cache_precision).
+        self.kv_cache_precision = kv_cache_precision
         self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
@@ -982,6 +982,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         in parallel threads.
         """
         model = self.model_caches[model_index].get(device)
+        kv_cache_precision = resolve_kv_cache_precision(
+            self.kv_cache_precision, architecture=model
+        )
 
         # Cast model weights to match force_inference_dtype (else linear
         # layers throw a Half/Float mismatch).
@@ -1034,7 +1037,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if self.kv_cache_precision == "int8":
+        if kv_cache_precision == "int8":
             cache = cache.quantize()
         if self.keep_cache_on_device:
             return cache
