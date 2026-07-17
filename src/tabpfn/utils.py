@@ -142,7 +142,7 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
             )
 
         if "mps" not in exclude_devices and torch.backends.mps.is_available():
-            if _is_mps_supported():
+            if _is_torch_mps_supported():
                 return (torch.device("mps"),)
             warnings.warn(
                 "An MPS device is available, but TabPFN disables MPS for "
@@ -165,12 +165,17 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
             f"than once. It contained: {devices}"
         )
 
-    if not _is_mps_supported() and any(d.type == "mps" for d in devices):
-        raise ValueError(
-            "The MPS device was selected, "
-            "but TabPFN requires PyTorch >= 2.6 for MPS. "
-            'Upgrade PyTorch, or set `device="cpu"` instead.'
-        )
+    if any(d.type == "mps" for d in devices):
+        if not torch.backends.mps.is_available():
+            raise ValueError(
+                "The MPS device was selected, but MPS is not available on this system."
+            )
+        if not _is_torch_mps_supported():
+            raise ValueError(
+                "The MPS device was selected, "
+                "but TabPFN requires PyTorch >= 2.6 for MPS. "
+                "Upgrade PyTorch, or set device='cpu' instead."
+            )
 
     return devices
 
@@ -189,12 +194,12 @@ def _parse_device(device: str | torch.device) -> torch.device:
     return device
 
 
-def _is_mps_supported() -> bool:
+def _is_torch_mps_supported() -> bool:
     """Return True if the MPS device is supported, otherwise False.
 
     We require PyTorch >= 2.6 for MPS to support all used operations.
     """
-    return torch.__version__ >= "2.6" and torch.backends.mps.is_available()
+    return torch.__version__ >= "2.6"
 
 
 def is_autocast_available(device_type: str) -> bool:
