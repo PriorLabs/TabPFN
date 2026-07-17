@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import pathlib
 import typing
-import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -272,32 +271,6 @@ def determine_precision(
     return use_autocast_, forced_inference_dtype_, byte_size
 
 
-def warn_if_kv_cache_dtype_overrides_inference_precision(
-    *,
-    fit_mode: str,
-    kv_cache_dtype: Literal["auto", "int8"],
-    inference_precision: torch.dtype | Literal["autocast", "auto"],
-) -> None:
-    """Warn when a forced ``inference_precision`` is ignored by the int8 KV cache."""
-    if kv_cache_dtype not in ("auto", "int8"):
-        raise ValueError(
-            f"Invalid kv_cache_dtype: {kv_cache_dtype}. Expected 'auto' or 'int8'."
-        )
-    if (
-        fit_mode == "fit_with_cache"
-        and kv_cache_dtype == "int8"
-        and isinstance(inference_precision, torch.dtype)
-    ):
-        warnings.warn(
-            "inference_precision forces a dtype but kv_cache_dtype is 'int8', "
-            "so the KV cache is still stored as int8 regardless of the forced "
-            "dtype. Pass kv_cache_dtype='auto' to keep the KV cache in the "
-            "forced dtype.",
-            UserWarning,
-            stacklevel=3,
-        )
-
-
 def create_inference_engine(  # noqa: PLR0913
     *,
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache", "batched"],
@@ -312,7 +285,7 @@ def create_inference_engine(  # noqa: PLR0913
     use_autocast_: bool,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
-    kv_cache_dtype: Literal["auto", "int8"] = "int8",
+    kv_cache_precision: Literal["auto", "int8"] | None = None,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -339,9 +312,11 @@ def create_inference_engine(  # noqa: PLR0913
             inference device. If False, caches are offloaded to CPU as they
             are built and moved back on demand during inference, lowering
             resident device memory at the cost of per-call transfers.
-        kv_cache_dtype: Only for ``fit_mode="fit_with_cache"``. ``"int8"``
-            (default) quantizes the KV cache to save memory; ``"auto"`` keeps
-            the computed dtype.
+        kv_cache_precision: Only for ``fit_mode="fit_with_cache"``. Resolved
+            against what the architecture supports. ``None`` (default) picks the
+            architecture default (``"int8"`` when it can quantize, else
+            ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
+            ``"auto"`` keeps the computed dtype.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -378,7 +353,7 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
             keep_cache_on_device=keep_cache_on_device,
-            kv_cache_dtype=kv_cache_dtype,
+            kv_cache_precision=kv_cache_precision,
         )
     if fit_mode == "batched":
         raise ValueError(

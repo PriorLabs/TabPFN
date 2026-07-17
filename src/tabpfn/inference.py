@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
+import warnings
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sequence
 from copy import deepcopy
@@ -821,6 +822,27 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = use_inference
 
 
+def resolve_kv_cache_precision(
+    kv_cache_precision: Literal["auto", "int8"] | None,
+    *,
+    architecture: Architecture,
+) -> Literal["auto", "int8"]:
+    """Resolve the KV cache dtype against ``architecture``."""
+    supported = architecture.get_supported_kv_cache_precisions()
+    if kv_cache_precision is None:
+        return "int8" if "int8" in supported else "auto"
+    if kv_cache_precision not in supported:
+        warnings.warn(
+            f"kv_cache_precision={kv_cache_precision!r} is not supported by "
+            f"{type(architecture).__name__} (supported: {supported}); "
+            "falling back to 'auto' (the KV cache is not quantized).",
+            UserWarning,
+            stacklevel=2,
+        )
+        return "auto"
+    return kv_cache_precision
+
+
 class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     """Inference engine with explicit KV cache passed through forward().
 
@@ -835,7 +857,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     When ``keep_cache_on_device=True``, each per-estimator cache is kept
     on the GPU for subsequent prediction calls, avoiding CPU↔GPU transfers.
 
-    For TabPFN-3 models, ``kv_cache_dtype="int8"`` (the default) stores the KV
+    For TabPFN-3 models, ``kv_cache_precision="int8"`` (the default) stores the KV
     cache with per-tensor symmetric quantization to save memory, dequantizing
     on-the-fly in the attention layer; ``"auto"`` keeps the computed dtype.
 
@@ -857,7 +879,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         autocast: bool,
         keep_cache_on_device: bool = True,
-        kv_cache_dtype: Literal["auto", "int8"] = "int8",
+        kv_cache_precision: Literal["auto", "int8"] | None = None,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -882,9 +904,12 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 memory but avoids CPU↔GPU transfers, giving lower latency.
                 When False, caches are moved to CPU after building and
                 transferred to the target device on every predict call.
-            kv_cache_dtype: Dtype the KV cache is stored in. ``"int8"``
-                (default) quantizes it to save memory (if the architecture
-                supports it); ``"auto"`` keeps the computed dtype.
+            kv_cache_precision: Dtype the KV cache is stored in, resolved against
+                what the architecture supports (see
+                :func:`resolve_kv_cache_precision`). ``None`` (default) picks the
+                architecture default (``"int8"`` when it can quantize, else
+                ``"auto"``); ``"int8"`` quantizes to save memory; ``"auto"``
+                keeps the computed dtype.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -894,7 +919,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
 
         self.keep_cache_on_device = keep_cache_on_device
-        self.kv_cache_dtype = kv_cache_dtype
+        self.kv_cache_precision = resolve_kv_cache_precision(
+            kv_cache_precision, architecture=models[0]
+        )
         self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
@@ -1007,7 +1034,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if self.kv_cache_dtype == "int8" and hasattr(cache, "quantize"):
+        if self.kv_cache_precision == "int8":
             cache = cache.quantize()
         if self.keep_cache_on_device:
             return cache

@@ -311,11 +311,11 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
 
-    # kv_cache_dtype="auto" keeps the cache un-quantized, so the cached path
+    # kv_cache_precision="auto" keeps the cache un-quantized, so the cached path
     # matches the non-cached path (int8 quantization would perturb it).
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor.create_default_for_version(
-        fit_mode="fit_with_cache", kv_cache_dtype="auto", **kwargs
+        fit_mode="fit_with_cache", kv_cache_precision="auto", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(preds, tabpfn.predict(X), decimal=2)

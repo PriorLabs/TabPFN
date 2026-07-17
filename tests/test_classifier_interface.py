@@ -558,7 +558,7 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier.create_default_for_version(
-        fit_mode="fit_with_cache", kv_cache_dtype="auto", **kwargs
+        fit_mode="fit_with_cache", kv_cache_precision="auto", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))
