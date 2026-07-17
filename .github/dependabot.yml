@@ -6,6 +6,10 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 3
+    # Only propose versions old enough to pass uv's `exclude-newer = "7 days"`
+    # quarantine (see pyproject.toml).
+    cooldown:
+      default-days: 8
 
   # GitHub Actions
   - package-ecosystem: "github-actions"

@@ -760,7 +760,7 @@ def get_preprocessed_dataset_chunks(  # noqa: PLR0913
             max_data_size.
             If False, splits into chunks of size `max_data_size`, with
             the last chunk having the remainder samples but is dropped if its
-            size is less than 2.
+            size is less than min_chunk_size (default: 2000).
         data_shuffle_seed: int. Random seed to use for the data shuffling and splitting.
         preprocessing_random_state: Random state to use for the preprocessing.
         shuffle: If True, shuffle the data before splitting.

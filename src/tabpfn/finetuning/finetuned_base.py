@@ -193,6 +193,37 @@ def _snapshot_model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
 
 
+def _ratio_ctx_query_split(
+    X: Any,
+    y: Any,
+    *,
+    query_ratio: float,
+    min_query_size: int,
+    random_state: int,
+    stratify: Any = None,
+) -> list[Any]:
+    """Split a chunk into context and query sets, sized relative to the chunk.
+
+    Chunks can be smaller than the configured context+query size (the remainder
+    chunk of an epoch's chunking, or a small dataset), so the query size is
+    computed per chunk as ``query_ratio`` of the chunk rather than from the
+    configured maximum. ``min_query_size`` bounds it from below (e.g. the number
+    of classes). Falls back to an unstratified split when the chunk cannot
+    satisfy stratification.
+    """
+    test_size = max(int(len(X) * query_ratio), min_query_size)
+    try:
+        return train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=stratify
+        )
+    except ValueError:
+        if stratify is None:
+            raise
+        return train_test_split(
+            X, y, test_size=test_size, random_state=random_state, stratify=None
+        )
+
+
 class _TabPFNDDPWrapper(torch.nn.Module):
     """Thin wrapper that registers estimator.model_ as a submodule for DDP."""
 
@@ -235,20 +266,29 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             is crucial for stable fine-tuning. Defaults to 1e-5.
         weight_decay: The weight decay for the AdamW optimizer. Defaults to 0.01.
         validation_split_ratio: Fraction of the original training data reserved
-            as a validation set for early stopping and monitoring. Defaults to 0.1.
+            as a validation set for early stopping and monitoring. Set to 0 or
+            None to disable validation: all data is then used for fine-tuning,
+            per-epoch evaluation is skipped, and early stopping is disabled.
+            Ignored when explicit validation data is passed to ``fit``.
+            Defaults to 0.1.
         n_finetune_ctx_plus_query_samples: The total number of samples per
             meta-dataset during fine-tuning (context plus query) before applying
-            the `finetune_ctx_query_split_ratio`. Defaults to 10_000.
+            the `finetune_ctx_query_split_ratio`. Defaults to 50_000.
         finetune_ctx_query_split_ratio: The proportion of each fine-tuning
             meta-dataset to use as query samples for calculating the loss. The
             remainder is used as context. Defaults to 0.2.
         n_inference_subsample_samples: The total number of subsampled training
-            samples per estimator during validation and final inference.
-            Defaults to 50_000.
+            samples per estimator during validation and final inference. If
+            None, no subsampling is applied and the full training set is used
+            as context. Defaults to None.
         random_state: Seed for reproducibility of data splitting and model
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
-            performance. Defaults to True.
+            performance. When enabled, the best-performing weights are restored
+            at the end of training and a best checkpoint is saved alongside the
+            interval checkpoints. When disabled, training runs all epochs and
+            the last-epoch weights are kept (no best checkpoint is saved).
+            Defaults to True.
         early_stopping_patience: Number of epochs to wait for improvement before
             early stopping. Defaults to 8.
         min_delta: Minimum change in metric to be considered as an improvement.
@@ -304,10 +344,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         time_limit: int | None = None,
         learning_rate: float = 1e-5,
         weight_decay: float = 0.01,
-        validation_split_ratio: float = 0.1,
-        n_finetune_ctx_plus_query_samples: int = 10_000,
+        validation_split_ratio: float | None = 0.1,
+        n_finetune_ctx_plus_query_samples: int = 50_000,
         finetune_ctx_query_split_ratio: float = 0.2,
-        n_inference_subsample_samples: int = 50_000,
+        n_inference_subsample_samples: int | None = None,
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
@@ -725,8 +765,22 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 estimator=self.finetuned_estimator_,
                 ensure_y_numeric=self._model_type == "regressor",
             )
-        else:
+        elif self.validation_split_ratio:
             X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)
+        else:
+            # Validation disabled: train on all data, skip per-epoch evaluation.
+            X_train, y_train = X, y
+            X_val = y_val = None
+
+        do_validation = X_val is not None
+        # Early stopping needs a validation metric to act on.
+        early_stopping_enabled = self.early_stopping and do_validation
+        if is_main_process and self.early_stopping and not do_validation:
+            logger.info(
+                "Validation is disabled (validation_split_ratio=%s); "
+                "early stopping is disabled as well.",
+                self.validation_split_ratio,
+            )
 
         # Calculate the context size used during finetuning.
         n_finetune_ctx_plus_query_samples = min(
@@ -782,7 +836,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             return float(t.item())
 
         # --- Initial eval (rank 0 only) ---
-        if is_main_process:
+        if is_main_process and do_validation:
             logger.info("--- 🚀 Eval default model ---")
             eval_result = self._evaluate_model(
                 validation_eval_config,
@@ -810,17 +864,17 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         # restores the base model (not the last, degraded epoch) at early stop.
         # Seeded on every rank so DDP weights stay in sync in that case.
         best_model_state: dict[str, torch.Tensor] | None = None
-        if self.early_stopping:
+        if early_stopping_enabled:
             best_model_state = _snapshot_model_state(self.finetuned_estimator_.model_)
 
         scheduler: LambdaLR | None = None
 
         start_time = _synchronize_epoch_timer()
 
-        finetuning_query_size = self._get_valid_finetuning_query_size(
-            query_size=int(
-                n_finetune_ctx_plus_query_samples * self.finetune_ctx_query_split_ratio
-            ),
+        # Lower bound for the per-chunk query size (e.g. >= n_classes for
+        # classification); the actual size is computed per chunk by the splitter.
+        min_finetuning_query_size = self._get_valid_finetuning_query_size(
+            query_size=1,
             y_train=y_train,
         )
         for epoch in range(epoch_to_start_from, self.epochs):
@@ -832,8 +886,9 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
             # Regenerate datasets each epoch with a different random_state
             training_splitter = partial(
-                train_test_split,
-                test_size=finetuning_query_size,
+                _ratio_ctx_query_split,
+                query_ratio=self.finetune_ctx_query_split_ratio,
+                min_query_size=min_finetuning_query_size,
                 random_state=epoch_random_state,
             )
 
@@ -874,15 +929,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     generator=dataloader_generator,
                 )
 
+            steps_per_epoch = len(finetuning_dataloader)
+            if steps_per_epoch == 0:
+                logger.warning(
+                    "No training batches available; ending training early.",
+                )
+                break
+
             # Instantiate the LR scheduler only once
             if self.use_lr_scheduler and scheduler is None:
-                steps_per_epoch = len(finetuning_dataloader)
-                if steps_per_epoch == 0:
-                    logger.warning(
-                        "No training batches available; ending training early.",
-                    )
-                    break
-
                 total_steps = steps_per_epoch * self.epochs
                 warmup_steps = int(total_steps * 0.1)
 
@@ -891,7 +946,19 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     warmup_steps=warmup_steps,
                     warmup_only=self.lr_warmup_only,
                 )
-                scheduler = LambdaLR(optimizer, lr_lambda=lrate_schedule_fn)
+                # On checkpoint resume, start the schedule at the step it
+                # reached instead of re-running warmup from 0. -1 (fresh run)
+                # is LambdaLR's default starting position.
+                last_step = epoch_to_start_from * steps_per_epoch - 1
+                if last_step >= 0:
+                    # LambdaLR requires initial_lr when resuming; loaded
+                    # optimizer state may lack it (e.g. checkpoint from a
+                    # run without a scheduler).
+                    for group in optimizer.param_groups:
+                        group.setdefault("initial_lr", self.learning_rate)
+                scheduler = LambdaLR(
+                    optimizer, lr_lambda=lrate_schedule_fn, last_epoch=last_step
+                )
 
                 if is_main_process:
                     logger.info(
@@ -977,7 +1044,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
                 if is_main_process:
                     current_lr = (
-                        scheduler.get_last_lr()[0]
+                        float(scheduler.get_last_lr()[0])
                         if scheduler is not None
                         else self.learning_rate
                     )
@@ -1011,7 +1078,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             )
 
             # --- Validation (rank 0 only), broadcast metric ---
-            if is_main_process:
+            if is_main_process and do_validation:
                 eval_result = self._evaluate_model(
                     validation_eval_config,
                     X_train,  # pyright: ignore[reportArgumentType]
@@ -1035,6 +1102,15 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             else:
                 primary_metric = self._get_initial_best_metric()
                 eval_result = EvalResult(primary=primary_metric)
+                if is_main_process and mean_train_loss is not None:
+                    # Validation disabled: log training progress only.
+                    logger.info(
+                        "📊 Epoch %d | Train Loss: %.4f", epoch + 1, mean_train_loss
+                    )
+                    _logger.log_epoch(
+                        {"train/epoch": epoch, "train/mean_loss": mean_train_loss},
+                        step=global_step,
+                    )
 
             primary_metric = _ddp_broadcast_primary_metric(primary_metric)
 
@@ -1048,21 +1124,32 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     and (epoch + 1) % self.save_checkpoint_interval == 0
                 )
 
-                is_best = self._is_improvement(primary_metric, best_metric)
+                # The "best model" concept only exists under early stopping
+                # (which requires validation): without it the last epoch is
+                # the result, so only interval checkpoints are saved.
+                is_best = early_stopping_enabled and self._is_improvement(
+                    primary_metric, best_metric
+                )
 
                 if save_interval_checkpoint or is_best:
+                    if do_validation:
+                        checkpoint_metrics = self._get_checkpoint_metrics(eval_result)
+                    elif mean_train_loss is not None:
+                        checkpoint_metrics = {"train_loss": mean_train_loss}
+                    else:
+                        checkpoint_metrics = {}
                     save_checkpoint(
                         estimator=self.finetuned_estimator_,
                         output_dir=output_dir,
                         epoch=epoch + 1,
                         optimizer=optimizer,
-                        metrics=self._get_checkpoint_metrics(eval_result),
+                        metrics=checkpoint_metrics,
                         train_size=train_size,
                         is_best=is_best,
                         save_interval_checkpoint=save_interval_checkpoint,
                     )
 
-            if self.early_stopping and not np.isnan(primary_metric):
+            if early_stopping_enabled and not np.isnan(primary_metric):
                 if self._is_improvement(primary_metric, best_metric):
                     best_metric = primary_metric
                     patience_counter = 0
@@ -1111,7 +1198,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                         )
                     break
 
-        if self.early_stopping and best_model_state is not None:
+        if early_stopping_enabled and best_model_state is not None:
             self.finetuned_estimator_.model_.load_state_dict(best_model_state)
 
         # --- DDP cleanup ---
