@@ -8,7 +8,6 @@ import numpy as np
 from sklearn.preprocessing import PowerTransformer
 
 from tabpfn.preprocessing.steps import SafePowerTransformer
-
 from tabpfn.preprocessing.steps.safe_power_transformer import (
     _yeojohnson_inverse_transform,
 )
@@ -115,8 +114,8 @@ def test__yeojohnson_inverse_transform__float32_boundary__finite_no_overflow():
     float32_max = np.finfo(np.float32).max
 
     cases = [
-        (float32_max, 0.0),   # x >= 0, lambda == 0
-        (float32_max, 0.5),   # x >= 0, lambda != 0
+        (float32_max, 0.0),  # x >= 0, lambda == 0
+        (float32_max, 0.5),  # x >= 0, lambda != 0
         (-float32_max, 1.5),  # x < 0, lambda != 2
         (-float32_max, 2.0),  # x < 0, lambda == 2
     ]
