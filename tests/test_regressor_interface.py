@@ -7,7 +7,7 @@ import itertools
 import os
 import typing
 from collections.abc import Callable
-from typing import Any, Literal
+from typing import Literal
 from unittest import mock
 
 import numpy as np
@@ -24,6 +24,7 @@ from torch import nn
 
 import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
+from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngineExplicitKVCache
@@ -295,7 +296,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
     model_version: ModelVersion,
     device: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kwargs = {
         "version": model_version,
@@ -313,18 +313,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     tabpfn.fit(X, y)
     preds = tabpfn.predict(X)
 
-    original_init = InferenceEngineExplicitKVCache.__init__
-
-    def _init_without_kv_quantization(
-        self: InferenceEngineExplicitKVCache, *args: Any, **kwargs: Any
-    ) -> None:
-        kwargs.setdefault("maybe_quantize_kv_cache", False)
-        original_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(
-        InferenceEngineExplicitKVCache, "__init__", _init_without_kv_quantization
-    )
-
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor.create_default_for_version(
         fit_mode="fit_with_cache", **kwargs
@@ -334,13 +322,14 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices())
-def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
+def test__fit_preprocessors_and_with_cache_produce_equal_results__quantized_kv_cache(
     X_y: tuple[np.ndarray, np.ndarray], device: str
 ) -> None:
+    # Do not specify inference precision, as this would disable KV cache quantization.
     kwargs = {
+        # At the moment, only V3 supports a quantized KV cache.
         "version": ModelVersion.V3,
         "n_estimators": 2,
-        "inference_precision": torch.float32,
         "random_state": 0,
         "device": device,
     }
@@ -351,14 +340,21 @@ def test__fit_preprocessors_and_with_cache_with_quantized_kv_cache__v3(
         fit_mode="fit_preprocessors", **kwargs
     )
     tabpfn.fit(X, y)
-    preds = tabpfn.predict(X)
+    preds_without_cache = tabpfn.predict(X)
 
     torch.random.manual_seed(0)
     tabpfn = TabPFNRegressor.create_default_for_version(
         fit_mode="fit_with_cache", **kwargs
     )
     tabpfn.fit(X, y)
-    np.testing.assert_allclose(preds, tabpfn.predict(X), rtol=0.25)
+    np.testing.assert_allclose(preds_without_cache, tabpfn.predict(X), rtol=0.25)
+
+    assert isinstance(tabpfn.executor_, InferenceEngineExplicitKVCache)
+    cache_entries = [
+        entry for cache in tabpfn.executor_.kv_caches for entry in cache.kv.values()
+    ]
+    assert cache_entries
+    assert all(isinstance(entry, QuantizedKVCacheEntry) for entry in cache_entries)
 
 
 @pytest.mark.parametrize("model_version", list(ModelVersion))
@@ -1232,3 +1228,46 @@ def test__fit_with_differentiable_input__second_call_refreshes_target_stats() ->
     assert not torch.allclose(reg.raw_space_bardist_.borders, bardist_borders1), (
         "raw_space_bardist_ must be rebuilt to the new target scale"
     )
+
+
+def test__fit__fit_with_cache_and_dtype_specified__does_not_quantize_cache(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = X_y
+    tabpfn = TabPFNRegressor.create_default_for_version(
+        # V3 is currently the only version to support cache quantization.
+        version=ModelVersion.V3,
+        fit_mode="fit_with_cache",
+        inference_precision=torch.float32,
+        n_estimators=2,
+        random_state=0,
+    )
+    tabpfn.fit(X, y)
+
+    assert isinstance(tabpfn.executor_, InferenceEngineExplicitKVCache)
+    cache_entries = [
+        entry for cache in tabpfn.executor_.kv_caches for entry in cache.kv.values()
+    ]
+    assert cache_entries
+    assert not any(isinstance(entry, QuantizedKVCacheEntry) for entry in cache_entries)
+
+
+def test__fit__fit_with_cache_and_dtype_auto__quantizes_cache(
+    X_y: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = X_y
+    tabpfn = TabPFNRegressor.create_default_for_version(
+        # V3 is currently the only version to support cache quantization.
+        version=ModelVersion.V3,
+        fit_mode="fit_with_cache",
+        n_estimators=2,
+        random_state=0,
+    )
+    tabpfn.fit(X, y)
+
+    assert isinstance(tabpfn.executor_, InferenceEngineExplicitKVCache)
+    cache_entries = [
+        entry for cache in tabpfn.executor_.kv_caches for entry in cache.kv.values()
+    ]
+    assert cache_entries
+    assert all(isinstance(entry, QuantizedKVCacheEntry) for entry in cache_entries)

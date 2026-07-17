@@ -877,14 +877,15 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             autocast: Whether to use torch.autocast during cache build.
-            keep_cache_on_device: If True (default), keep each per-estimator
-                KV cache on the device where it was built.  Uses more device
-                memory but avoids CPU↔GPU transfers, giving lower latency.
-                When False, caches are moved to CPU after building and
-                transferred to the target device on every predict call.
-            maybe_quantize_kv_cache: If True (default), quantize the KV cache
-                to reduce memory footprint if it is supported by the architecture.
-                If False, the KV cache is not quantized.
+            keep_cache_on_device: If True (default), keep each per-estimator KV cache on
+                the device where it was built. Uses more device memory but avoids
+                CPU↔GPU transfers, giving lower latency.
+                When False, caches are moved to CPU after building and transferred to
+                the target device on every predict call.
+            maybe_quantize_kv_cache: If True (default), quantize the KV cache to reduce
+                the memory footprint, if it is supported by the architecture and
+                force_inference_dtype is None. If False, or if force_inference_dtype is
+                set, the KV cache is not quantized.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -1007,7 +1008,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if self.maybe_quantize_kv_cache and hasattr(cache, "quantize"):
+        if (
+            self.maybe_quantize_kv_cache
+            and self.force_inference_dtype is None
+            and hasattr(cache, "quantize")
+        ):
             cache = cache.quantize()
         if self.keep_cache_on_device:
             return cache
