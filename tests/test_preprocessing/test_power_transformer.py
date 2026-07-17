@@ -8,6 +8,9 @@ import numpy as np
 from sklearn.preprocessing import PowerTransformer
 
 from tabpfn.preprocessing.steps import SafePowerTransformer
+from tabpfn.preprocessing.steps.safe_power_transformer import (
+    _yeojohnson_inverse_transform,
+)
 
 
 def test__safe_power_transformer__normal_cases__same_results_as_power_transformer():
@@ -104,6 +107,28 @@ def test__safe_power_transformer__inverse_transform_float32__no_overflow_warning
     )
     assert x_inv.dtype == np.float32
     assert np.all(np.isfinite(x_inv))
+
+
+def test__yeojohnson_inverse_transform__float32_boundary__finite_no_overflow():
+    """Float32 boundary inputs must clip safely without overflow."""
+    float32_max = np.finfo(np.float32).max
+
+    cases = [
+        (float32_max, 0.0),  # x >= 0, lambda == 0
+        (float32_max, 0.5),  # x >= 0, lambda != 0
+        (-float32_max, 1.5),  # x < 0, lambda != 2
+        (-float32_max, 2.0),  # x < 0, lambda == 2
+    ]
+
+    for value, lmbda in cases:
+        x = np.array([value], dtype=np.float32)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            result = _yeojohnson_inverse_transform(x, lmbda)
+
+        assert result.dtype == np.float32
+        assert np.all(np.isfinite(result))
 
 
 def test__safe_power_transformer__transform_then_inverse_transform__returns_original():
