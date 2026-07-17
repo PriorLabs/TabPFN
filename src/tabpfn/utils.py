@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -140,8 +141,16 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
                 torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())
             )
 
-        if _is_mps_supported() and "mps" not in exclude_devices:
-            return (torch.device("mps"),)
+        if "mps" not in exclude_devices and torch.backends.mps.is_available():
+            if _is_mps_supported():
+                return (torch.device("mps"),)
+            warnings.warn(
+                "An MPS device is available, but TabPFN disables MPS for "
+                "PyTorch < 2.6 (earlier versions can give poor accuracy and "
+                "lack bfloat16 autocast support on the MPS backend). Falling "
+                "back to CPU. Install torch>=2.6 to use MPS.",
+                stacklevel=2,
+            )
 
         return (torch.device("cpu"),)
 
@@ -159,8 +168,8 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
     if not _is_mps_supported() and any(d.type == "mps" for d in devices):
         raise ValueError(
             "The MPS device was selected, "
-            "but this is not supported by TabPFN before PyTorch 2.5. "
-            'Set `device="cpu"` instead.'
+            "but TabPFN requires PyTorch >= 2.6 for MPS. "
+            'Upgrade PyTorch, or set `device="cpu"` instead.'
         )
 
     return devices
@@ -183,10 +192,9 @@ def _parse_device(device: str | torch.device) -> torch.device:
 def _is_mps_supported() -> bool:
     """Return True if the MPS device is supported, otherwise False.
 
-    We have found that using MPS can lead to poor accuracy on PyTorch <2.5. See
-    https://github.com/PriorLabs/TabPFN/pull/619
+    We require PyTorch >= 2.6 for MPS to support all used operations.
     """
-    return torch.__version__ >= "2.5" and torch.backends.mps.is_available()
+    return torch.__version__ >= "2.6" and torch.backends.mps.is_available()
 
 
 def is_autocast_available(device_type: str) -> bool:
