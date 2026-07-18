@@ -36,8 +36,8 @@ from tabpfn.model_loading import (
 from tabpfn.preprocessing.clean import fix_dtypes
 from tabpfn.utils import (
     DevicesSpecification,
+    infer_autocast_inference_mode,
     infer_devices,
-    infer_fp16_inference_mode,
 )
 from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
@@ -251,7 +251,7 @@ def determine_precision(
             The byte size per element for the chosen precision.
     """
     if inference_precision in ["autocast", "auto"]:
-        use_autocast_ = infer_fp16_inference_mode(
+        use_autocast_ = infer_autocast_inference_mode(
             devices=devices_,
             enable=True if (inference_precision == "autocast") else None,
         )

@@ -5,10 +5,8 @@
 from __future__ import annotations
 
 import contextlib
-import functools
 import os
 from collections.abc import Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import numpy as np
@@ -224,21 +222,24 @@ def is_autocast_available(device_type: str) -> bool:
         )
 
 
-@functools.lru_cache(maxsize=1)
 def cpu_supports_fast_bf16() -> bool:
     """Whether the CPU accelerates bfloat16 (Intel AMX / AVX512-BF16, AMD Zen 4+).
 
-    Reads Linux CPU flags; returns False when they are unavailable (e.g. non-Linux)
-    so autocast stays off rather than falling back to emulated, slower bf16.
+    Requires a torch build with oneDNN, which provides the fast bf16 kernels
+    (absent e.g. on macOS wheels, where CPU bf16 falls back to slow reference
+    kernels). Returns False when the capability checks are unavailable, so
+    autocast stays off rather than falling back to emulated, slower bf16.
     """
-    with contextlib.suppress(OSError):
-        flags = Path("/proc/cpuinfo").read_bytes()
-        if b"amx_bf16" in flags or b"avx512_bf16" in flags:
-            return True
-    return False
+    if not torch.backends.mkldnn.is_available():
+        return False
+    # The capability checks are private torch API with no public equivalent;
+    # guarded so a torch release removing them degrades to bf16-off, not a crash.
+    avx512_bf16 = getattr(torch.cpu, "_is_avx512_bf16_supported", lambda: False)
+    amx_tile = getattr(torch.cpu, "_is_amx_tile_supported", lambda: False)
+    return bool(avx512_bf16() or amx_tile())
 
 
-def infer_fp16_inference_mode(
+def infer_autocast_inference_mode(
     devices: Sequence[torch.device], *, enable: bool | None
 ) -> bool:
     """Infer whether reduced-precision (autocast) inference should be enabled.
@@ -264,27 +265,28 @@ def infer_fp16_inference_mode(
     if is_cpu:
         # CPU autocast runs in bfloat16, which is only faster than float32 on CPUs
         # with native bf16 support.
-        fp16_available = (
+        autocast_available = (
             all(device.type.lower() == "cpu" for device in devices)
             and is_autocast_available("cpu")
             and cpu_supports_fast_bf16()
         )
     else:
-        fp16_available = any(is_autocast_available(device.type) for device in devices)
+        autocast_available = any(
+            is_autocast_available(device.type) for device in devices
+        )
 
     if enable is None:
-        return fp16_available
+        return autocast_available
 
     if enable is True:
-        if not fp16_available:
+        if not autocast_available:
             raise ValueError(
-                "You specified `fp16_inference=True`, however"
-                "`torch.amp.autocast_mode.is_autocast_available()`"
-                f" reported that one or more of the selected devices ({devices=})"
-                " does not support it."
-                "\nPlease ensure your version of torch and device type"
-                " are compatible with torch.autocast()`"
-                " or set `fp16_inference=False`.",
+                'You specified `inference_precision="autocast"`, however one or'
+                f" more of the selected devices ({devices=}) does not support it."
+                " On CPU, autocast requires hardware-accelerated bfloat16"
+                " (Intel AMX / AVX512-BF16, AMD Zen 4+)."
+                '\nSet `inference_precision="auto"` to fall back to full'
+                " precision automatically.",
             )
         return True
 
