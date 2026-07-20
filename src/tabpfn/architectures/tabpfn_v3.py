@@ -262,7 +262,7 @@ def get_cache_size(
     n_features: int,
     model_config: TabPFNV3Config,
     base_dtype: torch.dtype | Literal["autocast"],
-    quantize_kv_cache: bool = True,
+    kv_cache_precision: Literal["auto", "int8"] = "int8",
 ) -> int:
     """Calculate the cached memory in bytes for a single TabPFN v3 estimator.
 
@@ -289,8 +289,8 @@ def get_cache_size(
       reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``)
       stay fp32.
 
-    The KV cache is additionally int8-quantized when ``quantize_kv_cache`` is
-    True (mirroring the engine's ``maybe_quantize_kv_cache``).
+    The KV cache is additionally int8-quantized when ``kv_cache_precision="int8"``
+    (mirroring the engine's ``kv_cache_precision`` option).
 
     Args:
         n_train: Number of training rows. The KV cache and train activations
@@ -306,16 +306,22 @@ def get_cache_size(
             ``"autocast"`` (GPU autocast path -- KV and ``train_embeddings`` are
             sized at fp16 while ``inducing_hidden`` and ``scaler_cache`` stay
             fp32, since autocast keeps those ops in fp32).
-        quantize_kv_cache: If True (default), the KV cache is sized at
-            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` (mirrors
-            the engine's ``maybe_quantize_kv_cache``) plus per-tensor scales at
-            the KV compute dtype; if False, the K/V are sized at the compute
+        kv_cache_precision: If ``"int8"`` (default), the KV cache is sized at
+            :data:`~tabpfn.architectures.kv_cache.QUANTIZED_KV_DTYPE` plus
+            per-tensor scales; if ``"auto"``, K/V are sized at the compute
             dtype with no scales.
 
     Returns:
         Per-estimator cache size in bytes. Multiply by the ensemble size for the
         total (each estimator holds its own cache); divide by ``1024 ** 2`` for MB.
     """
+    if kv_cache_precision not in ("auto", "int8"):
+        raise ValueError(
+            f"Invalid kv_cache_precision: {kv_cache_precision}. "
+            "Must be one of 'auto' or 'int8'."
+        )
+    quantize_kv_cache = kv_cache_precision == "int8"
+
     # Set the stored dtype of each cached component up front. On the forced-
     # precision path the model and inputs are cast to ``dtype``, so every
     # component is ``dtype``. Under autocast the cache is mixed precision.
@@ -1929,6 +1935,10 @@ class TabPFNV3(Architecture):
             options,
             use_chunkwise_inference=True,
         )
+
+    @override
+    def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
+        return ("auto", "int8")
 
     def _prepare_y(
         self,
