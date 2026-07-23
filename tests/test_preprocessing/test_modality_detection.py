@@ -13,6 +13,7 @@ import pytest
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
+    _nunique_numeric,
     detect_feature_modalities,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
@@ -400,3 +401,102 @@ def test_infer_categorical_with_dict_raises_error():
             max_unique_for_category=2,
             min_unique_for_numerical=2,
         )
+
+
+# ---------------------------------------------------------------------------
+# Parallel numeric kernel: equivalence with the pandas kernel
+# ---------------------------------------------------------------------------
+
+
+def _numeric_test_matrix(rng: np.random.Generator, n: int = 500) -> np.ndarray:
+    """Matrix mixing every numeric column kind the kernel must handle."""
+    cols = [
+        rng.standard_normal(n),  # continuous
+        rng.integers(0, 3, n).astype(np.float64),  # low-cardinality
+        rng.integers(0, 50, n).astype(np.float64),  # mid-cardinality
+        np.full(n, 7.0),  # constant
+        np.full(n, np.nan),  # all-NaN
+        np.where(rng.random(n) < 0.1, np.nan, rng.standard_normal(n)),  # NaN mix
+        np.where(rng.random(n) < 0.1, np.inf, rng.standard_normal(n)),  # +inf mix
+        np.where(rng.random(n) < 0.1, -np.inf, rng.integers(0, 2, n)),  # -inf mix
+        np.where(rng.random(n) < 0.5, np.nan, 1.0),  # constant + NaN
+        np.where(rng.random(n) < 0.5, 0.0, -0.0),  # signed zeros collapse
+    ]
+    return np.stack(cols, axis=1)
+
+
+@pytest.mark.parametrize("dtype", [np.float64, np.float32])
+@pytest.mark.parametrize("provided_categorical_indices", [None, [1, 2, 3]])
+def test__numeric_kernel_matches_pandas_kernel(
+    dtype: type,
+    provided_categorical_indices: list[int] | None,
+) -> None:
+    """The threaded numeric kernel must reproduce the pandas kernel exactly."""
+    X = _numeric_test_matrix(np.random.default_rng(0)).astype(dtype)
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=None,
+        min_samples_for_inference=100,
+        max_unique_for_category=30,
+        min_unique_for_numerical=4,
+        provided_categorical_indices=provided_categorical_indices,
+    )
+    for j, feature in enumerate(schema.features):
+        expected = _detect_feature_modality(
+            pd.Series(X[:, j]),
+            reported_categorical=j in (provided_categorical_indices or ()),
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            big_enough_n_to_infer_cat=True,
+        )
+        assert feature.modality == expected, f"column {j}"
+
+
+@pytest.mark.parametrize("dtype", [np.int64, np.int32, np.uint8, np.bool_])
+def test__numeric_kernel_matches_pandas_kernel_int_bool(dtype: type) -> None:
+    rng = np.random.default_rng(1)
+    X = np.stack(
+        [
+            rng.integers(0, 2, 500),  # binary
+            rng.integers(0, 2, 500),  # binary
+            np.ones(500, dtype=np.int64),  # constant
+            rng.integers(0, 100, 500) % (2 if dtype == np.bool_ else 100),
+        ],
+        axis=1,
+    ).astype(dtype)
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=None,
+        min_samples_for_inference=100,
+        max_unique_for_category=30,
+        min_unique_for_numerical=4,
+    )
+    for j, feature in enumerate(schema.features):
+        expected = _detect_feature_modality(
+            pd.Series(X[:, j]),
+            reported_categorical=False,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            big_enough_n_to_infer_cat=True,
+        )
+        assert feature.modality == expected, f"column {j}"
+
+
+def test__nunique_numeric_matches_pandas() -> None:
+    X = _numeric_test_matrix(np.random.default_rng(2))
+    for j in range(X.shape[1]):
+        assert _nunique_numeric(X[:, j]) == pd.Series(X[:, j]).nunique(dropna=False), (
+            f"column {j}"
+        )
+
+
+def test__numeric_kernel_zero_rows() -> None:
+    X = np.empty((0, 3), dtype=np.float64)
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=None,
+        min_samples_for_inference=100,
+        max_unique_for_category=30,
+        min_unique_for_numerical=4,
+    )
+    assert [f.modality for f in schema.features] == [FeatureModality.CONSTANT] * 3

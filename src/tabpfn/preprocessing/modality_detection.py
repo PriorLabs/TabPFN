@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
-from typing import TYPE_CHECKING
+from concurrent.futures import ThreadPoolExecutor
 
+import numpy as np
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
@@ -17,8 +19,9 @@ from tabpfn.preprocessing.datamodel import (
     build_input_feature_names,
 )
 
-if TYPE_CHECKING:
-    import numpy as np
+_NUMERIC_NUMPY_DTYPE_KINDS = "fiub"
+"""Numpy dtype kinds whose columns are counted with the GIL-releasing
+``np.unique`` kernel; other dtypes use the pandas kernel."""
 
 
 def detect_feature_modalities(
@@ -58,22 +61,89 @@ def detect_feature_modalities(
         A dictionary with the feature modalities as keys and the column as
         values.
     """
-    features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
-    for i, index in enumerate(range(X.shape[1])):
-        X_slice: np.ndarray = X[:, index]
+    # Numeric arrays use a count-based kernel built on np.unique, which
+    # releases the GIL while sorting -- the thread pool then scales across
+    # cores. Other dtypes run the pandas kernel, which holds the GIL (the
+    # loop still works, it just does not parallelise).
+    use_numeric_kernel = X.dtype.kind in _NUMERIC_NUMPY_DTYPE_KINDS
+
+    def detect_one(index: int) -> FeatureModality:
         reported_categorical = index in (provided_categorical_indices or ())
-        feature_name = unique_feature_names[i]
-        feat_modality = _detect_feature_modality(
-            s=pd.Series(X_slice, name=feature_name),
+        if use_numeric_kernel:
+            return _modality_from_exact_count(
+                n_unique=_nunique_numeric(X[:, index]),
+                reported_categorical=reported_categorical,
+                max_unique_for_category=max_unique_for_category,
+                min_unique_for_numerical=min_unique_for_numerical,
+                big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            )
+        return _detect_feature_modality(
+            s=pd.Series(X[:, index], name=unique_feature_names[index]),
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-        features.append(Feature(name=feature_name, modality=feat_modality))
+
+    with ThreadPoolExecutor(max_workers=_usable_cpu_count()) as executor:
+        modalities = list(executor.map(detect_one, range(X.shape[1])))
+
+    features = [
+        Feature(name=unique_feature_names[i], modality=modality)
+        for i, modality in enumerate(modalities)
+    ]
     return FeatureSchema(features=features)
+
+
+def _usable_cpu_count() -> int:
+    """CPUs available to this process (cgroup/affinity-aware where possible)."""
+    if hasattr(os, "sched_getaffinity"):
+        return len(os.sched_getaffinity(0))
+    return os.cpu_count() or 1
+
+
+def _nunique_numeric(column: np.ndarray) -> int:
+    """Exact distinct count of a numeric column, NaN counted as one category.
+
+    Equals ``pd.Series(column).nunique(dropna=False)``: NaN is one category
+    (handled explicitly, since ``np.unique`` collapses NaNs only from numpy
+    1.24 on), ``+/-inf`` are ordinary values, and ``0.0 == -0.0`` collapses
+    under both implementations.
+    """
+    if column.dtype.kind == "f":
+        non_nan = column[~np.isnan(column)]
+        return len(np.unique(non_nan)) + (non_nan.shape[0] < column.shape[0])
+    return len(np.unique(column))
+
+
+def _modality_from_exact_count(
+    n_unique: int,
+    *,
+    reported_categorical: bool,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    big_enough_n_to_infer_cat: bool,
+) -> FeatureModality:
+    """Modality of a numeric-dtype column from its exact distinct count.
+
+    Mirrors :func:`_detect_feature_modality` for numeric-dtype columns: there
+    the series is always numeric (``_is_numeric_pandas_series`` is True by
+    dtype), so the decision depends only on the distinct count. Any change to
+    the decision logic must be made in both places.
+    """
+    if n_unique <= 1 and not reported_categorical:
+        return FeatureModality.CONSTANT
+    if _detect_numeric_as_categorical(
+        n_unique=n_unique,
+        reported_categorical=reported_categorical,
+        max_unique_for_category=max_unique_for_category,
+        min_unique_for_numerical=min_unique_for_numerical,
+        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+    ):
+        return FeatureModality.CATEGORICAL
+    return FeatureModality.NUMERICAL
 
 
 def _detect_feature_modality(
