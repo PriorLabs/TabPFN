@@ -20,6 +20,8 @@ from tabpfn.preprocessing.datamodel import (
 if TYPE_CHECKING:
     import numpy as np
 
+_EARLY_EXIT_PREFIX_ROWS = 1024
+
 
 def detect_feature_modalities(
     X: np.ndarray,
@@ -84,7 +86,21 @@ def _detect_feature_modality(
     min_unique_for_numerical: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    n_unique = _get_unique_with_sklearn_compatible_error(s)
+    # Early exit for the distinct count: counts only grow with the number of
+    # rows scanned, and every comparison below is against a threshold of at
+    # most max(max_unique_for_category, min_unique_for_numerical). So once a
+    # small prefix of the column already exceeds all of them, every decision
+    # equals the full-column one and scanning the remaining rows is skipped —
+    # the common case for continuous columns. Low-cardinality columns fall
+    # through to the exact full count, paying one extra prefix pass.
+    decided_at = max(max_unique_for_category, min_unique_for_numerical, 1) + 1
+    n_unique = 0
+    if len(s) > _EARLY_EXIT_PREFIX_ROWS:
+        n_unique = _get_unique_with_sklearn_compatible_error(
+            s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
+        )
+    if n_unique < decided_at:
+        n_unique = _get_unique_with_sklearn_compatible_error(s)
 
     if n_unique <= 1 and not reported_categorical:
         # Either all values are missing, or all values are the same.
