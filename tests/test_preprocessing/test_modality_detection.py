@@ -12,6 +12,7 @@ import pytest
 
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.modality_detection import (
+    _EARLY_EXIT_PREFIX_ROWS,
     _detect_feature_modality,
     detect_feature_modalities,
 )
@@ -420,7 +421,9 @@ def test__long_columns_early_exit_decisions(
 
 
 def test__early_exit_not_fooled_by_uninformative_prefix():
-    # The first 1024 rows are constant; only the tail is distinct. The prefix
-    # must not decide anything -- the full scan has to run.
-    s = pd.Series(np.concatenate([np.zeros(1024), np.arange(1.0, 4000.0)]))
+    # The prefix is constant; only the tail is distinct. The prefix must not
+    # decide anything -- the full scan has to run.
+    s = pd.Series(
+        np.concatenate([np.zeros(_EARLY_EXIT_PREFIX_ROWS), np.arange(1.0, 4000.0)])
+    )
     assert _for_test_detect_with_defaults(s) == FeatureModality.NUMERICAL
