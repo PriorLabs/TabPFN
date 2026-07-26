@@ -313,7 +313,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         n_estimators_final_inference: If set, overrides `n_estimators` only for
             the final fitted inference model that is used after fine-tuning. If
             None, the value from `kwargs` or the estimator default is used.
-            Defaults to 8.
+            Defaults to 2.
         use_activation_checkpointing: Whether to use activation checkpointing to
             reduce memory usage. Defaults to True.
         save_checkpoint_interval: Number of epochs between checkpoint saves. This
