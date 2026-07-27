@@ -613,7 +613,7 @@ def _find_max_input_features(
 ) -> int:
     """Find the largest number of input features that fits within the budget.
 
-    Decrements from n_total until k + pipeline.num_added_features(...) <= max.
+    Decrements k until k + pipeline.num_added_features(...) <= max.
 
     TODO: The search always slices the *first* k features, so the budget
     estimate can be biased when transforms add features depending on feature
@@ -622,7 +622,7 @@ def _find_max_input_features(
     """
     n_total = feature_schema.num_columns
 
-    for k in range(n_total, -1, -1):
+    for k in range(min(n_total, max_features_per_estimator), -1, -1):
         if k == n_total:
             sliced_schema = feature_schema
         else:

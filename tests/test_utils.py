@@ -12,6 +12,7 @@ from torch.torch_version import TorchVersion
 
 from tabpfn.utils import (
     _cpu_supports_fast_bf16,
+    _repair_borders,
     _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
     infer_autocast_inference_mode,
@@ -329,3 +330,36 @@ def test__infer_autocast_inference_mode__cpu_without_fast_bf16_and_enabled__rais
     mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
     with pytest.raises(ValueError, match="does not support it"):
         infer_autocast_inference_mode([torch.device("cpu")], enable=True)
+
+
+@pytest.mark.parametrize(
+    ("borders", "expected_last"),
+    [
+        # Widening must move the top border up regardless of sign. Multiplying by
+        # 1.1 moves a negative border further down, past borders[-2].
+        ([-10.0, -5.0, -4.9999999], -4.5),
+        ([1.0, 5.0, 5.0000001], 5.5),
+        ([-2.0, 3.0, 3.0000001], 3.3),
+    ],
+)
+def test__repair_borders__collapsed_top_gap__widens_upwards(borders, expected_last):
+    repaired = np.array(borders)
+    _repair_borders(repaired, inplace=True)
+
+    assert repaired[-1] == pytest.approx(expected_last)
+    assert np.all(np.diff(repaired) > 0)
+
+
+@pytest.mark.parametrize(
+    ("borders", "expected_last"),
+    [
+        ([-10.0, -5.0, np.nan], 0.0),
+        ([1.0, 5.0, np.nan], 10.0),
+    ],
+)
+def test__repair_borders__nan_top__widens_upwards(borders, expected_last):
+    repaired = np.array(borders)
+    _repair_borders(repaired, inplace=True)
+
+    assert repaired[-1] == pytest.approx(expected_last)
+    assert np.all(np.diff(repaired) > 0)

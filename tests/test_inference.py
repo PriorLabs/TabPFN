@@ -15,6 +15,7 @@ from numpy.random import default_rng
 from torch import Tensor, nn
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures import tabpfn_v2
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
 from tabpfn.architectures.kv_cache import KVCacheEntry
 from tabpfn.architectures.shared import workaround_mps_linear_bug
@@ -26,6 +27,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
+    resolve_kv_cache_precision,
 )
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
@@ -884,3 +886,22 @@ def test__kv_cache_chunking__train_embeddings_not_duplicated(
 
     assert train_emb.shape[-2] == n_train
     assert test_emb.shape[-2] == n_test
+
+
+def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
+    """int8 on a v2 architecture (which cannot quantize) warns and uses 'auto'."""
+    arch = tabpfn_v2.get_architecture(
+        tabpfn_v2.TabPFNV2Config(
+            max_num_classes=10,
+            num_buckets=5,
+            emsize=192,
+            nlayers=1,
+            nhead=6,
+            features_per_group=2,
+            seed=0,
+        ),
+        cache_trainset_representation=False,
+    )
+    with pytest.warns(UserWarning, match="not supported"):
+        resolved = resolve_kv_cache_precision("int8", architecture=arch)
+    assert resolved == "auto"

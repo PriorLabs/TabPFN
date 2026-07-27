@@ -12,6 +12,7 @@ import pytest
 
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.modality_detection import (
+    _EARLY_EXIT_PREFIX_ROWS,
     _detect_feature_modality,
     detect_feature_modalities,
 )
@@ -400,3 +401,29 @@ def test_infer_categorical_with_dict_raises_error():
             max_unique_for_category=2,
             min_unique_for_numerical=2,
         )
+
+
+@pytest.mark.parametrize(
+    ("series_data", "expected"),
+    [
+        # Prefix (1024 rows) already shows > 10 distinct -> decided early.
+        (np.arange(5000, dtype=float), FeatureModality.NUMERICAL),
+        # Prefix stays below the threshold -> exact full scan must run.
+        (np.tile([1.0, 2.0, 3.0], 2000), FeatureModality.CATEGORICAL),
+        (np.zeros(5000), FeatureModality.CONSTANT),
+    ],
+)
+def test__long_columns_early_exit_decisions(
+    series_data: np.ndarray, expected: FeatureModality
+) -> None:
+    """Columns longer than the early-exit prefix get the exact-count modality."""
+    assert _for_test_detect_with_defaults(pd.Series(series_data)) == expected
+
+
+def test__early_exit_not_fooled_by_uninformative_prefix():
+    # The prefix is constant; only the tail is distinct. The prefix must not
+    # decide anything -- the full scan has to run.
+    s = pd.Series(
+        np.concatenate([np.zeros(_EARLY_EXIT_PREFIX_ROWS), np.arange(1.0, 4000.0)])
+    )
+    assert _for_test_detect_with_defaults(s) == FeatureModality.NUMERICAL

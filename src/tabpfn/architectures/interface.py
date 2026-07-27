@@ -250,6 +250,15 @@ class Architecture(nn.Module, ABC):
             use_chunkwise_inference=False,
         )
 
+    def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
+        """KV cache storage dtypes this architecture supports (``fit_with_cache``).
+
+        ``"auto"`` (keep the computed dtype) is always supported. Architectures
+        whose cache implements quantization override this to additionally list
+        e.g. ``"int8"``.
+        """
+        return ("auto",)
+
     @property
     @abstractmethod
     def embedding_dim(self) -> int:

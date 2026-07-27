@@ -285,6 +285,7 @@ def create_inference_engine(  # noqa: PLR0913
     use_autocast_: bool,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
+    kv_cache_precision: Literal["auto", "int8"] | None = None,
 ) -> InferenceEngine:
     """Create the appropriate TabPFN inference engine based on `fit_mode`.
 
@@ -311,6 +312,11 @@ def create_inference_engine(  # noqa: PLR0913
             inference device. If False, caches are offloaded to CPU as they
             are built and moved back on demand during inference, lowering
             resident device memory at the cost of per-call transfers.
+        kv_cache_precision: Only for ``fit_mode="fit_with_cache"``. Resolved
+            against what the architecture supports. ``None`` (default) picks the
+            architecture default (``"int8"`` when it can quantize, else
+            ``"auto"``); ``"int8"`` quantizes the KV cache to save memory;
+            ``"auto"`` keeps the computed dtype.
     """
     if fit_mode == "low_memory":
         return InferenceEngineOnDemand(
@@ -347,6 +353,7 @@ def create_inference_engine(  # noqa: PLR0913
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
             keep_cache_on_device=keep_cache_on_device,
+            kv_cache_precision=kv_cache_precision,
         )
     if fit_mode == "batched":
         raise ValueError(

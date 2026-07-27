@@ -7,7 +7,7 @@ import itertools
 import os
 from collections.abc import Callable
 from itertools import product
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -26,7 +26,6 @@ from tabpfn import TabPFNClassifier
 from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.base import ClassifierModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
-from tabpfn.inference import InferenceEngineExplicitKVCache
 from tabpfn.inference_config import InferenceConfig
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
@@ -539,7 +538,6 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     X_y: tuple[np.ndarray, np.ndarray],
     model_version: ModelVersion,
     device: str,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     kwargs = {
         "version": model_version,
@@ -558,21 +556,9 @@ def test__fit_preprocessors_and_with_cache_produce_equal_results(
     probs = tabpfn.predict_proba(X)
     preds = tabpfn.predict(X)
 
-    original_init = InferenceEngineExplicitKVCache.__init__
-
-    def _init_without_kv_quantization(
-        self: InferenceEngineExplicitKVCache, *args: Any, **kwargs: Any
-    ) -> None:
-        kwargs.setdefault("maybe_quantize_kv_cache", False)
-        original_init(self, *args, **kwargs)
-
-    monkeypatch.setattr(
-        InferenceEngineExplicitKVCache, "__init__", _init_without_kv_quantization
-    )
-
     torch.random.manual_seed(0)
     tabpfn = TabPFNClassifier.create_default_for_version(
-        fit_mode="fit_with_cache", **kwargs
+        fit_mode="fit_with_cache", kv_cache_precision="auto", **kwargs
     )
     tabpfn.fit(X, y)
     np.testing.assert_array_almost_equal(probs, tabpfn.predict_proba(X))

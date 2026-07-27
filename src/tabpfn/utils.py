@@ -30,7 +30,7 @@ MAXINT_RANDOM_SEED = int(np.iinfo(np.int32).max)
 def get_autocast_context(
     device: torch.device, *, enabled: bool
 ) -> contextlib.AbstractContextManager:
-    """Returns a torch.autocast context manager, disabling it for MPS devices.
+    """Returns a torch.autocast context manager.
 
     Args:
         device: The torch device being used.
@@ -39,8 +39,6 @@ def get_autocast_context(
     Returns:
         A context manager for autocasting.
     """
-    if device.type == "mps":
-        return contextlib.nullcontext()
     return torch.autocast(device.type, enabled=enabled)
 
 
@@ -61,10 +59,10 @@ def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
         nans = np.isnan(borders)
         largest = borders[~nans].max()
         borders[nans] = largest
-        borders[-1] = borders[-1] * 2
+        borders[-1] += np.abs(borders[-1])
 
     if borders[-1] - borders[-2] < 1e-6:
-        borders[-1] = borders[-1] * 1.1
+        borders[-1] += np.abs(borders[-1] * 0.1)
 
     if borders[0] == borders[1]:
         borders[0] -= np.abs(borders[0] * 0.1)
@@ -141,8 +139,16 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
                 torch.device(f"cuda:{i}") for i in range(torch.cuda.device_count())
             )
 
-        if _is_mps_supported() and "mps" not in exclude_devices:
-            return (torch.device("mps"),)
+        if "mps" not in exclude_devices and torch.backends.mps.is_available():
+            if _is_torch_mps_supported():
+                return (torch.device("mps"),)
+            warnings.warn(
+                "An MPS device is available, but TabPFN disables MPS for "
+                "PyTorch < 2.6 (earlier versions can give poor accuracy and "
+                "lack bfloat16 autocast support on the MPS backend). Falling "
+                "back to CPU. Install torch>=2.6 to use MPS.",
+                stacklevel=2,
+            )
 
         return (torch.device("cpu"),)
 
@@ -157,12 +163,17 @@ def infer_devices(devices: DevicesSpecification) -> tuple[torch.device, ...]:
             f"than once. It contained: {devices}"
         )
 
-    if not _is_mps_supported() and any(d.type == "mps" for d in devices):
-        raise ValueError(
-            "The MPS device was selected, "
-            "but this is not supported by TabPFN before PyTorch 2.5. "
-            'Set `device="cpu"` instead.'
-        )
+    if any(d.type == "mps" for d in devices):
+        if not torch.backends.mps.is_available():
+            raise ValueError(
+                "The MPS device was selected, but MPS is not available on this system."
+            )
+        if not _is_torch_mps_supported():
+            raise ValueError(
+                "The MPS device was selected, "
+                "but TabPFN requires PyTorch >= 2.6 for MPS. "
+                "Upgrade PyTorch, or set device='cpu' instead."
+            )
 
     return devices
 
@@ -181,13 +192,12 @@ def _parse_device(device: str | torch.device) -> torch.device:
     return device
 
 
-def _is_mps_supported() -> bool:
+def _is_torch_mps_supported() -> bool:
     """Return True if the MPS device is supported, otherwise False.
 
-    We have found that using MPS can lead to poor accuracy on PyTorch <2.5. See
-    https://github.com/PriorLabs/TabPFN/pull/619
+    We require PyTorch >= 2.6 for MPS to support all used operations.
     """
-    return torch.__version__ >= "2.5" and torch.backends.mps.is_available()
+    return torch.__version__ >= "2.6"
 
 
 def is_autocast_available(device_type: str) -> bool:
