@@ -241,6 +241,8 @@ def _cpu_supports_fast_bf16() -> bool:
     kernels). AMX CPUs also enumerate AVX512-BF16, so this one check covers
     both instruction sets.
     """
+    # bf16 without oneDNN's fast kernels is far slower than float32. Official
+    # wheels always ship oneDNN; this guards distro/self-built torch without it.
     if not torch.backends.mkldnn.is_available():
         return False
     # Private torch API with no public equivalent; if a torch release removes
