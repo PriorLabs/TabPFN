@@ -1725,6 +1725,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             unit="estimator",
             disable=not self.show_progress_bar,
         ):
+            # Upcast from autocast's reduced precision so the post-processing
+            # (temperature scaling, softmax, estimator averaging) runs in
+            # float32, keeping predict_proba consistent with predict_logits.
+            output = output.float()  # noqa: PLW2901
             original_ndim = output.ndim
 
             # This block correctly handles both single configs and lists of configs
