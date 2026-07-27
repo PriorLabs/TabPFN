@@ -222,7 +222,7 @@ def is_autocast_available(device_type: str) -> bool:
         )
 
 
-def cpu_supports_fast_bf16() -> bool:
+def _cpu_supports_fast_bf16() -> bool:
     """Whether the CPU accelerates bfloat16 (Intel AMX / AVX512-BF16, AMD Zen 4+).
 
     Requires a torch build with oneDNN, which provides the fast bf16 kernels
@@ -246,7 +246,7 @@ def infer_autocast_inference_mode(
 
     On GPU this is fp16 autocast; on CPU ``torch.autocast`` runs in bfloat16,
     which is enabled only on CPUs with native bf16 support (see
-    :func:`cpu_supports_fast_bf16`).
+    :func:`_cpu_supports_fast_bf16`).
 
     Args:
         devices: The devices to validate against.
@@ -268,7 +268,7 @@ def infer_autocast_inference_mode(
         autocast_available = (
             all(device.type.lower() == "cpu" for device in devices)
             and is_autocast_available("cpu")
-            and cpu_supports_fast_bf16()
+            and _cpu_supports_fast_bf16()
         )
     else:
         autocast_available = any(

@@ -11,9 +11,9 @@ import torch
 from torch.torch_version import TorchVersion
 
 from tabpfn.utils import (
+    _cpu_supports_fast_bf16,
     _translate_probs_across_borders_unchunked,
     balance_probas_by_class_counts,
-    cpu_supports_fast_bf16,
     infer_autocast_inference_mode,
     infer_devices,
     translate_probs_across_borders,
@@ -295,7 +295,7 @@ def test__cpu_supports_fast_bf16(
         torch.cpu, "_is_avx512_bf16_supported", return_value=avx512_bf16
     )
     mocker.patch.object(torch.cpu, "_is_amx_tile_supported", return_value=amx_tile)
-    assert cpu_supports_fast_bf16() is expected
+    assert _cpu_supports_fast_bf16() is expected
 
 
 def test__cpu_supports_fast_bf16__torch_helpers_missing__returns_false(
@@ -304,7 +304,7 @@ def test__cpu_supports_fast_bf16__torch_helpers_missing__returns_false(
     mocker.patch.object(torch.backends.mkldnn, "is_available", return_value=True)
     monkeypatch.delattr(torch.cpu, "_is_avx512_bf16_supported", raising=False)
     monkeypatch.delattr(torch.cpu, "_is_amx_tile_supported", raising=False)
-    assert cpu_supports_fast_bf16() is False
+    assert _cpu_supports_fast_bf16() is False
 
 
 @pytest.mark.parametrize(
@@ -318,7 +318,7 @@ def test__infer_autocast_inference_mode__cpu(
     enable: bool | None,
     expected: bool,
 ) -> None:
-    mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=supports_bf16)
+    mocker.patch("tabpfn.utils._cpu_supports_fast_bf16", return_value=supports_bf16)
     mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
     assert (
         infer_autocast_inference_mode([torch.device("cpu")], enable=enable) is expected
@@ -328,7 +328,7 @@ def test__infer_autocast_inference_mode__cpu(
 def test__infer_autocast_inference_mode__cpu_without_fast_bf16_and_enabled__raises(
     mocker: MagicMock,
 ) -> None:
-    mocker.patch("tabpfn.utils.cpu_supports_fast_bf16", return_value=False)
+    mocker.patch("tabpfn.utils._cpu_supports_fast_bf16", return_value=False)
     mocker.patch("tabpfn.utils.is_autocast_available", return_value=True)
     with pytest.raises(ValueError, match="does not support it"):
         infer_autocast_inference_mode([torch.device("cpu")], enable=True)
