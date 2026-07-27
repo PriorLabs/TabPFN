@@ -10,6 +10,8 @@ from tabpfn.inference_tuning import (
     ClassifierTuningConfig,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
+    find_optimal_temperature,
+    get_tuning_splits,
     resolve_tuning_config,
     select_robust_optimal_threshold,
 )
@@ -195,3 +197,61 @@ def test__resolve_tuning_config__provides_expected_values_for_auto_config(
     assert resolved_tuning_config.tune_decision_thresholds == tune_decision_thresholds
     assert resolved_tuning_config.tuning_holdout_frac == expected_tuning_holdout_pct
     assert resolved_tuning_config.tuning_n_folds == expected_tuning_holdout_n_splits
+
+
+def test__find_optimal_temperature__works_when_class_missing_from_holdout() -> None:
+    rng = np.random.default_rng(0)
+    n_estimators, n_samples, n_classes = 2, 50, 3
+    raw_logits = rng.normal(size=(n_estimators, n_samples, n_classes))
+    # Class 2 never appears in the holdout labels.
+    y_true = rng.integers(0, 2, size=n_samples)
+
+    def logits_to_probabilities_fn(
+        raw_logits: np.ndarray,
+        softmax_temperature: float,
+    ) -> np.ndarray:
+        scaled = raw_logits / softmax_temperature
+        exp = np.exp(scaled - scaled.max(axis=-1, keepdims=True))
+        probas = exp / exp.sum(axis=-1, keepdims=True)
+        return probas.mean(axis=0)
+
+    temperature = find_optimal_temperature(
+        raw_logits=raw_logits,
+        y_true=y_true,
+        logits_to_probabilities_fn=logits_to_probabilities_fn,
+        current_default_temperature=1.0,
+    )
+
+    assert 0.6 <= temperature <= 1.4
+
+
+def test__find_optimal_classification_threshold_single_class__all_negative() -> None:
+    # One-vs-rest labels are all-negative when the class is absent from the holdout.
+    y_true = np.zeros(20, dtype=int)
+    y_pred_probas = np.linspace(0.05, 0.95, 20)
+
+    threshold = find_optimal_classification_threshold_single_class(
+        metric_name=ClassifierEvalMetrics.LOG_LOSS,
+        y_true=y_true,
+        y_pred_probas=y_pred_probas,
+    )
+
+    assert 0.0 < threshold < 1.0
+
+
+def test__get_tuning_splits__accepts_numpy_generator_random_state() -> None:
+    X = np.arange(100, dtype=np.float64).reshape(50, 2)
+    y = np.array([0, 1] * 25)
+
+    splits = get_tuning_splits(
+        X=X,
+        y=y,
+        holdout_frac=0.2,
+        n_splits=1,
+        random_state=np.random.default_rng(0),
+    )
+
+    assert len(splits) == 1
+    X_train, X_holdout, y_train, y_holdout = splits[0]
+    assert len(X_train) + len(X_holdout) == len(X)
+    assert len(y_train) + len(y_holdout) == len(y)

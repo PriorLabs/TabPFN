@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `fit()` crashing during temperature calibration or threshold tuning (`tuning_config`) when a rare class is absent from the tuning holdout: `log_loss` is now given the full label set explicitly.
+- Fix `fit()` crashing when `random_state` is a `np.random.Generator` and tuning is enabled: the generator is now converted to a static seed before being passed to `StratifiedKFold`.
+
 ## [8.1.0] - 2026-07-13
 
 ### Added
