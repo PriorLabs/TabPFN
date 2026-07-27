@@ -21,6 +21,7 @@ from tabpfn.preprocessing.configs import (
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
+    _collect_importance_orderings,
     _compute_feature_importance_order,
     _draw_balanced_from_pool,
     _get_subsample_feature_indices,
@@ -1044,24 +1045,22 @@ def test_scale_n_estimators_for_feature_coverage__uses_min_max_features_across_c
 
 @skip_on_macos
 def test___compute_feature_importance_order__classification():
-    """_compute_feature_importance_order returns one valid feature ranking per tree."""
+    """Small datasets yield a single valid feature ranking."""
     rng = np.random.default_rng(0)
     n_samples, n_features = 100, 10
     X = rng.standard_normal((n_samples, n_features))
     # Make feature 0 highly predictive
     y = (X[:, 0] > 0).astype(int)
 
-    n_estimators = 4
     orders = _compute_feature_importance_order(
-        X=X, y=y, task_type="classifier", n_estimators=n_estimators, rng=rng
+        X=X, y=y, task_type="classifier", n_estimators=4, rng=rng
     )
 
-    assert len(orders) == n_estimators
+    assert len(orders) == 1
     for order in orders:
         assert order.shape == (n_features,)
         assert set(order) == set(range(n_features)), "All feature indices must appear"
-    # Feature 0 should rank first (most important) in the majority of orderings
-    assert sum(order[0] == 0 for order in orders) > len(orders) // 2
+    assert orders[0][0] == 0
 
 
 @skip_on_macos
@@ -1072,16 +1071,15 @@ def test___compute_feature_importance_order__regression():
     X = rng.standard_normal((n_samples, n_features))
     y = X[:, 2] * 3.0 + rng.standard_normal(n_samples) * 0.1
 
-    n_estimators = 4
     orders = _compute_feature_importance_order(
-        X=X, y=y, task_type="regressor", n_estimators=n_estimators, rng=rng
+        X=X, y=y, task_type="regressor", n_estimators=4, rng=rng
     )
 
-    assert len(orders) == n_estimators
+    assert len(orders) == 1
     for order in orders:
         assert order.shape == (n_features,)
         assert set(order) == set(range(n_features))
-    assert sum(order[0] == 2 for order in orders) > len(orders) // 2
+    assert orders[0][0] == 2
 
 
 @skip_on_macos
@@ -1092,19 +1090,58 @@ def test___compute_feature_importance_order__subsamples_large_datasets():
     X = rng.standard_normal((n_samples, n_features))
     y = rng.integers(0, 2, n_samples)
 
-    n_estimators = 4
     orders = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=n_estimators,
+        n_estimators=8,
         max_samples=50,
         rng=rng,
     )
-    assert len(orders) == n_estimators
+    # min(n_estimators, n_samples // max_samples + 1) unique orderings
+    assert len(orders) == 5
     for order in orders:
         assert order.shape == (n_features,)
         assert set(order) == set(range(n_features))
+
+
+def test___collect_importance_orderings__small_data_returns_single_ordering():
+    orders = _collect_importance_orderings(
+        X=np.zeros((100, 6)),
+        y=np.zeros(100),
+        task_type="regressor",
+        n_estimators=4,
+        max_samples=200,
+        fit_ordering_fn=lambda _X, _y: np.arange(6),
+        rng=np.random.default_rng(0),
+    )
+
+    assert len(orders) == 1
+
+
+def test__subsample_features_importance_based__collected_orderings_cover_all_features():
+    """Estimators sharing a collected ordering draw from one shared pool."""
+    n_features, top_k, size, n_estimators = 12, 4, 8, 2
+
+    for seed in range(20):
+        rng = np.random.default_rng(seed)
+        orders = _collect_importance_orderings(
+            X=np.zeros((50, n_features)),
+            y=np.zeros(50),
+            task_type="regressor",
+            n_estimators=n_estimators,
+            max_samples=100,
+            fit_ordering_fn=lambda _X, _y: np.arange(n_features),
+            rng=rng,
+        )
+        subsampled = _subsample_features_importance_based(
+            [size] * n_estimators, n_features, orders, top_k, rng
+        )
+
+        # Combined budget covers all features: 2 * (8 - 4) top-up draws == the
+        # 8 non-top features, so a shared pool guarantees full coverage.
+        covered = set(np.concatenate(subsampled))
+        assert covered == set(range(n_features))
 
 
 def test__end_to_end__feature_importance_skipped_when_no_subsampling_needed():
@@ -1351,7 +1388,7 @@ def test___compute_feature_importance_order__lightgbm():
         rng=rng,
     )
 
-    assert len(orderings) == 3
+    assert len(orderings) == 1
     for order in orderings:
         assert len(order) == n_features
         assert order[0] == 5
@@ -1365,7 +1402,7 @@ def test___compute_feature_importance_order__lightgbm():
         categorical_feature_indices=[0, 1],
         rng=rng,
     )
-    assert len(orderings_cat) == 2
+    assert len(orderings_cat) == 1
     assert len(orderings_cat[0]) == n_features
 
 
@@ -1389,7 +1426,7 @@ def test___compute_feature_importance_order__handles_nan():
         rng=rng,
     )
 
-    assert len(orderings) == 2
+    assert len(orderings) == 1
     for order in orderings:
         assert len(order) > 0
         assert not np.isnan(order).any()
