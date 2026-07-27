@@ -59,10 +59,10 @@ def _repair_borders(borders: np.ndarray, *, inplace: Literal[True]) -> None:
         nans = np.isnan(borders)
         largest = borders[~nans].max()
         borders[nans] = largest
-        borders[-1] = borders[-1] * 2
+        borders[-1] += np.abs(borders[-1])
 
     if borders[-1] - borders[-2] < 1e-6:
-        borders[-1] = borders[-1] * 1.1
+        borders[-1] += np.abs(borders[-1] * 0.1)
 
     if borders[0] == borders[1]:
         borders[0] -= np.abs(borders[0] * 0.1)
