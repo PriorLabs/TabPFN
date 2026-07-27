@@ -274,37 +274,34 @@ def test__translate_probs_across_borders__forces_chunking(
 
 
 @pytest.mark.parametrize(
-    ("mkldnn", "avx512_bf16", "amx_tile", "expected"),
+    ("mkldnn", "avx512_bf16", "expected"),
     [
-        (True, True, False, True),
-        (True, False, True, True),
-        (True, False, False, False),
-        (False, True, True, False),
+        (True, True, True),
+        (True, False, False),
+        (False, True, False),
     ],
-    ids=["avx512_bf16", "amx", "no_bf16_hardware", "no_onednn_build"],
+    ids=["bf16_hardware", "no_bf16_hardware", "no_onednn_build"],
 )
 def test__cpu_supports_fast_bf16(
     mocker: MagicMock,
     mkldnn: bool,
     avx512_bf16: bool,
-    amx_tile: bool,
     expected: bool,
 ) -> None:
     mocker.patch.object(torch.backends.mkldnn, "is_available", return_value=mkldnn)
     mocker.patch.object(
         torch.cpu, "_is_avx512_bf16_supported", return_value=avx512_bf16
     )
-    mocker.patch.object(torch.cpu, "_is_amx_tile_supported", return_value=amx_tile)
     assert _cpu_supports_fast_bf16() is expected
 
 
-def test__cpu_supports_fast_bf16__torch_helpers_missing__returns_false(
+def test__cpu_supports_fast_bf16__torch_helper_missing__warns_and_returns_false(
     mocker: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     mocker.patch.object(torch.backends.mkldnn, "is_available", return_value=True)
     monkeypatch.delattr(torch.cpu, "_is_avx512_bf16_supported", raising=False)
-    monkeypatch.delattr(torch.cpu, "_is_amx_tile_supported", raising=False)
-    assert _cpu_supports_fast_bf16() is False
+    with pytest.warns(UserWarning, match="cannot detect CPU bf16 support"):
+        assert _cpu_supports_fast_bf16() is False
 
 
 @pytest.mark.parametrize(

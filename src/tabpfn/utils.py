@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Literal
 
@@ -227,16 +228,25 @@ def _cpu_supports_fast_bf16() -> bool:
 
     Requires a torch build with oneDNN, which provides the fast bf16 kernels
     (absent e.g. on macOS wheels, where CPU bf16 falls back to slow reference
-    kernels). Returns False when the capability checks are unavailable, so
-    autocast stays off rather than falling back to emulated, slower bf16.
+    kernels). AMX CPUs also enumerate AVX512-BF16, so this one check covers
+    both instruction sets.
     """
     if not torch.backends.mkldnn.is_available():
         return False
-    # The capability checks are private torch API with no public equivalent;
-    # guarded so a torch release removing them degrades to bf16-off, not a crash.
-    avx512_bf16 = getattr(torch.cpu, "_is_avx512_bf16_supported", lambda: False)
-    amx_tile = getattr(torch.cpu, "_is_amx_tile_supported", lambda: False)
-    return bool(avx512_bf16() or amx_tile())
+    # Private torch API with no public equivalent; if a torch release removes
+    # it, warn and stay on float32 rather than risk slow emulated bf16.
+    avx512_bf16 = getattr(torch.cpu, "_is_avx512_bf16_supported", None)
+    if avx512_bf16 is None:
+        warnings.warn(
+            "torch.cpu._is_avx512_bf16_supported() does not exist in this torch"
+            " version, so TabPFN cannot detect CPU bf16 support and disables"
+            " CPU bf16 autocast. Please report this at"
+            " https://github.com/PriorLabs/TabPFN/issues so detection can be"
+            " updated.",
+            stacklevel=2,
+        )
+        return False
+    return bool(avx512_bf16())
 
 
 def infer_autocast_inference_mode(
