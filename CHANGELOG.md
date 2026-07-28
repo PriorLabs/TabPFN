@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- - Fixed a `RuntimeWarning: overflow encountered in cast` in `SafePowerTransformer`'s
+- Fixed a `RuntimeWarning: overflow encountered in cast` in `SafePowerTransformer`'s
     Yeo-Johnson inverse transform, caused by the clip bound being computed in the
     output dtype instead of float64. ([#1105](https://github.com/PriorLabs/TabPFN/pull/1105))
 - Fix timing on GPU to reflect full GPU work. ([#1113](https://github.com/PriorLabs/TabPFN/pull/1113))
