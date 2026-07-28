@@ -557,6 +557,43 @@ class ManyClassDecoder(nn.Module):
         # convert to logits:
         return torch.log(torch.clamp(test_output_MBT, min=1e-5) + 3e-5)
 
+    def attention_weights(
+        self,
+        train_embeddings: torch.Tensor,  # (B, N, E)
+        test_embeddings: torch.Tensor,  # (B, M, E)
+    ) -> torch.Tensor:
+        """Per-train-row attention weights, averaged over heads: ``(B, M, N)``.
+
+        Runs the same query/key projection, optional query scaling and
+        scaled-dot-product softmax over the training rows as ``forward``, but
+        returns the attention distribution itself rather than the label-weighted
+        average. ``weights[..., n]`` is the vote mass this decoder places on
+        train row ``n`` for a test row; the weights are non-negative and sum to 1
+        over the training axis.
+
+        ``forward`` produces the same distribution implicitly inside a fused
+        attention kernel that never materializes it, so this recomputes the
+        scores explicitly. Collapsing the weights by training label recovers the
+        pre-log class average that ``forward`` turns into logits. Provided for
+        interpretability read-out of the decoder head; not used on the inference
+        path.
+        """
+        B, M, _ = test_embeddings.shape
+        N = train_embeddings.shape[1]
+        q_BMHD = self.q_projection(test_embeddings).view(
+            B, M, self.num_heads, self.head_dim
+        )
+        if train_embeddings.dtype != q_BMHD.dtype:
+            train_embeddings = train_embeddings.to(q_BMHD.dtype)
+        k_BNHD = self.k_projection(train_embeddings).view(
+            B, N, self.num_heads, self.head_dim
+        )
+        if self.softmax_scaling_layer is not None:
+            q_BMHD = self.softmax_scaling_layer(q_BMHD, N)
+        scores_BHMN = torch.einsum("bmhd,bnhd->bhmn", q_BMHD, k_BNHD).float()
+        scores_BHMN /= math.sqrt(self.head_dim)
+        return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)  # over heads -> (B, M, N)
+
 
 def _chunked_class_attention(
     q_BSHD: torch.Tensor,

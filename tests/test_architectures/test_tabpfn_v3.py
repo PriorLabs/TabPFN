@@ -112,6 +112,48 @@ def test__forward__no_test_set_works_batch_size_one() -> None:
     assert out["standard"].shape == (0, 1, 10)
 
 
+@pytest.mark.parametrize("use_softmax_scaling", [False, True])
+@torch.no_grad()
+def test__many_class_decoder_attention_weights_matches_forward(
+    use_softmax_scaling: bool,
+) -> None:
+    """attention_weights is a proper distribution and matches the fused forward.
+
+    Collapsing the per-train-row weights by class label must reproduce, up to the
+    head's log-clamping, the logits the fused decoder returns.
+    """
+    torch.manual_seed(0)
+    B, N, M, E, max_num_classes = 2, 40, 7, 48, 10
+    head_dim, num_heads = 16, 3
+    scaling = (
+        tabpfn_v3.SoftmaxScalingMLP(num_heads=num_heads, head_dim=head_dim)
+        if use_softmax_scaling
+        else None
+    )
+    decoder = tabpfn_v3.ManyClassDecoder(
+        max_num_classes=max_num_classes,
+        input_size=E,
+        head_dim=head_dim,
+        num_heads=num_heads,
+        softmax_scaling_layer=scaling,
+    )
+    train_emb = torch.randn(B, N, E)
+    test_emb = torch.randn(B, M, E)
+    targets = torch.randint(0, max_num_classes, (B, N))
+
+    weights = decoder.attention_weights(train_emb, test_emb)
+    assert weights.shape == (B, M, N)
+    assert torch.all(weights >= 0)
+    torch.testing.assert_close(weights.sum(-1), torch.ones(B, M))
+
+    one_hot = torch.nn.functional.one_hot(targets, max_num_classes).float()
+    class_avg = torch.einsum("bmn,bnt->bmt", weights, one_hot)
+    logits = torch.log(torch.clamp(class_avg, min=1e-5) + 3e-5).transpose(0, 1)
+
+    expected = decoder(train_emb, test_emb, targets)
+    torch.testing.assert_close(logits, expected, atol=1e-4, rtol=1e-4)
+
+
 @torch.no_grad()
 def test__mem_eff_forward_matches_standard_forward() -> None:
     """Memory-efficient inference path must be numerically identical to standard."""
