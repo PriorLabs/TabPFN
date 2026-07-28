@@ -570,17 +570,13 @@ class ManyClassDecoder(nn.Module):
     ) -> torch.Tensor:
         """Per-train-row attention weights, averaged over heads: ``(B, M, N)``.
 
-        ``weights[..., n]`` is the vote mass this decoder places on train row
-        ``n`` for a test row; the weights are non-negative and sum to 1 over the
-        training axis. Collapsing them by training label recovers the pre-log
-        class average that ``forward`` turns into logits.
+        ``weights[..., n]`` is the vote mass placed on train row ``n`` for a
+        test row; non-negative and summing to 1 over the training axis.
+        Collapsing by training label recovers the pre-log class average that
+        ``forward`` turns into logits.
 
-        ``forward`` computes the same distribution inside a fused attention kernel
-        that never materializes it (to avoid the O(N*M) memory cost). This is the
-        interpretability read-out, so it materializes the scores explicitly: the
-        query scaling and ``1/sqrt(head_dim)`` factor below mirror what
-        ``_batched_scaled_dot_product_attention`` applies on the inference path.
-        Not used on the inference path.
+        ``forward`` fuses this into a single attention kernel to avoid
+        materializing an O(N*M) tensor.
         """
         q_BMHD, k_BNHD = self._project_qk(train_embeddings, test_embeddings)
         if self.softmax_scaling_layer is not None:
