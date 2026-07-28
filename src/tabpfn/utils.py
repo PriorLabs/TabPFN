@@ -233,10 +233,42 @@ def is_autocast_available(device_type: str) -> bool:
         )
 
 
-def infer_fp16_inference_mode(
+def _cpu_supports_fast_bf16() -> bool:
+    """Whether the CPU accelerates bfloat16 (Intel AMX / AVX512-BF16, AMD Zen 4+).
+
+    Requires a torch build with oneDNN, which provides the fast bf16 kernels
+    (absent e.g. on macOS wheels, where CPU bf16 falls back to slow reference
+    kernels). AMX CPUs also enumerate AVX512-BF16, so this one check covers
+    both instruction sets.
+    """
+    # bf16 without oneDNN's fast kernels is far slower than float32. Official
+    # wheels always ship oneDNN; this guards distro/self-built torch without it.
+    if not torch.backends.mkldnn.is_available():
+        return False
+    # Private torch API with no public equivalent; if a torch release removes
+    # it, warn and stay on float32 rather than risk slow emulated bf16.
+    avx512_bf16 = getattr(torch.cpu, "_is_avx512_bf16_supported", None)
+    if avx512_bf16 is None:
+        warnings.warn(
+            "torch.cpu._is_avx512_bf16_supported() does not exist in this torch"
+            " version, so TabPFN cannot detect CPU bf16 support and disables"
+            " CPU bf16 autocast. Please report this at"
+            " https://github.com/PriorLabs/TabPFN/issues so detection can be"
+            " updated.",
+            stacklevel=2,
+        )
+        return False
+    return bool(avx512_bf16())
+
+
+def infer_autocast_inference_mode(
     devices: Sequence[torch.device], *, enable: bool | None
 ) -> bool:
-    """Infer whether fp16 inference should be enabled.
+    """Infer whether reduced-precision (autocast) inference should be enabled.
+
+    On GPU this is fp16 autocast; on CPU ``torch.autocast`` runs in bfloat16,
+    which is enabled only on CPUs with native bf16 support (see
+    :func:`_cpu_supports_fast_bf16`).
 
     Args:
         devices: The devices to validate against.
@@ -245,31 +277,38 @@ def infer_fp16_inference_mode(
             detect if it's possible and use it if so.
 
     Returns:
-        Whether to use fp16 inference or not.
+        Whether to use autocast inference or not.
 
     Raises:
-        ValueError: If fp16 inference was enabled and any of the selected devices do
+        ValueError: If autocast was enabled and any of the selected devices do
             not support it.
     """
     is_cpu = any(device.type.lower() == "cpu" for device in devices)
-    fp16_available = (
-        not is_cpu  # CPU can show enabled, yet it kills inference speed
-        and any(is_autocast_available(device.type) for device in devices)
-    )
+    if is_cpu:
+        # CPU autocast runs in bfloat16, which is only faster than float32 on CPUs
+        # with native bf16 support.
+        autocast_available = (
+            all(device.type.lower() == "cpu" for device in devices)
+            and is_autocast_available("cpu")
+            and _cpu_supports_fast_bf16()
+        )
+    else:
+        autocast_available = any(
+            is_autocast_available(device.type) for device in devices
+        )
 
     if enable is None:
-        return fp16_available
+        return autocast_available
 
     if enable is True:
-        if not fp16_available:
+        if not autocast_available:
             raise ValueError(
-                "You specified `fp16_inference=True`, however"
-                "`torch.amp.autocast_mode.is_autocast_available()`"
-                f" reported that one or more of the selected devices ({devices=})"
-                " does not support it."
-                "\nPlease ensure your version of torch and device type"
-                " are compatible with torch.autocast()`"
-                " or set `fp16_inference=False`.",
+                'You specified `inference_precision="autocast"`, however one or'
+                f" more of the selected devices ({devices=}) does not support it."
+                " On CPU, autocast requires hardware-accelerated bfloat16"
+                " (Intel AMX / AVX512-BF16, AMD Zen 4+)."
+                '\nSet `inference_precision="auto"` to fall back to full'
+                " precision automatically.",
             )
         return True
 
