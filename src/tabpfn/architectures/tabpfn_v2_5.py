@@ -382,7 +382,7 @@ class TabPFNBlock(nn.Module):
     @override
     def forward(
         self,
-        x_BRCE: torch.Tensor,
+        x_BRCE_container: list[torch.Tensor] | torch.Tensor,
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
         *,
@@ -399,9 +399,11 @@ class TabPFNBlock(nn.Module):
         E: The embedding size of each cell.
 
         Args:
-            x_BRCE:
-                The transformer state passed as input to the layer of shape
-                (batch_size, num_items, num_feature_blocks, d_model).
+            x_BRCE_container:
+                Either the transformer state Tensor or a length-1 list containing
+                the transformer state. The list form is consumed with ``pop(0)``
+                so non-checkpointed callers can release their reference before
+                allocating the next activation.
             single_eval_pos:
                 The position from which on everything is treated as test set.
             save_peak_memory_factor:
@@ -423,6 +425,10 @@ class TabPFNBlock(nn.Module):
         """
         # -- First Block: Attention between features.
         # The row attention has no train/test distinction and is not cached.
+        if isinstance(x_BRCE_container, torch.Tensor):
+            x_BRCE = x_BRCE_container
+        else:
+            x_BRCE = x_BRCE_container.pop(0)
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
@@ -830,16 +836,20 @@ class TabPFNV2p5(Architecture):
         kv_out: dict[int, KVCacheEntry] = {}
         for layer_idx, block in enumerate(self.blocks):
             if return_kv_cache and not using_cache:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, kv_entry = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     return_kv=True,
                 )
                 kv_out[layer_idx] = kv_entry
             elif using_cache:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, _ = block(
-                    x_BRCD,
+                    x_BRCD_container,
                     block_single_eval_pos,
                     save_peak_memory_factor,
                     cached_kv=kv_cache.kv[layer_idx],
@@ -853,8 +863,10 @@ class TabPFNV2p5(Architecture):
                     use_reentrant=False,
                 )[0]
             else:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, _ = block(
-                    x_BRCD, block_single_eval_pos, save_peak_memory_factor
+                    x_BRCD_container, block_single_eval_pos, save_peak_memory_factor
                 )
 
         # In the cache path every row is a test row; otherwise the test rows start
