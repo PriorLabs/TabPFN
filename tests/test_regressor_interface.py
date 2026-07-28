@@ -672,14 +672,14 @@ def test_cpu_large_dataset_warning():
     # Create a CPU model
     model = TabPFNRegressor(device="cpu")
 
-    # Create synthetic data slightly above the warning threshold
+    # Create synthetic data slightly above the warning threshold (1000 for v3)
     rng = np.random.default_rng(seed=42)
-    X_large = rng.random((201, 10))
-    y_large = rng.random(201)
+    X_large = rng.random((1001, 10))
+    y_large = rng.random(1001)
 
     # Check that a warning is raised
     with pytest.warns(
-        UserWarning, match="Running on CPU with more than 200 samples may be slow"
+        UserWarning, match="Running on CPU with more than 1000 samples may be slow"
     ):
         model.fit(X_large, y_large)
 
@@ -689,12 +689,12 @@ def test_cpu_large_dataset_warning_override():
     and that we can disable the error with ignore_pretraining_limits.
     """
     rng = np.random.default_rng(seed=42)
-    X_large = rng.random((1001, 10))
-    y_large = rng.random(1001)
+    X_large = rng.random((5001, 10))
+    y_large = rng.random(5001)
 
     model = TabPFNRegressor(device="cpu")
     with pytest.raises(
-        RuntimeError, match="Running on CPU with more than 1000 samples is not"
+        RuntimeError, match="Running on CPU with more than 5000 samples is not"
     ):
         model.fit(X_large, y_large)
 
@@ -715,12 +715,12 @@ def test_cpu_large_dataset_error():
 
     # Create synthetic data above the error threshold
     rng = np.random.default_rng(seed=42)
-    X_large = rng.random((1501, 10))
-    y_large = rng.random(1501)
+    X_large = rng.random((5501, 10))
+    y_large = rng.random(5501)
 
     # Check that a RuntimeError is raised
     with pytest.raises(
-        RuntimeError, match="Running on CPU with more than 1000 samples is not"
+        RuntimeError, match="Running on CPU with more than 5000 samples is not"
     ):
         model.fit(X_large, y_large)
 

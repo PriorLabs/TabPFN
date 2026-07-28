@@ -44,6 +44,7 @@ def ensure_compatible_fit_inputs(
     ignore_pretraining_limits: bool,
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
+    max_cpu_samples: int = 1000,
 ) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
     """Validate and convert inputs to standardized format.
 
@@ -57,6 +58,7 @@ def ensure_compatible_fit_inputs(
         ensure_y_numeric: Whether to ensure the target data is numeric, e.g. for
             regression tasks.
         devices: The devices to use for the input data.
+        max_cpu_samples: Sample count above which CPU inference raises by default.
 
     Returns:
         A tuple of five elements:
@@ -82,6 +84,7 @@ def ensure_compatible_fit_inputs(
         y=y,
         max_num_samples=max_num_samples,
         max_num_features=max_num_features,
+        max_cpu_samples=max_cpu_samples,
         devices=devices,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
@@ -125,6 +128,7 @@ def validate_dataset_size(
     max_num_features: int,
     devices: tuple[torch.device, ...],
     ignore_pretraining_limits: bool = False,
+    max_cpu_samples: int = 1000,
 ) -> None:
     """Validate the dataset size."""
     if len(X) != len(y):
@@ -146,6 +150,7 @@ def validate_dataset_size(
     _validate_num_samples_for_cpu(
         devices=devices,
         num_samples=num_samples,
+        max_cpu_samples=max_cpu_samples,
         allow_cpu_override=ignore_pretraining_limits,
     )
 
@@ -277,6 +282,7 @@ def _validate_num_samples_and_features(
 def _validate_num_samples_for_cpu(
     devices: Sequence[torch.device],
     num_samples: int,
+    max_cpu_samples: int,
     *,
     allow_cpu_override: bool = False,
 ) -> None:
@@ -285,6 +291,7 @@ def _validate_num_samples_for_cpu(
     Args:
         devices: The torch devices being used
         num_samples: The number of samples in the input data
+        max_cpu_samples: Sample count above which CPU inference raises by default.
         allow_cpu_override: If True, allow CPU usage with large datasets.
     """
     allow_cpu_override = allow_cpu_override or settings.tabpfn.allow_cpu_large_dataset
@@ -293,19 +300,21 @@ def _validate_num_samples_for_cpu(
         return
 
     if any(device.type == "cpu" for device in devices):
-        if num_samples > 1000:
+        if num_samples > max_cpu_samples:
             raise RuntimeError(
-                "Running on CPU with more than 1000 samples is not allowed "
-                "by default due to slow performance.\n"
+                f"Running on CPU with more than {max_cpu_samples} samples is not "
+                "allowed by default due to slow performance.\n"
                 "To override this behavior, set the environment variable "
                 "TABPFN_ALLOW_CPU_LARGE_DATASET=1 or "
                 "set ignore_pretraining_limits=True.\n"
                 "Alternatively, consider using a GPU or the tabpfn-client API: "
                 "https://github.com/PriorLabs/tabpfn-client"
             )
-        if num_samples > 200:
+        # Warn at a fifth of the hard limit, matching the pre-existing 200:1000 ratio.
+        warn_threshold = max_cpu_samples // 5
+        if num_samples > warn_threshold:
             warnings.warn(
-                "Running on CPU with more than 200 samples may be slow.\n"
+                f"Running on CPU with more than {warn_threshold} samples may be slow.\n"
                 "Consider using a GPU or the tabpfn-client API: "
                 "https://github.com/PriorLabs/tabpfn-client",
                 stacklevel=2,

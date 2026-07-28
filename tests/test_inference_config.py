@@ -14,7 +14,7 @@ from tabpfn.architectures import tabpfn_v2_5
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
 from tabpfn.constants import ModelVersion
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import InferenceConfig, cpu_sample_limit
 from tabpfn.preprocessing import PreprocessorConfig
 
 
@@ -182,3 +182,13 @@ def test__regressor_get_inference_config__with_override__applies_override() -> N
     config = reg.get_inference_config()
     assert config.POLYNOMIAL_FEATURES == "all"
     assert specs.inference_config.POLYNOMIAL_FEATURES == "no"
+
+
+def test__cpu_sample_limit__v3__returns_5000() -> None:
+    assert cpu_sample_limit(ModelVersion.V3) == 5000
+
+
+def test__cpu_sample_limit__pre_v3_versions__return_1000() -> None:
+    assert cpu_sample_limit(ModelVersion.V2) == 1000
+    assert cpu_sample_limit(ModelVersion.V2_5) == 1000
+    assert cpu_sample_limit(ModelVersion.V2_6) == 1000

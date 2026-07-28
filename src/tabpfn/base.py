@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import pathlib
 import typing
 from collections.abc import Sequence
@@ -29,6 +30,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
+from tabpfn.inference_config import cpu_sample_limit
 from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
@@ -207,6 +209,9 @@ def initialize_tabpfn_model(
             )
             norm_criterion = bardist
 
+        inference_config = dataclasses.replace(
+            inference_config, MAX_CPU_SAMPLES=cpu_sample_limit(version)
+        )
         return models, architecture_configs, norm_criterion, inference_config
 
     raise TypeError(

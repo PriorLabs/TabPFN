@@ -332,7 +332,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - If `True`, the model will not raise an error if the input data is
                   outside the pre-training range. Also suppresses error when using
-                  the model with more than 1000 samples on CPU.
+                  the model with a large dataset on CPU.
                 - If `False`, you can use the model outside the pre-training range, but
                   the model could perform worse.
 
@@ -814,6 +814,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             estimator=self,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
             ensure_y_numeric=True,
             devices=self.devices_,
@@ -996,6 +997,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             y=y,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
             devices=self.devices_,
             ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
