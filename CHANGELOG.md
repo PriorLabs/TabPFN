@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.2.0] - 2026-07-28
+
+### Added
+
+- Add `examples/input_gradients.py` showing how to extract gradients of TabPFN predictions with respect to the input data via `differentiable_input=True` on the breast-cancer dataset. ([#1128](https://github.com/PriorLabs/TabPFN/pull/1128))
+
+### Changed
+
+- Improved fine-tuning: retuned the example scripts (Higgs test AUC 0.8247 → 0.8322, California housing test MSE 0.1350 → 0.1328), `validation_split_ratio=None`/`0` now disables validation entirely, best-checkpoint saving now only applies with `early_stopping=True`, and small remainder data chunks no longer crash the context/query split. ([#1101](https://github.com/PriorLabs/TabPFN/pull/1101))
+- Run the consistency tests with float64 inference precision and regenerate the reference predictions, reducing floating-point divergence across hardware/BLAS backends. ([#1111](https://github.com/PriorLabs/TabPFN/pull/1111))
+- Expose the `kv_cache_dtype` as explicit argument. ([#1120](https://github.com/PriorLabs/TabPFN/pull/1120))
+- `inference_precision="auto"` now uses bfloat16 autocast on CPUs with native bf16 support (Intel AMX / AVX512-BF16, AMD Zen 4+), giving ~2x faster CPU inference at unchanged accuracy. CPUs without fast bf16 keep running in float32. ([#1122](https://github.com/PriorLabs/TabPFN/pull/1122))
+- Raised the default CPU sample limit from 1000 to 5000 for the v3 model (other versions keep the 1000 limit). With bf16 autocast on modern CPUs, v3 inference on datasets up to 5000 rows now runs in a reasonable time (~30s at 5000 rows). The "may be slow" warning threshold scales with the limit (1000 for v3, 200 otherwise). The override (`ignore_pretraining_limits=True` / `TABPFN_ALLOW_CPU_LARGE_DATASET=1`) is unchanged. ([#1123](https://github.com/PriorLabs/TabPFN/pull/1123))
+- Enabled autocast also for mps. ([#1124](https://github.com/PriorLabs/TabPFN/pull/1124))
+- Changed the minimal required version of torch to use MPS to 2.6 ([#1129](https://github.com/PriorLabs/TabPFN/pull/1129))
+- Speed up preprocessing for large number of features ([#1136](https://github.com/PriorLabs/TabPFN/pull/1136))
+- Speedup preprocessing for large numeric columns. ([#1137](https://github.com/PriorLabs/TabPFN/pull/1137))
+
+### Fixed
+
+- Fixed a `RuntimeWarning: overflow encountered in cast` in `SafePowerTransformer`'s
+    Yeo-Johnson inverse transform, caused by the clip bound being computed in the
+    output dtype instead of float64. ([#1105](https://github.com/PriorLabs/TabPFN/pull/1105))
+- Fix timing on GPU to reflect full GPU work. ([#1113](https://github.com/PriorLabs/TabPFN/pull/1113))
+- Fix `_repair_borders` widening the top bar-distribution border downwards for negative targets, which left the borders non-ascending when a quantile target transform collapsed the top gap. ([#1127](https://github.com/PriorLabs/TabPFN/pull/1127))
+
+
 ## [8.1.0] - 2026-07-13
 
 ### Added
