@@ -253,8 +253,12 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             initialization. Defaults to 0.
         early_stopping: Whether to use early stopping based on validation
             performance. Defaults to True.
-        early_stopping_patience: Number of epochs to wait for improvement before
-            early stopping. Defaults to 8.
+        early_stopping_patience: Number of validation checks to wait for
+            improvement before early stopping. Defaults to 8.
+        validation_frequency: Number of epochs between validation checks. A value
+            of 1 (default) validates after every epoch. The initial evaluation
+            of the unfine-tuned model still runs whenever validation data is
+            available. Must be a positive integer.
         min_delta: Minimum change in metric to be considered as an improvement.
             Defaults to 1e-4.
         grad_clip_value: Maximum norm for gradient clipping. If None, gradient
@@ -330,6 +334,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
+        validation_frequency: int = 1,
         min_delta: float = 1e-4,
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
@@ -365,6 +370,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             random_state=random_state,
             early_stopping=early_stopping,
             early_stopping_patience=early_stopping_patience,
+            validation_frequency=validation_frequency,
             min_delta=min_delta,
             grad_clip_value=grad_clip_value,
             use_lr_scheduler=use_lr_scheduler,
