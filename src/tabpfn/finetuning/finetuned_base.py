@@ -12,8 +12,8 @@ from __future__ import annotations
 import copy
 import datetime
 import logging
-import os
 import operator
+import os
 import time
 import warnings
 from abc import ABC, abstractmethod
