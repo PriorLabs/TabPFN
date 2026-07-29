@@ -568,14 +568,14 @@ class ManyClassDecoder(nn.Module):
         train_embeddings: torch.Tensor,  # (B, N, E)
         test_embeddings: torch.Tensor,  # (B, M, E)
     ) -> torch.Tensor:
-        """Per-train-row attention weights, averaged over heads: ``(B, M, N)``.
+        """Per-train-row attention weights, averaged over heads: `(B, M, N)`.
 
-        ``weights[..., n]`` is the vote mass placed on train row ``n`` for a
+        `weights[..., n]` is the vote mass placed on train row `n` for a
         test row; non-negative and summing to 1 over the training axis.
         Collapsing by training label recovers the pre-log class average that
-        ``forward`` turns into logits.
+        `forward` turns into logits.
 
-        ``forward`` fuses this into a single attention kernel to avoid
+        `forward` fuses this into a single attention kernel to avoid
         materializing an O(N*M) tensor.
         """
         q_BMHD, k_BNHD = self._project_qk(train_embeddings, test_embeddings)
