@@ -856,7 +856,6 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
 # Suppression is per-thread: ``torch.nn.init`` is shared process-wide, so a thread
 # constructing an unrelated module must keep seeing the real initializers.
 _INIT_SUPPRESSION = threading.local()
-_INIT_GUARD_LOCK = threading.Lock()
 
 
 def _guarded_initializer(initializer: Callable[..., Any]) -> Callable[..., Any]:
@@ -879,16 +878,17 @@ def _install_init_guards() -> None:
     around each construction: swapping cannot be made safe, because a thread that
     never enters the suppression context would still observe the swapped-in values.
     Already-guarded initializers are left alone, so repeated calls are a no-op.
+
+    Needs no lock: two threads installing at once both wrap the same unguarded
+    original, so whichever assignment lands is correct and the other wrapper is
+    simply discarded.
     """
-    with _INIT_GUARD_LOCK:
-        for name in dir(nn.init):
-            if not name.endswith("_") or name.startswith("_"):
-                continue
-            initializer = getattr(nn.init, name)
-            if callable(initializer) and not getattr(
-                initializer, "_tabpfn_guarded", False
-            ):
-                setattr(nn.init, name, _guarded_initializer(initializer))
+    for name in dir(nn.init):
+        if not name.endswith("_") or name.startswith("_"):
+            continue
+        initializer = getattr(nn.init, name)
+        if callable(initializer) and not getattr(initializer, "_tabpfn_guarded", False):
+            setattr(nn.init, name, _guarded_initializer(initializer))
 
 
 @contextlib.contextmanager
