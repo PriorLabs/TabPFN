@@ -509,6 +509,22 @@ class ManyClassDecoder(nn.Module):
         self.k_projection = nn.Linear(self.input_size, self.attention_size)
         self.softmax_scaling_layer = softmax_scaling_layer
 
+    def _project_qk(
+        self,
+        train_embeddings: torch.Tensor,  # (B, N, E)
+        test_embeddings: torch.Tensor,  # (B, M, E)
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Project inputs to per-head queries/keys: (B, M, H, D), (B, N, H, D)."""
+        q_BME = self.q_projection(test_embeddings)
+        # Mirrors the dtype guard in ICLAttention's cached path.
+        if train_embeddings.dtype != q_BME.dtype:
+            train_embeddings = train_embeddings.to(q_BME.dtype)
+        k_BNE = self.k_projection(train_embeddings)
+        h, d = self.num_heads, self.head_dim
+        q_BMHD = q_BME.view(*q_BME.shape[:2], h, d).contiguous()
+        k_BNHD = k_BNE.view(*k_BNE.shape[:2], h, d).contiguous()
+        return q_BMHD, k_BNHD
+
     @override
     def forward(
         self,
@@ -518,11 +534,7 @@ class ManyClassDecoder(nn.Module):
     ) -> torch.Tensor:
         """Perform a forward pass."""
         B, M, _ = test_embeddings.shape
-        q_BME = self.q_projection(test_embeddings)
-        # Mirrors the dtype guard in ICLAttention's cached path.
-        if train_embeddings.dtype != q_BME.dtype:
-            train_embeddings = train_embeddings.to(q_BME.dtype)
-        k_BNE = self.k_projection(train_embeddings)
+        q_BMHD, k_BNHD = self._project_qk(train_embeddings, test_embeddings)
 
         if M == 0:
             # OOM checks at training start run with no test rows. Flash attention
@@ -530,18 +542,12 @@ class ManyClassDecoder(nn.Module):
             # Both dummy terms keep the output in the computation graph so that
             # gradients flow through both projections during memory estimation.
             empty = test_embeddings.new_empty((0, B, self.max_num_classes))
-            return empty + (q_BME.sum() + k_BNE.sum()) * 0.0
+            return empty + (q_BMHD.sum() + k_BNHD.sum()) * 0.0
 
-        one_hot_targets_BNT = (
-            F.one_hot(targets.long(), num_classes=self.max_num_classes)
-            .to(dtype=q_BME.dtype)
-            .contiguous()
-        )
-
-        q_BMHD = q_BME.view(B, M, self.num_heads, self.head_dim).contiguous()
-        k_BNHD = k_BNE.view(B, -1, self.num_heads, self.head_dim).contiguous()
         one_hot_targets_BNHT = (
-            one_hot_targets_BNT.unsqueeze(2)
+            F.one_hot(targets.long(), num_classes=self.max_num_classes)
+            .to(dtype=q_BMHD.dtype)
+            .unsqueeze(2)
             .expand(-1, -1, self.num_heads, -1)
             .contiguous()
         )
@@ -556,6 +562,28 @@ class ManyClassDecoder(nn.Module):
         test_output_MBT = test_output_BMT.transpose(0, 1)
         # convert to logits:
         return torch.log(torch.clamp(test_output_MBT, min=1e-5) + 3e-5)
+
+    def attention_weights(
+        self,
+        train_embeddings: torch.Tensor,  # (B, N, E)
+        test_embeddings: torch.Tensor,  # (B, M, E)
+    ) -> torch.Tensor:
+        """Per-train-row attention weights, averaged over heads: `(B, M, N)`.
+
+        `weights[..., n]` is the vote mass placed on train row `n` for a
+        test row; non-negative and summing to 1 over the training axis.
+        Collapsing by training label recovers the pre-log class average that
+        `forward` turns into logits.
+
+        `forward` fuses this into a single attention kernel to avoid
+        materializing an O(N*M) tensor.
+        """
+        q_BMHD, k_BNHD = self._project_qk(train_embeddings, test_embeddings)
+        if self.softmax_scaling_layer is not None:
+            q_BMHD = self.softmax_scaling_layer(q_BMHD, k_BNHD.shape[1])
+        scores_BHMN = torch.einsum("bmhd,bnhd->bhmn", q_BMHD, k_BNHD).float()
+        scores_BHMN /= math.sqrt(self.head_dim)
+        return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)  # over heads -> (B, M, N)
 
 
 def _chunked_class_attention(
