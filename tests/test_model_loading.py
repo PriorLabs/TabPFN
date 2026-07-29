@@ -571,3 +571,74 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
         f"Expected at most 1 concurrent download, got {download_attempts}. "
         "The file lock is not working correctly."
     )
+
+
+def test__load_model__parameter_init_suppressed__weights_come_from_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config = _get_minimal_v2_config()
+    model = tabpfn_v2.get_architecture(config, cache_trainset_representation=False)
+    state_dict = {k: v.clone() for k, v in model.state_dict().items()}
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save({"state_dict": state_dict, "config": asdict(config)}, checkpoint_path)
+
+    loaded_model, _, _, _ = model_loading.load_model(path=checkpoint_path)
+
+    loaded_state_dict = loaded_model.state_dict()
+    assert set(loaded_state_dict) == set(state_dict)
+    for name, expected in state_dict.items():
+        assert torch.equal(loaded_state_dict[name], expected), name
+
+
+@pytest.mark.parametrize("architecture_name", sorted(ARCHITECTURES))
+def test__architectures__every_tensor_is_in_the_state_dict(
+    architecture_name: str,
+) -> None:
+    """Skipping the init on load relies on the checkpoint supplying every tensor.
+
+    A parameter or buffer outside the state dict would keep whatever the allocator
+    handed out, since strict loading never reaches it.
+    """
+    architecture_module = ARCHITECTURES[architecture_name]
+    # A superset of the fields the bundled architectures need; parse_config returns
+    # the ones it does not recognise rather than rejecting them.
+    config, _ = architecture_module.parse_config(
+        {
+            "emsize": 16,
+            "embed_dim": 16,
+            "nlayers": 2,
+            "nhead": 2,
+            "features_per_group": 1,
+            "max_num_classes": 10,
+            "num_buckets": 1000,
+            "icl_num_heads": 2,
+            "feat_agg_num_heads": 2,
+            "dist_embed_num_heads": 2,
+        }
+    )
+
+    model = architecture_module.get_architecture(
+        config, cache_trainset_representation=False
+    )
+
+    in_state_dict = set(model.state_dict())
+    outside = [
+        name
+        for name, _ in (*model.named_parameters(), *model.named_buffers())
+        if name not in in_state_dict
+    ]
+    assert not outside, f"{architecture_name} has tensors outside the state dict"
+
+
+def test__suppressed_parameter_init__exception_raised__initializers_restored() -> None:
+    original = torch.nn.init.xavier_uniform_
+
+    def suppress_then_raise() -> None:
+        with model_loading._suppressed_parameter_init():
+            assert torch.nn.init.xavier_uniform_ is not original
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        suppress_then_raise()
+
+    assert torch.nn.init.xavier_uniform_ is original

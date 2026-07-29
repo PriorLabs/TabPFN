@@ -14,9 +14,11 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import urllib.request
 import warnings
 import zipfile
+from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
@@ -851,6 +853,46 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     return Checkpoint(path).load()
 
 
+def _no_op_init(tensor: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
+    del args, kwargs
+    return tensor
+
+
+# ``torch.nn.init`` is shared process-wide, so the swap below is serialized to stop a
+# concurrent construction from observing the no-ops.
+_INIT_SUPPRESSION_LOCK = threading.Lock()
+
+
+@contextlib.contextmanager
+def _suppressed_parameter_init() -> Iterator[None]:
+    """Make the in-place initializers in ``torch.nn.init`` no-ops for the duration.
+
+    Module constructors fill freshly allocated parameters with random values, which
+    a subsequent strict ``load_state_dict`` overwrites in full. Suppressing the fill
+    leaves the allocation and the module tree untouched, so tensors keep their
+    storage and any reference taken during construction stays valid.
+
+    Only safe when every parameter and buffer is supplied by the checkpoint, which
+    strict loading enforces.
+    """
+    initializers = {}
+    for name in dir(nn.init):
+        if not name.endswith("_") or name.startswith("_"):
+            continue
+        initializer = getattr(nn.init, name)
+        if callable(initializer):
+            initializers[name] = initializer
+
+    with _INIT_SUPPRESSION_LOCK:
+        for name in initializers:
+            setattr(nn.init, name, _no_op_init)
+        try:
+            yield
+        finally:
+            for name, initializer in initializers.items():
+                setattr(nn.init, name, initializer)
+
+
 def load_model(
     *,
     path: Path,
@@ -888,10 +930,11 @@ def load_model(
         "Keys in config that were not parsed by architecture config: "
         f"{', '.join(unused_model_config.keys())}"
     )
-    model = architecture.get_architecture(
-        model_config,
-        cache_trainset_representation=cache_trainset_representation,
-    )
+    with _suppressed_parameter_init():
+        model = architecture.get_architecture(
+            model_config,
+            cache_trainset_representation=cache_trainset_representation,
+        )
 
     if "test_targets_MB" in inspect.signature(model.forward).parameters:
         # The model computes the loss internally. Strip criterion keys that
