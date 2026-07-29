@@ -84,7 +84,6 @@ def test__forward_pass_equal_with_save_peak_memory_enabled_and_disabled(
 
 
 @pytest.mark.parametrize("task_type", TASK_TYPES)
-@torch.no_grad()
 @pytest.mark.skipif(sys.platform == "win32", reason="float64 tests fail on Windows")
 def test__forward_pass_equal_with_checkpointing_enabled_and_disabled(
     task_type: str,
@@ -108,6 +107,9 @@ def test__forward_pass_equal_with_checkpointing_enabled_and_disabled(
         assert torch.allclose(
             output_with_recomputation[key], output_without_recomputation[key]
         ), f"Outputs for {key} do not match between implementations."
+
+    output_with_recomputation["standard"].sum().backward()
+    assert arch.blocks[0].mlp[0].weight.grad is not None
 
 
 def test__thinking_rows__output_has_correct_shape() -> None:

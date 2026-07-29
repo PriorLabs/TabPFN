@@ -319,7 +319,7 @@ class TabPFNBlock(nn.Module):
 
     def forward(
         self,
-        x_BRCE_container: list[torch.Tensor],
+        x_BRCE_container: list[torch.Tensor] | torch.Tensor,
         single_eval_pos: int,
         save_peak_memory_factor: int | None,
         *,
@@ -337,8 +337,10 @@ class TabPFNBlock(nn.Module):
 
         Args:
             x_BRCE_container:
-                A length-1 list containing the transformer state passed as input to the
-                layer of shape (batch_size, num_items, num_feature_blocks, d_model).
+                Either the transformer state Tensor or a length-1 list containing
+                the transformer state. The list form is consumed with ``pop(0)``
+                so non-checkpointed callers can release their reference before
+                allocating the next activation.
             single_eval_pos:
                 The position from which on everything is treated as test set.
             save_peak_memory_factor:
@@ -360,7 +362,10 @@ class TabPFNBlock(nn.Module):
         """
         # -- First Block: Attention between features.
         # The row attention has no train/test distinction and is not cached.
-        x_BRCE = x_BRCE_container.pop(0)
+        if isinstance(x_BRCE_container, torch.Tensor):
+            x_BRCE = x_BRCE_container
+        else:
+            x_BRCE = x_BRCE_container.pop(0)
         x_BRCE = chunked_evaluate_maybe_inplace(
             self.per_sample_attention_between_features,
             x_BRCE,
@@ -926,11 +931,9 @@ class TabPFNV2(Architecture):
             {} if (return_kv_cache and not using_cache) else None
         )
         for layer_idx, block in enumerate(self.blocks):
-            # Note: Using x_BRCD._set() instead of the container approach here leads
-            # to memory issues on some mac hardware.
-            x_BRCD_container = [x_BRCD]
-            del x_BRCD
             if return_kv_cache and not using_cache:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, kv_entry = block(
                     x_BRCD_container,
                     block_single_eval_pos,
@@ -939,6 +942,8 @@ class TabPFNV2(Architecture):
                 )
                 kv_out[layer_idx] = kv_entry
             elif using_cache:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, _ = block(
                     x_BRCD_container,
                     block_single_eval_pos,
@@ -948,11 +953,14 @@ class TabPFNV2(Architecture):
             elif force_recompute_layer:
                 x_BRCD = torch.utils.checkpoint.checkpoint(
                     block,
-                    x_BRCD_container,
+                    x_BRCD,
                     block_single_eval_pos,
                     save_peak_memory_factor,
+                    use_reentrant=False,
                 )[0]
             else:
+                x_BRCD_container = [x_BRCD]
+                del x_BRCD
                 x_BRCD, _ = block(
                     x_BRCD_container, block_single_eval_pos, save_peak_memory_factor
                 )
