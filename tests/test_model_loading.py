@@ -630,15 +630,44 @@ def test__architectures__every_tensor_is_in_the_state_dict(
     assert not outside, f"{architecture_name} has tensors outside the state dict"
 
 
-def test__suppressed_parameter_init__exception_raised__initializers_restored() -> None:
-    original = torch.nn.init.xavier_uniform_
-
+def test__suppressed_parameter_init__exception_raised__suppression_cleared() -> None:
     def suppress_then_raise() -> None:
         with model_loading._suppressed_parameter_init():
-            assert torch.nn.init.xavier_uniform_ is not original
             raise RuntimeError("boom")
 
     with pytest.raises(RuntimeError, match="boom"):
         suppress_then_raise()
 
-    assert torch.nn.init.xavier_uniform_ is original
+    weight = torch.zeros(4, 4)
+    torch.nn.init.xavier_uniform_(weight)
+    assert weight.abs().sum() > 0
+
+
+def test__suppressed_parameter_init__other_thread__still_initializes() -> None:
+    """Suppression must not leak to threads that did not ask for it."""
+    entered = threading.Event()
+    may_finish = threading.Event()
+    other_thread_weight = torch.zeros(8, 8)
+
+    def suppress_and_hold() -> None:
+        with model_loading._suppressed_parameter_init():
+            suppressed = torch.zeros(8, 8)
+            torch.nn.init.xavier_uniform_(suppressed)
+            assert suppressed.abs().sum() == 0
+            entered.set()
+            assert may_finish.wait(timeout=10)
+
+    def initialize_normally() -> None:
+        assert entered.wait(timeout=10)
+        torch.nn.init.xavier_uniform_(other_thread_weight)
+        may_finish.set()
+
+    suppressor = threading.Thread(target=suppress_and_hold)
+    other = threading.Thread(target=initialize_normally)
+    suppressor.start()
+    other.start()
+    for thread in (suppressor, other):
+        thread.join(timeout=15)
+        assert not thread.is_alive()
+
+    assert other_thread_weight.abs().sum() > 0

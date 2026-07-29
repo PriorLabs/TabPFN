@@ -18,7 +18,7 @@ import threading
 import urllib.request
 import warnings
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
@@ -853,19 +853,47 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     return Checkpoint(path).load()
 
 
-def _no_op_init(tensor: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
-    del args, kwargs
-    return tensor
+# Suppression is per-thread: ``torch.nn.init`` is shared process-wide, so a thread
+# constructing an unrelated module must keep seeing the real initializers.
+_INIT_SUPPRESSION = threading.local()
+_INIT_GUARD_LOCK = threading.Lock()
 
 
-# ``torch.nn.init`` is shared process-wide, so the swap below is serialized to stop a
-# concurrent construction from observing the no-ops.
-_INIT_SUPPRESSION_LOCK = threading.Lock()
+def _guarded_initializer(initializer: Callable[..., Any]) -> Callable[..., Any]:
+    """Wrap an initializer so it is a no-op on threads that asked for suppression."""
+
+    @functools.wraps(initializer)
+    def guarded(tensor: torch.Tensor, *args: Any, **kwargs: Any) -> torch.Tensor:
+        if getattr(_INIT_SUPPRESSION, "active", False):
+            return tensor
+        return initializer(tensor, *args, **kwargs)
+
+    guarded._tabpfn_guarded = True  # type: ignore[attr-defined]
+    return guarded
+
+
+def _install_init_guards() -> None:
+    """Replace ``torch.nn.init``'s in-place initializers with guarded versions once.
+
+    The guards are installed for the lifetime of the process rather than swapped
+    around each construction: swapping cannot be made safe, because a thread that
+    never enters the suppression context would still observe the swapped-in values.
+    Already-guarded initializers are left alone, so repeated calls are a no-op.
+    """
+    with _INIT_GUARD_LOCK:
+        for name in dir(nn.init):
+            if not name.endswith("_") or name.startswith("_"):
+                continue
+            initializer = getattr(nn.init, name)
+            if callable(initializer) and not getattr(
+                initializer, "_tabpfn_guarded", False
+            ):
+                setattr(nn.init, name, _guarded_initializer(initializer))
 
 
 @contextlib.contextmanager
 def _suppressed_parameter_init() -> Iterator[None]:
-    """Make the in-place initializers in ``torch.nn.init`` no-ops for the duration.
+    """Skip the in-place initializers in ``torch.nn.init`` on the calling thread.
 
     Module constructors fill freshly allocated parameters with random values, which
     a subsequent strict ``load_state_dict`` overwrites in full. Suppressing the fill
@@ -875,22 +903,13 @@ def _suppressed_parameter_init() -> Iterator[None]:
     Only safe when every parameter and buffer is supplied by the checkpoint, which
     strict loading enforces.
     """
-    initializers = {}
-    for name in dir(nn.init):
-        if not name.endswith("_") or name.startswith("_"):
-            continue
-        initializer = getattr(nn.init, name)
-        if callable(initializer):
-            initializers[name] = initializer
-
-    with _INIT_SUPPRESSION_LOCK:
-        for name in initializers:
-            setattr(nn.init, name, _no_op_init)
-        try:
-            yield
-        finally:
-            for name, initializer in initializers.items():
-                setattr(nn.init, name, initializer)
+    _install_init_guards()
+    was_active = getattr(_INIT_SUPPRESSION, "active", False)
+    _INIT_SUPPRESSION.active = True
+    try:
+        yield
+    finally:
+        _INIT_SUPPRESSION.active = was_active
 
 
 def load_model(
