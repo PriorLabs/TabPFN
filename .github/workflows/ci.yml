@@ -125,6 +125,75 @@ jobs:
           key: model-cache-${{ hashFiles('model_cache/**') }}
           enableCrossOsArchive: true
 
+      # Works around `Windows fatal exception: code 0xc000001d`
+      # (STATUS_ILLEGAL_INSTRUCTION), which aborted roughly 1 in 10 Windows jobs
+      # at the suite's first fit/predict on real weights.
+      #
+      # It is not a wheel built for an ISA the runner lacks -- it is the
+      # opposite. The abort only happens on the newer Intel runners (Xeon
+      # Platinum 8573C, Emerald Rapids); the AMD EPYC 7763 runners, with no
+      # AVX-512 at all, never hit it. Emerald Rapids advertises AMX and oneDNN
+      # dispatches AMX kernels for it, but the tile state is not usable on this
+      # runner, so the first tile instruction faults. Capping the ISA is the
+      # only lever available: Linux lets a process request that state with
+      # arch_prctl(ARCH_REQ_XCOMP_PERM, XFEATURE_XTILEDATA), but Windows has no
+      # documented user-space equivalent to opt into.
+      #
+      # Established by re-running the crashing test under each dispatcher cap in
+      # turn on an affected runner (run 30532900721): every oneDNN cap survived,
+      # while capping MKL (MKL_ENABLE_INSTRUCTIONS) or torch's own vectorized
+      # kernels (ATEN_CPU_CAPABILITY) still aborted. AVX512_CORE_FP16 is the
+      # highest oneDNN tier below AMX, so this keeps every AVX-512 kernel and
+      # drops only the AMX ones; capping to AVX2 also works but costs ~3x
+      # runtime. Both torch 2.5.0 (oneDNN v3.5.3) and 2.13.0 (v3.12.0) are
+      # affected, so this is not a regression that ages out on its own -- drop
+      # it once torch ships a oneDNN that honours the Windows AMX opt-in.
+      - name: Cap oneDNN below AMX (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "ONEDNN_MAX_CPU_ISA=AVX512_CORE_FP16" >> "$GITHUB_ENV"
+
+      # Kept so that any recurrence names the runner's CPU and the ISA torch
+      # selected for it; that pairing is what made the abort diagnosable.
+      #
+      # GetEnabledXStateFeatures reports which XSAVE state components Windows
+      # has actually enabled. Bits 17 and 18 are the AMX tile config and tile
+      # data components, and they decide who owns the bug: if Windows reports
+      # them disabled, oneDNN dispatched AMX kernels the OS never enabled and
+      # the bug is its detection; if it reports them enabled and a tile
+      # instruction still faults, the bug is under Windows or the hypervisor
+      # and torch can only work around it.
+      - name: Log CPU and torch dispatch info (Windows only)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: |
+          pwsh -NoProfile -Command "Get-CimInstance Win32_Processor |
+            Format-List Name, Manufacturer, Description, NumberOfCores,
+            NumberOfLogicalProcessors"
+          uv run --no-sync python -c '
+          import ctypes
+          import torch
+          print("torch", torch.__version__)
+          print("cpu_capability", torch.backends.cpu.get_cpu_capability())
+          print(torch.__config__.parallel_info())
+          print(torch.__config__.show())
+          kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+          kernel32.GetEnabledXStateFeatures.restype = ctypes.c_uint64
+          mask = kernel32.GetEnabledXStateFeatures()
+          print(f"enabled_xstate_features 0x{mask:016x}")
+          components = [
+              (2, "AVX"),
+              (5, "AVX512_KMASK"),
+              (6, "AVX512_ZMM_H"),
+              (7, "AVX512_ZMM"),
+              (17, "AMX_TILE_CONFIG"),
+              (18, "AMX_TILE_DATA"),
+          ]
+          for bit, name in components:
+              print(f"  bit {bit:>2} {name:<16} {bool(mask >> bit & 1)}")
+          '
+
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         run: uv run --no-sync pytest tests/
