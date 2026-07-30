@@ -125,24 +125,34 @@ jobs:
           key: model-cache-${{ hashFiles('model_cache/**') }}
           enableCrossOsArchive: true
 
-      # Diagnostics for the intermittent Windows abort
-      # `Windows fatal exception: code 0xc000001d` (STATUS_ILLEGAL_INSTRUCTION),
-      # which kills roughly 1 in 10 Windows jobs. Every occurrence dies at the
-      # same test -- the suite's first fit/predict on real weights -- under both
-      # dependency sets, and a retry clears it. faulthandler cannot walk the
-      # native stack on Windows ("cannot get C stack on this system"), so the
-      # log never names the faulting DLL; record the CPU and the ISA torch
-      # picks for it instead.
+      # Works around `Windows fatal exception: code 0xc000001d`
+      # (STATUS_ILLEGAL_INSTRUCTION), which aborted roughly 1 in 10 Windows jobs
+      # at the suite's first fit/predict on real weights.
       #
-      # Run 30531520172 caught the split: the job on an Intel Xeon Platinum
-      # 8573C (Emerald Rapids, cpu_capability AVX512) aborted, while the job on
-      # an AMD EPYC 7763 (AVX2, no AVX-512) in the same run passed. So the
-      # abort happens on the runner with MORE ISA available, not less -- the
-      # opposite of a wheel built for an ISA the CPU lacks. The prime suspect
-      # is AMX, which Emerald Rapids advertises in CPUID but which Windows
-      # leaves off until a process opts into the tile XSTATE; an AMX kernel
-      # dispatched without that opt-in raises exactly this exception code.
-      # Remove all of this once the flake is understood.
+      # It is not a wheel built for an ISA the runner lacks -- it is the
+      # opposite. The abort only happens on the newer Intel runners (Xeon
+      # Platinum 8573C, Emerald Rapids); the AMD EPYC 7763 runners, with no
+      # AVX-512 at all, never hit it. Emerald Rapids advertises AMX in CPUID,
+      # but Windows leaves the tile XSTATE off until a process opts in, so
+      # oneDNN's AMX kernels take an illegal-instruction fault on their first
+      # tile instruction.
+      #
+      # Established by re-running the crashing test under each dispatcher cap in
+      # turn on an affected runner (run 30532900721): every oneDNN cap survived,
+      # while capping MKL (MKL_ENABLE_INSTRUCTIONS) or torch's own vectorized
+      # kernels (ATEN_CPU_CAPABILITY) still aborted. AVX512_CORE_FP16 is the
+      # highest oneDNN tier below AMX, so this keeps every AVX-512 kernel and
+      # drops only the AMX ones; capping to AVX2 also works but costs ~3x
+      # runtime. Both torch 2.5.0 (oneDNN v3.5.3) and 2.13.0 (v3.12.0) are
+      # affected, so this is not a regression that ages out on its own -- drop
+      # it once torch ships a oneDNN that honours the Windows AMX opt-in.
+      - name: Cap oneDNN below AMX (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "ONEDNN_MAX_CPU_ISA=AVX512_CORE_FP16" >> "$GITHUB_ENV"
+
+      # Kept so that any recurrence names the runner's CPU and the ISA torch
+      # selected for it; that pairing is what made the abort diagnosable.
       - name: Log CPU and torch dispatch info (Windows only)
         if: runner.os == 'Windows'
         continue-on-error: true
@@ -158,53 +168,6 @@ jobs:
           print(torch.__config__.parallel_info())
           print(torch.__config__.show())
           '
-
-      # Runs the known-flaky test on its own, ahead of the suite. It reproduces
-      # the abort in ~10s on an affected runner, so when the control run dies we
-      # immediately re-run it under each dispatcher cap in turn. One unlucky job
-      # then answers both open questions at once: which library was mid-dispatch
-      # (ONEDNN_VERBOSE names the primitive and ISA of the last kernel before
-      # the abort) and which cap is enough to prevent it. The cheapest cap that
-      # survives is the fix; capping to AVX2 also works but costs ~3x runtime.
-      # On the ~9 in 10 runners that are unaffected only the control run
-      # happens, so this normally adds a few seconds. Advisory only:
-      # `continue-on-error` plus the trailing `exit 0` keep the real test steps
-      # below in charge of the job's verdict.
-      - name: Crash canary and dispatcher probe (Windows only)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        shell: bash
-        run: |
-          set +e
-          test_id="tests/test_classifier_interface.py::test__predict__show_progress_bar_true__tiny_dataset_does_not_crash"
-          results="${RUNNER_TEMP:-.}/canary-results.txt"
-          : > "$results"
-          probe() {
-            label="$1"
-            shift
-            echo "::group::canary [$label] $*"
-            env "$@" uv run --no-sync pytest -q "$test_id" 2>&1 | tail -60
-            code=${PIPESTATUS[0]}
-            echo "::endgroup::"
-            printf '%-18s exit=%-4s %s\n' "$label" "$code" "$*" >> "$results"
-            return "$code"
-          }
-
-          probe control
-          if [ $? -ne 0 ]; then
-            echo "Control run aborted: this runner reproduces the flake."
-            echo "Probing which dispatcher issues the illegal instruction."
-            probe onednn-verbose ONEDNN_VERBOSE=1
-            probe onednn-no-amx  ONEDNN_MAX_CPU_ISA=AVX512_CORE_FP16
-            probe onednn-avx512  ONEDNN_MAX_CPU_ISA=AVX512_CORE
-            probe onednn-avx2    ONEDNN_MAX_CPU_ISA=AVX2
-            probe mkl-no-amx     MKL_ENABLE_INSTRUCTIONS=AVX512
-            probe aten-avx2      ATEN_CPU_CAPABILITY=avx2
-          fi
-
-          echo "=== canary summary (exit=0 means the test survived) ==="
-          cat "$results"
-          exit 0
 
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
