@@ -294,6 +294,7 @@ TabPFN uses Pydantic settings for configuration, supporting environment variable
 
 **PyTorch Settings:**
 - `PYTORCH_CUDA_ALLOC_CONF`: PyTorch CUDA memory allocation configuration to optimize GPU memory usage (default: `max_split_size_mb:512`). See [PyTorch CUDA documentation](https://docs.pytorch.org/docs/stable/notes/cuda.html#optimizing-memory-usage-with-pytorch-cuda-alloc-conf) for more information.
+- If you experience crashes on Windows with the error message containing `Windows fatal exception: code 0xc000001d`, try to set `ONEDNN_MAX_CPU_ISA=AVX512_CORE_FP16`. This is likely an upstream pytorch/oneDNN bug.
 
 Example:
 ```bash
