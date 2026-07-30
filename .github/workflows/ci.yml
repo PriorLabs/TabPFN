@@ -125,29 +125,46 @@ jobs:
           key: model-cache-${{ hashFiles('model_cache/**') }}
           enableCrossOsArchive: true
 
-      # The hosted Windows runners have heterogeneous CPUs (Intel Xeon with
-      # AVX-512, AMD EPYC without), so kernels that dispatch on AVX-512 abort
-      # with `Windows fatal exception: code 0xc000001d`
-      # (STATUS_ILLEGAL_INSTRUCTION) on whichever machine we happen to land on.
-      # Cap each dispatcher torch can route CPU work through, so the test runs
-      # behave the same whichever machine we get:
-      #   ONEDNN_MAX_CPU_ISA      oneDNN primitives (matmul, conv, ...)
-      #   ATEN_CPU_CAPABILITY     torch's own vectorized ATen kernels
-      #   MKL_ENABLE_INSTRUCTIONS MKL's BLAS/LAPACK
-      # Written to GITHUB_ENV rather than each step's `env:` because the latter
-      # two have no "autodetect" value to pass on the other runners: an unknown
-      # value makes torch warn in every process, and MKL_ENABLE_INSTRUCTIONS
-      # would really cap Linux, whose torch wheels link MKL as well. Only the
-      # test steps follow, so this stays scoped to the test runs.
-      - name: Cap CPU ISA to AVX2 (Windows only)
+      # Diagnostics for the intermittent Windows abort
+      # `Windows fatal exception: code 0xc000001d` (STATUS_ILLEGAL_INSTRUCTION),
+      # which kills roughly 1 in 10 Windows jobs. Every occurrence so far dies
+      # at the same test -- the suite's first fit/predict on real weights --
+      # under both dependency sets, and a retry clears it. faulthandler cannot
+      # walk the native stack on Windows ("cannot get C stack on this system"),
+      # so the log never names the faulting DLL. Record the CPU and the ISA
+      # torch selects for it instead: if the aborts only ever happen on one CPU
+      # model, that confirms an AVX-512 kernel running on a runner without it;
+      # if they are spread across CPU models, the dispatch theory is dead.
+      # Remove all of this once the flake is understood.
+      - name: Log CPU and torch dispatch info (Windows only)
         if: runner.os == 'Windows'
+        continue-on-error: true
         shell: bash
         run: |
-          {
-            echo "ONEDNN_MAX_CPU_ISA=AVX2"
-            echo "ATEN_CPU_CAPABILITY=avx2"
-            echo "MKL_ENABLE_INSTRUCTIONS=AVX2"
-          } >> "$GITHUB_ENV"
+          pwsh -NoProfile -Command "Get-CimInstance Win32_Processor |
+            Format-List Name, Manufacturer, Description, NumberOfCores,
+            NumberOfLogicalProcessors"
+          uv run --no-sync python -c '
+          import torch
+          print("torch", torch.__version__)
+          print("cpu_capability", torch.backends.cpu.get_cpu_capability())
+          print(torch.__config__.parallel_info())
+          print(torch.__config__.show())
+          '
+
+      # Runs the known-flaky test on its own, ahead of the suite. When the abort
+      # happens mid-suite, two threads write the faulthandler dump at once and
+      # the output is shredded into unreadable interleaved text; in a process
+      # doing nothing else there is a chance of a legible dump. Advisory only --
+      # `continue-on-error` keeps the real test steps below in charge of the
+      # job's verdict, and a fresh process is not the same environment as one
+      # 170 tests deep, so this may simply never reproduce.
+      - name: Crash canary in an isolated process (Windows only)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: >
+          uv run --no-sync pytest -v
+          "tests/test_classifier_interface.py::test__predict__show_progress_bar_true__tiny_dataset_does_not_crash"
 
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
