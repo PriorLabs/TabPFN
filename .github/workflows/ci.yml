@@ -125,6 +125,30 @@ jobs:
           key: model-cache-${{ hashFiles('model_cache/**') }}
           enableCrossOsArchive: true
 
+      # The hosted Windows runners have heterogeneous CPUs (Intel Xeon with
+      # AVX-512, AMD EPYC without), so kernels that dispatch on AVX-512 abort
+      # with `Windows fatal exception: code 0xc000001d`
+      # (STATUS_ILLEGAL_INSTRUCTION) on whichever machine we happen to land on.
+      # Cap each dispatcher torch can route CPU work through, so the test runs
+      # behave the same whichever machine we get:
+      #   ONEDNN_MAX_CPU_ISA      oneDNN primitives (matmul, conv, ...)
+      #   ATEN_CPU_CAPABILITY     torch's own vectorized ATen kernels
+      #   MKL_ENABLE_INSTRUCTIONS MKL's BLAS/LAPACK
+      # Written to GITHUB_ENV rather than each step's `env:` because the latter
+      # two have no "autodetect" value to pass on the other runners: an unknown
+      # value makes torch warn in every process, and MKL_ENABLE_INSTRUCTIONS
+      # would really cap Linux, whose torch wheels link MKL as well. Only the
+      # test steps follow, so this stays scoped to the test runs.
+      - name: Cap CPU ISA to AVX2 (Windows only)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          {
+            echo "ONEDNN_MAX_CPU_ISA=AVX2"
+            echo "ATEN_CPU_CAPABILITY=avx2"
+            echo "MKL_ENABLE_INSTRUCTIONS=AVX2"
+          } >> "$GITHUB_ENV"
+
       - name: Run Tests (all tests)
         if: ${{ matrix.dependency-set != 'lowest-direct' && github.event_name != 'pull_request' && github.event_name != 'merge_group' }}
         run: uv run --no-sync pytest tests/
