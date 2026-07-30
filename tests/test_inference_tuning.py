@@ -191,9 +191,10 @@ def test__find_optimal_classification_thresholds__absent_class_is_neutral(
 ) -> None:
     """A class with no holdout rows gets the mean tuned threshold, not a searched one.
 
-    On the unguarded code this raised for log_loss and returned the smallest
-    threshold in the grid for roc_auc (nan losses collapsing to argmin == 0),
-    which is a large boost applied to the class with the least evidence.
+    Searching on such a class yields an arbitrary threshold, since every candidate
+    scores identically: roc_auc collapses to the smallest threshold in the grid
+    (nan losses making argmin return 0), which is a large boost applied to the
+    class with the least evidence, while the remaining metrics suppress it.
     """
     thresholds = find_optimal_classification_thresholds(
         metric_name=metric_name,
