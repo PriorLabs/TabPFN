@@ -15,6 +15,7 @@ from tabpfn import TabPFNClassifier
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import PerformanceOptions
 from tabpfn.architectures.kv_cache import (
+    FP8_KV_DTYPE,
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
@@ -614,20 +615,24 @@ def _build_cache(
     x: torch.Tensor,
     y: torch.Tensor,
     *,
-    kv_cache_precision: Literal["auto", "int8"],
+    kv_cache_precision: Literal["auto", "int8", "fp8"],
 ) -> TabPFNV3Cache:
     """Build a cache the way the inference engine does: forward to populate it,
-    then apply the ``kv_cache_precision="int8"`` step (``cache.quantize()``).
+    then apply the quantization step for the requested precision.
     """
     _, cache = arch(x, y, return_kv_cache=True)
-    return cache.quantize() if kv_cache_precision == "int8" else cache
+    if kv_cache_precision == "int8":
+        return cache.quantize()
+    if kv_cache_precision == "fp8":
+        return cache.quantize(FP8_KV_DTYPE)
+    return cache
 
 
 @torch.no_grad()
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16])
-@pytest.mark.parametrize("kv_cache_precision", ["int8", "auto"])
+@pytest.mark.parametrize("kv_cache_precision", ["int8", "fp8", "auto"])
 def test__calculate_cache_size__matches_whole_classifier_cache(
-    kv_cache_precision: Literal["auto", "int8"],
+    kv_cache_precision: Literal["auto", "int8", "fp8"],
     dtype: torch.dtype,
 ) -> None:
     """get_cache_size equals the exact byte size of every tensor in a real
@@ -668,9 +673,9 @@ def test__calculate_cache_size__matches_whole_classifier_cache(
     reason="Autocast inference is only enabled on CUDA (disabled on CPU/MPS), so "
     "the mixed-precision cache it produces can only be built on a GPU.",
 )
-@pytest.mark.parametrize("kv_cache_precision", ["int8", "auto"])
+@pytest.mark.parametrize("kv_cache_precision", ["int8", "fp8", "auto"])
 def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
-    kv_cache_precision: Literal["auto", "int8"],
+    kv_cache_precision: Literal["auto", "int8", "fp8"],
 ) -> None:
     """get_cache_size matches the exact byte size of a real classifier cache built
     on the GPU autocast path (the default for ``inference_precision='auto'`` on a
@@ -697,6 +702,8 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
         _, cache = arch(x, y, return_kv_cache=True)
     if kv_cache_precision == "int8":
         cache = cache.quantize()
+    elif kv_cache_precision == "fp8":
+        cache = cache.quantize(FP8_KV_DTYPE)
 
     total = get_cache_size(
         n_train=n_train,
