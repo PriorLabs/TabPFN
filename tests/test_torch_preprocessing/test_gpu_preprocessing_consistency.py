@@ -282,13 +282,13 @@ class TestGpuQuantileEligibility:
 # Linux, Accelerate on macOS, OpenBLAS on some Windows builds) that can
 # produce different singular vectors for near-degenerate singular values.
 # This makes the GPU SVD output non-deterministic across platforms.  On
-# macOS the CPU-only (sklearn ARPACK) and GPU (torch full-SVD via
-# Accelerate) paths happen to agree, so we test SVD configs there.  On
-# other platforms we use configs without SVD to keep the consistency tests
-# deterministic.
+# macOS with recent dependencies the CPU-only (sklearn ARPACK) and GPU
+# (torch full-SVD via Accelerate) paths happen to agree, so we test SVD
+# configs there.
 _IS_MACOS = sys.platform == "darwin"
 _SVD_MACOS = pytest.mark.skipif(
-    not _IS_MACOS, reason="torch SVD is non-deterministic across LAPACK backends"
+    not (_IS_MACOS and torch.__version__ >= "2.13"),
+    reason="ARPACK and LAPACK SVD only agree on macOS with recent dependencies",
 )
 
 
@@ -527,9 +527,7 @@ class TestTestBatchSizeInvariance:
 class TestTestDataConsistency:
     """Verify that test-time transform also matches between paths."""
 
-    @pytest.mark.skipif(
-        not _IS_MACOS, reason="torch SVD non-deterministic across LAPACK backends"
-    )
+    @_SVD_MACOS
     def test_transform_X_test(self, sample_data: _DataWithSchema) -> None:
         """Test data transform with SVD (macOS only)."""
         X, schema = sample_data
