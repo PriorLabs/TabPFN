@@ -94,7 +94,11 @@ class ClassifierEvalMetrics(str, Enum):
     LOG_LOSS = "log_loss"
 
 
-METRIC_NAME_TO_OBJECTIVE = {
+# Objectives for the one-vs-rest threshold search, so the inputs are always
+# binary: callers binarize y_true as ``(y_true == i)`` and pass thresholded 0/1
+# predictions. ``f1`` (average="binary") and ``roc_auc`` (1-D scores) rely on
+# this too, and raise on multiclass input.
+BINARY_METRIC_NAME_TO_OBJECTIVE = {
     "f1": lambda y_true, y_pred: (
         -f1_score(
             y_true,
@@ -131,17 +135,17 @@ def compute_metric_to_minimize(
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> float:
-    """Computes the metric.
+    """Computes the metric for binary one-vs-rest inputs.
 
     Adjusts the sign of the metric to frame the problem as a minimization
     problem.
     """
-    if metric_name not in METRIC_NAME_TO_OBJECTIVE:
+    if metric_name not in BINARY_METRIC_NAME_TO_OBJECTIVE:
         raise ValueError(
             f"Metric '{metric_name}' is not supported. "
-            f"Supported metrics are: {list(METRIC_NAME_TO_OBJECTIVE.keys())}"
+            f"Supported metrics are: {list(BINARY_METRIC_NAME_TO_OBJECTIVE.keys())}"
         )
-    return METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
+    return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
 
 
 def get_tuning_splits(
