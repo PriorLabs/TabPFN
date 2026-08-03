@@ -26,6 +26,7 @@ from typing import Literal
 
 import numpy as np
 import pytest
+import torch
 
 from tabpfn.preprocessing.configs import EnsembleConfig, PreprocessorConfig
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
@@ -357,11 +358,22 @@ def _save_reference(
     logger.info(f"Reference data saved for {test_name} at {path}")
 
 
+def _get_filtered_test_cases() -> list:
+    skip_svd = pytest.mark.skipif(
+        not torch.__version__ >= "2.13",
+        reason="ARPACK and LAPACK SVD only agree on recent dependencies",
+    )
+    return [
+        pytest.param(name, case, marks=[skip_svd] if "svd" in name else [])
+        for name, case in test_cases.items()
+    ]
+
+
 @pytest.mark.skipif(
     _get_current_platform_string() not in ENABLED_PLATFORMS,
     reason="Current platform does not have consistency tests enabled.",
 )
-@pytest.mark.parametrize(("test_case_name", "test_case"), test_cases.items())
+@pytest.mark.parametrize(("test_case_name", "test_case"), _get_filtered_test_cases())
 def test__pipeline__output_matches_reference(
     test_case_name: str, test_case: _PipelineConsistencyCase
 ) -> None:
