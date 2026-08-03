@@ -21,6 +21,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold
 
+from tabpfn.utils import infer_random_state
+
 if TYPE_CHECKING:
     import torch
 
@@ -92,7 +94,11 @@ class ClassifierEvalMetrics(str, Enum):
     LOG_LOSS = "log_loss"
 
 
-METRIC_NAME_TO_OBJECTIVE = {
+# Objectives for the one-vs-rest threshold search, so the inputs are always
+# binary: callers binarize y_true as ``(y_true == i)`` and pass thresholded 0/1
+# predictions. ``f1`` (average="binary") and ``roc_auc`` (1-D scores) rely on
+# this too, and raise on multiclass input.
+BINARY_METRIC_NAME_TO_OBJECTIVE = {
     "f1": lambda y_true, y_pred: (
         -f1_score(
             y_true,
@@ -119,7 +125,8 @@ METRIC_NAME_TO_OBJECTIVE = {
             y_pred,
         )
     ),
-    "log_loss": log_loss,
+    # y_true is binarized one-vs-rest and may contain a single label.
+    "log_loss": lambda y_true, y_pred: log_loss(y_true, y_pred, labels=[0, 1]),
 }
 
 
@@ -128,17 +135,17 @@ def compute_metric_to_minimize(
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> float:
-    """Computes the metric.
+    """Computes the metric for binary one-vs-rest inputs.
 
     Adjusts the sign of the metric to frame the problem as a minimization
     problem.
     """
-    if metric_name not in METRIC_NAME_TO_OBJECTIVE:
+    if metric_name not in BINARY_METRIC_NAME_TO_OBJECTIVE:
         raise ValueError(
             f"Metric '{metric_name}' is not supported. "
-            f"Supported metrics are: {list(METRIC_NAME_TO_OBJECTIVE.keys())}"
+            f"Supported metrics are: {list(BINARY_METRIC_NAME_TO_OBJECTIVE.keys())}"
         )
-    return METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
+    return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
 
 
 def get_tuning_splits(
@@ -168,6 +175,10 @@ def get_tuning_splits(
     # more than 100 folds
     rounded_holdout_frac = round(holdout_frac, 2)
     n_folds = max(2, round(1 / rounded_holdout_frac))
+
+    if isinstance(random_state, np.random.Generator):
+        # StratifiedKFold does not accept np.random.Generator.
+        random_state, _ = infer_random_state(random_state)
 
     splitter = StratifiedKFold(
         n_splits=n_folds,
@@ -329,7 +340,12 @@ def find_optimal_temperature(
     # TODO: think about vectorizing this loop.
     for temperature in temperatures:
         probas = logits_to_probabilities_fn(raw_logits, temperature)
-        current_log_loss = log_loss(y_true=y_true, y_pred=probas)
+        # The holdout may lack a rare class, so labels cannot be inferred from y_true.
+        current_log_loss = log_loss(
+            y_true=y_true,
+            y_pred=probas,
+            labels=np.arange(probas.shape[-1]),
+        )
 
         if current_log_loss < best_log_loss:
             best_log_loss = current_log_loss
