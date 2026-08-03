@@ -130,7 +130,7 @@ jobs:
         if: ${{ matrix.dependency-set != 'lowest-direct' && (github.event_name == 'pull_request' || github.event_name == 'merge_group') }}
         run: uv run --no-sync pytest -m "not slow" tests/
 
-      # We don't support MPS below PyTorch 2.5 (see tabpfn.utils.infer_devices()), thus
+      # We don't support MPS below PyTorch 2.6 (see tabpfn.utils.infer_devices()), thus
       # disable MPS for the lowest-direct dependency set.
 
       - name: Run Tests (all tests, MPS disabled)

@@ -285,9 +285,9 @@ class TestGpuQuantileEligibility:
 # macOS with recent dependencies the CPU-only (sklearn ARPACK) and GPU
 # (torch full-SVD via Accelerate) paths happen to agree, so we test SVD
 # configs there.
-_IS_MACOS = sys.platform == "darwin"
-_SVD_MACOS = pytest.mark.skipif(
-    not (_IS_MACOS and torch.__version__ >= "2.13"),
+_GPU_AND_CPU_SVD_CONSISTENT = sys.platform == "darwin" and torch.__version__ >= "2.13"
+_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT = pytest.mark.skipif(
+    not _GPU_AND_CPU_SVD_CONSISTENT,
     reason="ARPACK and LAPACK SVD only agree on macOS with recent dependencies",
 )
 
@@ -374,8 +374,8 @@ class TestPipelineConsistency:
             V26_QUANTILE_NUMERIC_APPEND_ORIGINAL,
             V26_QUANTILE_ONEHOT,
             V26_QUANTILE_EXTRAPOLATE,
-            pytest.param(V26_QUANTILE_SVD, marks=_SVD_MACOS),
-            pytest.param(V25_SQUASHING_SVD, marks=_SVD_MACOS),
+            pytest.param(V26_QUANTILE_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
+            pytest.param(V25_SQUASHING_SVD, marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT),
             V25_SQUASHING_NO_SVD,
             V25_NONE,
         ],
@@ -405,7 +405,8 @@ class TestPipelineConsistency:
         [
             _make_config(V26_QUANTILE_NUMERIC, fingerprint=False),
             pytest.param(
-                _make_config(V26_QUANTILE_SVD, fingerprint=False), marks=_SVD_MACOS
+                _make_config(V26_QUANTILE_SVD, fingerprint=False),
+                marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT,
             ),
             _make_config(
                 V26_QUANTILE_NUMERIC,
@@ -413,7 +414,10 @@ class TestPipelineConsistency:
                 feature_shift_count=5,
             ),
             _make_config(V26_QUANTILE_NUMERIC, outlier_removal_std=None),
-            pytest.param(_make_config(V26_QUANTILE_SVD_APPEND), marks=_SVD_MACOS),
+            pytest.param(
+                _make_config(V26_QUANTILE_SVD_APPEND),
+                marks=_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT,
+            ),
             _make_config(V26_QUANTILE_APPEND_NO_SVD),
         ],
         ids=[
@@ -432,7 +436,7 @@ class TestPipelineConsistency:
         X, schema = sample_data
         _assert_paths_match(X, schema, config)
 
-    @_SVD_MACOS
+    @_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT
     def test_feature_subsampling_matches(
         self, large_feature_data: _DataWithSchema
     ) -> None:
@@ -465,7 +469,7 @@ class TestSmallFeatureCounts:
         if (
             pconfig is TestPipelineConsistency.V26_QUANTILE_SVD
             and n_features >= 2
-            and not _IS_MACOS
+            and not _GPU_AND_CPU_SVD_CONSISTENT
         ):
             pytest.skip("torch SVD is non-deterministic across LAPACK backends")
 
@@ -527,7 +531,7 @@ class TestTestBatchSizeInvariance:
 class TestTestDataConsistency:
     """Verify that test-time transform also matches between paths."""
 
-    @_SVD_MACOS
+    @_SKIP_IF_GPU_CPU_SVD_NOT_CONSISTENT
     def test_transform_X_test(self, sample_data: _DataWithSchema) -> None:
         """Test data transform with SVD (macOS only)."""
         X, schema = sample_data
