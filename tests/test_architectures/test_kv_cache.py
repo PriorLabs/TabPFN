@@ -104,15 +104,28 @@ class _FakeArchitecture:
 
 def test_resolve_accepts_fp8_and_default_stays_int8() -> None:
     arch = _FakeArchitecture(("auto", "int8", "fp8"))
-    assert resolve_kv_cache_precision("fp8", architecture=arch) == "fp8"
+    cpu = torch.device("cpu")
+    assert resolve_kv_cache_precision("fp8", architecture=arch, device=cpu) == "fp8"
     # The default is unchanged by this feature: unset still resolves to int8.
-    assert resolve_kv_cache_precision(None, architecture=arch) == "int8"
+    assert resolve_kv_cache_precision(None, architecture=arch, device=cpu) == "int8"
 
 
 def test_resolve_falls_back_to_auto_when_unsupported() -> None:
     arch = _FakeArchitecture(("auto",))
     with pytest.warns(UserWarning, match="not supported"):
-        assert resolve_kv_cache_precision("fp8", architecture=arch) == "auto"
+        assert (
+            resolve_kv_cache_precision(
+                "fp8", architecture=arch, device=torch.device("cpu")
+            )
+            == "auto"
+        )
+
+
+def test_resolve_rejects_fp8_on_mps() -> None:
+    """MPS has no float8 casts; requesting fp8 there fails fast at resolution."""
+    arch = _FakeArchitecture(("auto", "int8", "fp8"))
+    with pytest.raises(ValueError, match="not supported on MPS"):
+        resolve_kv_cache_precision("fp8", architecture=arch, device=torch.device("mps"))
 
 
 def test_get_cache_size_accepts_fp8() -> None:

@@ -22,6 +22,12 @@ from torch import Tensor
 QUANTIZED_KV_DTYPE: torch.dtype = torch.int8  # default
 FP8_KV_DTYPE: torch.dtype = torch.float8_e4m3fn
 
+#: Storage dtype for each quantized ``kv_cache_precision`` value.
+KV_CACHE_PRECISION_DTYPES: dict[str, torch.dtype] = {
+    "int8": QUANTIZED_KV_DTYPE,
+    "fp8": FP8_KV_DTYPE,
+}
+
 # Low, high, max-magnitude value for each integer dtype.
 # int8 uses the symmetric range [-127, 127] (one code below the full int8
 # range) so that ``-max * scale`` equals ``+max * scale`` and dequantization

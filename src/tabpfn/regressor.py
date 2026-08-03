@@ -427,8 +427,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 architecture default (`"int8"` when it can quantize, e.g. TabPFN-3,
                 else `"auto"`); `"int8"` quantizes the key-value cache to save
                 memory; `"fp8"` stores it as 8-bit floats instead (same size,
-                float rounding semantics — plain tensor casts, no accelerator
-                requirements); `"auto"` keeps the computed dtype. Requesting a
+                float rounding semantics; not supported on MPS);
+                `"auto"` keeps the computed dtype. Requesting a
                 quantized precision on an architecture that cannot quantize
                 warns and falls back to `"auto"`.
 

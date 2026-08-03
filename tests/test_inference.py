@@ -903,5 +903,7 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
         cache_trainset_representation=False,
     )
     with pytest.warns(UserWarning, match="not supported"):
-        resolved = resolve_kv_cache_precision("int8", architecture=arch)
+        resolved = resolve_kv_cache_precision(
+            "int8", architecture=arch, device=torch.device("cpu")
+        )
     assert resolved == "auto"

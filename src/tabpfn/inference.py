@@ -19,7 +19,7 @@ from typing_extensions import override
 import joblib
 import torch
 
-from tabpfn.architectures.kv_cache import FP8_KV_DTYPE
+from tabpfn.architectures.kv_cache import KV_CACHE_PRECISION_DTYPES
 from tabpfn.architectures.shared.workaround_mps_linear_bug import (
     maybe_replace_linears_on_mps,
 )
@@ -827,8 +827,20 @@ def resolve_kv_cache_precision(
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None,
     *,
     architecture: Architecture,
+    device: torch.device,
 ) -> Literal["auto", "int8", "fp8"]:
-    """Resolve the KV cache dtype against ``architecture``."""
+    """Resolve the KV cache dtype against ``architecture`` and ``device``.
+
+    Raises:
+        ValueError: If ``"fp8"`` is requested on MPS, which has no float8
+            casts. Rejected here, before any fitting work starts; the rest of
+            the fp8 path can then assume a capable device.
+    """
+    if kv_cache_precision == "fp8" and device.type == "mps":
+        raise ValueError(
+            "kv_cache_precision='fp8' is not supported on MPS: PyTorch cannot "
+            "cast to float8 dtypes there. Use 'int8' (the default) or 'auto'."
+        )
     supported = architecture.get_supported_kv_cache_precisions()
     if kv_cache_precision is None:
         return "int8" if "int8" in supported else "auto"
@@ -987,7 +999,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         """
         model = self.model_caches[model_index].get(device)
         kv_cache_precision = resolve_kv_cache_precision(
-            self.kv_cache_precision, architecture=model
+            self.kv_cache_precision, architecture=model, device=device
         )
 
         # Cast model weights to match force_inference_dtype (else linear
@@ -1041,10 +1053,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if kv_cache_precision == "int8":
-            cache = cache.quantize()
-        elif kv_cache_precision == "fp8":
-            cache = cache.quantize(FP8_KV_DTYPE)
+        if kv_cache_precision != "auto":
+            cache = cache.quantize(KV_CACHE_PRECISION_DTYPES[kv_cache_precision])
         if self.keep_cache_on_device:
             return cache
         return cache.to("cpu")
