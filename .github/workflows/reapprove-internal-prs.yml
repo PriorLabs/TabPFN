@@ -1,0 +1,118 @@
+# Automatically re-approve PRs from PriorLabs org members when new code is pushed.
+#
+# The branch protection rules require that the most recent push is reviewed and
+# approved, which is important for PRs from external collaborators. However, this is
+# extra overhead for PRs from Prior Labs members, where we might want to request small
+# changes during review and trust that the author will apply these. In this case,
+# approve the current version of the PR if a previous version was already approved.
+name: Re-approve internal PRs
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  reapprove:
+    name: Restore dismissed approval
+    # MEMBER means the author is a member of the organisation that owns the repository.
+    # Also check if the PR came from a fork, to avoid approving PRs from member's forks,
+    # and for defence in depth.
+    if: >
+      (
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'OWNER'
+      ) &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-slim
+    steps:
+      - name: Restore approval dismissed by this push
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+
+            const isHuman = (user) => user?.type === "User";
+
+            // The push that triggered this run also dismisses the existing approvals,
+            // and there is no ordering guarantee between the two. Thus, wait 10 seconds
+            // to give the dismissal more time to process.
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100,
+            });
+
+            if (reviews.some((r) => r.state === "APPROVED" && isHuman(r.user))) {
+              core.info("PR still has a standing human approval, nothing to restore.");
+              return;
+            }
+
+            // Once a review is dismissed its entry in the reviews list reports state
+            // DISMISSED, which does not say whether it was an approval or a change
+            // request. Only the review_dismissed timeline event keeps the original
+            // state, so the evidence that a human really did approve has to come from
+            // there.
+            const timeline = await github.paginate(
+              github.rest.issues.listEventsForTimeline,
+              { owner, repo, issue_number: pullNumber, per_page: 100 },
+            );
+
+            const reviewsById = new Map(reviews.map((r) => [r.id, r]));
+
+            // dismissal_commit_id is set when the stale review rule dismissed the
+            // approval because of a push, and unset when a reviewer dismissed it by
+            // hand. A reviewer withdrawing their approval deliberately should stay
+            // withdrawn, so only push dismissals count.
+            const restorable = timeline
+              .filter((e) => e.event === "review_dismissed")
+              .map((e) => e.dismissed_review)
+              .filter(
+                (d) =>
+                  d?.state === "approved" &&
+                  d.dismissal_commit_id &&
+                  isHuman(reviewsById.get(d.review_id)?.user),
+              )
+              .map((d) => reviewsById.get(d.review_id));
+
+            if (restorable.length === 0) {
+              core.info("PR has not yet been approved by a human, not approving.");
+              return;
+            }
+
+            // A change request survives a push, and outranks an earlier approval from
+            // the same reviewer, so it must not be approved over.
+            const latestStateByReviewer = new Map();
+            for (const review of reviews) {
+              if (isHuman(review.user) && review.state !== "COMMENTED") {
+                latestStateByReviewer.set(review.user.login, review.state);
+              }
+            }
+            const blocking = [...latestStateByReviewer].filter(
+              ([, state]) => state === "CHANGES_REQUESTED",
+            );
+            if (blocking.length > 0) {
+              const who = blocking.map(([login]) => login).join(", ");
+              core.info(`Changes are still requested by ${who}, not approving.`);
+              return;
+            }
+
+            const credits = restorable
+              .map((r) => `@${r.user.login} (${r.commit_id.slice(0, 7)})`)
+              .join(", ");
+            core.info(`Approved, restoring the approval of ${credits}.`);
+            await github.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              event: "APPROVE",
+              body:
+                `Restoring the approval of ${credits} after push.\n\n` +
+                "Dismiss this review to require re-review.",
+            });
