@@ -27,7 +27,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
     MultiDeviceInferenceEngine,
-    resolve_kv_cache_precision,
+    _resolve_kv_cache_precision,
 )
 from tabpfn.preprocessing import (
     ClassifierEnsembleConfig,
@@ -903,5 +903,7 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
         cache_trainset_representation=False,
     )
     with pytest.warns(UserWarning, match="not supported"):
-        resolved = resolve_kv_cache_precision("int8", architecture=arch)
+        resolved = _resolve_kv_cache_precision(
+            "int8", architecture=arch, device=torch.device("cpu")
+        )
     assert resolved == "auto"

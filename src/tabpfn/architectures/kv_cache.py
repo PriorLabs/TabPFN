@@ -6,7 +6,7 @@ Provides cache containers for storing key-value projections from attention
 layers, enabling efficient inference by reusing computed values across
 different test sets without storing state inside the model.
 
-Includes optional integer quantization (e.g. int8) via
+Includes optional quantization (int8 or fp8) via
 :class:`QuantizedKVCacheEntry` for reduced memory footprint with per-tensor
 symmetric quantization.
 """
@@ -19,10 +19,16 @@ from dataclasses import dataclass, field
 import torch
 from torch import Tensor
 
-# only supported KV quantization so far
-QUANTIZED_KV_DTYPE: torch.dtype = torch.int8
+QUANTIZED_KV_DTYPE: torch.dtype = torch.int8  # default
+FP8_KV_DTYPE: torch.dtype = torch.float8_e4m3fn
 
-# Low, high, max-magnitude value for each dtype.
+#: Storage dtype for each quantized ``kv_cache_precision`` value.
+KV_CACHE_PRECISION_DTYPES: dict[str, torch.dtype] = {
+    "int8": QUANTIZED_KV_DTYPE,
+    "fp8": FP8_KV_DTYPE,
+}
+
+# Low, high, max-magnitude value for each integer dtype.
 # int8 uses the symmetric range [-127, 127] (one code below the full int8
 # range) so that ``-max * scale`` equals ``+max * scale`` and dequantization
 # cannot exceed the original absmax in magnitude.
@@ -30,32 +36,44 @@ _QUANTIZATION_RANGES: dict[torch.dtype, tuple[int, int, int]] = {
     torch.int8: (-127, 127, 127),
 }
 
+# Float dtypes are scaled onto the representable range and rounded by the
+# dtype cast. e4m3fn has no infinity, so the clamp is required: casting a
+# value above the max would produce NaN.
+_FLOAT_QUANTIZATION_DTYPES = (torch.float8_e4m3fn,)
+
 
 def _quantize_tensor(
     t: Tensor, dtype: torch.dtype = torch.int8
 ) -> tuple[Tensor, Tensor]:
-    """Per-tensor symmetric quantization to the given integer *dtype*.
+    """Per-tensor symmetric quantization to the given *dtype*.
 
-    Returns ``(quantized, scale)`` where
-    ``scale = absmax / max_val`` and ``quantized = round(t / scale)``.
+    Returns ``(quantized, scale)`` where ``scale = absmax / max_val`` and
+    ``quantized ~= t / scale``, so ``float = quantized * scale``.
     """
-    if dtype not in _QUANTIZATION_RANGES:
+    if dtype in _QUANTIZATION_RANGES:
+        lo, hi, max_val = _QUANTIZATION_RANGES[dtype]
+    elif dtype in _FLOAT_QUANTIZATION_DTYPES:
+        max_val = torch.finfo(dtype).max
+        lo, hi = -max_val, max_val
+    else:
         raise ValueError(
-            f"Unsupported quantization dtype {dtype}. "
-            f"Supported: {list(_QUANTIZATION_RANGES)}"
+            f"Unsupported quantization dtype {dtype}. Supported: "
+            f"{list(_QUANTIZATION_RANGES) + list(_FLOAT_QUANTIZATION_DTYPES)}"
         )
-    lo, hi, max_val = _QUANTIZATION_RANGES[dtype]
     absmax = t.abs().amax()
     scale = absmax / float(max_val)
     # Avoid division by zero for all-zero tensors; floor at scale.dtype's
     # smallest positive normal so the clamp is representable in any dtype.
     scale = torch.clamp(scale, min=torch.finfo(scale.dtype).tiny)
-    quantized = (t / scale).round().clamp(lo, hi).to(dtype)
+    scaled = t / scale
+    if dtype in _QUANTIZATION_RANGES:
+        scaled = scaled.round()
+    quantized = scaled.clamp(lo, hi).to(dtype)
     return quantized, scale
 
 
 def _dequantize_tensor(t: Tensor, scale: Tensor, dtype: torch.dtype) -> Tensor:
-    """Dequantize an integer tensor back to floating-point *dtype*."""
+    """Dequantize a quantized tensor back to floating-point *dtype*."""
     return t.to(dtype) * scale.to(dtype)
 
 
@@ -87,7 +105,7 @@ class KVCacheEntry:
         """Quantize this entry with per-tensor symmetric scaling.
 
         Args:
-            dtype: Target integer dtype (default `QUANTIZED_KV_DTYPE`).
+            dtype: Target quantization dtype (default `QUANTIZED_KV_DTYPE`).
         """
         assert self.is_valid()
         k_q, k_s = _quantize_tensor(self.key, dtype)
@@ -97,11 +115,11 @@ class KVCacheEntry:
 
 @dataclass
 class QuantizedKVCacheEntry:
-    """Quantized key-value cache entry with per-tensor scale factors.
+    """Quantized key-value cache entry with scale factors.
 
-    Stores K/V as integer tensors alongside scalar scale factors for
-    symmetric quantization: ``float_value = int_value * scale``. The
-    integer dtype is implicit in the stored tensors (see ``self.key.dtype``);
+    Stores K/V as quantized tensors alongside scale factors for symmetric
+    quantization: ``float_value = quantized_value * scale``. The quantized
+    dtype is implicit in the stored tensors (see ``self.key.dtype``);
     the scale already encodes the dtype's quantization range, so dequantizing
     requires no extra dtype bookkeeping.
 

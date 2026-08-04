@@ -19,6 +19,7 @@ from typing_extensions import override
 import joblib
 import torch
 
+from tabpfn.architectures.kv_cache import KV_CACHE_PRECISION_DTYPES
 from tabpfn.architectures.shared.workaround_mps_linear_bug import (
     maybe_replace_linears_on_mps,
 )
@@ -822,12 +823,24 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = use_inference
 
 
-def resolve_kv_cache_precision(
-    kv_cache_precision: Literal["auto", "int8"] | None,
+def _resolve_kv_cache_precision(
+    kv_cache_precision: Literal["auto", "int8", "fp8"] | None,
     *,
     architecture: Architecture,
-) -> Literal["auto", "int8"]:
-    """Resolve the KV cache dtype against ``architecture``."""
+    device: torch.device,
+) -> Literal["auto", "int8", "fp8"]:
+    """Resolve the KV cache dtype against ``architecture`` and ``device``.
+
+    Raises:
+        ValueError: If ``"fp8"`` is requested on MPS, which has no float8
+            casts. Rejected here, before any fitting work starts; the rest of
+            the fp8 path can then assume a capable device.
+    """
+    if kv_cache_precision == "fp8" and device.type == "mps":
+        raise ValueError(
+            "kv_cache_precision='fp8' is not supported on MPS: PyTorch cannot "
+            "cast to float8 dtypes there. Use 'int8' (the default) or 'auto'."
+        )
     supported = architecture.get_supported_kv_cache_precisions()
     if kv_cache_precision is None:
         return "int8" if "int8" in supported else "auto"
@@ -859,7 +872,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
     For TabPFN-3 models, ``kv_cache_precision="int8"`` (the default) stores the KV
     cache with per-tensor symmetric quantization to save memory, dequantizing
-    on-the-fly in the attention layer; ``"auto"`` keeps the computed dtype.
+    on-the-fly in the attention layer; ``"fp8"`` stores it as 8-bit floats
+    instead (same size, float rounding semantics); ``"auto"`` keeps the
+    computed dtype.
 
     At predict, only X_test is preprocessed (CPU and GPU). The model is
     called with ``x_is_test_only=True``. ``y`` still carries the full
@@ -879,7 +894,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         save_peak_mem: MemorySavingMode,
         autocast: bool,
         keep_cache_on_device: bool = True,
-        kv_cache_precision: Literal["auto", "int8"] | None = None,
+        kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -906,10 +921,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 transferred to the target device on every predict call.
             kv_cache_precision: Dtype the KV cache is stored in, resolved against
                 what the architecture supports (see
-                :func:`resolve_kv_cache_precision`). ``None`` (default) picks the
+                :func:`_resolve_kv_cache_precision`). ``None`` (default) picks the
                 architecture default (``"int8"`` when it can quantize, else
-                ``"auto"``); ``"int8"`` quantizes to save memory; ``"auto"``
-                keeps the computed dtype.
+                ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
+                stores 8-bit floats instead; ``"auto"`` keeps the computed
+                dtype.
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -920,7 +936,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         self.keep_cache_on_device = keep_cache_on_device
         # Kept as the raw request; resolved per ensemble member in _build_cache
-        # against that member's own architecture (see resolve_kv_cache_precision).
+        # against that member's own architecture (see _resolve_kv_cache_precision).
         self.kv_cache_precision = kv_cache_precision
         self.ensemble_preprocessor = ensemble_preprocessor
 
@@ -982,8 +998,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         in parallel threads.
         """
         model = self.model_caches[model_index].get(device)
-        kv_cache_precision = resolve_kv_cache_precision(
-            self.kv_cache_precision, architecture=model
+        kv_cache_precision = _resolve_kv_cache_precision(
+            self.kv_cache_precision, architecture=model, device=device
         )
 
         # Cast model weights to match force_inference_dtype (else linear
@@ -1037,8 +1053,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             )
 
         assert cache is not None
-        if kv_cache_precision == "int8":
-            cache = cache.quantize()
+        if kv_cache_precision != "auto":
+            cache = cache.quantize(KV_CACHE_PRECISION_DTYPES[kv_cache_precision])
         if self.keep_cache_on_device:
             return cache
         return cache.to("cpu")
