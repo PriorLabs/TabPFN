@@ -823,7 +823,7 @@ class InferenceEngineCachePreprocessing(MultiDeviceInferenceEngine):
         self.inference_mode = use_inference
 
 
-def resolve_kv_cache_precision(
+def _resolve_kv_cache_precision(
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None,
     *,
     architecture: Architecture,
@@ -921,7 +921,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 transferred to the target device on every predict call.
             kv_cache_precision: Dtype the KV cache is stored in, resolved against
                 what the architecture supports (see
-                :func:`resolve_kv_cache_precision`). ``None`` (default) picks the
+                :func:`_resolve_kv_cache_precision`). ``None`` (default) picks the
                 architecture default (``"int8"`` when it can quantize, else
                 ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
@@ -936,7 +936,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         self.keep_cache_on_device = keep_cache_on_device
         # Kept as the raw request; resolved per ensemble member in _build_cache
-        # against that member's own architecture (see resolve_kv_cache_precision).
+        # against that member's own architecture (see _resolve_kv_cache_precision).
         self.kv_cache_precision = kv_cache_precision
         self.ensemble_preprocessor = ensemble_preprocessor
 
@@ -998,7 +998,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         in parallel threads.
         """
         model = self.model_caches[model_index].get(device)
-        kv_cache_precision = resolve_kv_cache_precision(
+        kv_cache_precision = _resolve_kv_cache_precision(
             self.kv_cache_precision, architecture=model, device=device
         )
 
