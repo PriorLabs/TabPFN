@@ -21,6 +21,7 @@ from sklearn.utils.multiclass import check_classification_targets
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import check_array, validate_data
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
+from tabpfn.preprocessing.datamodel import INPUT_FEATURE_PREFIX, FeatureModality
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -30,8 +31,13 @@ if TYPE_CHECKING:
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
+    from tabpfn.preprocessing.datamodel import FeatureSchema
 
     T = TypeVar("T")
+
+#: Cap on how many column names the likely-text warning lists, so a wide frame of
+#: text columns does not produce an unreadable multi-kilobyte message.
+_MAX_TEXT_COLUMNS_IN_WARNING = 10
 
 
 def ensure_compatible_fit_inputs(
@@ -152,6 +158,60 @@ def validate_dataset_size(
         num_samples=num_samples,
         max_cpu_samples=max_cpu_samples,
         allow_cpu_override=ignore_pretraining_limits,
+    )
+
+
+def warn_if_text_features(
+    feature_schema: FeatureSchema,
+    *,
+    declared_categorical_indices: Sequence[int] | None = None,
+) -> None:
+    """Warn when input columns look like free text rather than categoricals.
+
+    High-cardinality string columns are labelled `FeatureModality.TEXT` by
+    `detect_feature_modalities`, but this package has no text handling: they are swept
+    into the same `OrdinalEncoder` as real categoricals, which selects columns by dtype
+    (see `get_ordinal_encoder`). That turns near-unique text into near-unique integer
+    codes, i.e. noise rather than signal, without any error to hint at it.
+
+    Must be called while the schema still carries the TEXT labels, i.e. before the
+    first preprocessing step that rebuilds it, since
+    `FeatureSchema.from_only_categorical_indices` collapses TEXT into NUMERICAL.
+
+    Args:
+        feature_schema: The schema produced by `detect_feature_modalities`.
+        declared_categorical_indices: Positional indices the caller passed as
+            `categorical_features_indices`. These are never reported: declaring a
+            column categorical states that the user already knows it holds
+            non-numeric values and intends them as categories, so warning about it
+            would be noise.
+    """
+    declared = set(declared_categorical_indices or ())
+    text_names = [
+        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
+        for index, feature in enumerate(feature_schema.features)
+        if feature.modality is FeatureModality.TEXT and index not in declared
+    ]
+    if not text_names:
+        return
+
+    shown = text_names[:_MAX_TEXT_COLUMNS_IN_WARNING]
+    columns = ", ".join(repr(name) for name in shown)
+    if len(text_names) > len(shown):
+        columns += f" (and {len(text_names) - len(shown)} more)"
+
+    warnings.warn(
+        f"These columns look like free text and are being ordinal-encoded as "
+        f"high-cardinality categoricals, which usually adds noise rather than "
+        f"signal: {columns}.\n"
+        "If such a column holds numbers stored as strings, convert it to a numeric "
+        "dtype. If it holds genuine text, this package has no text handling -- "
+        "consider the tabpfn-client API, which embeds text natively: "
+        "https://github.com/PriorLabs/tabpfn-client \n"
+        "To silence this for a column that is genuinely a high-cardinality category, "
+        "pass its index in `categorical_features_indices`.",
+        UserWarning,
+        stacklevel=4,
     )
 
 
