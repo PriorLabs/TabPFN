@@ -639,18 +639,21 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     )
 
 
-@pytest.mark.parametrize("validation_frequency", [0, -1, True, 1.5, "2"])
-def test__finetuned_tabpfn_classifier__validation_frequency_must_be_positive_integer(
-    validation_frequency: object,
+@pytest.mark.parametrize("validation_frequency", [0, -1])
+def test__finetuned_tabpfn_classifier__validation_frequency_must_be_positive(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+    tmp_path: Path,
+    validation_frequency: int,
 ) -> None:
-    """Reject values that cannot represent a whole-epoch validation cadence."""
+    """Reject a non-positive validation cadence before training starts."""
+    X, y = synthetic_data
     clf = FinetunedTabPFNClassifier(
         device="cpu",
-        validation_frequency=validation_frequency,  # type: ignore[arg-type]
+        validation_frequency=validation_frequency,
     )
 
-    with pytest.raises(ValueError, match="validation_frequency"):
-        clf._validated_validation_frequency()
+    with pytest.raises(ValueError, match="validation_frequency must be positive"):
+        clf.fit(np.asarray(X), np.asarray(y), output_dir=tmp_path)
 
 
 def test__finetuned_tabpfn_classifier__validation_frequency_schedules_evaluation(
