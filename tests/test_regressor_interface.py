@@ -1246,6 +1246,9 @@ def test__fit_with_text_column__warns() -> None:
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'review'" in str(record[0].message)
+    # Pins the stacklevel: the warning must blame this file's `fit` call, not a
+    # frame inside tabpfn or the contextlib wrapper around `fit`.
+    assert record[0].filename == __file__
 
     # Only `fit` runs modality detection, so `predict` must not warn again.
     # catch_warnings collects any warning instead of failing on unrelated ones.

@@ -211,7 +211,11 @@ def warn_if_text_features(
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
-        stacklevel=4,
+        # Points at a direct `estimator.fit(X, y)` call site. Five frames out:
+        # this function, `_initialize_dataset_preprocessing`, `fit`, and the
+        # contextlib wrapper added by the `@config_context(...)` decorator on
+        # `fit`. Pinned by the `warning.filename` asserts in the interface tests.
+        stacklevel=5,
     )
 
 
