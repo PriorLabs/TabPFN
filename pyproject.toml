@@ -392,6 +392,8 @@ ignore_packages = [
     "certifi",
     # Appears to be MIT, but the tool doesn't know. https://github.com/arogozhnikov/einops/blob/361b11e87da94ead4bd09de636c5dbed73e0e3e0/LICENSE
     "einops",
+    # Is BSD-3-Clause, but declared via PEP 639 `License-Expression`, which the tool doesn't read. https://github.com/fsspec/filesystem_spec/blob/98acce943655c959148cb317fe99573380d537b1/LICENSE
+    "fsspec",
     # Is Apache Licensed since 1.2 but the tool doesn't know. https://github.com/calvinmccarter/kditransform/blob/5ee7cfad665bb1078211c0becad8fbd31e78429d/LICENSE
     "kditransform",
     "nvidia*",
