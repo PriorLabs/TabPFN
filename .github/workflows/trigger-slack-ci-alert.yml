@@ -11,4 +11,5 @@ permissions: {}
 jobs:
   notify:
     uses: ./.github/workflows/slack-ci-alert.yml
-    secrets: inherit
+    secrets:
+      CI_STATUS_SLACK_WEBHOOK_URL: ${{ secrets.CI_STATUS_SLACK_WEBHOOK_URL }}
