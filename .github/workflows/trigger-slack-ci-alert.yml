@@ -1,0 +1,15 @@
+# Send a Slack alert when the CI fails on main.
+name: Slack CI alert
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify:
+    uses: ./.github/workflows/slack-ci-alert.yml
+    secrets:
+      CI_STATUS_SLACK_WEBHOOK_URL: ${{ secrets.CI_STATUS_SLACK_WEBHOOK_URL }}
