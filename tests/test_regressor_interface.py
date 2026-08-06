@@ -1238,13 +1238,7 @@ def _mk_reg_dataset(
 
 @pytest.mark.parametrize("device", devices)
 def test__predict_batched__matches_per_dataset(device: str) -> None:
-    """The public predict_batched API matches per-dataset fit+predict.
-
-    Each dataset is preprocessed exactly as in standard inference, including its
-    own target standardisation and its own per-estimator border transforms, then
-    all are scored in one fused forward per estimator. Results come back in input
-    order, one entry per dataset with the same structure predict would return.
-    """
+    """predict_batched matches per-dataset fit+predict, in input order."""
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA device requested but not available.")
 
@@ -1286,10 +1280,8 @@ def test__predict_batched__matches_per_dataset(device: str) -> None:
 def test__predict_batched__full_output_uses_per_dataset_criterion() -> None:
     """output_type="full" returns each dataset's own raw-space bar distribution.
 
-    The bar distribution the model predicts over is fixed by the checkpoint, but
-    the raw-space one is that distribution rescaled by the dataset's own y mean
-    and std. Datasets on wildly different target scales must therefore come back
-    with different criteria, not the first dataset's.
+    The raw-space bardist is rescaled by the dataset's own y mean and std, so
+    datasets on different target scales must not share the first one's criterion.
     """
     X_a, y_a = _mk_reg_dataset(0)
     X_b, y_b = _mk_reg_dataset(1)
@@ -1319,8 +1311,8 @@ def test__predict_batched__full_output_uses_per_dataset_criterion() -> None:
         )
         ref.fit(X, y)
         ref_full = ref.predict(X[:5], output_type="full")
-        # Relative tolerance: dataset B lives on a ~5000 scale, where float32
-        # decode noise is a few units in the last place, not an absolute 1e-4.
+        # Relative: dataset B lives on a ~5000 scale, where float32 decode noise
+        # is a few ulp rather than an absolute 1e-4.
         np.testing.assert_allclose(out[i]["mean"], ref_full["mean"], rtol=1e-4)
         torch.testing.assert_close(
             out[i]["criterion"].borders, ref_full["criterion"].borders
@@ -1330,12 +1322,9 @@ def test__predict_batched__full_output_uses_per_dataset_criterion() -> None:
 def test__predict_batched__uses_fitted_target_transforms() -> None:
     """The border mapping must read the members' configs, not ensemble_configs_.
 
-    ``target_transform`` is fitted on the dataset's y in place by
-    ``_transform_labels_one``. With ``n_preprocessing_jobs > 1`` that fit happens
-    in a joblib worker process, so only the config that travels back on the
-    ensemble member carries it; ``ensemble_configs_`` keeps an unfitted copy.
-    Decoding with the unfitted one would silently produce wrong borders, so this
-    pins parity under multi-process preprocessing.
+    With ``n_preprocessing_jobs > 1`` ``target_transform`` is fitted in a joblib
+    worker, so ``ensemble_configs_`` keeps an unfitted copy and decoding with it
+    would silently produce wrong borders.
     """
     data = [_mk_reg_dataset(s) for s in range(2)]
     X_list = [d[0] for d in data]
@@ -1351,8 +1340,7 @@ def test__predict_batched__uses_fitted_target_transforms() -> None:
     }
     batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
 
-    # Guard the premise: at least one config must actually carry a target
-    # transform, otherwise this test would pass vacuously.
+    # Without a target transform in play the test would pass vacuously.
     probe = TabPFNRegressor(**kwargs)
     probe.fit(X_list[0], y_list[0])
     assert any(
@@ -1369,12 +1357,9 @@ def test__predict_batched__uses_fitted_target_transforms() -> None:
 def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
 
-    The standard predict path runs fix_dtypes / process_text_na_dataframe /
-    ordinal encoding on X_test before the member preprocessors; predict_batched
-    must apply the same validation or non-numeric inputs would diverge from (or
-    crash relative to) predict. The frames here mix a categorical-dtype column,
-    an object/string column, and NaNs in both a numeric and the object column,
-    placed within the first 5 rows so X_test exercises NaN handling too.
+    predict_batched must clean X_test as predict does. The frames mix a
+    categorical column, an object column, and NaNs placed within the first 5
+    rows so X_test exercises them too.
     """
     if device == "cuda" and not torch.cuda.is_available():
         pytest.skip("CUDA device requested but not available.")
@@ -1424,11 +1409,9 @@ def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
 
 
 def test__predict_batched__handles_constant_target_dataset() -> None:
-    """A constant-target dataset takes no part in the fused forward.
+    """A constant-target dataset is answered analytically and stitched back.
 
-    fit() returns before building an executor when y is constant, so that dataset
-    is answered analytically and stitched back at its input position, leaving the
-    other datasets' results unaffected.
+    It takes no part in the fused forward, and must not disturb the others.
     """
     X_a, y_a = _mk_reg_dataset(0)
     X_b, _ = _mk_reg_dataset(1)
@@ -1459,10 +1442,8 @@ def test__predict_batched__handles_constant_target_dataset() -> None:
 def test__predict_batched__fp16_matches_fp32(device: str) -> None:
     """predict_batched works with inference_precision=float16.
 
-    The batched engine casts inputs to the forced dtype and the model with them;
-    this guards the regressor path against the fp16 dtype-mismatch regression that
-    was fixed for the classifier. Older torch lacks CPU fp16 matmul, so skip CPU
-    there.
+    Guards the regressor path against the fp16 dtype mismatch fixed for the
+    classifier. Older torch lacks CPU fp16 matmul, so skip CPU there.
     """
     if torch.device(device).type == "cpu" and not is_cpu_float16_supported():
         pytest.skip("CPU float16 matmul not supported in this PyTorch version.")

@@ -1322,38 +1322,26 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> list[RegressionResultType]:
         """Predict for several independent datasets in one pass.
 
-        Each ``(X_train, y_train, X_test)`` triple is preprocessed exactly as in
-        ``fit()`` + ``predict()`` (input validation, CPU and GPU preprocessing,
-        same ensemble configs, own target standardisation), then all datasets are
-        stacked along the model's batch dimension and scored with a *single fused
-        forward per estimator*. For the supported cases below this is equivalent
-        to calling ``fit`` + ``predict`` on each dataset independently.
+        Each triple is preprocessed exactly as ``fit()`` + ``predict()`` does,
+        then all datasets are stacked on the model's batch dimension and scored
+        with a single fused forward per estimator. Equivalent to fitting and
+        predicting each dataset independently. Runs on an internal clone, so
+        ``self`` is unchanged on return.
 
-        Unlike the classifier's ``predict_proba_batched`` there is no shared
-        output-space constraint: the bar distribution the model predicts over is
-        fixed by the checkpoint, so each dataset is decoded with its own
-        target standardisation and its own per-estimator border transforms.
-        The datasets must still share array shapes: the fused forward stacks them
-        on the batch dimension, and ragged batches are rejected rather than padded
-        (padding would feed the model fake context rows and silently corrupt
-        results). Group datasets by shape upstream if needed.
-
-        This method does not modify the estimator: the per-dataset fits run on an
-        internal clone, so ``self`` is unchanged on return (any prior ``fit`` is
-        preserved).
+        Datasets need not share a target scale (each is decoded with its own
+        bar distribution) but must share array shapes; ragged batches are
+        rejected rather than padded.
 
         Args:
             X_train_list: Training features, one array per dataset (all same shape).
             y_train_list: Training targets, one array per dataset.
             X_test_list: Test features, one array per dataset (all same shape).
             output_type: As in :meth:`predict`, applied to every dataset.
-            quantiles: As in :meth:`predict`, used when ``output_type`` is
-                ``"quantiles"``, ``"main"`` or ``"full"``.
+            quantiles: As in :meth:`predict`.
 
         Returns:
-            A list with one entry per dataset, in input order. Each entry is
-            exactly what :meth:`predict` returns for that dataset, so entry ``i``
-            has the same structure as ``fit(X_i, y_i).predict(X_test_i, ...)``.
+            One entry per dataset, in input order, each being what :meth:`predict`
+            would return for that dataset.
 
         Raises:
             ValueError: If the input lists have unequal or zero length, or the
@@ -1361,13 +1349,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             TabPFNValidationError: If ``output_type`` or ``quantiles`` are invalid.
 
         Note:
-            Datasets whose target is constant are answered analytically, exactly
-            as ``predict`` does, and take no part in the fused forward.
+            Constant-target datasets are answered analytically and take no part
+            in the fused forward.
         """
-        # Both imported here rather than at module scope to avoid circular imports:
-        # architectures.interface imported at runtime from regressor is circular
-        # (the rest of the module only needs PerformanceOptions for type-checking),
-        # and the `finetuning` package imports TabPFNRegressor.
+        # Imported here rather than at module scope: importing
+        # architectures.interface at runtime is circular, as is `finetuning`,
+        # which imports TabPFNRegressor.
         from tabpfn.architectures.interface import (  # noqa: PLC0415
             PerformanceOptions,
         )
@@ -1392,10 +1379,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if output_type not in _USABLE_OUTPUT_TYPES:
             raise TabPFNValidationError(f"Invalid output type: {output_type}")
 
-        # The fused forward stacks datasets on the model's batch dimension, which
-        # requires identical shapes. Padding ragged datasets would feed the model
-        # fake (zero) context rows and leave padded query rows untrimmed in the
-        # output, silently corrupting results — so reject ragged batches.
+        # Padding ragged datasets would feed the model fake context rows and leave
+        # padded query rows untrimmed, silently corrupting results.
         train_shapes = {np.asarray(X).shape for X in X_train_list}
         test_shapes = {np.asarray(X).shape for X in X_test_list}
         if len(train_shapes) > 1 or len(test_shapes) > 1:
@@ -1407,20 +1392,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "once per group."
             )
 
-        # Run the per-dataset fits on an internal clone so this prediction method
-        # does not mutate the estimator: ``self`` is left unchanged on return (any
-        # prior fit is preserved), and the batched executor is dropped with the
-        # clone rather than pinning every dataset's tensors on ``self``. The clone
-        # shares the same model via the ``model_path`` param, so there is no reload.
+        # Fit on a clone so a prior fit on ``self`` survives and the batched
+        # executor is dropped with the clone. The clone shares the model via the
+        # ``model_path`` param, so there is no reload.
         worker = clone(self)
-        # Fit each dataset in "fit_preprocessors" mode so the fitted ensemble
-        # members are cached on the executor and reused directly (no redundant
-        # preprocessing).
+        # "fit_preprocessors" caches the fitted members on the executor, so the
+        # loop below reuses them instead of preprocessing twice.
         worker.fit_mode = "fit_preprocessors"
 
-        # Results are stitched back in input order. Constant-target datasets are
-        # answered analytically and contribute no item to the fused batch, so
-        # ``fused_index`` maps a position in the batch back to its input index.
+        # Constant-target datasets contribute no item to the fused batch, so
+        # ``fused_index`` maps a batch position back to its input index.
         results: list[RegressionResultType | None] = [None] * len(X_train_list)
         items: list[RegressorBatch] = []
         fused_index: list[int] = []
@@ -1430,15 +1411,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         for idx, (X, y, X_test) in enumerate(
             zip(X_train_list, y_train_list, X_test_list, strict=True)
         ):
-            # Standard fit on the clone: builds the ensemble preprocessor + configs,
-            # caches the fitted members on the executor, sets y_train_mean_/std_ and
-            # the per-dataset raw-space bar distribution, and detects constant
-            # targets exactly as a normal predict would.
             worker.fit(X, y)
 
             if worker.is_constant_target_:
-                # fit() returns before creating an executor for a constant target,
-                # so there is nothing to score; answer it the way predict() does.
+                # fit() returns before building an executor here, so there is
+                # nothing to score.
                 results[idx] = worker._handle_constant_target(
                     len(np.asarray(X_test)), output_type, quantiles
                 )
@@ -1446,14 +1423,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Rebuilt fresh on every fit, so each dataset keeps its own object.
             raw_space_bardists.append(worker.raw_space_bardist_)
-            # The z-norm bar distribution comes from the checkpoint and is identical
-            # across datasets; capture it once from the first non-constant dataset.
+            # Fixed by the checkpoint, so identical across datasets.
             if znorm_borders is None:
                 znorm_borders = worker.znorm_space_bardist_.borders.clone()
 
-            # Validate/clean X_test exactly as the standard predict path does
-            # before the per-member preprocessors run, so non-numeric inputs
-            # (DataFrames, categoricals, NaNs) are handled identically.
+            # Clean X_test as the standard predict path does, so DataFrames,
+            # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
@@ -1498,11 +1473,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     y_context=y_context,
                     y_query=torch.zeros(n_test),
                     cat_indices=cat_indices,
-                    # The configs must come from the fitted members, not from
-                    # ``worker.ensemble_configs_``: ``target_transform`` is fitted on
-                    # this dataset's y in place, and with n_preprocessing_jobs > 1
-                    # that happens in a worker process, so only the member's copy
-                    # carries the fitted transform the border mapping below needs.
+                    # Must come from the members, not ``worker.ensemble_configs_``:
+                    # with n_preprocessing_jobs > 1 ``target_transform`` is fitted in
+                    # a worker process, so only the member's copy carries the fitted
+                    # transform the border mapping needs.
                     configs=[m.config for m in members],
                     raw_space_bardist=worker.raw_space_bardist_,
                     znorm_space_bardist=worker.znorm_space_bardist_,
@@ -1514,12 +1488,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         if items:
             # The collator keeps only the first item's bar distributions; harmless
-            # here because each dataset's own one is tracked in raw_space_bardists
-            # and applied downstream, after the fused forward.
+            # because each dataset's own one is tracked in raw_space_bardists.
             batch = meta_dataset_collator(items)
-            # The clone now drives the batched executor; set the mode so
-            # fit_from_preprocessed does not warn about switching out of
-            # fine-tuning mode.
+            # Set before fit_from_preprocessed so it does not warn about switching.
             worker.fit_mode = "batched"
             worker.fit_from_preprocessed(
                 batch.X_context,
@@ -1528,7 +1499,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 batch.configs,
                 performance_options=PerformanceOptions(),
             )
-            # One fused forward per estimator; each output is
+            # One fused forward per estimator, each output
             # (n_test, n_fused_datasets, n_buckets) with one config per dataset.
             raw_outputs = list(
                 worker.executor_.iter_outputs(
@@ -1561,9 +1532,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> RegressionResultType:
         """Decode one dataset's slice of the fused forward.
 
-        Mirrors the per-estimator border translation and averaging in
-        :meth:`predict`, but reads the dataset's slice out of the fused output and
-        uses that dataset's own raw-space bar distribution as the criterion.
+        Same border translation and averaging as :meth:`predict`, with this
+        dataset's own raw-space bar distribution as the criterion.
         """
         std_borders = znorm_borders.cpu().numpy()
         accumulated_logits: torch.Tensor | None = None
