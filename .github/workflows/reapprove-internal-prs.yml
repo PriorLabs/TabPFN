@@ -1,0 +1,116 @@
+# Automatically reapprove PRs from PriorLabs org members after new code is pushed.
+#
+# The branch protection rules dismiss all approvals when new code is pushed to a PR, to
+# ensure the most recent push is reviewed and approved. This is important for external
+# collaborators, but is extra overhead for internal PRs where we trust the authors. In
+# this case, the workflow automatically approves the current version of the PR if a
+# previous version was already approved.
+name: Reapprove internal PRs
+
+on:
+  pull_request_review:
+    types: [dismissed]
+
+permissions:
+  pull-requests: write
+
+# One push can dismiss several approvals, and each dismissal starts its own run. Run
+# them one at a time per PR, so that a later run sees the approval an earlier one
+# created instead of adding a duplicate.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+  # We need to check every review that was dismissed, in case it was an approval.
+  queue: max
+
+jobs:
+  reapprove:
+    name: Restore dismissed approval
+    # Three checks:
+    # - This PR comes from an org member or owner
+    # - The dismissed review comes from an org member or owner. Without this, an
+    #   external user can trigger this bot to approve a PR by submitting an approval
+    #   themselves. Not a big risk, as the PR's author must still be an internal user.
+    #   We include 'github-actions[bot]' so that the workflow can reapprove again after
+    #   a second push from the user.
+    # - The PR does not come from a fork, for defence in depth.
+    if: >
+      (
+        github.event.pull_request.author_association == 'MEMBER' ||
+        github.event.pull_request.author_association == 'OWNER'
+      ) &&
+      (
+        github.event.review.author_association == 'MEMBER' ||
+        github.event.review.author_association == 'OWNER' ||
+        github.event.review.user.login == 'github-actions[bot]'
+      ) &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-slim
+    steps:
+      - name: Restore the dismissed approval
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pullNumber = context.payload.pull_request.number;
+            const headSha = context.payload.pull_request.head.sha;
+            const dismissedReview = context.payload.review;
+
+            const reviews = await github.paginate(github.rest.pulls.listReviews, {
+              owner,
+              repo,
+              pull_number: pullNumber,
+              per_page: 100,
+            });
+
+            // Check if any of the reviews of this PR already approved the head commit.
+            // They might come from a human or an earlier run of the workflow.
+            // In this case, exit early to avoid approving again.
+            if (reviews.some((r) => r.commit_id === headSha && r.state === "APPROVED")) {
+              core.info("The current head is already approved, not approving again.");
+              return;
+            }
+
+            // The payload to this workflow doesn't tell us if the dismissed review was
+            // previously an approval, or why it was dismissed. To find this out, we
+            // find the review_dismissed event in the PR timeline.
+            const timeline = await github.paginate(
+              github.rest.issues.listEventsForTimeline,
+              { owner, repo, issue_number: pullNumber, per_page: 100 },
+            );
+            const dismissal = timeline
+              .filter((e) => e.event === "review_dismissed")
+              .map((e) => e.dismissed_review)
+              .find((d) => d?.review_id === dismissedReview.id);
+            if (!dismissal) {
+              core.info(`Found no dismissal of review ${dismissedReview.id}.`);
+              return;
+            }
+
+            // The dismissed review may not have been an approval (e.g. if it requested
+            // changes), in which case we don't want to approve.
+            if (dismissal.state !== "approved") {
+              core.info("The dismissed review was not an approval, not approving.");
+              return;
+            }
+            // We only want to reapprove when the dismissal was due to new code being
+            // pushed, not if the reviewer manually dismissed the review.
+            if (!dismissal.dismissal_commit_id) {
+              core.info("The approval was dismissed by hand, not restoring it.");
+              return;
+            }
+
+            core.info("Approving to restore the dismissed approval.");
+            // This approves the current HEAD, not the commit "headSha" that triggered
+            // this workflow. This avoids a race condition when someone makes two pushes
+            // in quick succession, as the workflow would only be triggered for the
+            // first one. It's safe, because the push can only come from an org member.
+            await github.rest.pulls.createReview({
+              owner,
+              repo,
+              pull_number: pullNumber,
+              event: "APPROVE",
+              body:
+                "Reapproving after a push, as this is a PR from an internal author " +
+                "and was already approved."
+            });
