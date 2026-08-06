@@ -31,6 +31,8 @@ jobs:
     # - The dismissed review comes from an org member or owner. Without this, an
     #   external user can trigger this bot to approve a PR by submitting an approval
     #   themselves. Not a big risk, as the PR's author must still be an internal user.
+    #   We include 'github-actions[bot]' so that the workflow can reapprove again after
+    #   a second push from the user.
     # - The PR does not come from a fork, for defence in depth.
     if: >
       (
@@ -61,9 +63,10 @@ jobs:
               per_page: 100,
             });
 
-            // The head can already be approved, either by a human or by an earlier run
-            // of this workflow.
-            if (reviews.some((r) => r.state === "APPROVED" && r.commit_id === headSha)) {
+            // Check if any of the reviews of this PR already approved the head commit.
+            // They might come from a human or an earlier run of the workflow.
+            // In this case, exit early to avoid approving again.
+            if (reviews.some((r) => r.commit_id === headSha && r.state === "APPROVED")) {
               core.info("The current head is already approved, not approving again.");
               return;
             }
@@ -98,9 +101,9 @@ jobs:
             }
 
             core.info("Approving to restore the dismissed approval.");
-            // This approves the current HEAD, not the commit "headSha" that trigerred
+            // This approves the current HEAD, not the commit "headSha" that triggered
             // this workflow. This avoids a race condition when someone makes two pushes
-            // in quick succession, as the workflow would only be trigerred for the
+            // in quick succession, as the workflow would only be triggered for the
             // first one. It's safe, because the push can only come from an org member.
             await github.rest.pulls.createReview({
               owner,
