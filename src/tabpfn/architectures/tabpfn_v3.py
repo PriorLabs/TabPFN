@@ -1899,8 +1899,14 @@ class TabPFNV3(Architecture):
             torch._dynamo.mark_dynamic(x_RiBC, index=1)
             torch._dynamo.mark_dynamic(x_RiBC, index=2)
 
+        # On the cache path the stages drop the train rows unless the caller
+        # already passed test rows only (see _stages_0_to_2), so plan for the
+        # rows the attention calls will actually see.
+        num_rows = x_RiBC.shape[0]
+        if kv_cache is not None and not kv_cache.is_empty() and not x_is_test_only:
+            num_rows -= num_train
         self._plan_attention_backends(
-            num_rows=x_RiBC.shape[0],
+            num_rows=num_rows,
             num_cols=x_RiBC.shape[2],
             batch_size=B,
             num_train=num_train,
@@ -2086,7 +2092,9 @@ class TabPFNV3(Architecture):
         Runs once per forward, before any layer: all per-stage sequence
         lengths follow from the input shapes, so each stage's backend is
         decided upfront and written to its attention modules'
-        ``planned_backend`` slots (``None`` = standard SDPA path). Sequence
+        ``planned_backend`` slots (``None`` = standard SDPA path).
+        ``num_rows`` is the number of rows the stages will see — on the
+        cache path that is the test rows alone. Sequence
         lengths and batch sizes of chunk-dependent stages are upper bounds
         (in-forward chunking only shrinks them). The slots are restored to
         ``"auto"`` by :meth:`_reset_attention_plan` when the forward ends.
