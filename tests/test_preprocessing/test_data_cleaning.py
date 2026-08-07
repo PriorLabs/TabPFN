@@ -12,7 +12,11 @@ import torch
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
-from tabpfn.preprocessing.clean import process_text_na_dataframe
+from tabpfn.preprocessing.clean import (
+    _is_single_float_block,
+    fix_dtypes,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.validation import ensure_compatible_fit_inputs
@@ -724,3 +728,116 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
     # encode to a valid (non-negative) code; the non-numeric "abc" -> NaN -> unknown.
     assert out[0, 1] == -1
     assert (out[1:, 1] >= 0).all()
+
+
+# --- all-numeric fast path ------------------------------------------------------
+#
+# A numeric ndarray with no categorical columns has nothing to ordinally encode, so
+# `clean_data` converts it straight to float64 instead of building the intermediate
+# DataFrame and copying it back out. These pin the properties that shortcut has to
+# keep: same values, same layout, an owned array, and an encoder that is fitted
+# exactly as the general path leaves it.
+
+
+def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSchema:
+    return FeatureSchema(
+        features=[
+            Feature(
+                name=f"f{i}",
+                modality=FeatureModality.CATEGORICAL
+                if i in cat_indices
+                else FeatureModality.NUMERICAL,
+            )
+            for i in range(n_cols)
+        ]
+    )
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "bool", "float16"])
+@pytest.mark.parametrize("passthrough_inf", [False, True])
+def test__clean_data__numeric_array_converts_without_intermediate_copy(
+    dtype: str, *, passthrough_inf: bool
+) -> None:
+    """The shortcut returns exactly the float64 cast of its input."""
+    rng = np.random.default_rng(0)
+    X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
+
+    out, encoder, schema = clean_data(
+        X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
+    )
+
+    np.testing.assert_array_equal(out, X.astype(np.float64))
+    assert out.dtype == np.float64
+    assert schema.num_columns == 4
+    # Owned and writeable: callers mutate the cleaned array in place downstream.
+    assert not np.shares_memory(out, X)
+    assert out.flags.writeable
+    # Nothing was selected for encoding, so the encoder learned no categories.
+    assert not hasattr(encoder.named_transformers_["encoder"], "categories_")
+    assert encoder.n_features_in_ == 4
+
+
+@pytest.mark.parametrize("passthrough_inf", [False, True])
+def test__clean_data__non_finite_survive_the_numeric_shortcut(
+    *, passthrough_inf: bool
+) -> None:
+    """NaN and +/-inf come through the shortcut at their original positions."""
+    X = np.arange(12, dtype="float32").reshape(4, 3)
+    X[0, 1] = np.nan
+    X[1, 2] = np.inf
+    X[3, 0] = -np.inf
+
+    out, _, _ = clean_data(
+        X=X, feature_schema=_numeric_schema(3), passthrough_inf=passthrough_inf
+    )
+
+    np.testing.assert_array_equal(out, X.astype(np.float64))
+
+
+def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
+    """The shortcut and the general path agree, value for value.
+
+    A declared categorical column forces the same data down the general path, so
+    the only difference between the two calls is the route taken.
+    """
+    rng = np.random.default_rng(0)
+    X = (rng.integers(0, 4, size=(50, 3))).astype("float64")
+
+    shortcut, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
+    general, encoder, _ = clean_data(
+        X=X, feature_schema=_numeric_schema(3, cat_indices=(0,))
+    )
+
+    # Column 0 is ordinally encoded in the general call; its codes happen to equal
+    # the original small integers, so the two agree everywhere.
+    assert encoder.named_transformers_["encoder"].categories_[0].size == 4
+    np.testing.assert_array_equal(shortcut, general)
+    assert shortcut.dtype == general.dtype
+    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+
+
+def test__fix_dtypes__numeric_array_stays_consolidated() -> None:
+    """A numeric ndarray needs no per-column cast, so its frame stays one block.
+
+    A fragmented frame has to be re-materialised by every later `to_numpy`, which
+    is a full extra copy of the data.
+    """
+    frame = fix_dtypes(np.random.default_rng(0).standard_normal((8, 5)), None)
+
+    assert _is_single_float_block(frame)
+
+
+def test__fix_dtypes__mixed_numeric_dtypes_are_still_cast() -> None:
+    """Skipping the no-op cast must not skip the casts that do something."""
+    raw = pd.DataFrame(
+        {
+            "a": pd.array([1, 2, None], dtype="Int64"),
+            "b": np.array([1.5, 2.5, 3.5], dtype="float32"),
+            "c": [1.0, 2.0, 3.0],
+        }
+    )
+
+    frame = fix_dtypes(raw, cat_indices=None)
+
+    assert list(frame.dtypes) == [np.dtype("float64")] * 3
+    assert np.isnan(frame["a"].to_numpy()[2])

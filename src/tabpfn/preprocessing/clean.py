@@ -32,10 +32,16 @@ if TYPE_CHECKING:
 # https://numpy.org/doc/2.1/reference/arrays.dtypes.html#checking-the-data-type
 
 NUMERIC_DTYPE_KINDS = "?bBiufm"
+# The subset of the above that numpy casts to float64 the same way pandas does, so
+# a frame need not be built to convert it. Timedeltas ("m") are excluded: pandas
+# converts those through its own units rather than numpy's raw integers.
+FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
+
+_FLOAT64 = np.dtype(np.float64)
 
 
 def clean_data(
@@ -57,16 +63,41 @@ def clean_data(
         A tuple containing the cleaned data, the ordinal encoder, and the inferred
         feature modalities.
     """
-    # Will convert inferred categorical indices to category dtype,
-    # to be picked up by the ord_encoder, as well
-    # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-    X_pandas: pd.DataFrame = fix_dtypes(
-        X=X,
-        cat_indices=feature_schema.indices_for(FeatureModality.CATEGORICAL),
-    )
+    cat_indices = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
     # Ensure categories are ordinally encoded
     ord_encoder = get_ordinal_encoder()
+
+    if (
+        not cat_indices
+        and isinstance(X, np.ndarray)
+        and X.dtype.kind in FAST_CONVERTIBLE_DTYPE_KINDS
+    ):
+        # Nothing to encode and no dtype to infer, so the two steps below come out
+        # as a single cast: `fix_dtypes` would wrap `X` in a float64 frame that
+        # `process_text_na_dataframe` then copies straight back out, holding two
+        # full-size float64 buffers to produce one. Convert once, into the array
+        # that is returned.
+        #
+        # `passthrough_inf` makes no difference here: it records the +/-inf cells,
+        # NaNs them so the encoder does not choke, and writes them back at the same
+        # positions afterwards -- an exact round trip when nothing is encoded.
+        #
+        # The encoder is still fit, since the caller keeps it for predict, but on a
+        # single row: with no column selected it learns nothing from the values,
+        # only the column bookkeeping.
+        ord_encoder.fit(fix_dtypes(X=X[:1], cat_indices=cat_indices))
+        return (
+            np.array(X, dtype=np.float64, order="F", copy=True),
+            ord_encoder,
+            feature_schema,
+        )
+
+    # Will convert inferred categorical indices to category dtype,
+    # to be picked up by the ord_encoder, as well
+    # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
+    X_pandas: pd.DataFrame = fix_dtypes(X=X, cat_indices=cat_indices)
+
     X_numpy = process_text_na_dataframe(
         X=X_pandas,
         ord_encoder=ord_encoder,
@@ -173,7 +204,15 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
             X[object_columns] = X[object_columns].astype("string")
 
     numerical_columns = X.select_dtypes(include=["number"]).columns
-    if len(numerical_columns) > 0:
+    # Assigning the numeric columns back is not free even when the cast is a no-op:
+    # it rewrites them as one block per column, and a fragmented frame has to be
+    # re-materialised (a full extra copy) by every later `to_numpy`. Skip it when
+    # they already hold the target dtype -- the common case for a numeric ndarray
+    # input, whose DataFrame was constructed with `numeric_dtype` above.
+    if (
+        len(numerical_columns) > 0
+        and not (X.dtypes[numerical_columns] == np.dtype(numeric_dtype)).all()
+    ):
         X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
     return X
 
@@ -368,6 +407,74 @@ else:
     inf_masks_dataframe = _inf_masks_dataframe
 
 
+def _encoding_is_identity(
+    X: pd.DataFrame,
+    ord_encoder: OrderPreservingColumnTransformer | None,
+    *,
+    fit_encoder: bool,
+) -> bool:
+    """Whether the ordinal-encoding step provably cannot change any value.
+
+    The encoder selects columns by dtype (``category``/``string``), so a frame of
+    plain float64 columns leaves it with nothing to select: the transformer reduces
+    to its passthrough remainder and the whole step is the float64 cast it ends
+    with. Plain float64 specifically, not merely numeric -- a nullable ``Float64``
+    holds ``pd.NA``, which only survives the trip through pandas.
+
+    A *frozen* encoder does not re-select, it reuses the columns it saw at fit, so
+    that selection has to be empty as well.
+    """
+    if any(dtype != _FLOAT64 for dtype in X.dtypes):
+        return False
+    if fit_encoder or ord_encoder is None:
+        return True
+    return not any(
+        len(columns) > 0
+        for name, _, columns in getattr(ord_encoder, "transformers_", ())
+        if name != "remainder"
+    )
+
+
+def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
+    """`X`'s values as a freshly allocated, writeable float64 array.
+
+    On a consolidated float64 frame `to_numpy` hands back a transposed -- and under
+    copy-on-write read-only -- view of the single block, so the copy taken here is
+    the only allocation the identity path makes, and it is the array the caller
+    keeps. Routing the same frame through the ordinal encoder costs two more: one
+    to re-materialise it for the hstack, one for the closing `astype`.
+
+    Column-major because that is what the encoder path has always returned -- its
+    `hstack` builds an F-ordered array and the closing `astype` preserves layout --
+    and downstream preprocessing is column-wise. Pinning the order here keeps this
+    a change of cost only, not of what callers receive.
+    """
+    return np.array(X.to_numpy(dtype=np.float64, copy=False), order="F", copy=True)
+
+
+def _apply_ordinal_encoder(
+    X: pd.DataFrame,
+    ord_encoder: OrderPreservingColumnTransformer | None,
+    *,
+    fit_encoder: bool,
+    encoding_is_identity: bool,
+) -> np.ndarray:
+    """Run the ordinal-encoding step, or skip it where it cannot change anything."""
+    if encoding_is_identity:
+        if fit_encoder and ord_encoder is not None:
+            # Fitting still has to happen -- the caller keeps the encoder for
+            # predict -- but with no column selected it learns nothing from the
+            # values, so a single row settles the column bookkeeping and spares us
+            # the transform this branch exists to avoid.
+            ord_encoder.fit(X.iloc[:1])
+        return _owned_float64_values(X)
+    if fit_encoder and ord_encoder is not None:
+        return ord_encoder.fit_transform(X)
+    if ord_encoder is not None:
+        return ord_encoder.transform(X)
+    return X.to_numpy()
+
+
 def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
@@ -418,12 +525,15 @@ def process_text_na_dataframe(
             X = X.copy()
         X[string_cols] = X[string_cols].fillna(placeholder)
 
-    if fit_encoder and ord_encoder is not None:
-        X_encoded = ord_encoder.fit_transform(X)
-    elif ord_encoder is not None:
-        X_encoded = ord_encoder.transform(X)
-    else:
-        X_encoded = X.to_numpy()
+    encoding_is_identity = _encoding_is_identity(
+        X, ord_encoder, fit_encoder=fit_encoder
+    )
+    X_encoded = _apply_ordinal_encoder(
+        X,
+        ord_encoder,
+        fit_encoder=fit_encoder,
+        encoding_is_identity=encoding_is_identity,
+    )
 
     string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
@@ -432,7 +542,10 @@ def process_text_na_dataframe(
         np.nan,
         X_encoded[:, string_cols_ix],
     )
-    X_encoded = X_encoded.astype(np.float64)
+    if not encoding_is_identity:
+        # Skipped for the identity path, which already produced float64: the cast
+        # would only duplicate an array that is by construction the right dtype.
+        X_encoded = X_encoded.astype(np.float64)
 
     # Write the recorded +/-inf values back into their original numeric cells.
     if passthrough_inf and (pos_inf.any() or neg_inf.any()):
