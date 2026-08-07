@@ -868,7 +868,7 @@ _BUILT_MODEL_CACHE: OrderedDict[tuple[str, tuple[int, int]], tuple] = OrderedDic
 _BUILT_MODEL_CACHE_LOCK = Lock()
 
 
-def _built_model_cache_size() -> int:
+def _get_built_model_cache_size() -> int:
     try:
         return max(0, int(os.environ.get("TABPFN_MODEL_CACHE_SIZE", "0")))
     except ValueError:
@@ -908,7 +908,7 @@ def load_model(
     resolved = str(path.resolve())
     identity = Checkpoint(resolved).identity()
 
-    use_cache = _built_model_cache_size() > 0 and not cache_trainset_representation
+    use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
     key = (resolved, identity)
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
@@ -922,7 +922,7 @@ def load_model(
     )
 
     if use_cache:
-        size = _built_model_cache_size()
+        size = _get_built_model_cache_size()
         with _BUILT_MODEL_CACHE_LOCK:
             _BUILT_MODEL_CACHE[key] = result
             _BUILT_MODEL_CACHE.move_to_end(key)
