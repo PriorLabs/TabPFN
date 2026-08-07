@@ -51,6 +51,11 @@ from tabpfn.architectures.kv_cache import (
     KVCacheEntry,
     QuantizedKVCacheEntry,
 )
+from tabpfn.architectures.shared.attention_backends import (
+    AttentionSpec,
+    effective_attention_dtype,
+    resolve_attention_backend,
+)
 from tabpfn.architectures.shared.chunked_evaluate import chunked_evaluate_maybe_inplace
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
@@ -61,7 +66,14 @@ from tabpfn.preprocessing.torch.torch_standard_scaler import TorchStandardScaler
 if TYPE_CHECKING:
     from torch.nn.attention import SDPBackend
 
+    from tabpfn.architectures.shared.attention_backends import AttentionBackend
     from tabpfn.constants import TaskType
+
+    # A module's planned-attention-backend slot, set per forward pass by
+    # TabPFNV3._plan_attention_backends: a backend resolved upfront, None
+    # (planned: standard SDPA, no registry consult), or the resting default
+    # "auto" (no plan; the chokepoint resolves per call).
+    PlannedAttentionBackend = AttentionBackend | None | Literal["auto"]
 
 
 _logger = _logging.getLogger(__name__)
@@ -507,6 +519,7 @@ class ManyClassDecoder(nn.Module):
         self.q_projection = nn.Linear(self.input_size, self.attention_size)
         self.k_projection = nn.Linear(self.input_size, self.attention_size)
         self.softmax_scaling_layer = softmax_scaling_layer
+        self.planned_backend: PlannedAttentionBackend = "auto"
 
     def _project_qk(
         self,
@@ -555,6 +568,7 @@ class ManyClassDecoder(nn.Module):
             k_BNHD,
             one_hot_targets_BNHT,
             softmax_scaling_layer=self.softmax_scaling_layer,
+            backend=self.planned_backend,
         )
         test_output_BMT = test_output_BMHT.mean(2)  # average over heads
 
@@ -590,6 +604,7 @@ def _chunked_class_attention(
     k_BJHD: torch.Tensor,
     v_BJHT: torch.Tensor,
     softmax_scaling_layer: nn.Module | None = None,
+    backend: PlannedAttentionBackend = "auto",
 ) -> torch.Tensor:
     """Run retrieval attention where the value dimension C may exceed head_dim D.
 
@@ -603,6 +618,7 @@ def _chunked_class_attention(
         v_BJHT: Value tensor of shape (B, J, H, T) holding one-hot class
             encodings; T may be larger than D.
         softmax_scaling_layer: Optional scaling module to scale queries before SDPA.
+        backend: The caller's planned-attention-backend slot.
 
     Returns:
         Output tensor of shape (B, S, H, T).
@@ -639,7 +655,11 @@ def _chunked_class_attention(
 
     # Single flash-attention call across all chunks
     out_folded = _batched_scaled_dot_product_attention(
-        q_folded, k_folded, v_folded, softmax_scaling_layer=softmax_scaling_layer
+        q_folded,
+        k_folded,
+        v_folded,
+        softmax_scaling_layer=softmax_scaling_layer,
+        backend=backend,
     )
 
     # Unfold and trim padding: (B*K, S, H, D) -> (B, S, H, T)
@@ -768,16 +788,32 @@ class SoftmaxScalingMLP(nn.Module):
 
 def _batched_scaled_dot_product_attention(
     q_BSHD: torch.Tensor,
-    k_BSJD: torch.Tensor,
-    v_BSJD: torch.Tensor,
+    k_BSJD: torch.Tensor | None,
+    v_BSJD: torch.Tensor | None,
     softmax_scaling_layer: nn.Module | None = None,
     _backends_override: list[SDPBackend] | None = None,
+    quantized_kv: QuantizedKVCacheEntry | None = None,
+    backend: PlannedAttentionBackend = "auto",
 ) -> torch.Tensor:
-    """SDPA with optional query scaling."""
+    """SDPA with optional query scaling.
+
+    ``n`` for the scaling is the KV sequence length, read from ``k_BSJD`` or
+    the quantized cache entry; ``backend`` is the caller's
+    planned-attention-backend slot (see ``TabPFNV3._plan_attention_backends``).
+    """
     if softmax_scaling_layer is not None:
-        src_len = k_BSJD.shape[1]
+        k = quantized_kv.key if quantized_kv is not None else k_BSJD
+        assert k is not None
+        src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
-    return scaled_dot_product_attention(q_BSHD, k_BSJD, v_BSJD, _backends_override)
+    return scaled_dot_product_attention(
+        q_BSHD,
+        k_BSJD,
+        v_BSJD,
+        _backends_override,
+        quantized_kv=quantized_kv,
+        backend=backend,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -799,6 +835,7 @@ class Attention(nn.Module):
         super().__init__()
         self.num_heads = num_heads
         self.head_dim = head_dim
+        self.planned_backend: PlannedAttentionBackend = "auto"
         kw = {"device": device, "dtype": dtype, "bias": False}
 
         self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
@@ -826,9 +863,9 @@ class Attention(nn.Module):
             q = rope.rotate_queries_or_keys(q.transpose(1, 2)).transpose(1, 2)
             k = rope.rotate_queries_or_keys(k.transpose(1, 2)).transpose(1, 2)
 
-        out = _batched_scaled_dot_product_attention(q, k, v).reshape(
-            B, S, self.head_dim * self.num_heads
-        )
+        out = _batched_scaled_dot_product_attention(
+            q, k, v, backend=self.planned_backend
+        ).reshape(B, S, self.head_dim * self.num_heads)
         return self.out_projection(out)
 
 
@@ -848,6 +885,7 @@ class CrossAttention(nn.Module):
         self.num_heads = num_heads
         self.head_dim = head_dim
         self.softmax_scaling_layer = softmax_scaling_layer
+        self.planned_backend: PlannedAttentionBackend = "auto"
         kw = {"device": device, "dtype": dtype, "bias": False}
 
         self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
@@ -873,7 +911,11 @@ class CrossAttention(nn.Module):
         v = self.v_projection(x_for_key_and_value_BVE).view(B, V, -1, self.head_dim)
 
         out = _batched_scaled_dot_product_attention(
-            q, k, v, softmax_scaling_layer=self.softmax_scaling_layer
+            q,
+            k,
+            v,
+            softmax_scaling_layer=self.softmax_scaling_layer,
+            backend=self.planned_backend,
         )
 
         return self.out_projection(out.reshape(B, Q, self.head_dim * self.num_heads))
@@ -907,6 +949,10 @@ class ICLAttention(nn.Module):
         self.softmax_scaling_layer = softmax_scaling_layer
         self.num_kv_heads = num_kv_heads if num_kv_heads is not None else num_heads
         self.num_kv_heads_test = num_kv_heads_test
+        self.planned_backend: PlannedAttentionBackend = "auto"
+        # Separate slot for the reduced-KV-heads test partition of the GQA
+        # split path, whose call has a different shape than the main call.
+        self.planned_backend_test: PlannedAttentionBackend = "auto"
         kw = {"device": device, "dtype": dtype, "bias": False}
 
         self.q_projection = nn.Linear(embedding_size, head_dim * num_heads, **kw)
@@ -958,28 +1004,39 @@ class ICLAttention(nn.Module):
 
         if cached_kv is not None:
             # Use pre-computed K/V from cache (test-only path)
-            if isinstance(cached_kv, QuantizedKVCacheEntry):
-                cached_kv = cached_kv.dequantize(q.dtype)
             k = cached_kv.key
             v = cached_kv.value
             assert k is not None, "cached key is None"
             assert v is not None, "cached value is None"
-            # Match dtype in case of autocast (e.g. fp32 cache under fp16)
-            if k.dtype != q.dtype:
-                k = k.to(q.dtype)
-                v = v.to(q.dtype)
             # The cache already stores only the test KV heads (sliced at
             # cache-build time), so no slicing is needed here.
             if self.num_kv_heads_test is not None:
                 nh_test_heads = self.num_kv_heads_test
                 assert k.shape[2] == nh_test_heads, "cached key has wrong num heads"
                 assert v.shape[2] == nh_test_heads, "cached value has wrong num heads"
-            out = _batched_scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                softmax_scaling_layer=self.softmax_scaling_layer,
-            )
+            if isinstance(cached_kv, QuantizedKVCacheEntry):
+                # Passed through quantized: an external backend may consume the
+                # entry directly; otherwise it is dequantized at the chokepoint.
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    None,
+                    None,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                    quantized_kv=cached_kv,
+                    backend=self.planned_backend,
+                )
+            else:
+                # Match dtype in case of autocast (e.g. fp32 cache under fp16)
+                if k.dtype != q.dtype:
+                    k = k.to(q.dtype)
+                    v = v.to(q.dtype)
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                    backend=self.planned_backend,
+                )
         else:
             N = R if single_eval_pos is None else single_eval_pos
             x_train = x_BRE[:, :N]
@@ -997,6 +1054,7 @@ class ICLAttention(nn.Module):
                     k,
                     v,
                     softmax_scaling_layer=self.softmax_scaling_layer,
+                    backend=self.planned_backend,
                 )
                 # Test rows: fewer KV heads (GQA / MQA)
                 nh_test_heads = self.num_kv_heads_test
@@ -1005,6 +1063,7 @@ class ICLAttention(nn.Module):
                     k[:, :, :nh_test_heads],
                     v[:, :, :nh_test_heads],
                     softmax_scaling_layer=self.softmax_scaling_layer,
+                    backend=self.planned_backend_test,
                 )
                 out = torch.cat([out_train, out_test], dim=1)
             else:
@@ -1013,6 +1072,7 @@ class ICLAttention(nn.Module):
                     k,
                     v,
                     softmax_scaling_layer=self.softmax_scaling_layer,
+                    backend=self.planned_backend,
                 )
 
         result = self.out_projection(out.reshape(B, R, self.head_dim * self.num_heads))
@@ -1163,7 +1223,9 @@ class TransformerBlock(nn.Module):
             q_proj = rope.rotate_queries_or_keys(q_proj.transpose(1, 2)).transpose(1, 2)
             k_flat = rope.rotate_queries_or_keys(k_flat.transpose(1, 2)).transpose(1, 2)
 
-        attn_out = _batched_scaled_dot_product_attention(q_proj, k_flat, v_flat)
+        attn_out = _batched_scaled_dot_product_attention(
+            q_proj, k_flat, v_flat, backend=self.attention.planned_backend
+        )
         attn_out = attn_out.reshape(
             B * R, Q, self.attention.head_dim * self.attention.num_heads
         )
@@ -1837,6 +1899,54 @@ class TabPFNV3(Architecture):
             torch._dynamo.mark_dynamic(x_RiBC, index=1)
             torch._dynamo.mark_dynamic(x_RiBC, index=2)
 
+        # On the cache path the stages drop the train rows unless the caller
+        # already passed test rows only (see _stages_0_to_2), so plan for the
+        # rows the attention calls will actually see.
+        num_rows = x_RiBC.shape[0]
+        if kv_cache is not None and not kv_cache.is_empty() and not x_is_test_only:
+            num_rows -= num_train
+        self._plan_attention_backends(
+            num_rows=num_rows,
+            num_cols=x_RiBC.shape[2],
+            batch_size=B,
+            num_train=num_train,
+            device=x_RiBC.device,
+            kv_cache=kv_cache,
+        )
+        try:
+            return self._forward_impl(
+                x_RiBC,
+                y,
+                only_return_standard_out=only_return_standard_out,
+                performance_options=performance_options,
+                kv_cache=kv_cache,
+                return_kv_cache=return_kv_cache,
+                x_is_test_only=x_is_test_only,
+            )
+        finally:
+            # The plan describes this forward's shapes only; reset so nothing
+            # stale leaks into the next forward (or into pickling/deepcopy).
+            self._reset_attention_plan()
+
+    def _forward_impl(
+        self,
+        x_RiBC: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        only_return_standard_out: bool,
+        performance_options: PerformanceOptions,
+        kv_cache: TabPFNV3Cache | None,
+        return_kv_cache: bool,
+        x_is_test_only: bool,
+    ) -> (
+        torch.Tensor
+        | dict[str, torch.Tensor]
+        | tuple[torch.Tensor | dict[str, torch.Tensor], TabPFNV3Cache | None]
+    ):
+        """The :meth:`forward` body, run under the per-forward attention plan."""
+        B = x_RiBC.shape[1]
+        num_train = y.shape[0]
+
         x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
             x_RiBC,
             y,
@@ -1966,6 +2076,225 @@ class TabPFNV3(Architecture):
     @override
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
         return ("auto", "int8", "fp8")
+
+    def _plan_attention_backends(
+        self,
+        *,
+        num_rows: int,
+        num_cols: int,
+        batch_size: int,
+        num_train: int,
+        device: torch.device,
+        kv_cache: TabPFNV3Cache | None,
+    ) -> None:
+        """Resolve the attention backend for every stage of this forward pass.
+
+        Runs once per forward, before any layer: all per-stage sequence
+        lengths follow from the input shapes, so each stage's backend is
+        decided upfront and written to its attention modules'
+        ``planned_backend`` slots (``None`` = standard SDPA path).
+        ``num_rows`` is the number of rows the stages will see — on the
+        cache path that is the test rows alone. Sequence
+        lengths and batch sizes of chunk-dependent stages are upper bounds
+        (in-forward chunking only shrinks them). The slots are restored to
+        ``"auto"`` by :meth:`_reset_attention_plan` when the forward ends.
+        """
+        dtype = effective_attention_dtype(device, self.x_embed.weight.dtype)
+        is_grad_enabled = torch.is_grad_enabled()
+
+        def spec(
+            *,
+            seq_len_q: int | None,
+            seq_len_kv: int | None,
+            num_heads: int,
+            num_kv_heads: int,
+            head_dim: int,
+            batch: int | None,
+            quantized_kv_dtype: torch.dtype | None = None,
+        ) -> AttentionSpec:
+            return AttentionSpec(
+                seq_len_q=seq_len_q,
+                seq_len_kv=seq_len_kv,
+                num_heads=num_heads,
+                num_kv_heads=num_kv_heads,
+                head_dim=head_dim,
+                dtype=dtype,
+                device=device,
+                batch_size=batch,
+                quantized_kv_dtype=quantized_kv_dtype,
+                is_grad_enabled=is_grad_enabled,
+            )
+
+        # ---- Stage 1: feature-distribution embedder (induced attention) ----
+        dist_blocks = [
+            cast("InducedSelfAttentionBlock", b)
+            for b in self.feature_distribution_embedder.layers
+        ]
+        if dist_blocks:
+            attn1 = dist_blocks[0].cross_attn_block1.attn
+            inducing_backend = resolve_attention_backend(
+                spec(
+                    seq_len_q=dist_blocks[0].num_inducing_points,
+                    # Upper bound: the kv is the train rows of the current
+                    # row/col chunk.
+                    seq_len_kv=num_train,
+                    num_heads=attn1.num_heads,
+                    num_kv_heads=attn1.num_heads,
+                    head_dim=attn1.head_dim,
+                    batch=batch_size * num_cols,
+                )
+            )
+            attn2 = dist_blocks[0].cross_attn_block2.attn
+            rows_backend = resolve_attention_backend(
+                spec(
+                    # Upper bound: the queries are the rows of the current
+                    # row chunk.
+                    seq_len_q=num_rows,
+                    seq_len_kv=dist_blocks[0].num_inducing_points,
+                    num_heads=attn2.num_heads,
+                    num_kv_heads=attn2.num_heads,
+                    head_dim=attn2.head_dim,
+                    batch=batch_size * num_cols,
+                )
+            )
+            for block in dist_blocks:
+                block.cross_attn_block1.attn.planned_backend = inducing_backend
+                block.cross_attn_block2.attn.planned_backend = rows_backend
+
+        # ---- Stage 2: column aggregator (cross-feature attention) ----
+        agg_blocks = [
+            cast("TransformerBlock", b) for b in self.column_aggregator.blocks
+        ]
+        if agg_blocks:
+            num_cls = self.column_aggregator.num_cls_tokens
+            agg_attn = agg_blocks[0].attention
+            feature_backend = resolve_attention_backend(
+                spec(
+                    seq_len_q=num_cls + num_cols,
+                    seq_len_kv=num_cls + num_cols,
+                    num_heads=agg_attn.num_heads,
+                    num_kv_heads=agg_attn.num_heads,
+                    head_dim=agg_attn.head_dim,
+                    batch=batch_size * num_rows,
+                )
+            )
+            for block in agg_blocks[:-1]:
+                block.attention.planned_backend = feature_backend
+            # The last block only runs the CLS readout (forward_cross).
+            readout_attn = agg_blocks[-1].attention
+            agg_blocks[-1].attention.planned_backend = resolve_attention_backend(
+                spec(
+                    seq_len_q=num_cls,
+                    seq_len_kv=num_cls + num_cols,
+                    num_heads=readout_attn.num_heads,
+                    num_kv_heads=readout_attn.num_heads,
+                    head_dim=readout_attn.head_dim,
+                    batch=batch_size * num_rows,
+                )
+            )
+
+        # ---- Stage 3: ICL attention ----
+        icl_attns = [
+            cast("ICLTransformerBlock", b).icl_attention for b in self.icl_blocks
+        ]
+        cache_is_populated = kv_cache is not None and not kv_cache.is_empty()
+        if icl_attns:
+            icl = icl_attns[0]
+            icl_test_backend: AttentionBackend | None = None
+            if cache_is_populated:
+                # Cached predict: every input row queries the cached train KV
+                # (which stores only the test KV heads when the GQA split is
+                # configured).
+                assert kv_cache is not None
+                entry = next(iter(kv_cache.kv.values()))
+                quantized_dtype: torch.dtype | None = None
+                if isinstance(entry, QuantizedKVCacheEntry) and entry.key is not None:
+                    quantized_dtype = entry.key.dtype
+                icl_spec = spec(
+                    seq_len_q=num_rows,
+                    seq_len_kv=kv_cache.train_shape[1],
+                    num_heads=icl.num_heads,
+                    num_kv_heads=(
+                        icl.num_kv_heads_test
+                        if icl.num_kv_heads_test is not None
+                        else icl.num_kv_heads
+                    ),
+                    head_dim=icl.head_dim,
+                    batch=batch_size,
+                    quantized_kv_dtype=quantized_dtype,
+                )
+            elif icl.num_kv_heads_test is not None and num_train < num_rows:
+                # GQA split: train rows use the full KV heads, test rows the
+                # reduced set — two calls with different shapes per layer.
+                icl_spec = spec(
+                    seq_len_q=num_train,
+                    seq_len_kv=num_train,
+                    num_heads=icl.num_heads,
+                    num_kv_heads=icl.num_kv_heads,
+                    head_dim=icl.head_dim,
+                    batch=batch_size,
+                )
+                icl_test_backend = resolve_attention_backend(
+                    spec(
+                        seq_len_q=num_rows - num_train,
+                        seq_len_kv=num_train,
+                        num_heads=icl.num_heads,
+                        num_kv_heads=icl.num_kv_heads_test,
+                        head_dim=icl.head_dim,
+                        batch=batch_size,
+                    )
+                )
+            else:
+                icl_spec = spec(
+                    seq_len_q=num_rows,
+                    seq_len_kv=num_train,
+                    num_heads=icl.num_heads,
+                    num_kv_heads=icl.num_kv_heads,
+                    head_dim=icl.head_dim,
+                    batch=batch_size,
+                )
+            icl_backend = resolve_attention_backend(icl_spec)
+            for icl_attn in icl_attns:
+                icl_attn.planned_backend = icl_backend
+                icl_attn.planned_backend_test = icl_test_backend
+
+        # ---- Decoder (multiclass retrieval attention) ----
+        if self.task_type == "multiclass":
+            decoder = self.many_class_decoder
+            if cache_is_populated:
+                assert kv_cache is not None
+                num_test = num_rows
+                decoder_kv_len = kv_cache.train_shape[1]
+            else:
+                num_test = num_rows - num_train
+                decoder_kv_len = num_train
+            decoder.planned_backend = resolve_attention_backend(
+                spec(
+                    seq_len_q=num_test,
+                    seq_len_kv=decoder_kv_len,
+                    num_heads=decoder.num_heads,
+                    num_kv_heads=decoder.num_heads,
+                    head_dim=decoder.head_dim,
+                    # Class chunks are folded into the batch dimension.
+                    batch=batch_size
+                    * math.ceil(decoder.max_num_classes / decoder.head_dim),
+                )
+            )
+
+    def _reset_attention_plan(self) -> None:
+        """Restore every planned-backend slot to its resting ``"auto"`` value."""
+        for layer in self.feature_distribution_embedder.layers:
+            dist_block = cast("InducedSelfAttentionBlock", layer)
+            dist_block.cross_attn_block1.attn.planned_backend = "auto"
+            dist_block.cross_attn_block2.attn.planned_backend = "auto"
+        for agg_block in self.column_aggregator.blocks:
+            cast("TransformerBlock", agg_block).attention.planned_backend = "auto"
+        for icl_block in self.icl_blocks:
+            icl_attn = cast("ICLTransformerBlock", icl_block).icl_attention
+            icl_attn.planned_backend = "auto"
+            icl_attn.planned_backend_test = "auto"
+        if self.task_type == "multiclass":
+            self.many_class_decoder.planned_backend = "auto"
 
     def _prepare_y(
         self,

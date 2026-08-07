@@ -13,13 +13,14 @@ import pytest
 import torch
 
 import tabpfn.architectures.shared.scaled_dot_product_attention as _sdpa_mod
-from tabpfn.architectures.shared import mlx_backend
+from tabpfn.architectures.shared import mlx_backend, torch_mps_backend
+from tabpfn.architectures.shared.attention_backends import AttentionSpec
 from tabpfn.architectures.shared.mlx_backend import (
+    MLX_BACKEND,
     _mlx_to_torch,
     _torch_to_mlx,
     flash_attention_mlx,
     is_eligible_for_mlx,
-    is_mlx_preferred,
 )
 
 try:
@@ -70,78 +71,77 @@ def _reference_attn_cpu(
     return torch.einsum("bhsj,bhjd->bhsd", scores.softmax(dim=-1), v32).to(q.dtype)
 
 
-@_skip_unless_mps
+_MPS = torch.device("mps")
+
+
 def test__eligible_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mx=None (import failure) makes every tensor ineligible."""
+    """mx=None (import failure) makes every call ineligible."""
     monkeypatch.setattr(mlx_backend, "mx", None)
-    q = torch.zeros(1, 2, 8, 64, dtype=torch.float16, device="mps")
-    assert not is_eligible_for_mlx(q, q, q)
+    assert not is_eligible_for_mlx(_MPS, torch.float16, 64, is_grad_enabled=False)
 
 
-def test__eligible_false_for_cpu_tensors() -> None:
-    """CPU tensors are never eligible (not MPS)."""
-    q = torch.zeros(1, 2, 8, 64, dtype=torch.float16)
-    assert not is_eligible_for_mlx(q, q, q)
+def test__eligible_false_for_cpu_device() -> None:
+    """CPU calls are never eligible (not MPS)."""
+    assert not is_eligible_for_mlx(
+        torch.device("cpu"), torch.float16, 64, is_grad_enabled=False
+    )
 
 
-@_skip_unless_mps
+@_skip_unless_mlx
 def test__eligible_false_for_head_dim_over_128() -> None:
     """head_dim=129 is rejected regardless of other properties."""
-    q = torch.zeros(1, 2, 8, 129, dtype=torch.float16, device="mps")
-    assert not is_eligible_for_mlx(q, q, q)
+    assert not is_eligible_for_mlx(_MPS, torch.float16, 129, is_grad_enabled=False)
 
 
-@_skip_unless_mps
-def test__eligible_false_when_requires_grad() -> None:
-    q = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.float32, requires_grad=True)
-    k = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.float32)
-    v = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.float32)
-    assert not is_eligible_for_mlx(q, k, v)
+@_skip_unless_mlx
+def test__eligible_false_when_grad_enabled() -> None:
+    """MLX is forward-only: the torch->mlx round-trip detaches autograd."""
+    assert not is_eligible_for_mlx(_MPS, torch.float32, 64, is_grad_enabled=True)
 
 
-@_skip_unless_mps
+@_skip_unless_mlx
 def test__eligible_false_for_integer_dtype() -> None:
-    """Integer tensors are not a supported dtype (MPS supports int32)."""
-    if not _MLX_AVAILABLE:
-        pytest.skip("mlx not installed")
-    q = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.int32)
-    assert not is_eligible_for_mlx(q, q, q)
+    """Integer inputs are not a supported dtype (MPS supports int32)."""
+    assert not is_eligible_for_mlx(_MPS, torch.int32, 64, is_grad_enabled=False)
 
 
-@_skip_unless_mlx_and_mps
+@_skip_unless_mlx
 @pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
-def test__eligible_true_for_valid_mps_tensor(dtype: torch.dtype) -> None:
-    q = torch.zeros(1, 2, 8, 64, device="mps", dtype=dtype)
-    assert is_eligible_for_mlx(q, q, q)
+def test__eligible_true_for_valid_mps_call(dtype: torch.dtype) -> None:
+    assert is_eligible_for_mlx(_MPS, dtype, 64, is_grad_enabled=False)
 
 
-@_skip_unless_mlx_and_mps
-def test__eligible_true_at_head_dim_boundary_128() -> None:
-    q = torch.zeros(1, 2, 8, 128, device="mps", dtype=torch.float16)
-    assert is_eligible_for_mlx(q, q, q)
+@_skip_unless_mlx
+def test__eligible_head_dim_boundary_at_128() -> None:
+    assert is_eligible_for_mlx(_MPS, torch.float16, 128, is_grad_enabled=False)
+    assert not is_eligible_for_mlx(_MPS, torch.float16, 129, is_grad_enabled=False)
 
 
-@_skip_unless_mps
-def test__eligible_false_at_head_dim_129() -> None:
-    q = torch.zeros(1, 2, 8, 129, device="mps", dtype=torch.float16)
-    assert not is_eligible_for_mlx(q, q, q)
+def _mps_spec(seq_len_kv: int | None) -> AttentionSpec:
+    return AttentionSpec(
+        seq_len_q=16,
+        seq_len_kv=seq_len_kv,
+        num_heads=2,
+        num_kv_heads=2,
+        head_dim=64,
+        dtype=torch.float16,
+        device=_MPS,
+        batch_size=1,
+    )
 
 
 def test__preferred_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mlx_backend, "mx", None)
-    q = torch.zeros(1, 2, 8, 64)
-    k = torch.zeros(1, 2, 2048, 64)
-    assert not is_mlx_preferred(q, k, k)
+    assert not MLX_BACKEND.is_preferred(_mps_spec(2048))
 
 
-@_skip_unless_mlx_and_mps
-def test__preferred_requires_seq_kv_ge_129() -> None:
+@_skip_unless_mlx
+def test__preferred_requires_seq_kv_ge_128() -> None:
     """Threshold is 128; one below must not prefer MLX, at-threshold must."""
-    q = torch.zeros(1, 2, 8, 64, device="mps", dtype=torch.float16)
-    k_below = torch.zeros(1, 2, 127, 64, device="mps", dtype=torch.float16)
-    k_at = torch.zeros(1, 2, 128, 64, device="mps", dtype=torch.float16)
-    assert not is_mlx_preferred(q, k_below, k_below)
-    assert is_mlx_preferred(q, k_at, k_at)
+    assert not MLX_BACKEND.is_preferred(_mps_spec(127))
+    assert MLX_BACKEND.is_preferred(_mps_spec(128))
+    # Unknown (chunk-dependent) KV length never argues for MLX.
+    assert not MLX_BACKEND.is_preferred(_mps_spec(None))
 
 
 @_skip_unless_mlx
@@ -251,11 +251,18 @@ def test__flash_attention_mlx_gqa() -> None:
 
 
 @_skip_unless_mlx_and_mps
+@torch.no_grad()
 def test__dispatch_routes_through_mlx_when_preferred(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When is_mlx_preferred returns True, scaled_dot_product_attention uses MLX."""
-    monkeypatch.setattr(_sdpa_mod, "is_mlx_preferred", lambda *_: True)
+    """When MLX is preferred, scaled_dot_product_attention routes through it."""
+    # no_grad (decorator): MLX is forward-only, so its gate declines whenever
+    # grad mode is on — as at a real predict, which runs under
+    # torch.inference_mode. Disable the torch-native MPS backend (consulted
+    # before MLX on torch builds that have it) and drop MLX's seq-length
+    # threshold — the test sequences are short.
+    monkeypatch.setattr(torch_mps_backend, "is_torch_mps_preferred", lambda *_: False)
+    monkeypatch.setattr(mlx_backend, "_MLX_MIN_KV_SEQLEN", 0)
 
     # Use (B, S, H, D) tensors as expected by scaled_dot_product_attention.
     q, k, v = _mps_qkv(batch=1, seq_q=16, seq_kv=16, n_heads=2, head_dim=64)
@@ -269,9 +276,7 @@ def test__dispatch_routes_through_mlx_when_preferred(
 
 
 @_skip_unless_mlx_and_mps
-@pytest.mark.skipif(
-    torch.__version__ >= "2.13.dev20260510", reason="torch 2.13 uses SDPA"
-)
+@torch.no_grad()
 @pytest.mark.parametrize(
     ("n_q_heads", "n_kv_heads"),
     [(4, 4), (8, 2)],
@@ -283,16 +288,18 @@ def test__dispatch_mlx_matches_sdpa_reference(
     n_kv_heads: int,
 ) -> None:
     """Output matches SDPA reference and flash_attention_mlx is called."""
-    monkeypatch.setattr(_sdpa_mod, "is_mlx_preferred", lambda *_: True)
+    # Same setup rationale as test__dispatch_routes_through_mlx_when_preferred.
+    monkeypatch.setattr(torch_mps_backend, "is_torch_mps_preferred", lambda *_: False)
+    monkeypatch.setattr(mlx_backend, "_MLX_MIN_KV_SEQLEN", 0)
 
     called: list[bool] = []
-    original_fn = _sdpa_mod.flash_attention_mlx
+    original_fn = mlx_backend.flash_attention_mlx
 
     def _spy(*args: torch.Tensor, **kwargs: object) -> torch.Tensor:
         called.append(True)
         return original_fn(*args, **kwargs)
 
-    monkeypatch.setattr(_sdpa_mod, "flash_attention_mlx", _spy)
+    monkeypatch.setattr(mlx_backend, "flash_attention_mlx", _spy)
 
     head_dim = 64
     g = torch.Generator(device="mps").manual_seed(42)
