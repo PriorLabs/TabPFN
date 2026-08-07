@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import itertools
 import os
-import warnings
 from collections.abc import Callable
 from itertools import product
 from typing import Literal
@@ -1609,45 +1608,3 @@ def test__predict_proba_batched__does_not_mutate_estimator() -> None:
     fitted.predict_proba_batched(X_list, y_list, X_tests)
     after = fitted.predict_proba(a_x[:5])
     np.testing.assert_array_equal(before, after)
-
-
-def test__fit_with_text_column__warns() -> None:
-    """Fitting on a DataFrame with a free-text column warns and names it.
-
-    Which columns count as text is unit-tested in
-    tests/test_preprocessing/test_data_cleaning.py; here we check the estimator:
-    `fit` emits the warning, declaring the column in
-    `categorical_features_indices` silences it, and `predict` stays quiet.
-    """
-    n = 120
-    rng = np.random.default_rng(seed=42)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "review": [f"review {i}, a fairly long sentence" for i in range(n)],
-        }
-    )
-    y = rng.integers(0, 2, size=n)
-
-    model = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="look like free text") as record:
-        model.fit(X, y)
-    assert "'review'" in str(record[0].message)
-    # Pins the stacklevel: the warning must blame this file's `fit` call, not a
-    # frame inside tabpfn or the contextlib wrapper around `fit`.
-    assert record[0].filename == __file__
-
-    # Only `fit` runs modality detection, so `predict` must not warn again.
-    # catch_warnings collects any warning instead of failing on unrelated ones.
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.predict(X)
-    assert not [w for w in caught if "look like free text" in str(w.message)]
-
-    model = TabPFNClassifier(
-        n_estimators=1, device="cpu", categorical_features_indices=[1]
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.fit(X, y)
-    assert not [w for w in caught if "look like free text" in str(w.message)]

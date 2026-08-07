@@ -6,13 +6,11 @@ import io
 import itertools
 import os
 import typing
-import warnings
 from collections.abc import Callable
 from typing import Literal
 from unittest import mock
 
 import numpy as np
-import pandas as pd
 import pytest
 import sklearn.datasets
 import torch
@@ -1222,45 +1220,3 @@ def test__fit_with_differentiable_input__second_call_refreshes_target_stats() ->
     assert not torch.allclose(reg.raw_space_bardist_.borders, bardist_borders1), (
         "raw_space_bardist_ must be rebuilt to the new target scale"
     )
-
-
-def test__fit_with_text_column__warns() -> None:
-    """Fitting on a DataFrame with a free-text column warns and names it.
-
-    Which columns count as text is unit-tested in
-    tests/test_preprocessing/test_data_cleaning.py; here we check the estimator:
-    `fit` emits the warning, declaring the column in
-    `categorical_features_indices` silences it, and `predict` stays quiet.
-    """
-    n = 120
-    rng = np.random.default_rng(seed=42)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "review": [f"review {i}, a fairly long sentence" for i in range(n)],
-        }
-    )
-    y = rng.normal(size=n)
-
-    model = TabPFNRegressor(n_estimators=1, device="cpu")
-    with pytest.warns(UserWarning, match="look like free text") as record:
-        model.fit(X, y)
-    assert "'review'" in str(record[0].message)
-    # Pins the stacklevel: the warning must blame this file's `fit` call, not a
-    # frame inside tabpfn or the contextlib wrapper around `fit`.
-    assert record[0].filename == __file__
-
-    # Only `fit` runs modality detection, so `predict` must not warn again.
-    # catch_warnings collects any warning instead of failing on unrelated ones.
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.predict(X)
-    assert not [w for w in caught if "look like free text" in str(w.message)]
-
-    model = TabPFNRegressor(
-        n_estimators=1, device="cpu", categorical_features_indices=[1]
-    )
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        model.fit(X, y)
-    assert not [w for w in caught if "look like free text" in str(w.message)]

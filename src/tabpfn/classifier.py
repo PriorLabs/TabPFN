@@ -96,7 +96,6 @@ from tabpfn.validation import (
     ensure_compatible_predict_input_sklearn,
     validate_dataset_size,
     validate_num_classes,
-    warn_if_text_features,
 )
 
 if TYPE_CHECKING:
@@ -727,12 +726,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-        )
-        # Must stay before `clean_data`: the TEXT labels do not survive the first
-        # preprocessing step that rebuilds the schema.
-        warn_if_text_features(
-            feature_schema,
-            declared_categorical_indices=self.categorical_features_indices,
         )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,

@@ -4,8 +4,6 @@
 
 from __future__ import annotations
 
-import warnings
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -16,18 +14,12 @@ from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
 from tabpfn.preprocessing.clean import process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import (
-    INPUT_FEATURE_PREFIX,
     Feature,
     FeatureModality,
     FeatureSchema,
 )
-from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.validation import (
-    _MAX_TEXT_COLUMNS_IN_WARNING,
-    ensure_compatible_fit_inputs,
-    warn_if_text_features,
-)
+from tabpfn.validation import ensure_compatible_fit_inputs
 
 
 @pytest.fixture
@@ -736,169 +728,3 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
     # encode to a valid (non-negative) code; the non-numeric "abc" -> NaN -> unknown.
     assert out[0, 1] == -1
     assert (out[1:, 1] >= 0).all()
-
-
-def _text_schema(*names: str) -> FeatureSchema:
-    """Schema of TEXT features with the `input_` prefix real input names carry."""
-    return FeatureSchema(
-        features=[
-            Feature(name=f"{INPUT_FEATURE_PREFIX}{name}", modality=FeatureModality.TEXT)
-            for name in names
-        ]
-    )
-
-
-class TestWarnIfTextFeatures:
-    """Tests for validation.warn_if_text_features."""
-
-    def test__no_text_features__does_not_warn(self) -> None:
-        schema = _get_schema(n_numerical_features=2, n_categorical_features=2)
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warn_if_text_features(schema)
-
-    def test__text_features__warn_with_column_names_and_remedies(self) -> None:
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(_text_schema("review"))
-
-        message = str(record[0].message)
-        # Column names are shown as the user wrote them, without the input_ prefix.
-        assert "'review'" in message
-        assert INPUT_FEATURE_PREFIX not in message
-        # The message must state all remedies.
-        assert "numeric dtype" in message
-        assert "https://github.com/PriorLabs/tabpfn-client" in message
-        assert "categorical_features_indices" in message
-
-    def test__declared_categorical_indices__are_not_reported(self) -> None:
-        schema = _text_schema("sku", "review")
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(schema, declared_categorical_indices=[0])
-        message = str(record[0].message)
-        assert "'review'" in message
-        assert "'sku'" not in message
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warn_if_text_features(schema, declared_categorical_indices=[0, 1])
-
-    def test__many_text_columns__message_is_truncated(self) -> None:
-        n_extra = 5
-        n_columns = _MAX_TEXT_COLUMNS_IN_WARNING + n_extra
-        schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(schema)
-
-        message = str(record[0].message)
-        assert f"(and {n_extra} more)" in message
-        assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING - 1}'" in message
-        assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING}'" not in message
-
-
-def _schema_for_frame(
-    X: pd.DataFrame, declared: list[int] | None = None
-) -> FeatureSchema:
-    """Run the real modality detection over a frame, as `fit()` does."""
-    return detect_feature_modalities(
-        X=X.to_numpy(dtype=object),
-        feature_names=list(X.columns),
-        provided_categorical_indices=declared,
-        min_samples_for_inference=100,
-        max_unique_for_category=30,
-        min_unique_for_numerical=4,
-    )
-
-
-class TestWarnIfTextFeaturesOnRealFrames:
-    """`detect_feature_modalities` + `warn_if_text_features` over real columns.
-
-    Covers which columns actually reach the warning, which the schema-level tests
-    above cannot: they build schemas by hand.
-    """
-
-    n_rows = 200
-
-    def _numeric_column(self) -> np.ndarray:
-        return np.random.default_rng(0).normal(size=self.n_rows)
-
-    def test__free_text_column__warns(self) -> None:
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
-            }
-        )
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(_schema_for_frame(X))
-
-        assert "'review'" in str(record[0].message)
-
-    def test__ordinary_columns__do_not_warn(self) -> None:
-        """Neither low-cardinality strings nor fully numeric strings are TEXT.
-
-        The former are ordinary categoricals and the latter are
-        detected NUMERICAL.
-        """
-        values = np.random.default_rng(1).normal(size=200)
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "color": ["red", "green", "blue"] * 66 + ["red", "red"],
-                "as_str": [str(round(float(v), 4)) for v in values],
-            }
-        )
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warn_if_text_features(_schema_for_frame(X))
-
-    def test__numeric_column_with_one_stray_token__warns(self) -> None:
-        """A single non-numeric token flips a whole numeric column to TEXT.
-
-        `_is_numeric_pandas_series` requires *every* value to be coercible, so one
-        stray "N/A" makes the column ordinal-encoded as a near-unique categorical.
-        Warning here is the point of the feature: the fix is a numeric dtype.
-        """
-        values = np.random.default_rng(2).normal(size=200)
-        mostly_numeric = [str(round(float(v), 4)) for v in values]
-        mostly_numeric[7] = "N/A"
-        X = pd.DataFrame(
-            {"num": self._numeric_column(), "mostly_numeric": mostly_numeric}
-        )
-
-        with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(_schema_for_frame(X))
-
-        assert "'mostly_numeric'" in str(record[0].message)
-
-    def test__declared_categorical_columns__do_not_warn(self) -> None:
-        """Declaring a column categorical states intent, so it must stay quiet.
-
-        Covers both a plain string column and an explicit pandas `category`
-        dtype, each above the cardinality threshold.
-        """
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "sku": [f"sku_{i % 60}" for i in range(200)],
-                "sku_cat": pd.Series(
-                    [f"sku_{i % 60}" for i in range(200)], dtype="category"
-                ),
-            }
-        )
-        declared = [1, 2]
-
-        # The columns really are detected as TEXT; only the declaration silences
-        # the warning.
-        schema = _schema_for_frame(X, declared)
-        assert schema.indices_for(FeatureModality.TEXT) == declared
-        with pytest.warns(UserWarning, match="look like free text"):
-            warn_if_text_features(_schema_for_frame(X))
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            warn_if_text_features(schema, declared_categorical_indices=declared)
