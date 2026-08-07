@@ -1311,7 +1311,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return logit_to_output(output_type=output_type)
 
-    def predict_batched(  # noqa: C901
+    def predict_batched(  # noqa: C901, PLR0912
         self,
         X_train_list: list[XType],
         y_train_list: list[YType],
@@ -1347,6 +1347,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, or the
                 training (or test) arrays do not all share one shape.
             TabPFNValidationError: If ``output_type`` or ``quantiles`` are invalid.
+            NotImplementedError: If ``inference_precision`` is ``torch.float64``,
+                which the fused forward does not support.
 
         Note:
             Constant-target datasets are answered analytically and take no part
@@ -1369,6 +1371,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         if len(X_train_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+
+        if self.inference_precision == torch.float64:
+            raise NotImplementedError(
+                "predict_batched does not support inference_precision=torch.float64; "
+                "the fused forward runs at float32. Use predict per dataset instead."
+            )
 
         if quantiles is None:
             quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]

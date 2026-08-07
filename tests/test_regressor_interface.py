@@ -1483,6 +1483,46 @@ def test__predict_batched__rejects_ragged() -> None:
         reg.predict_batched([X_a, X_b], [y_a, y_b], [X_a[:3], X_b[:3]])
 
 
+def test__predict_batched__rejects_float64_precision() -> None:
+    """float64 must raise rather than silently compute at float32.
+
+    The fused batch is built at float32 and predict_batched bypasses the
+    float64 assert in _iter_forward_executor, so without this guard a float64
+    request returns float32-precision numbers while claiming predict parity.
+    """
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float64
+    )
+    with pytest.raises(NotImplementedError, match=r"float64"):
+        reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
+def test__predict_batched__float64_inputs_match_per_dataset() -> None:
+    """float64 *arrays* stay supported; only float64 precision is rejected.
+
+    Real feature pipelines hand over float64 (np.asarray of a DataFrame, for
+    one), so this must behave exactly like the float32 case.
+    """
+    data = [_mk_reg_dataset(s) for s in range(2)]
+    data = [(X.astype(np.float64), y.astype(np.float64)) for X, y in data]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    kwargs = {
+        "n_estimators": 2,
+        "device": "cpu",
+        "random_state": 42,
+        "inference_precision": torch.float32,
+    }
+    batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(**kwargs)
+        ref.fit(X, y)
+        np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), rtol=1e-4)
+
+
 def test__predict_batched__rejects_bad_arguments() -> None:
     """Length, emptiness, output_type and quantile validation mirror predict."""
     X, y = _mk_reg_dataset(0, n=40)
