@@ -20,19 +20,36 @@ from pathlib import Path
 
 import pytest
 import torch
+from torch.torch_version import TorchVersion
 
 import tabpfn
 from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.interface import PerformanceOptions
 
-pytestmark = pytest.mark.skipif(
-    not torch._dynamo.is_dynamo_supported(),
-    reason="torch.compile (Dynamo) is not supported on this platform/Python",
-)
+# This test reads Dynamo's graph-break log, whose wording has changed over
+# torch releases (verified on 2.12 and 2.13). Older builds phrase it
+# differently, so the test would parse nothing and pass without checking
+# anything; skip them rather than pretend. Anyone working on compilation
+# runs a recent torch.
+_MIN_TORCH = "2.12"
+
+pytestmark = [
+    pytest.mark.skipif(
+        not torch._dynamo.is_dynamo_supported(),
+        reason="torch.compile (Dynamo) is not supported on this platform/Python",
+    ),
+    pytest.mark.skipif(
+        TorchVersion(torch.__version__) < TorchVersion(_MIN_TORCH),
+        reason=f"graph-break log format is only parsed for torch >= {_MIN_TORCH}",
+    ),
+]
 
 # A graph break is attributed to the innermost user frame of its traceback;
 # a break deeper in torch merely passes through tabpfn's frames.
 _USER_FRAME = re.compile(r'File "([^"]+)", line \d+, in (\w+)')
+
+# Header introducing one break's traceback.
+_BREAK_HEADER = "Graph break in user code"
 
 # torch's own SDPA-backend context manager is not traceable on every torch
 # build. It is torch's to fix, so breaks it causes are not tabpfn's fault.
@@ -119,8 +136,14 @@ def test__enable_torch_compile__no_graph_break_in_tabpfn_code(
     # A silent fall-back to eager would make the assertions below vacuous.
     assert torch._dynamo.utils.counters["frames"]["ok"] > 0, "nothing was compiled"
 
+    blocks = "\n".join(records).split(_BREAK_HEADER)[1:]
+    if torch._dynamo.utils.counters["graph_break"] and not blocks:
+        # Dynamo reported breaks but its log did not parse — the wording
+        # must have changed again. Skip rather than pass without checking.
+        pytest.skip("graph-break log format not recognised on this torch build")
+
     offenders = []
-    for block in "\n".join(records).split("Graph break in user code")[1:]:
+    for block in blocks:
         frames = _USER_FRAME.findall(block)
         if not frames or any(owner in block for owner in _TORCH_OWNED):
             continue
