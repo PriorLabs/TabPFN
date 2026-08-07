@@ -289,8 +289,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             interval checkpoints. When disabled, training runs all epochs and
             the last-epoch weights are kept (no best checkpoint is saved).
             Defaults to True.
-        early_stopping_patience: Number of epochs to wait for improvement before
-            early stopping. Defaults to 8.
+        early_stopping_patience: Number of validation checks to wait for
+            improvement before early stopping. Defaults to 8.
+        validation_frequency: Number of epochs between validation checks. A value
+            of 1 (default) validates after every epoch, preserving the existing
+            behavior. The initial evaluation of the unfine-tuned model still runs
+            whenever validation data is available. With a value greater than 1,
+            early_stopping_patience counts validation checks rather than epochs.
+            Must be a positive integer.
         min_delta: Minimum change in metric to be considered as an improvement.
             Defaults to 1e-4.
         grad_clip_value: Maximum norm for gradient clipping. If None, gradient
@@ -351,6 +357,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         random_state: int = 0,
         early_stopping: bool = True,
         early_stopping_patience: int = 8,
+        validation_frequency: int = 1,
         min_delta: float = 1e-4,
         grad_clip_value: float | None = 1.0,
         use_lr_scheduler: bool = True,
@@ -379,6 +386,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         self.random_state = random_state
         self.early_stopping = early_stopping
         self.early_stopping_patience = early_stopping_patience
+        self.validation_frequency = validation_frequency
         self.min_delta = min_delta
         self.grad_clip_value = grad_clip_value
         self.use_lr_scheduler = use_lr_scheduler
@@ -653,6 +661,10 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
         output_dir: Path | None = None,
     ) -> FinetunedTabPFNBase:
         """Internal implementation of fit that runs the finetuning loop."""
+        validation_frequency = self.validation_frequency
+        if validation_frequency < 1:
+            raise ValueError("validation_frequency must be positive")
+
         # --- DDP setup ---
         (
             using_ddp,
@@ -773,14 +785,27 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             X_val = y_val = None
 
         do_validation = X_val is not None
-        # Early stopping needs a validation metric to act on.
-        early_stopping_enabled = self.early_stopping and do_validation
-        if is_main_process and self.early_stopping and not do_validation:
-            logger.info(
-                "Validation is disabled (validation_split_ratio=%s); "
-                "early stopping is disabled as well.",
-                self.validation_split_ratio,
-            )
+        has_scheduled_validation = (
+            self.epochs // validation_frequency
+            > epoch_to_start_from // validation_frequency
+        )
+        # Early stopping requires a validation metric from the remaining run.
+        early_stopping_enabled = (
+            self.early_stopping and do_validation and has_scheduled_validation
+        )
+        if is_main_process and self.early_stopping and not early_stopping_enabled:
+            if not do_validation:
+                logger.info(
+                    "Validation is disabled (validation_split_ratio=%s); "
+                    "early stopping is disabled as well.",
+                    self.validation_split_ratio,
+                )
+            else:
+                logger.info(
+                    "validation_frequency=%d schedules no validation checks in "
+                    "the remaining epochs; early stopping is disabled.",
+                    validation_frequency,
+                )
 
         # Calculate the context size used during finetuning.
         n_finetune_ctx_plus_query_samples = min(
@@ -1078,7 +1103,12 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             )
 
             # --- Validation (rank 0 only), broadcast metric ---
-            if is_main_process and do_validation:
+            run_validation = do_validation and (epoch + 1) % validation_frequency == 0
+            # NaN means "no validation metric for this epoch". It is also the
+            # placeholder on non-main ranks, which receive rank 0's value from
+            # the broadcast below.
+            eval_result = EvalResult(primary=float("nan"))
+            if is_main_process and run_validation:
                 eval_result = self._evaluate_model(
                     validation_eval_config,
                     X_train,  # pyright: ignore[reportArgumentType]
@@ -1097,28 +1127,19 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 for k, v in eval_result.secondary.items():
                     epoch_log_metrics[f"val/{k}"] = v
                 _logger.log_epoch(epoch_log_metrics, step=global_step)
+            elif is_main_process and mean_train_loss is not None:
+                # No validation this epoch: log training progress only.
+                logger.info(
+                    "📊 Epoch %d | Train Loss: %.4f", epoch + 1, mean_train_loss
+                )
+                _logger.log_epoch(
+                    {"train/epoch": epoch, "train/mean_loss": mean_train_loss},
+                    step=global_step,
+                )
 
-                primary_metric = eval_result.primary
-            else:
-                primary_metric = self._get_initial_best_metric()
-                eval_result = EvalResult(primary=primary_metric)
-                if is_main_process and mean_train_loss is not None:
-                    # Validation disabled: log training progress only.
-                    logger.info(
-                        "📊 Epoch %d | Train Loss: %.4f", epoch + 1, mean_train_loss
-                    )
-                    _logger.log_epoch(
-                        {"train/epoch": epoch, "train/mean_loss": mean_train_loss},
-                        step=global_step,
-                    )
+            primary_metric = _ddp_broadcast_primary_metric(eval_result.primary)
 
-            primary_metric = _ddp_broadcast_primary_metric(primary_metric)
-
-            if (
-                output_dir is not None
-                and not np.isnan(primary_metric)
-                and (not using_ddp or is_main_process)
-            ):
+            if output_dir is not None and (not using_ddp or is_main_process):
                 save_interval_checkpoint = (
                     self.save_checkpoint_interval is not None
                     and (epoch + 1) % self.save_checkpoint_interval == 0
@@ -1127,12 +1148,14 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 # The "best model" concept only exists under early stopping
                 # (which requires validation): without it the last epoch is
                 # the result, so only interval checkpoints are saved.
-                is_best = early_stopping_enabled and self._is_improvement(
-                    primary_metric, best_metric
+                is_best = (
+                    early_stopping_enabled
+                    and not np.isnan(primary_metric)
+                    and self._is_improvement(primary_metric, best_metric)
                 )
 
                 if save_interval_checkpoint or is_best:
-                    if do_validation:
+                    if run_validation:
                         checkpoint_metrics = self._get_checkpoint_metrics(eval_result)
                     elif mean_train_loss is not None:
                         checkpoint_metrics = {"train_loss": mean_train_loss}
@@ -1160,7 +1183,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                     patience_counter += 1
                     if is_main_process:
                         logger.info(
-                            "⚠️  No improvement for %s epochs. Best %s: %.4f",
+                            "⚠️  No improvement for %s validation checks. Best %s: %.4f",
                             patience_counter,
                             self._metric_name,
                             best_metric,

@@ -639,6 +639,188 @@ def test__finetuned_tabpfn_classifier__no_improvement_restores_base_model(
     )
 
 
+@pytest.mark.parametrize("validation_frequency", [0, -1])
+def test__finetuned_tabpfn_classifier__validation_frequency_must_be_positive(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+    tmp_path: Path,
+    validation_frequency: int,
+) -> None:
+    """Reject a non-positive validation cadence before training starts."""
+    X, y = synthetic_data
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        validation_frequency=validation_frequency,
+    )
+
+    with pytest.raises(ValueError, match="validation_frequency must be positive"):
+        clf.fit(np.asarray(X), np.asarray(y), output_dir=tmp_path)
+
+
+def test__finetuned_tabpfn_classifier__validation_frequency_schedules_evaluation(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+    tmp_path: Path,
+) -> None:
+    """Validate on scheduled epochs while retaining interval checkpoints."""
+    X, y = synthetic_data
+    n_classes = len(np.unique(y))
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+
+    validation_calls = 0
+
+    def evaluate(*_args: Any, **_kwargs: Any) -> EvalResult:
+        nonlocal validation_calls
+        validation_calls += 1
+        return EvalResult(primary=0.5, secondary={"roc_auc": 0.5, "log_loss": 1.0})
+
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=4,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        validation_frequency=2,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=False,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        save_checkpoint_interval=1,
+        use_lr_scheduler=False,
+    )
+
+    with (
+        mock.patch.object(
+            TabPFNV3,
+            "forward",
+            autospec=True,
+            side_effect=create_mock_architecture_forward(n_classes=n_classes),
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            side_effect=evaluate,
+        ),
+    ):
+        clf.fit(X_train, y_train, output_dir=tmp_path)
+
+    # One baseline evaluation plus scheduled evaluations after epochs 2 and 4.
+    assert validation_calls == 3
+    assert not list(tmp_path.glob("*_best.pth"))
+
+    skipped_checkpoint = torch.load(
+        tmp_path / "checkpoint_70_1.pth", map_location="cpu", weights_only=False
+    )
+    scheduled_checkpoint = torch.load(
+        tmp_path / "checkpoint_70_2.pth", map_location="cpu", weights_only=False
+    )
+    assert np.isfinite(skipped_checkpoint["train_loss"])
+    assert "roc_auc" not in skipped_checkpoint
+    assert scheduled_checkpoint["roc_auc"] == 0.5
+
+
+def test__finetuned_tabpfn_classifier__validation_frequency_without_remaining_eval(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Disable early stopping when no scheduled validation can occur."""
+    X, y = synthetic_data
+    n_classes = len(np.unique(y))
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=2,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        validation_frequency=3,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=True,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+    )
+
+    caplog.set_level(logging.INFO, logger="tabpfn.finetuning.finetuned_base")
+    with (
+        mock.patch.object(
+            TabPFNV3,
+            "forward",
+            autospec=True,
+            side_effect=create_mock_architecture_forward(n_classes=n_classes),
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            return_value=EvalResult(primary=0.5),
+        ) as evaluate_model,
+    ):
+        clf.fit(X_train, y_train)
+
+    # The baseline still runs, but no epoch is a multiple of the frequency.
+    assert evaluate_model.call_count == 1
+    assert "early stopping is disabled" in caplog.text
+
+
+def test__finetuned_tabpfn_classifier__validation_frequency_counts_patience_checks(
+    synthetic_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Early-stopping patience advances only on scheduled validation checks."""
+    X, y = synthetic_data
+    n_classes = len(np.unique(y))
+    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.3, random_state=42)
+    X_train = np.asarray(X_train)
+    y_train = np.asarray(y_train)
+
+    clf = FinetunedTabPFNClassifier(
+        device="cpu",
+        epochs=4,
+        learning_rate=1e-4,
+        validation_split_ratio=0.2,
+        validation_frequency=2,
+        n_finetune_ctx_plus_query_samples=50,
+        finetune_ctx_query_split_ratio=0.1,
+        n_inference_subsample_samples=100,
+        random_state=42,
+        early_stopping=True,
+        early_stopping_patience=1,
+        n_estimators_finetune=1,
+        n_estimators_validation=1,
+        n_estimators_final_inference=1,
+        use_lr_scheduler=False,
+    )
+
+    with (
+        mock.patch.object(
+            TabPFNV3,
+            "forward",
+            autospec=True,
+            side_effect=create_mock_architecture_forward(n_classes=n_classes),
+        ),
+        mock.patch.object(
+            FinetunedTabPFNClassifier,
+            "_evaluate_model",
+            autospec=True,
+            return_value=EvalResult(primary=0.5),
+        ) as evaluate_model,
+    ):
+        clf.fit(X_train, y_train)
+
+    # The check after epoch 2 consumes patience and stops the run. Epoch 1 does not.
+    assert evaluate_model.call_count == 2
+
+
 @pytest.mark.parametrize(
     "estimator_cls", [FinetunedTabPFNClassifier, FinetunedTabPFNRegressor]
 )
