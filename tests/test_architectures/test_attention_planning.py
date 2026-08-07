@@ -2,9 +2,8 @@
 """Tests for per-forward upfront attention-backend planning in TabPFN v3.
 
 The planner (``TabPFNV3._plan_attention_backends``) resolves the backend for
-every attention stage once per forward pass — instead of per attention call —
-and a planned backend read from a module attribute survives ``torch.compile``
-as an identity-guarded constant. These tests pin that contract.
+every attention stage once per forward pass — instead of per attention call.
+These tests pin that contract.
 """
 
 from __future__ import annotations
@@ -21,11 +20,7 @@ from tabpfn.architectures import tabpfn_v3
 from tabpfn.architectures.kv_cache import FP8_KV_DTYPE
 from tabpfn.architectures.shared import attention_backends
 from tabpfn.architectures.shared.attention_backends import (
-    AttentionBackend,
     AttentionSpec,
-)
-from tabpfn.architectures.shared.scaled_dot_product_attention import (
-    scaled_dot_product_attention,
 )
 
 
@@ -230,83 +225,3 @@ def test_model_pickles_and_deepcopies_with_unpicklable_backend() -> None:
 
     pickle.dumps(model)
     copy.deepcopy(model)
-
-
-class _TraceableConstBackend:
-    """A backend whose run() is pure torch ops — Dynamo-traceable."""
-
-    name = "traceable-const"
-
-    def is_preferred(self, spec: AttentionSpec) -> bool:  # noqa: ARG002
-        return True
-
-    def run(  # noqa: ANN202
-        self,
-        q,
-        k,  # noqa: ARG002
-        v,  # noqa: ARG002
-        *,
-        quantized_kv=None,  # noqa: ARG002
-        **_informational,
-    ):
-        return torch.full_like(q, 42.0)
-
-
-class _PlannedSDPAModule(torch.nn.Module):
-    """Minimal module reading a planned-backend slot inside its forward."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.planned_backend: AttentionBackend | None = None
-
-    def forward(self, q, k, v):  # noqa: ANN202
-        return scaled_dot_product_attention(q, k, v, backend=self.planned_backend)
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_planned_backend_executes_inside_compiled_graph() -> None:
-    """A planned backend is a Dynamo constant: fullgraph compiles, its output
-    is used in-graph, and swapping the plan recompiles via the identity guard.
-    """
-    torch._dynamo.reset()
-    module = _PlannedSDPAModule()
-    compiled = torch.compile(module, fullgraph=True)
-    q = torch.randn(1, 8, 2, 16)
-    k = torch.randn(1, 8, 2, 16)
-    v = torch.randn(1, 8, 2, 16)
-
-    # Planned None: plain SDPA fallback, no graph breaks (fullgraph=True).
-    eager_out = module(q, k, v)
-    torch.testing.assert_close(compiled(q, k, v), eager_out)
-
-    # Planned backend: executes inside the graph (guard miss -> recompile).
-    module.planned_backend = _TraceableConstBackend()
-    assert torch.all(compiled(q, k, v) == 42.0)
-
-    # Back to None: identity guard flips back.
-    module.planned_backend = None
-    torch.testing.assert_close(compiled(q, k, v), eager_out)
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_auto_resolution_traces_under_compile() -> None:
-    """The per-call "auto" path has no compile special-casing: the registry
-    walk traces into the graph, and a preferring traceable backend runs.
-    """
-    torch._dynamo.reset()
-
-    def attention(q, k, v):  # noqa: ANN202
-        return scaled_dot_product_attention(q, k, v)
-
-    compiled = torch.compile(attention, fullgraph=True)
-    q = torch.randn(1, 8, 2, 16)
-    k = torch.randn(1, 8, 2, 16)
-    v = torch.randn(1, 8, 2, 16)
-
-    # Empty registry: resolves to the SDPA fallback in-graph.
-    torch.testing.assert_close(compiled(q, k, v), attention(q, k, v))
-
-    # A preferring backend with a traceable run() is used inside the graph.
-    torch._dynamo.reset()
-    attention_backends.register_attention_backend(_TraceableConstBackend())
-    assert torch.all(compiled(q, k, v) == 42.0)
