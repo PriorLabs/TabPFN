@@ -13,11 +13,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
 from tabpfn.preprocessing.clean import process_text_na_dataframe
-from tabpfn.preprocessing.datamodel import (
-    Feature,
-    FeatureModality,
-    FeatureSchema,
-)
+from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.validation import ensure_compatible_fit_inputs
 
