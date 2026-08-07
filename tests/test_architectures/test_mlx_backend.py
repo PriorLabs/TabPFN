@@ -13,7 +13,7 @@ import pytest
 import torch
 
 import tabpfn.architectures.shared.scaled_dot_product_attention as _sdpa_mod
-from tabpfn.architectures.shared import mlx_backend
+from tabpfn.architectures.shared import mlx_backend, torch_mps_backend
 from tabpfn.architectures.shared.attention_backends import AttentionSpec
 from tabpfn.architectures.shared.mlx_backend import (
     MLX_BACKEND,
@@ -251,10 +251,17 @@ def test__flash_attention_mlx_gqa() -> None:
 
 
 @_skip_unless_mlx_and_mps
+@torch.no_grad()
 def test__dispatch_routes_through_mlx_when_preferred(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When MLX is preferred, scaled_dot_product_attention routes through it."""
+    # no_grad (decorator): MLX is forward-only, so its gate declines whenever
+    # grad mode is on — as at a real predict, which runs under
+    # torch.inference_mode. Disable the torch-native MPS backend (consulted
+    # before MLX on torch builds that have it) and drop MLX's seq-length
+    # threshold — the test sequences are short.
+    monkeypatch.setattr(torch_mps_backend, "is_torch_mps_preferred", lambda *_: False)
     monkeypatch.setattr(mlx_backend, "_MLX_MIN_KV_SEQLEN", 0)
 
     # Use (B, S, H, D) tensors as expected by scaled_dot_product_attention.
@@ -269,9 +276,7 @@ def test__dispatch_routes_through_mlx_when_preferred(
 
 
 @_skip_unless_mlx_and_mps
-@pytest.mark.skipif(
-    torch.__version__ >= "2.13.dev20260510", reason="torch 2.13 uses SDPA"
-)
+@torch.no_grad()
 @pytest.mark.parametrize(
     ("n_q_heads", "n_kv_heads"),
     [(4, 4), (8, 2)],
@@ -283,6 +288,8 @@ def test__dispatch_mlx_matches_sdpa_reference(
     n_kv_heads: int,
 ) -> None:
     """Output matches SDPA reference and flash_attention_mlx is called."""
+    # Same setup rationale as test__dispatch_routes_through_mlx_when_preferred.
+    monkeypatch.setattr(torch_mps_backend, "is_torch_mps_preferred", lambda *_: False)
     monkeypatch.setattr(mlx_backend, "_MLX_MIN_KV_SEQLEN", 0)
 
     called: list[bool] = []
