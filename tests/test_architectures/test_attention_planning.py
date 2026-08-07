@@ -163,9 +163,38 @@ def test_planner_cached_predict_spec_carries_quantized_dtype() -> None:
     model(x, y, kv_cache=cache)
 
     (icl_spec,) = [s for s in backend.specs if s.quantized_kv_dtype is not None]
-    assert icl_spec.seq_len_q == 20  # every input row queries the cache
+    # x still carries the train rows here (no x_is_test_only), but the
+    # stages drop them, so only the 10 test rows reach attention.
+    assert icl_spec.seq_len_q == 10
     assert icl_spec.seq_len_kv == 10  # cached train rows
     assert icl_spec.quantized_kv_dtype == FP8_KV_DTYPE
+
+
+@pytest.mark.usefixtures("registry_sandbox")
+@torch.no_grad()
+def test_planner_matches_both_cache_path_spellings() -> None:
+    """Both ways of calling the cache path must plan the same specs.
+
+    A caller may pass test rows only (``x_is_test_only``) or the full
+    tensor, in which case the stages drop the train rows themselves — the
+    attention calls are identical either way, so the plan must be too.
+    """
+    backend = _SpecRecordingBackend()  # observe only
+    attention_backends.register_attention_backend(backend)
+    model = _get_model()
+    x, y = _fit_inputs()
+    num_train = y.shape[0]
+    _, cache = model(x, y, return_kv_cache=True)
+
+    backend.specs.clear()
+    model(x, y, kv_cache=cache)
+    full_tensor_specs = list(backend.specs)
+
+    backend.specs.clear()
+    model(x[num_train:], y, kv_cache=cache, x_is_test_only=True)
+    test_only_specs = list(backend.specs)
+
+    assert full_tensor_specs == test_only_specs
 
 
 @pytest.mark.usefixtures("registry_sandbox")
