@@ -989,7 +989,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             NotImplementedError: If ``balance_probabilities`` or ``tuning_config``
                 is configured on the estimator — their state is per-dataset and
                 cannot be applied correctly across a shared batch. Score those
-                datasets individually with ``predict_proba``.
+                datasets individually with ``predict_proba``. Also raised for
+                ``inference_precision=torch.float64``, which the fused forward
+                does not support.
         """
         # Both imported here rather than at module scope to avoid circular imports:
         # architectures.interface imported at runtime from classifier is circular
@@ -1024,6 +1026,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "predict_proba_batched does not support tuning_config (tuned "
                 "decision thresholds / temperature calibration); score datasets "
                 "individually with predict_proba."
+            )
+        if self.inference_precision == torch.float64:
+            raise NotImplementedError(
+                "predict_proba_batched does not support "
+                "inference_precision=torch.float64; the fused forward runs at "
+                "float32. Use predict_proba per dataset instead."
             )
 
         # All datasets are scored with a single, shared n_classes_ (one fused
