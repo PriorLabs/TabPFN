@@ -162,6 +162,9 @@ cython_debug/
 # WandB
 wandb
 
+# scripts/bench_clean_data.py baselines (multi-GB output dumps)
+bench_out/
+
 .DS_Store
 ./src/.DS_Store
 
