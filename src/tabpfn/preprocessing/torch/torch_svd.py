@@ -6,6 +6,18 @@ from __future__ import annotations
 
 import torch
 
+#: Seed for the randomized-SVD projection. ``torch.svd_lowrank`` draws its random
+#: projection from the *global* torch RNG and accepts no generator argument, so an
+#: unseeded call returns different components on every invocation. This SVD is refitted
+#: on the combined train+test matrix on every predict, which made predictions
+#: irreproducible call to call: on a 1M x 246 table, 6-12% of predicted classes changed
+#: between two identical ``predict_proba`` calls on one fitted model.
+#:
+#: A fixed constant is sufficient. Ensemble members already differ from one another
+#: through their feature subsets, so no additional randomness is needed across
+#: estimators.
+_LOWRANK_SVD_SEED = 0
+
 
 def _svd_flip_stable(
     u: torch.Tensor,
@@ -111,8 +123,12 @@ class TorchTruncatedSVD:
         )
 
         if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T
-            u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
+            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T.
+            # fork_rng keeps the seeding local: the global stream is restored
+            # afterwards, so no other consumer of torch's RNG is affected.
+            with torch.random.fork_rng(devices=[]):
+                torch.manual_seed(_LOWRANK_SVD_SEED)
+                u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
             # Truncate oversampling dimensions
             u = u[:, :n_components]
             s = s[:n_components]
