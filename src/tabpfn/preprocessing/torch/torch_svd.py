@@ -111,10 +111,12 @@ class TorchTruncatedSVD:
         )
 
         if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T.
-            # fork_rng keeps the seeding local: the global stream is restored
-            # afterwards, so no other consumer of torch's RNG is affected.
-            with torch.random.fork_rng(devices=[]):
+            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T. It draws a
+            # random projection from the global RNG and takes no generator, so an
+            # unseeded call returns different components every time. Seed it, and fork
+            # every device so the caller's streams are restored on exit
+            # (torch.manual_seed reseeds CPU *and* all CUDA devices).
+            with torch.random.fork_rng(devices=range(torch.cuda.device_count())):
                 torch.manual_seed(0)
                 u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
             # Truncate oversampling dimensions

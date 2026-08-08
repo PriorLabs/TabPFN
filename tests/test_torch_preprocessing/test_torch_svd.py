@@ -694,3 +694,14 @@ def test__torch_truncated_svd__fit_is_deterministic():
     second = svd.fit(x)
 
     assert torch.equal(first["components"], second["components"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__torch_truncated_svd__fit_leaves_cuda_rng_untouched():
+    """Seeding must not leak: CUDA RNG state must survive the call unchanged."""
+    x = torch.randn(5_000, 250, generator=torch.Generator().manual_seed(0)).cuda()
+    before = torch.cuda.get_rng_state()
+
+    TorchTruncatedSVD(n_components=8).fit(x)
+
+    assert torch.equal(before, torch.cuda.get_rng_state())
