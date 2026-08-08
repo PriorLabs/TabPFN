@@ -111,13 +111,21 @@ class TorchTruncatedSVD:
         )
 
         if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T. It draws a
-            # random projection from the global RNG and takes no generator, so an
-            # unseeded call returns different components every time. Seed it, and fork
-            # every device so the caller's streams are restored on exit
-            # (torch.manual_seed reseeds CPU *and* all CUDA devices).
-            with torch.random.fork_rng(devices=range(torch.cuda.device_count())):
-                torch.manual_seed(0)
+            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T. It draws its
+            # projection from the default generator of x_filled.device and takes no
+            # generator argument, so an unseeded call returns different components
+            # every time. Fork and seed only that device's generator: torch.manual_seed
+            # would also reseed CUDA/MPS/XPU, which a CPU-only fork_rng does not
+            # restore, and forking every device would initialise a context on each.
+            device = x_filled.device
+            fork_devices = [] if device.type == "cpu" else [device]
+            with torch.random.fork_rng(devices=fork_devices, device_type=device.type):
+                if device.type == "cpu":
+                    torch.default_generator.manual_seed(0)
+                else:
+                    # Seeding is per *current* device, so make it the right one.
+                    with getattr(torch, device.type).device(device):
+                        getattr(torch, device.type).manual_seed(0)
                 u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
             # Truncate oversampling dimensions
             u = u[:, :n_components]
