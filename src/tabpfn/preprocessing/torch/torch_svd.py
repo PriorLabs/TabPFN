@@ -4,7 +4,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import torch
+
+from tabpfn.utils import infer_random_state
+
+if TYPE_CHECKING:
+    import numpy as np
 
 
 def _svd_flip_stable(
@@ -50,13 +57,21 @@ class TorchTruncatedSVD:
     If centering is needed, apply it before calling fit.
     """
 
-    def __init__(self, n_components: int) -> None:
+    def __init__(
+        self,
+        n_components: int,
+        random_state: int | np.random.Generator | None = None,
+    ) -> None:
         """Initialize the truncated SVD.
 
         Args:
             n_components: Number of components to keep.
+            random_state: Seeds the random projection drawn by the randomized
+                path. As in sklearn's ``TruncatedSVD``, ``None`` means a fresh
+                projection on every fit; the exact path ignores it.
         """
         self.n_components = n_components
+        self.random_state = random_state
 
     def fit(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
         """Compute the truncated SVD on the training data.
@@ -111,8 +126,25 @@ class TorchTruncatedSVD:
         )
 
         if use_lowrank:
-            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T
-            u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
+            # torch.svd_lowrank returns (U, S, V) with A ≈ U diag(S) V^T. It draws its
+            # projection from the default generator of x_filled.device and takes no
+            # generator argument, so the only way to control it is to seed that
+            # generator. Do so inside a fork, which restores the caller's state on
+            # exit: seeding is a side effect on process-global state that callers own.
+            # Fork only the tensor's own device -- torch.manual_seed would also reseed
+            # CUDA/MPS/XPU, which a CPU-only fork_rng does not restore, and forking
+            # every device would initialise a context on each.
+            static_seed, _ = infer_random_state(self.random_state)
+            device = x_filled.device
+            fork_devices = [] if device.type == "cpu" else [device]
+            with torch.random.fork_rng(devices=fork_devices, device_type=device.type):
+                if device.type == "cpu":
+                    torch.default_generator.manual_seed(static_seed)
+                else:
+                    # Seeding is per *current* device, so make it the right one.
+                    with getattr(torch, device.type).device(device):
+                        getattr(torch, device.type).manual_seed(static_seed)
+                u, s, v = torch.svd_lowrank(x_filled, q=q, niter=2)
             # Truncate oversampling dimensions
             u = u[:, :n_components]
             s = s[:n_components]

@@ -370,6 +370,7 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
     def __init__(
         self,
         global_transformer_name: Literal["svd", "svd_quarter_components"] = "svd",
+        random_state: int | np.random.Generator | None = None,
     ) -> None:
         """Initialize the SVD features step.
 
@@ -377,9 +378,12 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
             global_transformer_name: Name of the SVD variant. The number of
                 components is computed inside ``_fit`` via
                 :func:`get_svd_n_components`, matching the CPU pipeline.
+            random_state: Seeds the SVD's random projection, as in the CPU
+                :class:`AddSVDFeaturesStep`.
         """
         super().__init__()
         self.global_transformer_name = global_transformer_name
+        self.random_state = random_state
         self._scaler = TorchSafeStandardScaler()
         self._svd: TorchTruncatedSVD | None = None
 
@@ -411,7 +415,11 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
             n_features=num_features,
         )
 
-        self._svd = TorchTruncatedSVD(n_components=effective_n_components)
+        static_seed, _ = infer_random_state(self.random_state)
+        self._svd = TorchTruncatedSVD(
+            n_components=effective_n_components,
+            random_state=static_seed,
+        )
 
         # Fit scaler on training data (flatten batch dimension for fitting)
         # Shape: [num_train_rows, batch_size, num_cols] -> flattened

@@ -677,3 +677,31 @@ def test__add_svd_features__single_feature_is_noop_like_cpu():
     assert cpu_step.is_no_op
     assert cpu_result.X.shape == X_np.shape
     assert cpu_step.num_added_features(40, schema) == 0
+
+
+def test__torch_truncated_svd__random_state_controls_the_projection():
+    """``random_state`` must fix the randomized projection, and different seeds vary it.
+
+    ``torch.svd_lowrank`` draws its projection from the global torch RNG, so an
+    unseeded call returns different components each time. This shape takes that branch
+    (>1M cells, and min(n, f) >= 2 * (n_components + 10)); smaller inputs use the exact
+    path, which is deterministic anyway.
+    """
+    x = torch.randn(5_000, 250, generator=torch.Generator().manual_seed(0))
+
+    same = [TorchTruncatedSVD(n_components=8, random_state=0).fit(x) for _ in range(2)]
+    other = TorchTruncatedSVD(n_components=8, random_state=1).fit(x)
+
+    assert torch.equal(same[0]["components"], same[1]["components"])
+    assert not torch.equal(same[0]["components"], other["components"])
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test__torch_truncated_svd__fit_leaves_cuda_rng_untouched():
+    """Seeding must not leak: CUDA RNG state must survive the call unchanged."""
+    x = torch.randn(5_000, 250, generator=torch.Generator().manual_seed(0)).cuda()
+    before = torch.cuda.get_rng_state()
+
+    TorchTruncatedSVD(n_components=8, random_state=0).fit(x)
+
+    assert torch.equal(before, torch.cuda.get_rng_state())
