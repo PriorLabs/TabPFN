@@ -57,6 +57,7 @@ import json
 import pickle
 import platform
 import resource
+import statistics
 import sys
 import threading
 import time
@@ -425,13 +426,23 @@ def measure_time(
 
 
 def timing_as_dict(measurement: Measurement, warmup_calls: int) -> dict[str, Any]:
-    """JSON-serialisable timing stats. `median_s` is the gated number."""
+    """JSON-serialisable timing stats. `median_s` is the gated number.
+
+    The dispersion fields are recorded so a gate result can be read against the
+    noise it sits in: a regression inside `spread_pct` of the run that recorded it
+    says nothing. Within one process the repeats are typically tight (well under
+    1%); the drift that matters is between runs, which no number of repeats removes
+    -- that is what `--tolerance` is for.
+    """
     times = sorted(measurement.times)
+    median = measurement.median
     return {
-        "median_s": measurement.median,
+        "median_s": median,
         "mean_s": measurement.mean,
         "min_s": times[0],
         "max_s": times[-1],
+        "stdev_s": statistics.stdev(times) if len(times) > 1 else 0.0,
+        "spread_pct": (times[-1] - times[0]) / median * 100 if median else 0.0,
         "repeats": len(times),
         "warmup_calls": warmup_calls,
         "raw_times_s": list(measurement.times),
@@ -851,7 +862,9 @@ def main(args: argparse.Namespace) -> None:
         print(
             f"\nWall time: median {timing['median_s']:.3f} s over "
             f"{timing['repeats']} repeats after {args.warmup_calls} warmup "
-            f"(min {timing['min_s']:.3f} s, max {timing['max_s']:.3f} s)"
+            f"(min {timing['min_s']:.3f} s, max {timing['max_s']:.3f} s, "
+            f"spread {timing['spread_pct']:.1f}%, "
+            f"stdev {timing['stdev_s'] * 1000:.1f} ms)"
         )
 
         if recorded is not None:
@@ -872,7 +885,10 @@ def main(args: argparse.Namespace) -> None:
                     "schema_version": SCHEMA_VERSION,
                     "input": {**spec, "fingerprint": input_fingerprint},
                     "environment": environment,
-                    "config": {"sample_interval_ms": args.sample_interval_ms},
+                    "config": {
+                        "sample_interval_ms": args.sample_interval_ms,
+                        "tolerance": args.tolerance,
+                    },
                     "memory": memory.as_dict(),
                     "timing": timing,
                 },
@@ -933,8 +949,10 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timing-repeats",
         type=int,
-        default=3,
-        help="Timed calls. The median is the gated number.",
+        default=9,
+        help="Timed calls. The median is the gated number; more of them make it "
+        "harder for one slow call to bias a run, and `spread_pct` in the metrics "
+        "records how tight they were.",
     )
     parser.add_argument(
         "--warmup-calls",
