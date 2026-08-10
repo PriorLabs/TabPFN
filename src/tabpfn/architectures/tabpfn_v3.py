@@ -2087,214 +2087,162 @@ class TabPFNV3(Architecture):
         device: torch.device,
         kv_cache: TabPFNV3Cache | None,
     ) -> None:
-        """Resolve the attention backend for every stage of this forward pass.
+        """Resolve the attention backend of every stage for this forward pass.
 
-        Runs once per forward, before any layer: all per-stage sequence
-        lengths follow from the input shapes, so each stage's backend is
-        decided upfront and written to its attention modules'
-        ``planned_backend`` slots (``None`` = standard SDPA path).
-        ``num_rows`` is the number of rows the stages will see — on the
-        cache path that is the test rows alone. Sequence
-        lengths and batch sizes of chunk-dependent stages are upper bounds
-        (in-forward chunking only shrinks them). The slots are restored to
-        ``"auto"`` by :meth:`_reset_attention_plan` when the forward ends.
+        Runs once per forward, before any layer: every per-stage sequence
+        length follows from the input shapes, so each attention module's
+        backend is decided here and stored in its ``planned_backend`` slot
+        (``None`` = the standard SDPA path); :meth:`_reset_attention_plan`
+        clears them when the forward ends. ``num_rows`` is the number of rows
+        the stages will see — on the cache path, the test rows alone. The
+        sequence lengths and batch sizes of chunk-dependent stages are upper
+        bounds: in-forward chunking only shrinks them.
         """
         dtype = effective_attention_dtype(device, self.x_embed.weight.dtype)
         is_grad_enabled = torch.is_grad_enabled()
+        resolved: dict[AttentionSpec, AttentionBackend | None] = {}
+        # For the debug log: the modules' own paths, so no stage names.
+        paths = (
+            {module: path for path, module in self.named_modules()}
+            if _logger.isEnabledFor(_logging.DEBUG)
+            else {}
+        )
 
-        def spec(
+        def plan(
+            attention: nn.Module,
             *,
             seq_len_q: int | None,
             seq_len_kv: int | None,
-            num_heads: int,
-            num_kv_heads: int,
-            head_dim: int,
             batch: int | None,
+            num_kv_heads: int | None = None,
             quantized_kv_dtype: torch.dtype | None = None,
-        ) -> AttentionSpec:
-            return AttentionSpec(
+            test_heads: bool = False,
+        ) -> None:
+            """Plan one call; the head geometry comes from *attention* itself.
+
+            Resolutions are memoized, so the identical layers of a stage cost
+            one registry consult between them.
+            """
+            spec = AttentionSpec(
                 seq_len_q=seq_len_q,
                 seq_len_kv=seq_len_kv,
-                num_heads=num_heads,
-                num_kv_heads=num_kv_heads,
-                head_dim=head_dim,
+                num_heads=attention.num_heads,
+                num_kv_heads=num_kv_heads
+                or getattr(attention, "num_kv_heads", attention.num_heads),
+                head_dim=attention.head_dim,
                 dtype=dtype,
                 device=device,
                 batch_size=batch,
                 quantized_kv_dtype=quantized_kv_dtype,
                 is_grad_enabled=is_grad_enabled,
             )
+            if spec not in resolved:
+                resolved[spec] = resolve_attention_backend(spec)
+                if paths:  # one line per distinct call shape, not per module
+                    backend = resolved[spec]
+                    _logger.debug(
+                        "attention plan: %s%s q=%s kv=%s -> %s",
+                        paths[attention],
+                        "[test]" if test_heads else "",
+                        seq_len_q,
+                        seq_len_kv,
+                        "sdpa" if backend is None else backend.name,
+                    )
+            slot = "planned_backend_test" if test_heads else "planned_backend"
+            setattr(attention, slot, resolved[spec])
 
-        # ---- Stage 1: feature-distribution embedder (induced attention) ----
-        dist_blocks = [
-            cast("InducedSelfAttentionBlock", b)
-            for b in self.feature_distribution_embedder.layers
-        ]
-        if dist_blocks:
-            attn1 = dist_blocks[0].cross_attn_block1.attn
-            inducing_backend = resolve_attention_backend(
-                spec(
-                    seq_len_q=dist_blocks[0].num_inducing_points,
-                    # Upper bound: the kv is the train rows of the current
-                    # row/col chunk.
-                    seq_len_kv=num_train,
-                    num_heads=attn1.num_heads,
-                    num_kv_heads=attn1.num_heads,
-                    head_dim=attn1.head_dim,
-                    batch=batch_size * num_cols,
-                )
+        # Distribution embedder: the inducing points read the train rows,
+        # then every row reads the inducing points. Columns fold into the
+        # batch, and the row/column chunking bounds the row counts.
+        folded_cols = batch_size * num_cols
+        for layer in self.feature_distribution_embedder.layers:
+            block = cast("InducedSelfAttentionBlock", layer)
+            plan(
+                block.cross_attn_block1.attn,
+                seq_len_q=block.num_inducing_points,
+                seq_len_kv=num_train,
+                batch=folded_cols,
             )
-            attn2 = dist_blocks[0].cross_attn_block2.attn
-            rows_backend = resolve_attention_backend(
-                spec(
-                    # Upper bound: the queries are the rows of the current
-                    # row chunk.
+            plan(
+                block.cross_attn_block2.attn,
+                seq_len_q=num_rows,
+                seq_len_kv=block.num_inducing_points,
+                batch=folded_cols,
+            )
+
+        # Column aggregator: self-attention over CLS tokens + features, the
+        # last block doing the CLS-only readout. Rows fold into the batch.
+        num_cls = self.column_aggregator.num_cls_tokens
+        seq_len = num_cls + num_cols
+        folded_rows = batch_size * num_rows
+        agg = [cast("TransformerBlock", b) for b in self.column_aggregator.blocks]
+        for block in agg[:-1]:
+            plan(
+                block.attention,
+                seq_len_q=seq_len,
+                seq_len_kv=seq_len,
+                batch=folded_rows,
+            )
+        plan(
+            agg[-1].attention, seq_len_q=num_cls, seq_len_kv=seq_len, batch=folded_rows
+        )
+
+        # ICL: every row attends to the train rows, or to the cached keys.
+        cached = kv_cache is not None and not kv_cache.is_empty()
+        num_keys = kv_cache.train_shape[1] if cached else num_train
+        quantized_kv_dtype = None
+        if cached:
+            assert kv_cache is not None
+            entry = next(iter(kv_cache.kv.values()))
+            if isinstance(entry, QuantizedKVCacheEntry) and entry.key is not None:
+                quantized_kv_dtype = entry.key.dtype
+        for icl_block in self.icl_blocks:
+            icl = cast("ICLTransformerBlock", icl_block).icl_attention
+            icl.planned_backend_test = None
+            if cached:
+                plan(
+                    icl,
                     seq_len_q=num_rows,
-                    seq_len_kv=dist_blocks[0].num_inducing_points,
-                    num_heads=attn2.num_heads,
-                    num_kv_heads=attn2.num_heads,
-                    head_dim=attn2.head_dim,
-                    batch=batch_size * num_cols,
-                )
-            )
-            for block in dist_blocks:
-                block.cross_attn_block1.attn.planned_backend = inducing_backend
-                block.cross_attn_block2.attn.planned_backend = rows_backend
-
-        # ---- Stage 2: column aggregator (cross-feature attention) ----
-        agg_blocks = [
-            cast("TransformerBlock", b) for b in self.column_aggregator.blocks
-        ]
-        if agg_blocks:
-            num_cls = self.column_aggregator.num_cls_tokens
-            agg_attn = agg_blocks[0].attention
-            feature_backend = resolve_attention_backend(
-                spec(
-                    seq_len_q=num_cls + num_cols,
-                    seq_len_kv=num_cls + num_cols,
-                    num_heads=agg_attn.num_heads,
-                    num_kv_heads=agg_attn.num_heads,
-                    head_dim=agg_attn.head_dim,
-                    batch=batch_size * num_rows,
-                )
-            )
-            for block in agg_blocks[:-1]:
-                block.attention.planned_backend = feature_backend
-            # The last block only runs the CLS readout (forward_cross).
-            readout_attn = agg_blocks[-1].attention
-            agg_blocks[-1].attention.planned_backend = resolve_attention_backend(
-                spec(
-                    seq_len_q=num_cls,
-                    seq_len_kv=num_cls + num_cols,
-                    num_heads=readout_attn.num_heads,
-                    num_kv_heads=readout_attn.num_heads,
-                    head_dim=readout_attn.head_dim,
-                    batch=batch_size * num_rows,
-                )
-            )
-
-        # ---- Stage 3: ICL attention ----
-        icl_attns = [
-            cast("ICLTransformerBlock", b).icl_attention for b in self.icl_blocks
-        ]
-        cache_is_populated = kv_cache is not None and not kv_cache.is_empty()
-        if icl_attns:
-            icl = icl_attns[0]
-            icl_test_backend: AttentionBackend | None = None
-            if cache_is_populated:
-                # Cached predict: every input row queries the cached train KV
-                # (which stores only the test KV heads when the GQA split is
-                # configured).
-                assert kv_cache is not None
-                entry = next(iter(kv_cache.kv.values()))
-                quantized_dtype: torch.dtype | None = None
-                if isinstance(entry, QuantizedKVCacheEntry) and entry.key is not None:
-                    quantized_dtype = entry.key.dtype
-                icl_spec = spec(
-                    seq_len_q=num_rows,
-                    seq_len_kv=kv_cache.train_shape[1],
-                    num_heads=icl.num_heads,
-                    num_kv_heads=(
-                        icl.num_kv_heads_test
-                        if icl.num_kv_heads_test is not None
-                        else icl.num_kv_heads
-                    ),
-                    head_dim=icl.head_dim,
+                    seq_len_kv=num_keys,
                     batch=batch_size,
-                    quantized_kv_dtype=quantized_dtype,
+                    # The cache stores only the test KV heads when the split
+                    # is configured (sliced at cache-build time).
+                    num_kv_heads=icl.num_kv_heads_test or icl.num_kv_heads,
+                    quantized_kv_dtype=quantized_kv_dtype,
                 )
             elif icl.num_kv_heads_test is not None and num_train < num_rows:
-                # GQA split: train rows use the full KV heads, test rows the
-                # reduced set — two calls with different shapes per layer.
-                icl_spec = spec(
-                    seq_len_q=num_train,
+                # GQA split: train rows at the full KV heads, test rows at
+                # the reduced set — two calls with different shapes.
+                plan(icl, seq_len_q=num_train, seq_len_kv=num_train, batch=batch_size)
+                plan(
+                    icl,
+                    seq_len_q=num_rows - num_train,
                     seq_len_kv=num_train,
-                    num_heads=icl.num_heads,
-                    num_kv_heads=icl.num_kv_heads,
-                    head_dim=icl.head_dim,
                     batch=batch_size,
-                )
-                icl_test_backend = resolve_attention_backend(
-                    spec(
-                        seq_len_q=num_rows - num_train,
-                        seq_len_kv=num_train,
-                        num_heads=icl.num_heads,
-                        num_kv_heads=icl.num_kv_heads_test,
-                        head_dim=icl.head_dim,
-                        batch=batch_size,
-                    )
+                    num_kv_heads=icl.num_kv_heads_test,
+                    test_heads=True,
                 )
             else:
-                icl_spec = spec(
-                    seq_len_q=num_rows,
-                    seq_len_kv=num_train,
-                    num_heads=icl.num_heads,
-                    num_kv_heads=icl.num_kv_heads,
-                    head_dim=icl.head_dim,
-                    batch=batch_size,
-                )
-            icl_backend = resolve_attention_backend(icl_spec)
-            for icl_attn in icl_attns:
-                icl_attn.planned_backend = icl_backend
-                icl_attn.planned_backend_test = icl_test_backend
+                plan(icl, seq_len_q=num_rows, seq_len_kv=num_train, batch=batch_size)
 
-        # ---- Decoder (multiclass retrieval attention) ----
+        # Decoder: the test rows retrieve over the train rows, with the class
+        # chunks folded into the batch dimension.
         if self.task_type == "multiclass":
             decoder = self.many_class_decoder
-            if cache_is_populated:
-                assert kv_cache is not None
-                num_test = num_rows
-                decoder_kv_len = kv_cache.train_shape[1]
-            else:
-                num_test = num_rows - num_train
-                decoder_kv_len = num_train
-            decoder.planned_backend = resolve_attention_backend(
-                spec(
-                    seq_len_q=num_test,
-                    seq_len_kv=decoder_kv_len,
-                    num_heads=decoder.num_heads,
-                    num_kv_heads=decoder.num_heads,
-                    head_dim=decoder.head_dim,
-                    # Class chunks are folded into the batch dimension.
-                    batch=batch_size
-                    * math.ceil(decoder.max_num_classes / decoder.head_dim),
-                )
+            plan(
+                decoder,
+                seq_len_q=num_rows if cached else num_rows - num_train,
+                seq_len_kv=num_keys,
+                batch=batch_size
+                * math.ceil(decoder.max_num_classes / decoder.head_dim),
             )
 
     def _reset_attention_plan(self) -> None:
         """Restore every planned-backend slot to its resting ``"auto"`` value."""
-        for layer in self.feature_distribution_embedder.layers:
-            dist_block = cast("InducedSelfAttentionBlock", layer)
-            dist_block.cross_attn_block1.attn.planned_backend = "auto"
-            dist_block.cross_attn_block2.attn.planned_backend = "auto"
-        for agg_block in self.column_aggregator.blocks:
-            cast("TransformerBlock", agg_block).attention.planned_backend = "auto"
-        for icl_block in self.icl_blocks:
-            icl_attn = cast("ICLTransformerBlock", icl_block).icl_attention
-            icl_attn.planned_backend = "auto"
-            icl_attn.planned_backend_test = "auto"
-        if self.task_type == "multiclass":
-            self.many_class_decoder.planned_backend = "auto"
+        for module in self.modules():
+            for attr in ("planned_backend", "planned_backend_test"):
+                if hasattr(module, attr):
+                    setattr(module, attr, "auto")
 
     def _prepare_y(
         self,
