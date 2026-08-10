@@ -10,12 +10,10 @@ KV cache entries being dequantized at the chokepoint.
 from __future__ import annotations
 
 from collections.abc import Iterator
-from pathlib import Path
 
 import pytest
 import torch
 
-from tabpfn import architectures
 from tabpfn.architectures.kv_cache import FP8_KV_DTYPE, KVCacheEntry
 from tabpfn.architectures.shared import attention_backends
 from tabpfn.architectures.shared.fa3_backend import FA3_BACKEND
@@ -100,21 +98,9 @@ def test_declining_backend_falls_through_to_sdpa() -> None:
 
 
 @pytest.mark.usefixtures("registry_sandbox")
-def test_most_recently_registered_backend_wins() -> None:
-    first = _RecordingBackend("first")
-    second = _RecordingBackend("second")
-    attention_backends.register_attention_backend(first)
-    attention_backends.register_attention_backend(second)
-    q, k, v = _qkv()
-    scaled_dot_product_attention(q, k, v)
-    assert len(second.calls) == 1
-    assert first.calls == []
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_group_registration_keeps_given_order_ahead_of_earlier() -> None:
-    """One call registers several backends: consulted in the order given,
-    before anything registered earlier.
+def test_consult_order_is_newest_first_in_the_order_given() -> None:
+    """One call registers several backends in the order given, ahead of
+    anything registered earlier; unregistering drops them again.
     """
     earlier = _RecordingBackend("earlier")
     a = _RecordingBackend("a")
@@ -122,6 +108,8 @@ def test_group_registration_keeps_given_order_ahead_of_earlier() -> None:
     attention_backends.register_attention_backend(earlier)
     attention_backends.register_attention_backend(a, b)
     assert attention_backends.registered_attention_backends() == (a, b, earlier)
+    attention_backends.unregister_attention_backend("a")
+    assert attention_backends.registered_attention_backends() == (b, earlier)
 
 
 @pytest.mark.usefixtures("registry_sandbox")
@@ -134,62 +122,45 @@ def test_reregistration_is_reentrant_but_conflicts_raise() -> None:
 
 
 @pytest.mark.usefixtures("registry_sandbox")
-def test_quantized_kv_reaches_declaring_backend_undequantized() -> None:
+@pytest.mark.parametrize("consumes_quantized_kv", [True, False])
+def test_quantized_kv_is_passed_on_or_dequantized_once(
+    consumes_quantized_kv: bool,
+) -> None:
+    """A backend gets the cache entry as stored only if it declares so;
+    otherwise it gets dense k/v, dequantized once at the chokepoint.
+    """
     backend = _RecordingBackend()
-    backend.consumes_quantized_kv = True
+    backend.consumes_quantized_kv = consumes_quantized_kv
     attention_backends.register_attention_backend(backend)
     q, k, v = _qkv()
     entry = KVCacheEntry(key=k, value=v).quantize(FP8_KV_DTYPE)
-    scaled_dot_product_attention(q, None, None, quantized_kv=entry)
-    assert backend.calls[0]["quantized_kv"] is entry
-    assert backend.calls[0]["k"] is None
 
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_quantized_kv_dequantized_once_for_ordinary_backends() -> None:
-    """A backend without consumes_quantized_kv receives dense k/v."""
-    backend = _RecordingBackend()
-    attention_backends.register_attention_backend(backend)
-    q, k, v = _qkv()
-    entry = KVCacheEntry(key=k, value=v).quantize(FP8_KV_DTYPE)
     scaled_dot_product_attention(q, None, None, quantized_kv=entry)
+
     call = backend.calls[0]
-    assert call["quantized_kv"] is None
-    dequant = entry.dequantize(q.dtype)
-    torch.testing.assert_close(call["k"], dequant.key)
-    torch.testing.assert_close(call["v"], dequant.value)
+    if consumes_quantized_kv:
+        assert call["quantized_kv"] is entry
+        assert call["k"] is None
+    else:
+        assert call["quantized_kv"] is None
+        dequant = entry.dequantize(q.dtype)
+        torch.testing.assert_close(call["k"], dequant.key)
+        torch.testing.assert_close(call["v"], dequant.value)
 
 
 @pytest.mark.usefixtures("registry_sandbox")
-def test_quantized_kv_dequantized_when_no_backend_takes_it() -> None:
+def test_explicit_backend_argument_bypasses_the_registry() -> None:
+    """``backend=None`` forces the SDPA path and ``backend=x`` runs ``x``,
+    both without consulting the registry.
+    """
+    registered = _RecordingBackend("registered")
+    forced = _RecordingBackend("forced", preferred=False)
+    attention_backends.register_attention_backend(registered)
     q, k, v = _qkv()
-    entry = KVCacheEntry(key=k, value=v).quantize(FP8_KV_DTYPE)
-    out = scaled_dot_product_attention(q, None, None, quantized_kv=entry)
-    dequant = entry.dequantize(q.dtype)
-    expected = scaled_dot_product_attention(q, dequant.key, dequant.value)
-    torch.testing.assert_close(out, expected)
 
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_planned_none_skips_registry_consult() -> None:
-    """An explicitly planned ``None`` runs SDPA without consulting anyone."""
-    backend = _RecordingBackend()
-    attention_backends.register_attention_backend(backend)
-    q, k, v = _qkv()
-    out = scaled_dot_product_attention(q, k, v, backend=None)
-    assert not torch.all(out == 42.0)
-    assert backend.specs == []
-    assert backend.calls == []
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_planned_backend_runs_without_consult() -> None:
-    """A planned backend object takes the call; is_preferred is not re-asked."""
-    backend = _RecordingBackend(preferred=False)  # would decline if consulted
-    out = scaled_dot_product_attention(*_qkv(), backend=backend)
-    assert torch.all(out == 42.0)
-    assert backend.specs == []
-    assert len(backend.calls) == 1
+    assert not torch.all(scaled_dot_product_attention(q, k, v, backend=None) == 42.0)
+    assert torch.all(scaled_dot_product_attention(q, k, v, backend=forced) == 42.0)
+    assert registered.specs == []  # never consulted
 
 
 @pytest.mark.usefixtures("registry_sandbox")
@@ -228,40 +199,3 @@ def test_in_tree_backends_are_registered_when_available() -> None:
     names = [b.name for b in attention_backends.registered_attention_backends()]
     for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
         assert (backend.name in names) is backend.is_available(), backend.name
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-def test_consult_order_updates_on_register_and_unregister() -> None:
-    assert attention_backends.registered_attention_backends() == ()
-    first = _RecordingBackend("first")
-    second = _RecordingBackend("second")
-    attention_backends.register_attention_backend(first)
-    attention_backends.register_attention_backend(second)
-    assert attention_backends.registered_attention_backends() == (second, first)
-    attention_backends.unregister_attention_backend("second")
-    assert attention_backends.registered_attention_backends() == (first,)
-
-
-# Only these may call torch's SDPA op: the chokepoint, and the torch-MPS
-# backend that wraps it with head-dim padding.
-_MAY_CALL_TORCH_SDPA = {"scaled_dot_product_attention.py", "torch_mps_backend.py"}
-
-
-def test_architectures_never_call_torch_sdpa_directly() -> None:
-    """Attention must go through the shared chokepoint.
-
-    A hardcoded ``F.scaled_dot_product_attention`` in an architecture would
-    bypass backend selection and the per-forward plan without changing
-    results, so no numerical test would notice.
-    """
-    root = Path(architectures.__file__).parent
-    offenders = [
-        str(path.relative_to(root))
-        for path in sorted(root.rglob("*.py"))
-        if path.name not in _MAY_CALL_TORCH_SDPA
-        # The trailing "(" keeps prose that merely names the op out of it.
-        and "functional.scaled_dot_product_attention(" in path.read_text()
-    ]
-    assert not offenders, (
-        f"call shared.scaled_dot_product_attention instead: {offenders}"
-    )

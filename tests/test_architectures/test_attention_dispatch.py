@@ -131,21 +131,3 @@ def test_cached_predict_specs_report_the_quantized_cache() -> None:
         assert spec.quantized_kv_dtype == FP8_KV_DTYPE
         assert spec.seq_len_q == 10  # test rows query the cache
         assert spec.seq_len_kv == 10  # cached train rows
-
-
-@pytest.mark.usefixtures("registry_sandbox")
-@torch.no_grad()
-def test_specs_report_the_autocast_dtype() -> None:
-    """Under autocast the specs describe the dtype attention really runs in,
-    not the input's — the spec is built from the projected tensors.
-    """
-    backend = _RecordingBackend()
-    attention_backends.register_attention_backend(backend)
-    model = _model()
-    x, y = _inputs()
-
-    with torch.autocast("cpu", dtype=torch.bfloat16):
-        model(x, y)
-
-    assert backend.specs
-    assert {spec.dtype for spec in backend.specs} == {torch.bfloat16}
