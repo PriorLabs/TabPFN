@@ -21,17 +21,9 @@ if TYPE_CHECKING:
     from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
     from tabpfn.architectures.shared.attention_backends import AttentionBackend
 
-# The in-tree backends, consulted in this order (first wins among them) — the
-# same order the probes ran in before the registry existed. Anything
-# registered after this — e.g. an external backend at its enable call — is
-# consulted before all of them.
-#
-# A backend whose dependency is missing is left out: it then costs nothing
-# per call, and its import probe never runs inside a traced region.
-# Availability is an import/version check only — no CUDA or MPS
-# initialization at import time; whether a *call* suits the backend is still
-# decided by its is_preferred.
 register_attention_backend(
+    # Listed in consult order: the first one that prefers a call takes it.
+    # Backends whose dependency is missing are left out entirely.
     *(
         backend
         for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND)
