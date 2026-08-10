@@ -21,14 +21,22 @@ if TYPE_CHECKING:
     from tabpfn.architectures.kv_cache import QuantizedKVCacheEntry
     from tabpfn.architectures.shared.attention_backends import AttentionBackend
 
-# The in-tree backends, consulted in this order (first wins among them) —
-# the same order the probes ran in before the registry existed. Anything
+# The in-tree backends, consulted in this order (first wins among them) — the
+# same order the probes ran in before the registry existed. Anything
 # registered after this — e.g. an external backend at its enable call — is
 # consulted before all of them.
+#
+# A backend whose dependency is missing is left out: it then costs nothing
+# per call, and its import probe never runs inside a traced region.
+# Availability is an import/version check only — no CUDA or MPS
+# initialization at import time; whether a *call* suits the backend is still
+# decided by its is_preferred.
 register_attention_backend(
-    FA3_BACKEND,
-    TORCH_MPS_BACKEND,
-    MLX_BACKEND,
+    *(
+        backend
+        for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND)
+        if backend.is_available()
+    )
 )
 
 
@@ -43,11 +51,9 @@ def scaled_dot_product_attention(
 ) -> torch.Tensor:
     """Attention dispatch: run a registered backend, or the torch SDPA path.
 
-    ``backend`` carries the caller's plan: a backend resolved upfront by the
-    architecture takes the call, an explicit ``None`` means the caller
-    planned this call for the standard SDPA path (no registry consult), and
-    the default ``"auto"`` resolves per call from the live tensors for
-    callers without a plan.
+    The backend is resolved from the shapes of this call (the default
+    ``backend="auto"``); pass a backend to run it without consulting the
+    registry, or ``None`` to force the standard SDPA path.
 
     ``quantized_kv`` supplies the keys/values as a quantized cache entry
     instead of ``k_BSJD``/``v_BSJD``.

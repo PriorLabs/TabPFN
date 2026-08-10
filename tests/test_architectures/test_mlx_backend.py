@@ -74,12 +74,6 @@ def _reference_attn_cpu(
 _MPS = torch.device("mps")
 
 
-def test__eligible_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    """mx=None (import failure) makes every call ineligible."""
-    monkeypatch.setattr(mlx_backend, "mx", None)
-    assert not is_eligible_for_mlx(_MPS, torch.float16, 64, is_grad_enabled=False)
-
-
 def test__eligible_false_for_cpu_device() -> None:
     """CPU calls are never eligible (not MPS)."""
     assert not is_eligible_for_mlx(
@@ -130,9 +124,11 @@ def _mps_spec(seq_len_kv: int | None) -> AttentionSpec:
     )
 
 
-def test__preferred_false_when_mx_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test__unavailable_without_the_mlx_package(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Availability is what the package check gates; it decides registration."""
+    assert MLX_BACKEND.is_available() == (mlx_backend.mx is not None)
     monkeypatch.setattr(mlx_backend, "mx", None)
-    assert not MLX_BACKEND.is_preferred(_mps_spec(2048))
+    assert not MLX_BACKEND.is_available()
 
 
 @_skip_unless_mlx

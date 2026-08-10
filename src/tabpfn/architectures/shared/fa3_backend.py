@@ -63,10 +63,12 @@ def _is_hopper(device: torch.device) -> bool:
 
 
 def is_fa3_eligible(device: torch.device, dtype: torch.dtype, head_dim: int) -> bool:
-    """True iff FA3 can serve such an attention call (capability gate, not perf)."""
+    """True iff FA3 can serve such an attention call (capability gate, not perf).
+
+    Assumes the wheel is installed — see :meth:`FA3Backend.is_available`.
+    """
     return (
-        is_fa3_importable()
-        and device.type == "cuda"
+        device.type == "cuda"
         and _is_hopper(device)
         and dtype in (torch.float16, torch.bfloat16)
         and head_dim in _FA3_SUPPORTED_HEAD_DIMS
@@ -100,6 +102,11 @@ class FA3Backend:
     """
 
     name = "fa3"
+
+    @staticmethod
+    def is_available() -> bool:
+        """Whether the FA3 wheel is installed (checked once, at registration)."""
+        return is_fa3_importable()
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Eligibility plus the measured speedup crossover.

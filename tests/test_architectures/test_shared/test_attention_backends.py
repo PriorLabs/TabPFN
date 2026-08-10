@@ -10,15 +10,20 @@ KV cache entries being dequantized at the chokepoint.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 import torch
 
+from tabpfn import architectures
 from tabpfn.architectures.kv_cache import FP8_KV_DTYPE, KVCacheEntry
 from tabpfn.architectures.shared import attention_backends
+from tabpfn.architectures.shared.fa3_backend import FA3_BACKEND
+from tabpfn.architectures.shared.mlx_backend import MLX_BACKEND
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     scaled_dot_product_attention,
 )
+from tabpfn.architectures.shared.torch_mps_backend import TORCH_MPS_BACKEND
 
 
 class _RecordingBackend:
@@ -216,10 +221,13 @@ def test_lazy_spec_describes_the_live_call() -> None:
     assert spec.is_grad_enabled is False
 
 
-def test_fa3_backend_is_registered_by_default() -> None:
-    """Importing tabpfn (via the module imports above) registers FA3."""
+def test_in_tree_backends_are_registered_when_available() -> None:
+    """Importing tabpfn registers each in-tree backend whose dependency is
+    installed, and leaves out the others.
+    """
     names = [b.name for b in attention_backends.registered_attention_backends()]
-    assert "fa3" in names
+    for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
+        assert (backend.name in names) is backend.is_available(), backend.name
 
 
 @pytest.mark.usefixtures("registry_sandbox")
@@ -232,3 +240,28 @@ def test_consult_order_updates_on_register_and_unregister() -> None:
     assert attention_backends.registered_attention_backends() == (second, first)
     attention_backends.unregister_attention_backend("second")
     assert attention_backends.registered_attention_backends() == (first,)
+
+
+# Only these may call torch's SDPA op: the chokepoint, and the torch-MPS
+# backend that wraps it with head-dim padding.
+_MAY_CALL_TORCH_SDPA = {"scaled_dot_product_attention.py", "torch_mps_backend.py"}
+
+
+def test_architectures_never_call_torch_sdpa_directly() -> None:
+    """Attention must go through the shared chokepoint.
+
+    A hardcoded ``F.scaled_dot_product_attention`` in an architecture would
+    bypass backend selection and the per-forward plan without changing
+    results, so no numerical test would notice.
+    """
+    root = Path(architectures.__file__).parent
+    offenders = [
+        str(path.relative_to(root))
+        for path in sorted(root.rglob("*.py"))
+        if path.name not in _MAY_CALL_TORCH_SDPA
+        # The trailing "(" keeps prose that merely names the op out of it.
+        and "functional.scaled_dot_product_attention(" in path.read_text()
+    ]
+    assert not offenders, (
+        f"call shared.scaled_dot_product_attention instead: {offenders}"
+    )

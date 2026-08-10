@@ -45,8 +45,7 @@ def is_eligible_for_mlx(
     """
     _DTYPES = (torch.float16, torch.bfloat16, torch.float32)
     return (
-        mx is not None
-        and device.type == "mps"
+        device.type == "mps"
         and not is_grad_enabled
         and dtype in _DTYPES
         and head_dim <= 128
@@ -113,6 +112,11 @@ class MLXBackend:
     """
 
     name = "mlx"
+
+    @staticmethod
+    def is_available() -> bool:
+        """Whether the mlx package is installed (checked at registration)."""
+        return mx is not None
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Eligibility plus the KV-length crossover (also a memory guard).

@@ -17,15 +17,18 @@ if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
 
+# Torch added flash attention for MPS after 2.13.0.dev20260510.
+_MIN_TORCH_FOR_MPS_FLASH = "2.13.0.dev20260510"
+
+
 def is_torch_mps_preferred(device: torch.device, dtype: torch.dtype) -> bool:
-    """True iff PyTorch's MPS SDPA is preferred for such an attention call."""
+    """True iff PyTorch's MPS SDPA is preferred for such an attention call.
+
+    Assumes the torch build has the kernel — see
+    :meth:`TorchMPSBackend.is_available`.
+    """
     _DTYPES = (torch.float16, torch.bfloat16, torch.float32)
-    return (
-        # Torch added support for flash attention after 2.13.0.dev20260510.
-        torch.__version__ >= TorchVersion("2.13.0.dev20260510")
-        and device.type == "mps"
-        and dtype in _DTYPES
-    )
+    return device.type == "mps" and dtype in _DTYPES
 
 
 def torch_mps_sdpa(
@@ -67,6 +70,11 @@ class TorchMPSBackend:
     """
 
     name = "torch-mps"
+
+    @staticmethod
+    def is_available() -> bool:
+        """Whether this torch build has the MPS flash kernel."""
+        return torch.__version__ >= TorchVersion(_MIN_TORCH_FOR_MPS_FLASH)
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Torch-version + device/dtype gate; no shape constraints."""

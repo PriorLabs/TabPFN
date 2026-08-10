@@ -18,14 +18,13 @@ keeping its position).
 
 Selection is **shape-based, not tensor-based**: a backend's
 :meth:`AttentionBackend.is_preferred` receives an :class:`AttentionSpec` —
-the static description of an attention call (sequence lengths, head
-geometry, dtype, device) — so architectures can resolve the backend for each
-of their attention stages *upfront*, once per forward pass, when the input
-shapes are known and before any layer runs. The spec is deliberately pure
-geometry: backends cannot tell *which* stage of *which* architecture a call
-belongs to, only what the call looks like. The resolved backend (or ``None``)
-is then passed down to the attention chokepoints. Callers that have no plan
-pass nothing and get per-call resolution from the live tensors instead.
+the description of one attention call (sequence lengths, head geometry,
+dtype, device) — rather than the tensors themselves. The spec is
+deliberately pure geometry: backends cannot tell *which* stage of *which*
+architecture a call belongs to, only what the call looks like. Architectures
+need no selection code of their own: the chokepoint builds the spec from the
+live tensors and consults the registry per call, which is a few microseconds
+and traces cleanly under ``torch.compile``.
 
 Backends are a *performance* seam and therefore fail open: no registered
 backend, or none preferred, means the ordinary SDPA path runs. Any policy
@@ -48,21 +47,19 @@ if TYPE_CHECKING:
 
 @dataclasses.dataclass(frozen=True)
 class AttentionSpec:
-    """Static description of one attention call, known before any tensor exists.
+    """The shapes of one attention call, without its tensors.
 
-    Built by an architecture's planner from the forward-pass input shapes (or
-    from live tensors for unplanned callers). Fields typed ``| None`` mean
-    *unknown at plan time* (e.g. chunk-dependent): a backend whose decision
-    depends on such a field must decline when it is ``None``.
+    Built at the chokepoint from the live tensors, so the numbers describe
+    exactly the call about to run. A field is ``None`` only when the call
+    does not have it (e.g. no keys of their own on the quantized-cache
+    path); a backend whose decision depends on such a field must decline.
     """
 
     seq_len_q: int | None
-    """Query sequence length; an upper bound for chunk-dependent stages
-    (in-forward chunking only shrinks it); ``None`` when unknown."""
+    """Query sequence length."""
 
     seq_len_kv: int | None
-    """Key/value sequence length; an upper bound for chunk-dependent stages
-    (in-forward chunking only shrinks it); ``None`` when unknown."""
+    """Key/value sequence length; ``None`` if the call has no keys."""
 
     num_heads: int
     """Number of query heads."""
@@ -80,16 +77,14 @@ class AttentionSpec:
     """Device the call runs on."""
 
     batch_size: int | None
-    """Effective SDPA batch (with any folded dims); ``None`` when
-    chunk-dependent. Where known upfront it is an upper bound — in-forward
-    chunking only shrinks it."""
+    """SDPA batch of this call, including any dimensions folded into it."""
 
     quantized_kv_dtype: torch.dtype | None = None
     """Storage dtype of the quantized KV cache entry, or ``None`` when keys/
     values arrive as regular tensors."""
 
     is_grad_enabled: bool = False
-    """Grad mode the call runs under, snapshot at plan time."""
+    """Whether grad mode is on, i.e. whether a backward may follow."""
 
 
 @runtime_checkable
@@ -109,9 +104,9 @@ class AttentionBackend(Protocol):
     absorb the rest with ``**kwargs``: informational context may grow over
     time, and an open signature keeps existing backends compatible.
 
-    ``is_preferred`` sees only the :class:`AttentionSpec`, never tensors: it
-    runs at plan time, before the tensors of the call exist. A backend that
-    can be planned into a ``torch.compile``-d region must have a
+    ``is_preferred`` sees only the :class:`AttentionSpec`, never the tensors,
+    and must be cheap: it runs for every attention call. A backend that can
+    be selected inside a ``torch.compile``-d region must have a
     Dynamo-traceable ``run`` — the registry does not check this; it is the
     registrant's responsibility.
     """
@@ -206,20 +201,6 @@ def resolve_attention_backend(spec: AttentionSpec) -> AttentionBackend | None:
     return None
 
 
-def effective_attention_dtype(
-    device: torch.device, fallback: torch.dtype
-) -> torch.dtype:
-    """The dtype q/k/v will actually have, accounting for autocast.
-
-    Inference commonly runs the forward under ``torch.autocast``, in which
-    case the projections produce the autocast dtype regardless of the input
-    dtype — planning from the input dtype would mis-describe the call.
-    """
-    if torch.is_autocast_enabled(device.type):
-        return torch.get_autocast_dtype(device.type)
-    return fallback
-
-
 def spec_from_tensors(
     q_BSHD: torch.Tensor,
     k_BSJD: torch.Tensor | None,
@@ -254,7 +235,24 @@ def find_attention_backend(
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
 ) -> AttentionBackend | None:
-    """Per-call resolution from live tensors, for callers without a plan."""
-    return resolve_attention_backend(
-        spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
+    """Resolve the backend for this call from the live tensors."""
+    spec = spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
+    backend = resolve_attention_backend(spec)
+    # Not while tracing: logging is not traceable (it would break the graph),
+    # and a trace-time line would report once per compile, not per call.
+    if not torch.compiler.is_compiling() and _logger.isEnabledFor(logging.DEBUG):
+        _log_selection(spec, backend)
+    return backend
+
+
+def _log_selection(spec: AttentionSpec, backend: AttentionBackend | None) -> None:
+    """Debug-log one selection (the shapes make the stage recognisable)."""
+    _logger.debug(
+        "attention q=%s kv=%s heads=%s/%s head_dim=%s -> %s",
+        spec.seq_len_q,
+        spec.seq_len_kv,
+        spec.num_heads,
+        spec.num_kv_heads,
+        spec.head_dim,
+        "sdpa" if backend is None else backend.name,
     )
