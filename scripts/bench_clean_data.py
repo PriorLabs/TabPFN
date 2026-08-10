@@ -1,4 +1,4 @@
-# ruff: noqa: T201
+# ruff: noqa: T201, S603, S607
 #  Copyright (c) Prior Labs GmbH 2026.
 
 r"""Regression gate for `clean_data`'s transient RAM and wall time.
@@ -54,10 +54,14 @@ import dataclasses
 import gc
 import hashlib
 import json
+import os
 import pickle
 import platform
 import resource
+import shlex
+import shutil
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -69,6 +73,7 @@ import pandas as pd
 import torch
 from torch.utils.benchmark import Measurement, Timer
 
+import tabpfn
 from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 
@@ -136,9 +141,22 @@ AUX_FILE = "aux.pkl"
 FINGERPRINT_ELEMENTS = 1_000_000
 FINGERPRINT_OBJECT_ELEMENTS = 100_000
 
+# Below this many RSS samples inside the measured call, the "peak" is essentially
+# just the entry/exit readings: any spike between them was never looked for. Reported
+# rather than silently passed off as a measured peak.
+MIN_USEFUL_RSS_SAMPLES = 5
+
+# Below this median, a call is too short for the timing comparison to mean anything:
+# process-to-process quantisation is then a large fraction of the number itself. Same
+# reasoning as MIN_USEFUL_RSS_SAMPLES -- say so rather than report a percentage that
+# reads like a finding.
+MIN_USEFUL_MEDIAN_S = 0.05
+
 # Cells per block when comparing against a recorded array. Sized so the boolean
 # temporaries the comparison builds stay in the tens of MB whatever the shape.
 COMPARISON_CHUNK_CELLS = 32_000_000
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _PAGE_SIZE = resource.getpagesize()
 _GB = 1e9
@@ -627,6 +645,247 @@ def change_pct(new: float, baseline: float) -> str:
 
 
 # ---------------------------------------------------------------------------
+# A/B against a git reference
+# ---------------------------------------------------------------------------
+#
+# The baseline-on-disk gate compares across runs, which drags in every difference
+# between two processes -- and, on a cluster, between two nodes. `--reference`
+# removes that: it measures a reference commit and the working tree back to back on
+# one machine, minutes apart, with the same harness.
+#
+# The reference package is selected for a whole child process, by putting the
+# worktree's `src` on its `PYTHONPATH`. Two alternatives do not work:
+#
+# * Importing the reference under a second module name (`tabpfn_ref.clean`): the
+#   codebase is full of absolute `from tabpfn...` imports, so the reference module
+#   would pull its helpers from the *installed* package and silently run a mixture of
+#   the two versions.
+# * `uv run --project <worktree>`: hermetic, but the worktree has no `uv.lock` (it is
+#   gitignored) and `exclude-newer` is a *relative* date, so it resolves its own
+#   dependency set -- measured here as numpy 2.5.1 / pandas 3.0.5 / torch 2.13.0
+#   against the working tree's 2.4.6 / 3.0.3 / 2.12.0. Since what is being measured
+#   is how much copying pandas does, comparing across pandas versions answers a
+#   different question than the one asked.
+#
+# `PYTHONPATH` wins over the editable install because its entries precede the ones
+# site-processing appends for a `.pth` file. That is an assumption about the
+# environment rather than a guarantee, so it is not trusted: each side records the
+# `tabpfn` it actually imported and the comparison verifies both before believing any
+# number, along with the library versions the two sides ran against.
+
+
+def _git(*arguments: str) -> str:
+    """Run git in this repository and return its stdout, stripped."""
+    return subprocess.run(
+        ["git", *arguments],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=REPO_ROOT,
+    ).stdout.strip()
+
+
+def resolve_reference(revision: str) -> str:
+    """The full commit SHA a revision names, so the worktree can be cached by it."""
+    try:
+        return _git("rev-parse", f"{revision}^{{commit}}")
+    except subprocess.CalledProcessError:
+        fail([f"{revision!r} is not a commit this repository knows"])
+        raise  # unreachable; keeps the return type honest
+
+
+def prepare_reference_worktree(sha: str, root: Path, *, refresh: bool) -> Path:
+    """A worktree checked out at `sha`, reused across runs unless `refresh`.
+
+    Reused because the first use of one pays for a `uv sync` of its environment;
+    keyed by SHA so a different reference can never be served a stale checkout.
+    """
+    worktree = root / sha[:12]
+    if refresh and worktree.exists():
+        print(f"Removing the cached reference worktree at {worktree}")
+        _git("worktree", "remove", "--force", str(worktree))
+    if worktree.exists():
+        # Trust it only if it really is at the requested commit.
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=worktree,
+        ).stdout.strip()
+        if head == sha:
+            print(f"Reusing the reference worktree at {worktree}")
+            return worktree
+        print(f"Cached worktree at {worktree} is at {head[:12]}, not {sha[:12]}")
+        _git("worktree", "remove", "--force", str(worktree))
+
+    root.mkdir(parents=True, exist_ok=True)
+    print(f"Creating a reference worktree for {sha[:12]} at {worktree}")
+    _git("worktree", "add", "--detach", str(worktree), sha)
+    return worktree
+
+
+def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]:
+    """The measurement arguments both sides of the comparison are run with.
+
+    Built from the resolved spec rather than forwarded from argv, so `--small` and
+    `--string` shape defaults are already applied and the two children cannot
+    disagree about what they measured.
+    """
+    forwarded = [
+        "--rows",
+        str(spec["profiler_rows"]),
+        "--cols",
+        str(spec["cols"]),
+        "--input-dtype",
+        spec["dtype"],
+        "--timing-repeats",
+        str(args.timing_repeats),
+        "--warmup-calls",
+        str(args.warmup_calls),
+        "--sample-interval-ms",
+        str(args.sample_interval_ms),
+    ]
+    if spec["mix"] == MIX_HALF_STRING:
+        forwarded.append("--string")
+    if args.chunk_rows is not None:
+        forwarded += ["--chunk-rows", str(args.chunk_rows)]
+    return forwarded
+
+
+def run_child(command: list[str], label: str, env: dict[str, str] | None = None) -> int:
+    """Run one side of the comparison, letting it print straight through."""
+    print("\n" + "-" * 79)
+    print(f"{label}: {shlex.join(command)}")
+    if env:
+        print(f"  PYTHONPATH={env['PYTHONPATH']}")
+    print("-" * 79, flush=True)
+    return subprocess.run(
+        command, check=False, env={**os.environ, **(env or {})}
+    ).returncode
+
+
+def read_recorded_environment(run_dir: Path, spec: dict[str, Any]) -> dict[str, Any]:
+    """The `environment` block a side of the comparison just recorded."""
+    metrics_path = (
+        run_dir
+        / shape_dir_name(spec["rows"], spec["cols"], spec["dtype"], spec["mix"])
+        / METRICS_FILE
+    )
+    return json.loads(metrics_path.read_text())["environment"]
+
+
+def verify_reference_ran_the_reference(
+    reference_env: dict[str, Any],
+    worktree: Path,
+) -> None:
+    """Check the reference side measured the worktree's package, in this environment.
+
+    The whole comparison rests on this. If the child resolved the working tree's
+    package instead -- a `PYTHONPATH` that did not take, a stale worktree -- it would
+    quietly measure the same code twice and report no difference, which looks exactly
+    like a change that does nothing. And if it resolved different library versions,
+    any difference it *does* report might be pandas', not ours.
+
+    Checked here, right after the reference side, so a broken comparison costs one
+    run rather than two.
+    """
+    reference_path = Path(reference_env["tabpfn_path"])
+    current_path = Path(describe_environment()["tabpfn_path"])
+    print(f"\nreference package: {reference_path}")
+    print(f"working tree:      {current_path}")
+
+    problems = []
+    if worktree.resolve() not in reference_path.parents:
+        problems.append(
+            f"the reference run imported {reference_path}, which is not inside the "
+            f"reference worktree {worktree}, so it measured the wrong code"
+        )
+    if reference_path == current_path:
+        problems.append(
+            "both sides would import the same tabpfn, so this compares a commit "
+            "against itself"
+        )
+    drift = environment_drift(reference_env)
+    if drift:
+        problems += [
+            "the reference side did not run against this environment, so its numbers "
+            "are not comparable:",
+            *drift,
+        ]
+    if problems:
+        fail(problems)
+
+
+def run_reference_comparison(args: argparse.Namespace) -> int:
+    """Measure a reference commit, then the working tree, and gate on the pair."""
+    spec = resolve_input_spec(args)
+    sha = resolve_reference(args.reference)
+    worktree = prepare_reference_worktree(
+        sha, args.reference_root, refresh=args.refresh_reference
+    )
+    subject = _git("log", "-1", "--format=%h %s", sha)
+    print(f"Reference: {subject}")
+    if not _git("status", "--porcelain", "--", "src/tabpfn") and sha == _git(
+        "rev-parse", "HEAD"
+    ):
+        print(
+            "\nWARNING: src/tabpfn has no uncommitted changes and the reference is "
+            "HEAD,\nso this compares a commit against itself."
+        )
+
+    run_dir = args.out_root / "_reference_runs" / sha[:12]
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    forwarded = child_arguments(args, spec)
+    script = str(Path(__file__).resolve())
+
+    try:
+        # The reference side records the baseline. Same interpreter, same libraries,
+        # same harness -- only `import tabpfn` differs.
+        code = run_child(
+            [
+                sys.executable,
+                script,
+                *forwarded,
+                "--out-root",
+                str(run_dir),
+                "--overwrite-baseline",
+                "--record-as-reference",
+            ],
+            f"reference {sha[:12]}",
+            env={"PYTHONPATH": str(worktree / "src")},
+        )
+        if code != 0:
+            fail([f"the reference run failed with exit code {code}"])
+        verify_reference_ran_the_reference(
+            read_recorded_environment(run_dir, spec), worktree
+        )
+
+        # The working tree's side gates against it. `--strict-env` is belt and braces:
+        # the environment was already checked above, and this catches anything that
+        # changed between the two runs.
+        return run_child(
+            [
+                sys.executable,
+                script,
+                *forwarded,
+                "--out-root",
+                str(run_dir),
+                "--tolerance",
+                str(args.tolerance),
+                "--strict-env",
+            ],
+            "working tree",
+        )
+    finally:
+        if args.keep_reference_run:
+            print(f"\nKept the comparison's outputs in {run_dir}")
+        elif run_dir.exists():
+            shutil.rmtree(run_dir)
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -649,6 +908,10 @@ def describe_environment() -> dict[str, Any]:
         "torch_version": torch.__version__,
         "torch_num_threads": torch.get_num_threads(),
         "host_memory_available_gb": round(meminfo_gb("MemAvailable"), 1),
+        # Which tabpfn actually got imported. Deliberately outside the drift check
+        # below -- under `--reference` the two sides *must* differ here -- but
+        # recorded so `verify_packages_differed` can prove they did.
+        "tabpfn_path": str(Path(tabpfn.__file__).resolve().parent),
     }
 
 
@@ -784,8 +1047,47 @@ def check_memory(
         fail([problem])
 
 
+def describe_role(comparing: bool, *, record_as_reference: bool) -> str:  # noqa: FBT001
+    """What this run is doing, for the header."""
+    if comparing:
+        return "compare against baseline"
+    if record_as_reference:
+        return "record baseline (as the reference side of a comparison)"
+    return "record baseline"
+
+
+def load_baseline_for_comparison(
+    paths: dict[str, Path],
+    spec: dict[str, Any],
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    """The recorded baseline, having checked it is comparable with this run."""
+    recorded = load_baseline(paths, spec)
+    drift = environment_drift(recorded.get("environment", {}))
+    if not drift:
+        return recorded
+    if args.strict_env:
+        fail(
+            [
+                "the two runs did not share an environment, so their numbers are not "
+                "comparable:",
+                *drift,
+                "under --reference this usually means the reference worktree resolved "
+                "its own dependency versions (it has no uv.lock)",
+            ]
+        )
+    print("\nWARNING: the baseline was recorded elsewhere; RSS and timings")
+    print("are only comparable within one environment:")
+    for line in drift:
+        print(f"  - {line}")
+    return recorded
+
+
 def main(args: argparse.Namespace) -> None:
-    """Measure `clean_data`, then either record a baseline or gate against one."""
+    """Measure `clean_data`, and gate it against a reference or a recorded baseline."""
+    if args.reference is not None:
+        sys.exit(run_reference_comparison(args))
+
     spec = resolve_input_spec(args)
     out_dir = args.out_root / shape_dir_name(
         spec["rows"], spec["cols"], spec["dtype"], spec["mix"]
@@ -799,19 +1101,12 @@ def main(args: argparse.Namespace) -> None:
 
     environment = describe_environment()
     print(f"Output directory: {out_dir}")
-    print(f"Mode: {'compare against baseline' if comparing else 'record baseline'}")
+    role = describe_role(comparing, record_as_reference=args.record_as_reference)
+    print(f"Mode: {role}")
     for key, value in environment.items():
         print(f"  {key}: {value}")
 
-    recorded = None
-    if comparing:
-        recorded = load_baseline(paths, spec)
-        drift = environment_drift(recorded.get("environment", {}))
-        if drift:
-            print("\nWARNING: the baseline was recorded elsewhere; RSS and timings")
-            print("are only comparable within one environment:")
-            for line in drift:
-                print(f"  - {line}")
+    recorded = load_baseline_for_comparison(paths, spec, args) if comparing else None
 
     X = generate_input(spec)
     input_fingerprint = fingerprint(X)
@@ -839,6 +1134,13 @@ def main(args: argparse.Namespace) -> None:
         f"{memory.retained_bytes / _GB:.2f} GB, {memory.n_samples} RSS samples, "
         f"{memory.wall_s:.3f} s cold)"
     )
+    if memory.n_samples < MIN_USEFUL_RSS_SAMPLES:
+        print(
+            f"WARNING: only {memory.n_samples} RSS sample(s) landed inside a "
+            f"{memory.wall_s * 1000:.0f} ms call, so the transient above is the "
+            "entry/exit readings rather than a sampled peak. Lower "
+            "--sample-interval-ms, or measure a bigger shape."
+        )
 
     if recorded is not None:
         check_memory(recorded, memory, args.tolerance)
@@ -866,6 +1168,12 @@ def main(args: argparse.Namespace) -> None:
             f"spread {timing['spread_pct']:.1f}%, "
             f"stdev {timing['stdev_s'] * 1000:.1f} ms)"
         )
+        if timing["median_s"] < MIN_USEFUL_MEDIAN_S:
+            print(
+                f"WARNING: a {timing['median_s'] * 1000:.0f} ms median is too short "
+                "to compare across processes; treat this shape as a correctness "
+                "check and measure timing on a bigger one."
+            )
 
         if recorded is not None:
             problem = regression(
@@ -949,7 +1257,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--timing-repeats",
         type=int,
-        default=9,
+        default=3,
         help="Timed calls. The median is the gated number; more of them make it "
         "harder for one slow call to bias a run, and `spread_pct` in the metrics "
         "records how tight they were.",
@@ -964,8 +1272,10 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sample-interval-ms",
         type=float,
-        default=20.0,
-        help="RSS sampling period. Shorter catches narrower spikes.",
+        default=5.0,
+        help="RSS sampling period. Shorter catches narrower spikes; a call shorter "
+        "than a few periods cannot be sampled meaningfully at all, which the run "
+        "warns about.",
     )
     parser.add_argument(
         "--tolerance",
@@ -985,6 +1295,50 @@ def get_parser() -> argparse.ArgumentParser:
         default=None,
         help="Rows per block when comparing the cleaned array with the recorded one. "
         f"Defaults to {COMPARISON_CHUNK_CELLS:,} cells' worth for the column count.",
+    )
+    parser.add_argument(
+        "--reference",
+        nargs="?",
+        const="HEAD",
+        default=None,
+        metavar="REV",
+        help="Compare against a commit/branch/tag instead of a recorded baseline: it "
+        "is checked out in a cached worktree, measured with its own tabpfn via "
+        "`uv run --project`, and then the working tree is measured and gated against "
+        "it -- both on this machine, minutes apart. Defaults to HEAD when given "
+        "without a value, i.e. 'what do my uncommitted changes do'.",
+    )
+    parser.add_argument(
+        "--reference-root",
+        type=Path,
+        default=Path("bench_out/references"),
+        help="Where reference worktrees are cached, one per commit. The first run "
+        "against a commit pays for a `uv sync` of its environment; later ones reuse "
+        "it.",
+    )
+    parser.add_argument(
+        "--refresh-reference",
+        action="store_true",
+        help="Rebuild the cached reference worktree before using it.",
+    )
+    parser.add_argument(
+        "--keep-reference-run",
+        action="store_true",
+        help="Keep the two sides' metrics and outputs instead of deleting them when "
+        "the comparison ends.",
+    )
+    parser.add_argument(
+        "--strict-env",
+        action="store_true",
+        help="Treat an environment difference from the baseline as a failure rather "
+        "than a warning. Set for the working-tree side of a --reference comparison, "
+        "where the two runs share a machine and must share their libraries too.",
+    )
+    parser.add_argument(
+        "--record-as-reference",
+        action="store_true",
+        help="Label this run as the reference side of a comparison. Only affects "
+        "reporting.",
     )
     parser.add_argument(
         "--out-root",
