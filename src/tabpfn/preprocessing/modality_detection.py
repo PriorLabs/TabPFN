@@ -82,17 +82,14 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    # Warn here rather than at each call site: this is the single place the TEXT
-    # labels are produced, and they do not survive the first preprocessing step
-    # that rebuilds the schema.
-    warn_if_text_features(
+    _warn_if_text_features(
         feature_schema,
         declared_categorical_indices=provided_categorical_indices,
     )
     return feature_schema
 
 
-def warn_if_text_features(
+def _warn_if_text_features(
     feature_schema: FeatureSchema,
     *,
     declared_categorical_indices: Sequence[int] | None = None,

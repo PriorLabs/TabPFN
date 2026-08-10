@@ -22,8 +22,8 @@ from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
+    _warn_if_text_features,
     detect_feature_modalities,
-    warn_if_text_features,
 )
 from tabpfn.preprocessing.type_detection import infer_categorical_features
 
@@ -461,11 +461,11 @@ class TestWarnIfTextFeatures:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            warn_if_text_features(schema)
+            _warn_if_text_features(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(_text_schema("review"))
+            _warn_if_text_features(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -480,14 +480,14 @@ class TestWarnIfTextFeatures:
         schema = _text_schema("sku", "review")
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(schema, declared_categorical_indices=[0])
+            _warn_if_text_features(schema, declared_categorical_indices=[0])
         message = str(record[0].message)
         assert "'review'" in message
         assert "'sku'" not in message
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            warn_if_text_features(schema, declared_categorical_indices=[0, 1])
+            _warn_if_text_features(schema, declared_categorical_indices=[0, 1])
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -495,7 +495,7 @@ class TestWarnIfTextFeatures:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            warn_if_text_features(schema)
+            _warn_if_text_features(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
