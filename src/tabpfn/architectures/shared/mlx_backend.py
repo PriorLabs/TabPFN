@@ -151,6 +151,5 @@ class MLXBackend:
         return out_BHSD.permute(0, 2, 1, 3)
 
 
-# Registered by the shared SDPA module (see its explicit in-tree consult
-# order); is_preferred fails fast and cheap off-MPS.
+# Registered by the shared SDPA module, which owns the consult order.
 MLX_BACKEND = MLXBackend()

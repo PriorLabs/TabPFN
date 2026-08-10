@@ -99,6 +99,5 @@ class TorchMPSBackend:
         return out_BHSD.permute(0, 2, 1, 3)
 
 
-# Registered by the shared SDPA module (see its explicit in-tree consult
-# order).
+# Registered by the shared SDPA module, which owns the consult order.
 TORCH_MPS_BACKEND = TorchMPSBackend()

@@ -988,8 +988,7 @@ class ICLAttention(nn.Module):
                 assert k.shape[2] == nh_test_heads, "cached key has wrong num heads"
                 assert v.shape[2] == nh_test_heads, "cached value has wrong num heads"
             if isinstance(cached_kv, QuantizedKVCacheEntry):
-                # Passed through quantized: an external backend may consume the
-                # entry directly; otherwise it is dequantized at the chokepoint.
+                # The chokepoint dequantizes unless a backend takes it as is.
                 out = _batched_scaled_dot_product_attention(
                     q,
                     None,

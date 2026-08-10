@@ -1,11 +1,5 @@
 #  Copyright (c) Prior Labs GmbH 2026.
-"""Contract tests for the external attention backend registry.
-
-These pin the behaviour plugins rely on: a registered backend that prefers a
-call receives it and its output is used; a backend that declines (or none
-being registered) leaves the standard SDPA path intact, including quantized
-KV cache entries being dequantized at the chokepoint.
-"""
+"""Contract tests for the attention backend registry, as plugins rely on it."""
 
 from __future__ import annotations
 
@@ -99,9 +93,6 @@ def test_declining_backend_falls_through_to_sdpa() -> None:
 
 @pytest.mark.usefixtures("registry_sandbox")
 def test_consult_order_is_newest_first_in_the_order_given() -> None:
-    """One call registers several backends in the order given, ahead of
-    anything registered earlier; unregistering drops them again.
-    """
     earlier = _RecordingBackend("earlier")
     a = _RecordingBackend("a")
     b = _RecordingBackend("b")
@@ -126,8 +117,8 @@ def test_reregistration_is_reentrant_but_conflicts_raise() -> None:
 def test_quantized_kv_is_passed_on_or_dequantized_once(
     consumes_quantized_kv: bool,
 ) -> None:
-    """A backend gets the cache entry as stored only if it declares so;
-    otherwise it gets dense k/v, dequantized once at the chokepoint.
+    """The entry is passed on only to a backend that declares it consumes
+    one; otherwise the chokepoint dequantizes, once.
     """
     backend = _RecordingBackend()
     backend.consumes_quantized_kv = consumes_quantized_kv
@@ -150,9 +141,7 @@ def test_quantized_kv_is_passed_on_or_dequantized_once(
 
 @pytest.mark.usefixtures("registry_sandbox")
 def test_explicit_backend_argument_bypasses_the_registry() -> None:
-    """``backend=None`` forces the SDPA path and ``backend=x`` runs ``x``,
-    both without consulting the registry.
-    """
+    """``None`` forces SDPA, a backend runs it — neither consults anyone."""
     registered = _RecordingBackend("registered")
     forced = _RecordingBackend("forced", preferred=False)
     attention_backends.register_attention_backend(registered)
@@ -165,7 +154,7 @@ def test_explicit_backend_argument_bypasses_the_registry() -> None:
 
 @pytest.mark.usefixtures("registry_sandbox")
 def test_lazy_spec_describes_the_live_call() -> None:
-    """The per-call ("auto") path builds a faithful spec from the tensors."""
+    """The spec describes the call the tensors represent."""
     backend = _RecordingBackend(preferred=False)
     attention_backends.register_attention_backend(backend)
     q, k, v = _qkv(b=3, s=8, h=4, j=2, d=16)
@@ -193,9 +182,7 @@ def test_lazy_spec_describes_the_live_call() -> None:
 
 
 def test_in_tree_backends_are_registered_when_available() -> None:
-    """Importing tabpfn registers each in-tree backend whose dependency is
-    installed, and leaves out the others.
-    """
+    """Only backends whose dependency is installed get registered."""
     names = [b.name for b in attention_backends.registered_attention_backends()]
     for backend in (FA3_BACKEND, TORCH_MPS_BACKEND, MLX_BACKEND):
         assert (backend.name in names) is backend.is_available(), backend.name

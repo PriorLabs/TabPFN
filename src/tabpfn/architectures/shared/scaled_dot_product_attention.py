@@ -54,7 +54,7 @@ def scaled_dot_product_attention(
     receives dense ``k``/``v`` — unless it is a backend declaring
     ``consumes_quantized_kv = True``, which receives the entry as stored.
     """
-    if isinstance(backend, str):  # "auto": no plan, resolve from the live call
+    if isinstance(backend, str):  # "auto"
         backend = find_attention_backend(
             q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv
         )

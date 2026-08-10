@@ -133,7 +133,5 @@ class FA3Backend:
         )
 
 
-# Registered by the shared SDPA module (see its explicit in-tree consult
-# order); is_preferred fails fast and cheap off-Hopper, and creating the
-# instance here keeps module import free of CUDA initialization.
+# Registered by the shared SDPA module, which owns the consult order.
 FA3_BACKEND = FA3Backend()

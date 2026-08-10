@@ -2,34 +2,18 @@
 """Registry for swappable attention backends.
 
 Attention calls in the architectures funnel through the shared
-``scaled_dot_product_attention`` chokepoint. This registry lets a backend
-take over such a call with its own kernel — the in-tree FA3/MLX dispatch pattern,
-generalized so the implementation does not have to live in this package.
+``scaled_dot_product_attention`` chokepoint, which asks this registry who
+should take each one — so an alternative kernel does not have to live in
+this package.
 
-Registration is **explicit**: the shared SDPA module registers the in-tree
-backends in one call at import, and external packages call
-:func:`register_attention_backend` from their own setup/enable function, once
-per process. There is no automatic discovery. Each call places its backends
-at the *front* of the consult order, in the order given — so the in-tree
-defaults are consulted in their listed order, and anything registered
-afterwards (e.g. an external backend at its enable call) is consulted before
-them. Registration is re-entrant (re-registering the same object is a no-op,
-keeping its position).
+Registration is **explicit**, with no discovery: the shared SDPA module
+registers the in-tree backends at import, and external packages call
+:func:`register_attention_backend` from their own setup function.
 
-Selection is **shape-based, not tensor-based**: a backend's
-:meth:`AttentionBackend.is_preferred` receives an :class:`AttentionSpec` —
-the description of one attention call (sequence lengths, head geometry,
-dtype, device) — rather than the tensors themselves. The spec is
-deliberately pure geometry: backends cannot tell *which* stage of *which*
-architecture a call belongs to, only what the call looks like. Architectures
-need no selection code of their own: the chokepoint builds the spec from the
-live tensors and consults the registry per call, which is a few microseconds
-and traces cleanly under ``torch.compile``.
-
-Backends are a *performance* seam and therefore fail open: no registered
-backend, or none preferred, means the ordinary SDPA path runs. Any policy
-about *when* a backend should engage belongs to the backend and whoever
-registers it.
+A backend is offered an :class:`AttentionSpec` — the call's geometry, not its
+tensors — and cannot tell which stage of which architecture it belongs to.
+Backends are a *performance* seam and fail open: if none prefers the call,
+the ordinary SDPA path runs.
 """
 
 from __future__ import annotations
@@ -235,8 +219,7 @@ def find_attention_backend(
         if candidate.is_preferred(spec):
             backend = candidate
             break
-    # Not while tracing: logging is not traceable (it would break the graph),
-    # and a trace-time line would report once per compile, not per call.
+    # Not while tracing: logging is not traceable (it breaks the graph).
     if not torch.compiler.is_compiling() and _logger.isEnabledFor(logging.DEBUG):
         _log_selection(spec, backend)
     return backend

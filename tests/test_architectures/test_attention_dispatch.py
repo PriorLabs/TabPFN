@@ -1,10 +1,8 @@
 #  Copyright (c) Prior Labs GmbH 2026.
-"""TabPFN v3 dispatches its attention calls through the registry.
+"""TabPFN v3 routes its attention calls through the registry.
 
-The architectures own no selection logic: every attention call reaches the
-shared chokepoint, which describes it as an :class:`AttentionSpec` and asks
-the registry. These tests check that from the outside — a registered backend
-sees the calls it should, described as they really are.
+Checked from the outside: a registered backend sees the calls it should,
+described as they really are.
 """
 
 from __future__ import annotations
@@ -21,10 +19,8 @@ from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
 
 def _is_icl_spec(spec: AttentionSpec) -> bool:
-    """Identify the ICL calls of the tiny test model by their geometry.
-
-    ICL is the only stage there with head_dim 64 and 3 heads (the embedder
-    and aggregator run head_dim 16, the decoder 6 heads).
+    """The test model's ICL calls: its only ones with head_dim 64 and 3 heads
+    (embedder and aggregator run head_dim 16, the decoder 6 heads).
     """
     return spec.head_dim == 64 and spec.num_heads == 3
 
@@ -88,9 +84,7 @@ def _inputs() -> tuple[torch.Tensor, torch.Tensor]:
 @pytest.mark.usefixtures("registry_sandbox")
 @torch.no_grad()
 def test_backend_receives_the_calls_it_prefers() -> None:
-    """A backend preferring the ICL shape runs for every ICL layer, and the
-    specs describe the call it actually gets.
-    """
+    """A backend preferring the ICL shape runs once per ICL layer."""
     backend = _RecordingBackend(take=_is_icl_spec)
     attention_backends.register_attention_backend(backend)
     model = _model(nlayers=2)
@@ -111,9 +105,7 @@ def test_backend_receives_the_calls_it_prefers() -> None:
 @pytest.mark.usefixtures("registry_sandbox")
 @torch.no_grad()
 def test_cached_predict_specs_report_the_quantized_cache() -> None:
-    """On the cache path the ICL spec carries the stored KV dtype, so a
-    backend can decide whether to consume the entry as it is stored.
-    """
+    """On the cache path the specs carry the stored KV dtype."""
     backend = _RecordingBackend()  # observe only
     attention_backends.register_attention_backend(backend)
     model = _model()
