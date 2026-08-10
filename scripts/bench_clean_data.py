@@ -10,7 +10,13 @@ fomo-fitting's `experimental/arthur/res-2439-reduce-the-ram-footprint-of-the-wra
 this script isolates the same call so it can be iterated on without paying for a
 whole fit + predict.
 
-What it measures, on exactly the array that profiler hands to `clean_data`:
+By default it measures exactly the array that profiler hands to `clean_data`: an
+all-numeric float32 table, which is the case the RAM spike was found in. `--string`
+swaps in a half-numeric, half-low-cardinality-string table -- arriving as an object
+array, as mixed data really does -- so the ordinal encoder is actually exercised and
+a change can be told apart from a float-only one. Each mix keeps its own baseline.
+
+What it measures:
 
 * **Transient RSS** -- the peak process RSS reached inside the call, minus the RSS
   on entry, sampled by a background thread so a spike that is allocated and freed
@@ -26,14 +32,19 @@ longer, and must produce identical outputs, or it exits non-zero. Each check run
 as soon as its input exists, so a regression fails before the next (more expensive)
 stage is paid for. Passing overwrites the baseline.
 
-Smoke test locally (seconds, ~20 MB on disk):
+Smoke test locally (seconds, ~20 MB on disk; `--string` combines with it):
 
     uv run scripts/bench_clean_data.py --small
 
-Full shape -- needs ~55 GB of RAM and writes ~11 GB per run:
+Full shape -- needs ~20 GB of RAM and writes ~11 GB per run:
 
     srun -p gpuh100flex --gres=gpu:1 --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py
+
+Mixed columns, at the smaller shape object arrays force (see `--string`):
+
+    srun -p gpuh100flex --gres=gpu:1 --mem=0 --time=01:00:00 \
+        uv run scripts/bench_clean_data.py --string
 """
 
 from __future__ import annotations
@@ -81,6 +92,24 @@ SMALL_COLS = 100
 BEYOND_ARENA_N_FOLDS = 3
 SEED = 0
 
+# How the columns are made up. The all-numeric mix is the profiled one; the mixed
+# one exists to answer whether a change helps only float tables.
+MIX_NUMERIC = "numeric"
+MIX_HALF_STRING = "half-string"
+
+# `--string` carries its own default shape because mixed data reaches `clean_data`
+# as an object array (see `generate_half_string_input`), which costs a pointer *and*
+# a Python object per numeric cell -- roughly 40 bytes against float32's 4. The
+# default shape would need over 100 GB to build the input alone, before cleaning it.
+STRING_PROFILER_ROWS = 500_000
+STRING_COLS = 400
+
+# Distinct values per string column. Below MAX_UNIQUE_FOR_CATEGORICAL_FEATURES so
+# the columns detect as CATEGORICAL rather than TEXT, and deliberately not
+# numeric-looking: `_is_numeric_pandas_series` coerces columns whose strings parse
+# as numbers, which would send them down the numerical branch instead.
+STRING_LEVELS = 20
+
 # Modality-detection thresholds from the profiler's 3.1_exp `InferenceConfig`.
 # Standard-normal columns land on NUMERICAL for every one of these, but the
 # detection has to run anyway: its `FeatureSchema` is what `clean_data` consumes.
@@ -92,9 +121,10 @@ MIN_UNIQUE_FOR_NUMERICAL_FEATURES = 4
 # alone, so the +/-inf masking path is not exercised.
 PASSTHROUGH_INF = False
 
-# Bumped whenever the meaning of a recorded metric changes, so an old baseline is
-# rejected rather than silently compared against.
-SCHEMA_VERSION = 1
+# Bumped whenever the meaning of a recorded metric, or the shape of the recorded
+# input description, changes -- so an old baseline is rejected rather than silently
+# compared against. 2: `input` gained `mix`.
+SCHEMA_VERSION = 2
 
 METRICS_FILE = "metrics.json"
 ARRAY_FILE = "X_cleaned.npy"
@@ -103,6 +133,7 @@ AUX_FILE = "aux.pkl"
 # Head and tail elements hashed into the input fingerprint. Enough to catch a
 # changed generator or dtype without hashing gigabytes.
 FINGERPRINT_ELEMENTS = 1_000_000
+FINGERPRINT_OBJECT_ELEMENTS = 100_000
 
 # Cells per block when comparing against a recorded array. Sized so the boolean
 # temporaries the comparison builds stay in the tens of MB whatever the shape.
@@ -206,7 +237,16 @@ def train_rows_for(profiler_rows: int) -> int:
     return profiler_rows - test_rows
 
 
-def generate_input(profiler_rows: int, cols: int, dtype: str) -> np.ndarray:
+def generate_input(spec: dict[str, Any]) -> np.ndarray:
+    """The matrix `clean_data` is handed, for whichever column mix was asked for."""
+    if spec["mix"] == MIX_HALF_STRING:
+        return generate_half_string_input(
+            spec["profiler_rows"], spec["cols"], spec["dtype"]
+        )
+    return generate_numeric_input(spec["profiler_rows"], spec["cols"], spec["dtype"])
+
+
+def generate_numeric_input(profiler_rows: int, cols: int, dtype: str) -> np.ndarray:
     """The train matrix the profiler hands to `fit`, and so to `clean_data`.
 
     Drawn as float32 and cast afterwards, matching the profiler's `generate_inputs`
@@ -222,6 +262,32 @@ def generate_input(profiler_rows: int, cols: int, dtype: str) -> np.ndarray:
     ).astype(np.dtype(dtype), copy=False)
 
 
+def generate_half_string_input(profiler_rows: int, cols: int, dtype: str) -> np.ndarray:
+    """Half numeric columns, half low-cardinality string columns, as one object array.
+
+    Object dtype is not a simplification -- it is how mixed data actually arrives.
+    `ensure_compatible_fit_inputs` runs sklearn's `check_array(dtype=None)`, which
+    collapses a frame of mixed dtypes into a single object array, so that is what
+    `clean_data` sees.
+
+    The two kinds of column alternate rather than sitting in two contiguous halves,
+    so the numeric ones cannot be handled as one block by accident. With an odd
+    `cols` the numeric half takes the extra column.
+    """
+    rows = train_rows_for(profiler_rows)
+    numeric_cols = np.arange(0, cols, 2)
+    string_cols = np.arange(1, cols, 2)
+
+    rng = np.random.default_rng(SEED)
+    X = np.empty((rows, cols), dtype=object)
+    X[:, numeric_cols] = rng.standard_normal(
+        (rows, len(numeric_cols)), dtype=np.float32
+    ).astype(np.dtype(dtype), copy=False)
+    levels = np.array([f"lvl_{i:02d}" for i in range(STRING_LEVELS)], dtype=object)
+    X[:, string_cols] = levels[rng.integers(0, STRING_LEVELS, (rows, len(string_cols)))]
+    return X
+
+
 def fingerprint(X: np.ndarray) -> str:
     """Digest of the input's shape, dtype and edge values.
 
@@ -231,9 +297,30 @@ def fingerprint(X: np.ndarray) -> str:
     digest = hashlib.sha256()
     digest.update(f"{X.shape}|{X.dtype}|{SEED}".encode())
     flat = X.ravel()
-    digest.update(flat[:FINGERPRINT_ELEMENTS].tobytes())
-    digest.update(flat[-FINGERPRINT_ELEMENTS:].tobytes())
+    if X.dtype == object:
+        # `tobytes` on an object array digests pointer addresses, which differ on
+        # every run and would fail the guard against the array they identify. The
+        # elements' reprs are stable, and fewer of them are needed since building
+        # each one costs a Python call.
+        for edge in (
+            flat[:FINGERPRINT_OBJECT_ELEMENTS],
+            flat[-FINGERPRINT_OBJECT_ELEMENTS:],
+        ):
+            digest.update("|".join(map(repr, edge.tolist())).encode())
+    else:
+        digest.update(flat[:FINGERPRINT_ELEMENTS].tobytes())
+        digest.update(flat[-FINGERPRINT_ELEMENTS:].tobytes())
     return digest.hexdigest()
+
+
+def describe_input_size(X: np.ndarray) -> str:
+    """`X`'s footprint, flagging what an object array's `nbytes` leaves out."""
+    if X.dtype == object:
+        return (
+            f"{X.nbytes / _GB:.2f} GB of pointers, plus the Python objects they "
+            "point at, which nbytes does not count"
+        )
+    return f"{X.nbytes / _GB:.2f} GB"
 
 
 def build_feature_schema(X: np.ndarray) -> FeatureSchema:
@@ -357,9 +444,9 @@ def timing_as_dict(measurement: Measurement, warmup_calls: int) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def shape_dir_name(train_rows: int, cols: int, dtype: str) -> str:
-    """Directory name identifying one input shape."""
-    return f"rows{train_rows}_cols{cols}_{dtype}"
+def shape_dir_name(train_rows: int, cols: int, dtype: str, mix: str) -> str:
+    """Directory name identifying one input, so each mix keeps its own baseline."""
+    return f"rows{train_rows}_cols{cols}_{dtype}_{mix}"
 
 
 def baseline_paths(out_dir: Path) -> dict[str, Path]:
@@ -613,17 +700,33 @@ def print_pass_summary(
 
 def resolve_input_spec(args: argparse.Namespace) -> dict[str, Any]:
     """Everything identifying the input, for the directory name and the guard."""
-    profiler_rows = args.rows
-    if profiler_rows is None:
-        profiler_rows = SMALL_PROFILER_ROWS if args.small else DEFAULT_PROFILER_ROWS
-    cols = args.cols
-    if cols is None:
-        cols = SMALL_COLS if args.small else DEFAULT_COLS
+    # An explicit --rows/--cols wins, then --small (debugging beats everything it
+    # is combined with), then --string's own shape, then the profiled default.
+    if args.rows is not None:
+        profiler_rows = args.rows
+    elif args.small:
+        profiler_rows = SMALL_PROFILER_ROWS
+    elif args.string:
+        profiler_rows = STRING_PROFILER_ROWS
+    else:
+        profiler_rows = DEFAULT_PROFILER_ROWS
+
+    if args.cols is not None:
+        cols = args.cols
+    elif args.small:
+        cols = SMALL_COLS
+    elif args.string:
+        cols = STRING_COLS
+    else:
+        cols = DEFAULT_COLS
+
     return {
         "profiler_rows": profiler_rows,
         "rows": train_rows_for(profiler_rows),
         "cols": cols,
         "dtype": args.input_dtype,
+        "mix": MIX_HALF_STRING if args.string else MIX_NUMERIC,
+        "string_levels": STRING_LEVELS if args.string else None,
         "seed": SEED,
         "passthrough_inf": PASSTHROUGH_INF,
     }
@@ -673,7 +776,9 @@ def check_memory(
 def main(args: argparse.Namespace) -> None:
     """Measure `clean_data`, then either record a baseline or gate against one."""
     spec = resolve_input_spec(args)
-    out_dir = args.out_root / shape_dir_name(spec["rows"], spec["cols"], spec["dtype"])
+    out_dir = args.out_root / shape_dir_name(
+        spec["rows"], spec["cols"], spec["dtype"], spec["mix"]
+    )
     paths = baseline_paths(out_dir)
     # A baseline is only a baseline once all three files are there; a partial one
     # (an interrupted run, a hand-deleted array) is re-recorded rather than trusted.
@@ -697,11 +802,11 @@ def main(args: argparse.Namespace) -> None:
             for line in drift:
                 print(f"  - {line}")
 
-    X = generate_input(spec["profiler_rows"], spec["cols"], spec["dtype"])
+    X = generate_input(spec)
     input_fingerprint = fingerprint(X)
     print(
-        f"\nInput to clean_data: {X.shape} {X.dtype} ({X.nbytes / _GB:.2f} GB), "
-        f"fingerprint {input_fingerprint[:16]}"
+        f"\nInput to clean_data: {X.shape} {X.dtype} ({describe_input_size(X)})"
+        f"\n  mix: {spec['mix']}, fingerprint {input_fingerprint[:16]}"
     )
     if recorded is not None and recorded["input"]["fingerprint"] != input_fingerprint:
         fail(
@@ -808,6 +913,16 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use a shape that runs in seconds, for debugging this script. Its "
         "baseline lives in its own directory, so it never touches the full one.",
+    )
+    parser.add_argument(
+        "--string",
+        action="store_true",
+        help="Make half the columns low-cardinality strings, detected as "
+        f"categorical ({STRING_LEVELS} distinct values), so the ordinal encoder is "
+        "actually exercised instead of selecting nothing. Mixed data arrives as an "
+        "object array, which is far heavier per cell, so this also lowers the "
+        f"default shape to {STRING_PROFILER_ROWS} rows x {STRING_COLS} cols. Keeps "
+        "its own baseline directory.",
     )
     parser.add_argument(
         "--input-dtype",
