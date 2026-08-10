@@ -189,26 +189,14 @@ def registered_attention_backends() -> tuple[AttentionBackend, ...]:
     return _consult_order
 
 
-def resolve_attention_backend(spec: AttentionSpec) -> AttentionBackend | None:
-    """The first backend in consult order preferring *spec*, or ``None``.
-
-    This is the single selection routine, used both by architectures planning
-    their stages upfront and by the per-call fallback for unplanned callers.
-    """
-    for backend in _consult_order:
-        if backend.is_preferred(spec):
-            return backend
-    return None
-
-
-def spec_from_tensors(
+def _spec_from_tensors(
     q_BSHD: torch.Tensor,
     k_BSJD: torch.Tensor | None,
     v_BSJD: torch.Tensor | None,  # noqa: ARG001  (symmetry with run())
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
 ) -> AttentionSpec:
-    """Describe a live attention call, for per-call (unplanned) resolution."""
+    """Describe the call about to run, for the registry to match against."""
     k = quantized_kv.key if quantized_kv is not None else k_BSJD
     return AttentionSpec(
         seq_len_q=q_BSHD.shape[1],
@@ -235,9 +223,18 @@ def find_attention_backend(
     *,
     quantized_kv: QuantizedKVCacheEntry | None = None,
 ) -> AttentionBackend | None:
-    """Resolve the backend for this call from the live tensors."""
-    spec = spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
-    backend = resolve_attention_backend(spec)
+    """The backend for this call, or ``None`` for the standard SDPA path.
+
+    Describes the call, then takes the first registered backend that prefers
+    it. This is the one selection routine: the architectures call it (through
+    the chokepoint) and own no selection logic themselves.
+    """
+    spec = _spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
+    backend: AttentionBackend | None = None
+    for candidate in _consult_order:
+        if candidate.is_preferred(spec):
+            backend = candidate
+            break
     # Not while tracing: logging is not traceable (it would break the graph),
     # and a trace-time line would report once per compile, not per call.
     if not torch.compiler.is_compiling() and _logger.isEnabledFor(logging.DEBUG):

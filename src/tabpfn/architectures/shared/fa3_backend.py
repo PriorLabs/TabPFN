@@ -44,11 +44,6 @@ def _load_fa3_func() -> Callable | None:
     return flash_attn_func
 
 
-def is_fa3_importable() -> bool:
-    """True iff the FA3 Hopper Python package (``flash_attn_interface``) imports."""
-    return _load_fa3_func() is not None
-
-
 @functools.cache
 def _is_hopper(device: torch.device) -> bool:
     """True iff ``device`` is an Nvidia Hopper GPU (compute capability 9.x)."""
@@ -106,7 +101,7 @@ class FA3Backend:
     @staticmethod
     def is_available() -> bool:
         """Whether the FA3 wheel is installed (checked once, at registration)."""
-        return is_fa3_importable()
+        return _load_fa3_func() is not None
 
     def is_preferred(self, spec: AttentionSpec) -> bool:
         """Eligibility plus the measured speedup crossover.
