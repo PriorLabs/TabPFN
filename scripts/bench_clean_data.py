@@ -11,10 +11,18 @@ this script isolates the same call so it can be iterated on without paying for a
 whole fit + predict.
 
 By default it measures exactly the array that profiler hands to `clean_data`: an
-all-numeric float32 table, which is the case the RAM spike was found in. `--string`
-swaps in a half-numeric, half-low-cardinality-string table -- arriving as an object
-array, as mixed data really does -- so the ordinal encoder is actually exercised and
-a change can be told apart from a float-only one. Each mix keeps its own baseline.
+all-numeric float32 table, which is the case the RAM spike was found in. `--mix`
+swaps in one of two tables that reach `clean_data` as an object array, as mixed data
+really does, so a change can be told apart from a float-only one:
+
+* `half-string` alternates numeric and low-cardinality string columns, so the
+  ordinal encoder is actually exercised rather than selecting nothing.
+* `numeric-object` alternates float and integer columns. Nothing is encoded, but
+  every column still has to be recast, which leaves the frame split into one block
+  per column -- the layout pandas has to materialise before it can hand the values
+  back, and so the one where a copy of that is worth avoiding.
+
+Each mix keeps its own baseline.
 
 What it measures:
 
@@ -32,7 +40,7 @@ longer, and must produce identical outputs, or it exits non-zero. Each check run
 as soon as its input exists, so a regression fails before the next (more expensive)
 stage is paid for. Passing overwrites the baseline.
 
-Smoke test locally (seconds, ~20 MB on disk; `--string` combines with it):
+Smoke test locally (seconds, ~20 MB on disk; `--mix` combines with it):
 
     uv run scripts/bench_clean_data.py --small
 
@@ -43,10 +51,13 @@ so it is both big enough for the full shape and quick to get hold of:
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py
 
-Mixed columns, at the smaller shape object arrays force (see `--string`):
+Either object-array mix, at the smaller shape they force (see `--mix`):
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
-        uv run scripts/bench_clean_data.py --string
+        uv run scripts/bench_clean_data.py --mix half-string
+
+    srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
+        uv run scripts/bench_clean_data.py --mix numeric-object
 
 The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
 `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
@@ -105,23 +116,38 @@ SMALL_COLS = 100
 BEYOND_ARENA_N_FOLDS = 3
 SEED = 0
 
-# How the columns are made up. The all-numeric mix is the profiled one; the mixed
-# one exists to answer whether a change helps only float tables.
+# How the columns are made up. The all-numeric mix is the profiled one; the other two
+# exist to answer whether a change helps only float tables, and they split the two
+# ways a table can be non-trivial: columns the encoder takes, and columns it does not
+# but that still have to be converted.
 MIX_NUMERIC = "numeric"
 MIX_HALF_STRING = "half-string"
+MIX_NUMERIC_OBJECT = "numeric-object"
 
-# `--string` carries its own default shape because mixed data reaches `clean_data`
-# as an object array (see `generate_half_string_input`), which costs a pointer *and*
-# a Python object per numeric cell -- roughly 40 bytes against float32's 4. The
-# default shape would need over 100 GB to build the input alone, before cleaning it.
-STRING_PROFILER_ROWS = 500_000
-STRING_COLS = 400
+# Both of the others reach `clean_data` as an object array (see their generators),
+# which costs a pointer *and* a Python object per cell -- roughly 40 bytes against
+# float32's 4 -- so they carry their own default shape. The numeric default would
+# need over 100 GB to build the input alone, before cleaning it.
+OBJECT_MIXES = frozenset({MIX_HALF_STRING, MIX_NUMERIC_OBJECT})
+OBJECT_PROFILER_ROWS = 500_000
+OBJECT_COLS = 400
 
 # Distinct values per string column. Below MAX_UNIQUE_FOR_CATEGORICAL_FEATURES so
 # the columns detect as CATEGORICAL rather than TEXT, and deliberately not
 # numeric-looking: `_is_numeric_pandas_series` coerces columns whose strings parse
 # as numbers, which would send them down the numerical branch instead.
 STRING_LEVELS = 20
+
+# Distinct values per integer column, well above MAX_UNIQUE_FOR_CATEGORICAL_FEATURES
+# so those columns detect as NUMERICAL. A narrower range would have them picked up as
+# categorical, which would send that mix down the encoder path and leave nothing
+# measuring the conversion-only one.
+INTEGER_LEVELS = 10_000
+
+# Distinct values per generated non-float column, for the mixes that have any. Part
+# of the recorded input description, since it decides which modality the columns
+# detect as and so which path the mix measures.
+MIX_LEVELS = {MIX_HALF_STRING: STRING_LEVELS, MIX_NUMERIC_OBJECT: INTEGER_LEVELS}
 
 # Modality-detection thresholds from the profiler's 3.1_exp `InferenceConfig`.
 # Standard-normal columns land on NUMERICAL for every one of these, but the
@@ -136,8 +162,9 @@ PASSTHROUGH_INF = False
 
 # Bumped whenever the meaning of a recorded metric, or the shape of the recorded
 # input description, changes -- so an old baseline is rejected rather than silently
-# compared against. 2: `input` gained `mix`.
-SCHEMA_VERSION = 2
+# compared against. 2: `input` gained `mix`. 3: its `string_levels` became `levels`,
+# which the numeric-object mix has one of too.
+SCHEMA_VERSION = 3
 
 METRICS_FILE = "metrics.json"
 ARRAY_FILE = "X_cleaned.npy"
@@ -289,11 +316,11 @@ def train_rows_for(profiler_rows: int) -> int:
 
 def generate_input(spec: dict[str, Any]) -> np.ndarray:
     """The matrix `clean_data` is handed, for whichever column mix was asked for."""
-    if spec["mix"] == MIX_HALF_STRING:
-        return generate_half_string_input(
-            spec["profiler_rows"], spec["cols"], spec["dtype"]
-        )
-    return generate_numeric_input(spec["profiler_rows"], spec["cols"], spec["dtype"])
+    generator = {
+        MIX_HALF_STRING: generate_half_string_input,
+        MIX_NUMERIC_OBJECT: generate_numeric_object_input,
+    }.get(spec["mix"], generate_numeric_input)
+    return generator(spec["profiler_rows"], spec["cols"], spec["dtype"])
 
 
 def generate_numeric_input(profiler_rows: int, cols: int, dtype: str) -> np.ndarray:
@@ -335,6 +362,40 @@ def generate_half_string_input(profiler_rows: int, cols: int, dtype: str) -> np.
     ).astype(np.dtype(dtype), copy=False)
     levels = np.array([f"lvl_{i:02d}" for i in range(STRING_LEVELS)], dtype=object)
     X[:, string_cols] = levels[rng.integers(0, STRING_LEVELS, (rows, len(string_cols)))]
+    return X
+
+
+def generate_numeric_object_input(
+    profiler_rows: int, cols: int, dtype: str
+) -> np.ndarray:
+    """Alternating float and integer columns, all numeric, as one object array.
+
+    A frame of *mixed numeric* dtypes arrives this way for the same reason a
+    half-string one does: `check_array(dtype=None)` collapses anything that is not of
+    one dtype into an object array. Nothing here is categorical, so the ordinal
+    encoder selects no columns and the encoding step is skipped altogether -- but
+    every column still comes back from `convert_dtypes` as a nullable extension dtype
+    and has to be recast, which leaves the frame holding one block per column.
+
+    That layout is the point of this mix, and neither of the others reaches it: a
+    float table is wrapped without a recast and stays one block, and a half-string
+    one has columns the encoder takes, so it never gets as far as the block-layout
+    question.
+
+    The integers span `INTEGER_LEVELS` values so they detect as NUMERICAL rather than
+    categorical. Alternating rather than in halves, as above, so the float columns
+    cannot be handled as one block by accident.
+    """
+    rows = train_rows_for(profiler_rows)
+    float_cols = np.arange(0, cols, 2)
+    integer_cols = np.arange(1, cols, 2)
+
+    rng = np.random.default_rng(SEED)
+    X = np.empty((rows, cols), dtype=object)
+    X[:, float_cols] = rng.standard_normal(
+        (rows, len(float_cols)), dtype=np.float32
+    ).astype(np.dtype(dtype), copy=False)
+    X[:, integer_cols] = rng.integers(0, INTEGER_LEVELS, (rows, len(integer_cols)))
     return X
 
 
@@ -759,8 +820,8 @@ def prepare_reference_worktree(sha: str, root: Path, *, refresh: bool) -> Path:
 def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]:
     """The measurement arguments both sides of the comparison are run with.
 
-    Built from the resolved spec rather than forwarded from argv, so `--small` and
-    `--string` shape defaults are already applied and the two children cannot
+    Built from the resolved spec rather than forwarded from argv, so the `--small`
+    and per-mix shape defaults are already applied and the two children cannot
     disagree about what they measured.
     """
     forwarded = [
@@ -770,6 +831,8 @@ def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]
         str(spec["cols"]),
         "--input-dtype",
         spec["dtype"],
+        "--mix",
+        spec["mix"],
         "--timing-repeats",
         str(args.timing_repeats),
         "--warmup-calls",
@@ -777,8 +840,6 @@ def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]
         "--sample-interval-ms",
         str(args.sample_interval_ms),
     ]
-    if spec["mix"] == MIX_HALF_STRING:
-        forwarded.append("--string")
     if args.chunk_rows is not None:
         forwarded += ["--chunk-rows", str(args.chunk_rows)]
     return forwarded
@@ -1009,16 +1070,21 @@ def print_pass_summary(
 # ---------------------------------------------------------------------------
 
 
-def resolve_input_spec(args: argparse.Namespace) -> dict[str, Any]:
-    """Everything identifying the input, for the directory name and the guard."""
-    # An explicit --rows/--cols wins, then --small (debugging beats everything it
-    # is combined with), then --string's own shape, then the profiled default.
+def resolve_shape(args: argparse.Namespace) -> tuple[int, int]:
+    """Rows to generate and columns, from whichever of --rows/--cols/--small/--mix.
+
+    An explicit --rows/--cols wins, then --small (debugging beats everything it is
+    combined with), then the shape the mix carries, then the profiled default. Shared
+    with `profile_clean_data.py` so the two cannot drift into measuring different
+    tables under the same flags.
+    """
+    object_mix = args.mix in OBJECT_MIXES
     if args.rows is not None:
         profiler_rows = args.rows
     elif args.small:
         profiler_rows = SMALL_PROFILER_ROWS
-    elif args.string:
-        profiler_rows = STRING_PROFILER_ROWS
+    elif object_mix:
+        profiler_rows = OBJECT_PROFILER_ROWS
     else:
         profiler_rows = DEFAULT_PROFILER_ROWS
 
@@ -1026,18 +1092,23 @@ def resolve_input_spec(args: argparse.Namespace) -> dict[str, Any]:
         cols = args.cols
     elif args.small:
         cols = SMALL_COLS
-    elif args.string:
-        cols = STRING_COLS
+    elif object_mix:
+        cols = OBJECT_COLS
     else:
         cols = DEFAULT_COLS
+    return profiler_rows, cols
 
+
+def resolve_input_spec(args: argparse.Namespace) -> dict[str, Any]:
+    """Everything identifying the input, for the directory name and the guard."""
+    profiler_rows, cols = resolve_shape(args)
     return {
         "profiler_rows": profiler_rows,
         "rows": train_rows_for(profiler_rows),
         "cols": cols,
         "dtype": args.input_dtype,
-        "mix": MIX_HALF_STRING if args.string else MIX_NUMERIC,
-        "string_levels": STRING_LEVELS if args.string else None,
+        "mix": args.mix,
+        "levels": MIX_LEVELS.get(args.mix),
         "seed": SEED,
         "passthrough_inf": PASSTHROUGH_INF,
     }
@@ -1276,14 +1347,17 @@ def get_parser() -> argparse.ArgumentParser:
         "baseline lives in its own directory, so it never touches the full one.",
     )
     parser.add_argument(
-        "--string",
-        action="store_true",
-        help="Make half the columns low-cardinality strings, detected as "
-        f"categorical ({STRING_LEVELS} distinct values), so the ordinal encoder is "
-        "actually exercised instead of selecting nothing. Mixed data arrives as an "
-        "object array, which is far heavier per cell, so this also lowers the "
-        f"default shape to {STRING_PROFILER_ROWS} rows x {STRING_COLS} cols. Keeps "
-        "its own baseline directory.",
+        "--mix",
+        default=MIX_NUMERIC,
+        choices=[MIX_NUMERIC, MIX_HALF_STRING, MIX_NUMERIC_OBJECT],
+        help="Column make-up. 'numeric' is the profiled float table. 'half-string' "
+        f"makes every other column a low-cardinality string ({STRING_LEVELS} distinct "
+        "values, so it detects as categorical), which is what exercises the ordinal "
+        "encoder. 'numeric-object' makes every other column an integer instead, which "
+        "encodes nothing but forces a recast of every column. The latter two arrive "
+        "as object arrays, far heavier per cell, so they also lower the default shape "
+        f"to {OBJECT_PROFILER_ROWS} rows x {OBJECT_COLS} cols. Each keeps its own "
+        "baseline directory.",
     )
     parser.add_argument(
         "--input-dtype",
