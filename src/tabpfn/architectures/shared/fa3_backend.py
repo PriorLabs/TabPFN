@@ -17,6 +17,8 @@ from typing import TYPE_CHECKING, Any
 
 import torch
 
+from tabpfn.architectures.shared.attention_backends import AttentionBackend
+
 if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
@@ -88,7 +90,7 @@ def fa3_attn_func(
     return fn(q, k, v)
 
 
-class FA3Backend:
+class FA3Backend(AttentionBackend):
     """FA3 as an :class:`~.attention_backends.AttentionBackend`.
 
     Wraps the eligibility/crossover logic above unchanged; registered at

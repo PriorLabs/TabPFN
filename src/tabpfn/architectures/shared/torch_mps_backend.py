@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 import torch
 from torch.torch_version import TorchVersion
 
+from tabpfn.architectures.shared.attention_backends import AttentionBackend
+
 if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
@@ -60,7 +62,7 @@ def torch_mps_sdpa(
     return out
 
 
-class TorchMPSBackend:
+class TorchMPSBackend(AttentionBackend):
     """Torch-native MPS flash attention as an ``AttentionBackend``.
 
     Wraps ``torch_mps_sdpa`` (head-dim padding around the native op).

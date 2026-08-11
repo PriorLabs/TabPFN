@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import torch
 
+from tabpfn.architectures.shared.attention_backends import AttentionBackend
+
 if TYPE_CHECKING:
     from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
@@ -104,7 +106,7 @@ def flash_attention_mlx(
     return _mlx_to_torch(out, q_BHSD.device, q_BHSD.dtype)
 
 
-class MLXBackend:
+class MLXBackend(AttentionBackend):
     """MLX flash attention as an :class:`~.attention_backends.AttentionBackend`.
 
     Wraps the eligibility/crossover logic above unchanged; registered at
