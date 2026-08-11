@@ -112,6 +112,7 @@ FUNCTION_TARGETS: tuple[tuple[str, str], ...] = (
     ("tabpfn.preprocessing.clean", "fix_dtypes"),
     ("tabpfn.preprocessing.clean", "process_text_na_dataframe"),
     ("tabpfn.preprocessing.clean", "_apply_ordinal_encoder"),
+    ("tabpfn.preprocessing.clean", "_encode_into_preallocated"),
     ("tabpfn.preprocessing.clean", "_owned_float64_values"),
     # Only reached with PASSTHROUGH_INF; a module-level alias, so patching the
     # attribute is what the call site sees.
