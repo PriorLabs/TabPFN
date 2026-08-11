@@ -20,6 +20,7 @@ from tabpfn.preprocessing.configs import (
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
+    DEFAULT_N_ESTIMATORS,
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
     _draw_balanced_from_pool,
@@ -1009,11 +1010,11 @@ def test_scale_n_estimators_for_feature_coverage__no_scaling_when_enough_capacit
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=8,
-            n_total_features=4000,  # exactly 8 * 500
+            n_estimators="auto",
+            n_total_features=4000,  # exactly DEFAULT_N_ESTIMATORS (8) * 500
             preprocessor_configs=[cfg],
         )
-    assert result == 8
+    assert result == DEFAULT_N_ESTIMATORS
 
 
 def test_scale_n_estimators_for_feature_coverage__scales_up_and_warns():
@@ -1021,7 +1022,7 @@ def test_scale_n_estimators_for_feature_coverage__scales_up_and_warns():
     cfg = PreprocessorConfig("none", max_features_per_estimator=500)
     with pytest.warns(UserWarning, match="Auto-scaling n_estimators"):
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=8,
+            n_estimators="auto",
             n_total_features=5001,  # non-divisible: also exercises ceil rounding
             preprocessor_configs=[cfg],
         )
@@ -1034,12 +1035,42 @@ def test_scale_n_estimators_for_feature_coverage__uses_min_max_features_across_c
     large = PreprocessorConfig("none", max_features_per_estimator=1_000_000)
     with pytest.warns(UserWarning):  # noqa: PT030
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=2,
-            n_total_features=4000,
+            n_estimators="auto",
+            n_total_features=6000,
             preprocessor_configs=[small, large],
         )
-    # Bound by min budget (500): ceil(4000 / 500) = 8.
-    assert result == 8
+    # Bound by min budget (500): ceil(6000 / 500) = 12.
+    assert result == 12
+
+
+@pytest.mark.parametrize("n_estimators", [2, 8])
+def test_scale_n_estimators_for_feature_coverage__explicit_value_is_never_scaled(
+    n_estimators: int,
+):
+    """An explicitly passed n_estimators is used as-is, without warning."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=n_estimators,
+            n_total_features=5001,  # far over capacity: would scale "auto" to 11
+            preprocessor_configs=[cfg],
+        )
+    assert result == n_estimators
+
+
+def test_scale_n_estimators_for_feature_coverage__auto_scaling_disabled():
+    """auto_scale_n_estimators=False keeps "auto" at the package default."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=5001,
+            preprocessor_configs=[cfg],
+            auto_scale_n_estimators=False,
+        )
+    assert result == DEFAULT_N_ESTIMATORS
 
 
 @skip_on_macos

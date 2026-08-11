@@ -209,7 +209,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     def __init__(  # noqa: PLR0913
         self,
         *,
-        n_estimators: int = 8,
+        n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
@@ -255,18 +255,23 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  predictions of `n_estimators`-many forward passes of TabPFN. Each
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
+                 With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
+                 on wide datasets so every feature is seen by some estimator (see
+                 `auto_scale_n_estimators`). An explicit integer is never overridden.
 
             auto_scale_n_estimators:
-                Whether to automatically increase `n_estimators` when the dataset
-                has more features than a single estimator can see (i.e. more than
-                `max_features_per_estimator` features per estimator). When `True`
-                (default), `n_estimators` is raised to the smallest value that lets
-                every feature appear in at least one ensemble member, emitting a
-                warning when it does so. The auto-scaled value is capped at
-                `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may
-                never be sampled unless you raise `n_estimators` yourself. Set to
-                `False` to keep `n_estimators` exactly as provided; note that some
-                features may then never be sampled.
+                Only applies when `n_estimators="auto"`; an explicit `n_estimators`
+                is always used exactly as given. When `True` (default), the auto
+                value is raised above `DEFAULT_N_ESTIMATORS` when the dataset has
+                more features than a single estimator can see (i.e. more than
+                `max_features_per_estimator` features per estimator), to the
+                smallest value that lets every feature appear in at least one
+                ensemble member, emitting a warning when it does so. The
+                auto-scaled value is capped at `MAX_AUTO_SCALED_N_ESTIMATORS`;
+                beyond that some features may never be sampled unless you raise
+                `n_estimators` yourself. Set to `False` to keep `"auto"` at
+                `DEFAULT_N_ESTIMATORS`; note that some features may then never be
+                sampled.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -546,7 +551,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_classifier_v2().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
@@ -554,7 +559,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_classifier_v2_5().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
@@ -562,7 +567,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_classifier_v2_6().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
@@ -570,7 +575,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_classifier_v3().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         else:

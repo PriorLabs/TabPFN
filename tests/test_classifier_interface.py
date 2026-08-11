@@ -1321,7 +1321,7 @@ def test__create_default_for_version__v2__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2)
 
     assert isinstance(estimator, TabPFNClassifier)
-    assert estimator.n_estimators == 8
+    assert estimator.n_estimators == "auto"
     assert estimator.softmax_temperature == 0.9
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
@@ -1332,7 +1332,7 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2_5)
 
     assert isinstance(estimator, TabPFNClassifier)
-    assert estimator.n_estimators == 8
+    assert estimator.n_estimators == "auto"
     assert estimator.softmax_temperature == 0.9
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
@@ -1343,7 +1343,7 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V2_6)
 
     assert isinstance(estimator, TabPFNClassifier)
-    assert estimator.n_estimators == 8
+    assert estimator.n_estimators == "auto"
     assert estimator.softmax_temperature == 0.9
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path
@@ -1354,7 +1354,7 @@ def test__create_default_for_version__v3__uses_correct_defaults() -> None:
     estimator = TabPFNClassifier.create_default_for_version(ModelVersion.V3)
 
     assert isinstance(estimator, TabPFNClassifier)
-    assert estimator.n_estimators == 8
+    assert estimator.n_estimators == "auto"
     assert estimator.softmax_temperature == 0.9
     assert isinstance(estimator.model_path, str)
     assert "classifier" in estimator.model_path

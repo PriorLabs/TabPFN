@@ -1217,28 +1217,44 @@ features may never be sampled unless the user raises n_estimators explicitly.
 """
 
 
+DEFAULT_N_ESTIMATORS = 8
+"""The n_estimators value used when the user leaves ``n_estimators="auto"``.
+
+This is the base value that feature-coverage scaling may then raise.
+"""
+
+
 def scale_n_estimators_for_feature_coverage(
     *,
-    n_estimators: int,
+    n_estimators: int | Literal["auto"],
     n_total_features: int,
     preprocessor_configs: Sequence[PreprocessorConfig],
     auto_scale_n_estimators: bool = True,
 ) -> int:
     """Scale up n_estimators so every feature is included in at least one estimator.
 
+    Scaling only applies to ``n_estimators="auto"``; an explicit integer is always
+    returned unchanged, so the package never overrides a value the user chose.
+
     With balanced feature subsampling each estimator sees at most
     ``max_features_per_estimator`` features. If
     ``n_estimators * max_features_per_estimator < n_total_features`` some features
-    are never sampled. Returns the smallest n_estimators that covers all features
-    (using the smallest ``max_features_per_estimator`` across the supplied configs,
-    which is the binding budget), capped at ``MAX_AUTO_SCALED_N_ESTIMATORS``. When
+    are never sampled. For ``"auto"`` this returns the smallest n_estimators that
+    covers all features (using the smallest ``max_features_per_estimator`` across the
+    supplied configs, which is the binding budget), at least
+    ``DEFAULT_N_ESTIMATORS`` and capped at ``MAX_AUTO_SCALED_N_ESTIMATORS``. When
     the cap binds, full coverage is not reached and some features may never be
     sampled unless the user raises ``n_estimators`` explicitly.
 
-    When ``auto_scale_n_estimators`` is False the scaling is skipped and
-    ``n_estimators`` is returned unchanged (this is the ``auto_scale_n_estimators``
-    constructor argument on the estimator); some features may then never be sampled.
+    When ``auto_scale_n_estimators`` is False the scaling is skipped and ``"auto"``
+    simply resolves to ``DEFAULT_N_ESTIMATORS`` (this is the
+    ``auto_scale_n_estimators`` constructor argument on the estimator); some
+    features may then never be sampled.
     """
+    if n_estimators != "auto":
+        # A value the user chose explicitly is never overridden.
+        return n_estimators
+    n_estimators = DEFAULT_N_ESTIMATORS
     if not auto_scale_n_estimators or not preprocessor_configs:
         return n_estimators
     min_max_features = min(c.max_features_per_estimator for c in preprocessor_configs)
@@ -1268,9 +1284,9 @@ def scale_n_estimators_for_feature_coverage(
             f"(n_total_features={n_total_features}, "
             f"max_features_per_estimator={min_max_features}). "
             f"Pass n_estimators >= {target} to silence this warning. "
-            f"If this scaling is not desired, set auto_scale_n_estimators=False "
-            f"in the estimator constructor to disable it (note: some features may "
-            f"then never be sampled).",
+            f"If this scaling is not desired, pass an explicit n_estimators (or set "
+            f"auto_scale_n_estimators=False) in the estimator constructor to disable "
+            f"it (note: some features may then never be sampled).",
             UserWarning,
             stacklevel=2,
         )
