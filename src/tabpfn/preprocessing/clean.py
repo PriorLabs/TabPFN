@@ -626,11 +626,7 @@ def process_text_na_dataframe(
         X_encoded[:, string_cols_ix],
     )
     # `copy=False` because the cast has nothing to do whenever the step above already
-    # produced float64 -- the common case, since the ordinal encoder encodes into
-    # float64 and hstacks it with columns `fix_dtypes` has already made float64.
-    # Copying unconditionally duplicated the whole result for nothing: ~6% of the wall
-    # time of a mixed-column clean. It does not lower that path's peak, which is set
-    # inside the encoder's own hstack, but it does remove a full-size allocation.
+    # produced float64.
     # Safe to hand back uncopied because every branch above allocates its own array.
     X_encoded = X_encoded.astype(np.float64, copy=False)
 
