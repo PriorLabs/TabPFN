@@ -422,17 +422,52 @@ def _encoding_is_identity(
     holds ``pd.NA``, which only survives the trip through pandas.
 
     A *frozen* encoder does not re-select, it reuses the columns it saw at fit, so
-    that selection has to be empty as well.
+    that selection has to be empty as well -- and the frame has to be one sklearn
+    would have accepted, since skipping `transform` skips its checks along with it.
     """
     if any(dtype != _FLOAT64 for dtype in X.dtypes):
         return False
     if fit_encoder or ord_encoder is None:
         return True
-    return not any(
+    # `transformers_` read directly rather than defaulted: only a fitted encoder gets
+    # this far -- `_align_columns_to_fitted_dtypes` runs first and goes through
+    # `named_transformers_`, which raises without it -- and a default would answer
+    # "identity" for an encoder that selected nothing only because it was never fit.
+    if any(
         len(columns) > 0
-        for name, _, columns in getattr(ord_encoder, "transformers_", ())
+        for name, _, columns in ord_encoder.transformers_
         if name != "remainder"
-    )
+    ):
+        return False
+    return _matches_fitted_frame(ord_encoder, X)
+
+
+def _matches_fitted_frame(
+    ord_encoder: OrderPreservingColumnTransformer, X: pd.DataFrame
+) -> bool:
+    """Whether `X` lines up with the frame the encoder was fitted on.
+
+    The shortcut hands back `X`'s own columns in `X`'s own order, so it is only the
+    same answer as `transform` for a frame that lines up with the fitted one:
+
+    * A different width `transform` refuses outright -- `columns are missing` when it
+      has feature names to check against, sklearn's feature-count error when not.
+    * The same names in another order it accepts and *reorders*, selecting by name
+      and returning the columns as they sat at fit. Handing back `X`'s order instead
+      would be a silently transposed result, so this is the case worth catching.
+
+    When only one of the two sides carries names sklearn falls back to lining the
+    columns up positionally, which is what the shortcut does as well, so that is let
+    through.
+    """
+    if getattr(ord_encoder, "n_features_in_", None) != X.shape[1]:
+        return False
+    fitted_names = getattr(ord_encoder, "feature_names_in_", None)
+    if fitted_names is None or not all(isinstance(col, str) for col in X.columns):
+        return True
+    # Compared as plain lists: the two sides can hold the same names in a numpy
+    # string array and a pandas Index, whose own equality is dtype-sensitive.
+    return list(X.columns) == list(fitted_names)
 
 
 def _to_numpy_may_alias(X: pd.DataFrame) -> bool:

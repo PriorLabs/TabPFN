@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,7 +13,10 @@ import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessing import clean_data
+from tabpfn.preprocessing import (
+    clean as clean_module,
+    clean_data,
+)
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     _owned_float64_values,
@@ -892,3 +897,70 @@ def test__owned_float64_values__copies_a_single_block_frame() -> None:
     assert not np.shares_memory(out, values)
     out[0, 0] = 12345.0
     assert values[0, 0] != 12345.0
+
+
+# --- the frozen shortcut's preconditions -----------------------------------------
+#
+# At predict time the encoding step is skipped when a fitted encoder selected no
+# columns. Skipping `transform` skips its checks too, so the shortcut is only taken
+# for a frame `transform` would have handled the same way.
+
+
+def _float_frame(**columns: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({name: np.array(values) for name, values in columns.items()})
+
+
+def test__encoding_is_identity__an_unfitted_encoder_is_not_an_empty_selection() -> None:
+    """An encoder that never selected anything because it was never fitted.
+
+    It has no selection to read, which must not be mistaken for having selected no
+    columns -- that would hand the frame back unencoded instead of failing.
+    """
+    with pytest.raises(AttributeError):
+        clean_module._encoding_is_identity(
+            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]),
+            get_ordinal_encoder(),
+            fit_encoder=False,
+        )
+
+
+def test__process_text_na_dataframe__frozen_shortcut_rejects_a_narrower_frame() -> None:
+    """A width sklearn would refuse has to keep failing."""
+    encoder = get_ordinal_encoder()
+    encoder.fit(_float_frame(a=[1.0, 2.0], b=[3.0, 4.0], c=[5.0, 6.0]))
+
+    with pytest.raises(ValueError, match="missing"):
+        process_text_na_dataframe(
+            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]), ord_encoder=encoder
+        )
+
+
+def test__process_text_na_dataframe__frozen_shortcut_reorders_like_sklearn() -> None:
+    """Reordered columns come back in fit order, as `transform` returns them.
+
+    `ColumnTransformer` selects by name, so it lines a reordered frame back up with
+    the fit-time order. The shortcut returns the frame's own order, which for this
+    frame is a different array -- so it must not be taken here.
+    """
+    fitted_on = _float_frame(a=[1.0, 2.0], b=[3.0, 4.0], c=[5.0, 6.0])
+    encoder = get_ordinal_encoder()
+    encoder.fit(fitted_on)
+
+    out = process_text_na_dataframe(fitted_on[["a", "c", "b"]], ord_encoder=encoder)
+
+    np.testing.assert_array_equal(out, fitted_on.to_numpy())
+
+
+def test__process_text_na_dataframe__frozen_shortcut_taken_when_lined_up() -> None:
+    """The shortcut still applies to the frame the encoder was fitted on."""
+    frame = _float_frame(a=[1.0, 2.0], b=[3.0, 4.0])
+    encoder = get_ordinal_encoder()
+    encoder.fit(frame)
+
+    with mock.patch.object(
+        clean_module, "_owned_float64_values", wraps=clean_module._owned_float64_values
+    ) as shortcut:
+        out = process_text_na_dataframe(frame, ord_encoder=encoder)
+
+    assert shortcut.call_count == 1
+    np.testing.assert_array_equal(out, frame.to_numpy())
