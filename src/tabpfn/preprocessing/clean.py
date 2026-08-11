@@ -496,29 +496,36 @@ def _to_numpy_may_alias(X: pd.DataFrame) -> bool:
 def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
     """`X`'s values as a writeable float64 array that the caller owns.
 
-    A multi-block frame is materialised by `to_numpy` into an array nothing else
-    holds, so that single allocation is the one the caller keeps -- copying it again
-    would double the peak to produce the same values. A single-block frame instead
-    hands back a view of its own buffer, so that one is copied; the copy is then the
-    only allocation the identity path makes. Routing the same frame through the
-    ordinal encoder costs two either way: one to re-materialise it for the hstack,
-    one for the closing `astype`.
+    One full-size allocation, whichever pandas is installed. What it cannot be is
+    `to_numpy`'s result handed straight back, for a different reason per shape:
+
+    * A single-block frame is handed out as that block, so `to_numpy` allocates
+      nothing at all. That one is copied -- see `_to_numpy_may_alias`.
+    * A frame of many blocks pandas 3 materialises into a private array, which could
+      be taken as it is. Earlier pandas instead consolidates the frame *in place*
+      first and returns a view of the block it just built: taking that would write
+      through into the frame, and copying it costs a second full-size buffer on top
+      of the consolidation. Measured at 200,000 x 300 float64, that pair peaks at
+      twice the frame's size on pandas 1.4 against once on pandas 3.
+
+    So a many-block frame is assembled column by column into an array preallocated
+    here, which nothing else has ever referenced and which costs one buffer on every
+    version. It also leaves the frame's own blocks alone, where `to_numpy` would
+    consolidate them out from under a caller still holding it.
 
     Column-major because that is what the encoder path has always returned -- its
     `hstack` builds an F-ordered array and the closing `astype` preserves layout --
     and downstream preprocessing is column-wise. Pinning the order here keeps this a
-    change of cost only, not of what callers receive. pandas materialises with the
-    same layout, so the common case needs no rearranging, but the flags are checked
-    rather than assumed and anything else falls back to the copy.
+    change of cost only, not of what callers receive.
     """
-    values = X.to_numpy(dtype=np.float64, copy=False)
-    if (
-        not _to_numpy_may_alias(X)
-        and values.flags.writeable
-        and values.flags.f_contiguous
-    ):
-        return values
-    return np.array(values, order="F", copy=True)
+    if _to_numpy_may_alias(X):
+        return np.array(X.to_numpy(dtype=np.float64, copy=False), order="F", copy=True)
+
+    out = np.empty(X.shape, dtype=np.float64, order="F")
+    for position in range(X.shape[1]):
+        # Positional throughout: a duplicate column name makes `X[label]` a frame.
+        out[:, position] = X.iloc[:, position].to_numpy(dtype=np.float64, copy=False)
+    return out
 
 
 def _apply_ordinal_encoder(

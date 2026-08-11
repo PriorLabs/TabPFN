@@ -863,8 +863,14 @@ def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
     return frame
 
 
-def test__owned_float64_values__hands_a_multi_block_frame_through() -> None:
-    """A frame of many blocks is materialised by `to_numpy`; copying that is waste."""
+def test__owned_float64_values__assembles_a_multi_block_frame_in_one_buffer() -> None:
+    """A frame of many blocks is assembled directly, never routed through `to_numpy`.
+
+    Asserted through the frame rather than the result, because what the result looks
+    like depends on the pandas: `to_numpy` consolidates the frame in place before
+    pandas 3, so a run that went through it would cost a second full-size buffer and
+    leave the frame holding one block instead of many.
+    """
     values = np.random.default_rng(0).standard_normal((8, 5))
     frame = _fragmented_float_frame(values)
     assert not _is_single_float_block(frame)
@@ -875,9 +881,13 @@ def test__owned_float64_values__hands_a_multi_block_frame_through() -> None:
     assert out.flags.writeable
     assert out.flags.f_contiguous
     assert not np.shares_memory(out, values)
-    # Nothing else references what `to_numpy` built, so it was returned rather than
-    # copied a second time. A copy would own its data outright.
-    assert out.base is not None
+    # Still one block per column: nothing consolidated it on the way.
+    assert not _is_single_float_block(frame)
+    # And the buffer is the caller's alone -- writing into it cannot reach the frame.
+    assert not any(
+        np.shares_memory(out, frame.iloc[:, position].to_numpy(copy=False))
+        for position in range(frame.shape[1])
+    )
 
 
 def test__owned_float64_values__copies_a_single_block_frame() -> None:
