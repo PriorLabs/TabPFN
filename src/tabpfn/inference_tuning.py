@@ -333,7 +333,7 @@ def find_optimal_temperature(
     Returns:
         The temperature that minimizes the log loss.
     """
-    temperatures = np.linspace(0.6, 1.4, 82)
+    temperatures = get_tuning_temperatures()
     best_log_loss = float("inf")
     best_temperature = current_default_temperature
 

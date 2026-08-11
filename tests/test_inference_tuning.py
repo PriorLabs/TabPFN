@@ -12,6 +12,7 @@ from tabpfn.inference_tuning import (
     find_optimal_classification_thresholds,
     find_optimal_temperature,
     get_tuning_splits,
+    get_tuning_temperatures,
     resolve_tuning_config,
     select_robust_optimal_threshold,
 )
@@ -255,3 +256,53 @@ def test__get_tuning_splits__accepts_numpy_generator_random_state() -> None:
     X_train, X_holdout, y_train, y_holdout = splits[0]
     assert len(X_train) + len(X_holdout) == len(X)
     assert len(y_train) + len(y_holdout) == len(y)
+
+
+def test__get_tuning_temperatures__straddles_the_no_op_temperature() -> None:
+    temperatures = get_tuning_temperatures()
+
+    assert temperatures.shape == (81,)
+    assert temperatures[0] == pytest.approx(0.6)
+    assert temperatures[-1] == pytest.approx(1.4)
+    assert (np.diff(temperatures) > 0).all()
+    np.testing.assert_allclose(np.diff(temperatures), 0.01)
+    # A sharpening correction, a widening one, and leaving well alone must all be
+    # reachable; see `test__get_tuning_temperatures__contains_exactly_one`.
+    assert temperatures.min() < 1.0 < temperatures.max()
+
+
+def test__temperature_searches__only_return_values_from_the_shared_grid() -> None:
+    # Both searches sweep the same grid, so neither can return an off-grid value.
+    temperatures = get_tuning_temperatures()
+
+    regression_temperature = find_regression_optimal_temperature(
+        holdout_folds=[
+            _miscalibrated_fold(n_samples=200, target_temperature=1.2, seed=11)
+        ],
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+    rng = np.random.default_rng(11)
+    classification_temperature = find_optimal_temperature(
+        raw_logits=rng.normal(size=(2, 60, 3)),
+        y_true=rng.integers(0, 3, size=60),
+        logits_to_probabilities_fn=_softmax_over_estimators,
+        current_default_temperature=1.0,
+    )
+
+    assert regression_temperature in temperatures
+    assert classification_temperature in temperatures
+
+
+def test__get_tuning_temperatures__contains_exactly_one() -> None:
+    # calibration must be able to conclude "leave
+    # this distribution alone". An approximate 1.0 would not do, because
+    # `_compute_aggregated_logits` guards on `temperature != 1.0`.
+    temperatures = get_tuning_temperatures()
+
+    assert (temperatures == 1.0).any()
+    assert float(temperatures[temperatures == 1.0][0]) == 1.0
+    # A true no-op divisor, not merely a value that rounds to one.
+    assert 3.14159 / float(temperatures[temperatures == 1.0][0]) == 3.14159
+
+
