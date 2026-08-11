@@ -17,10 +17,12 @@ import tempfile
 import urllib.request
 import warnings
 import zipfile
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Literal, TypeVar, cast, overload
 from urllib.error import URLError
 
@@ -851,6 +853,34 @@ def _load_checkpoint_cached(path: str, _identity: tuple[int, int]) -> dict:
     return Checkpoint(path).load()
 
 
+# Bounded, opt-in cache of *built* models (architecture + loaded weights),
+# keyed by (resolved path, file identity). Enabled by setting the env var
+# ``TABPFN_MODEL_CACHE_SIZE`` to a positive integer (an LRU of that size;
+# default 0 disables it, preserving prior behaviour). Only the non-mutating
+# build is cached: with ``cache_trainset_representation`` the model accumulates
+# the train-set representation during fit, so a shared instance can't be reused
+# across fits. The cached model is shared by reference and left in ``eval()``
+# mode — intended for repeated sequential fit/predict (cross-validation,
+# per-group models, or servers that manage their own concurrency). RES-2422
+# tracks the follow-up that externalises per-fit state so a single backbone can
+# be shared across threads too.
+_BUILT_MODEL_CACHE: OrderedDict[tuple[str, tuple[int, int]], tuple] = OrderedDict()
+_BUILT_MODEL_CACHE_LOCK = Lock()
+
+
+def _get_built_model_cache_size() -> int:
+    try:
+        return max(0, int(os.environ.get("TABPFN_MODEL_CACHE_SIZE", "0")))
+    except ValueError:
+        return 0
+
+
+def clear_built_model_cache() -> None:
+    """Drop all entries from the built-model cache (see ``TABPFN_MODEL_CACHE_SIZE``)."""
+    with _BUILT_MODEL_CACHE_LOCK:
+        _BUILT_MODEL_CACHE.clear()
+
+
 def load_model(
     *,
     path: Path,
@@ -863,9 +893,12 @@ def load_model(
 ]:
     """Loads a model from a given path. Only for inference.
 
-    The raw checkpoint is cached in memory so that repeated calls with the
-    same path skip disk I/O.  The cache is automatically invalidated when
-    the file is modified (detected via mtime and size).
+    The raw checkpoint is cached in memory so repeated calls with the same path
+    skip disk I/O. When ``TABPFN_MODEL_CACHE_SIZE`` is a positive integer the
+    *built* model (architecture + loaded weights) is also cached, as an LRU of
+    that size, so repeated calls skip reconstruction and ``load_state_dict``
+    entirely. Only the non-mutating build (``cache_trainset_representation=False``)
+    is cached. Both caches invalidate when the file changes (mtime + size).
 
     Args:
         path: Path to the checkpoint
@@ -873,7 +906,44 @@ def load_model(
             trainset representation. Forwarded to get_architecture.
     """
     resolved = str(path.resolve())
-    checkpoint = _load_checkpoint_cached(resolved, Checkpoint(resolved).identity())
+    identity = Checkpoint(resolved).identity()
+
+    use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
+    key = (resolved, identity)
+    if use_cache:
+        with _BUILT_MODEL_CACHE_LOCK:
+            cached = _BUILT_MODEL_CACHE.get(key)
+            if cached is not None:
+                _BUILT_MODEL_CACHE.move_to_end(key)
+                return cached
+
+    result = _build_model(
+        resolved, identity, cache_trainset_representation=cache_trainset_representation
+    )
+
+    if use_cache:
+        size = _get_built_model_cache_size()
+        with _BUILT_MODEL_CACHE_LOCK:
+            _BUILT_MODEL_CACHE[key] = result
+            _BUILT_MODEL_CACHE.move_to_end(key)
+            while len(_BUILT_MODEL_CACHE) > size:
+                _BUILT_MODEL_CACHE.popitem(last=False)
+    return result
+
+
+def _build_model(
+    resolved: str,
+    identity: tuple[int, int],
+    *,
+    cache_trainset_representation: bool = True,
+) -> tuple[
+    Architecture,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
+    ArchitectureConfig,
+    InferenceConfig,
+]:
+    """Build a model from a resolved checkpoint path (no built-model cache)."""
+    checkpoint = _load_checkpoint_cached(resolved, identity)
 
     # V2 models don't have the "architecture_name" key, V2.5 models have the
     # architecture name set to "base", so we remap. From V2.6 onwards, the architecture
