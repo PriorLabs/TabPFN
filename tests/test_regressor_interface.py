@@ -26,6 +26,7 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -1220,3 +1221,392 @@ def test__fit_with_differentiable_input__second_call_refreshes_target_stats() ->
     assert not torch.allclose(reg.raw_space_bardist_.borders, bardist_borders1), (
         "raw_space_bardist_ must be rebuilt to the new target scale"
     )
+
+
+# =============================================================================
+# predict_batched: batched multi-dataset inference (public API)
+# =============================================================================
+
+
+def _mk_reg_dataset(
+    seed: int, n: int = 60, f: int = 5
+) -> tuple[np.ndarray, np.ndarray]:
+    r = np.random.RandomState(seed)
+    X = r.randn(n, f).astype(np.float32)
+    y = (X[:, 0] * 2.0 + 0.5 * X[:, 1] + 0.1 * r.randn(n)).astype(np.float32)
+    return X, y
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_batched__matches_per_dataset(device: str) -> None:
+    """predict_batched matches per-dataset fit+predict, in input order."""
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    data = [_mk_reg_dataset(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [_mk_reg_dataset(s + 100, n=8)[0] for s in range(3)]
+
+    reg = TabPFNRegressor(
+        n_estimators=4,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    )
+    batched_mean = reg.predict_batched(X_list, y_list, X_tests, output_type="mean")
+    batched_q = reg.predict_batched(X_list, y_list, X_tests, output_type="quantiles")
+
+    assert len(batched_mean) == 3
+    assert batched_mean[0].shape == (8,)
+    assert len(batched_q[0]) == 9  # default quantiles
+
+    atol = 1e-4 if torch.device(device).type == "cpu" else 1e-2
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(
+            n_estimators=4,
+            device=device,
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        np.testing.assert_allclose(
+            batched_mean[i], ref.predict(X_tests[i], output_type="mean"), atol=atol
+        )
+        ref_q = ref.predict(X_tests[i], output_type="quantiles")
+        for bq, rq in zip(batched_q[i], ref_q, strict=True):
+            np.testing.assert_allclose(bq, rq, atol=atol)
+
+
+def test__predict_batched__full_output_uses_per_dataset_criterion() -> None:
+    """output_type="full" returns each dataset's own raw-space bar distribution.
+
+    The raw-space bardist is rescaled by the dataset's own y mean and std, so
+    datasets on different target scales must not share the first one's criterion.
+    """
+    X_a, y_a = _mk_reg_dataset(0)
+    X_b, y_b = _mk_reg_dataset(1)
+    y_b = y_b * 1000.0 + 5000.0  # same features, very different target scale
+
+    reg = TabPFNRegressor(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float32
+    )
+    out = reg.predict_batched(
+        [X_a, X_b], [y_a, y_b], [X_a[:5], X_b[:5]], output_type="full"
+    )
+
+    assert len(out) == 2
+    borders_a = out[0]["criterion"].borders
+    borders_b = out[1]["criterion"].borders
+    assert not torch.allclose(borders_a, borders_b)
+    # And the point estimates land on each dataset's own scale.
+    assert abs(float(np.mean(out[0]["mean"]))) < 100.0
+    assert float(np.mean(out[1]["mean"])) > 1000.0
+
+    for i, (X, y) in enumerate([(X_a, y_a), (X_b, y_b)]):
+        ref = TabPFNRegressor(
+            n_estimators=2,
+            device="cpu",
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        ref_full = ref.predict(X[:5], output_type="full")
+        # Relative: dataset B lives on a ~5000 scale, where float32 decode noise
+        # is a few ulp rather than an absolute 1e-4.
+        np.testing.assert_allclose(out[i]["mean"], ref_full["mean"], rtol=1e-4)
+        torch.testing.assert_close(
+            out[i]["criterion"].borders, ref_full["criterion"].borders
+        )
+
+
+def test__predict_batched__uses_fitted_target_transforms() -> None:
+    """The border mapping must read the members' configs, not ensemble_configs_.
+
+    With ``n_preprocessing_jobs > 1`` ``target_transform`` is fitted in a joblib
+    worker, so ``ensemble_configs_`` keeps an unfitted copy and decoding with it
+    would silently produce wrong borders.
+    """
+    data = [_mk_reg_dataset(s) for s in range(2)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    kwargs = {
+        "n_estimators": 4,
+        "device": "cpu",
+        "random_state": 42,
+        "n_preprocessing_jobs": 2,
+        "inference_precision": torch.float32,
+    }
+    batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
+
+    # Without a target transform in play the test would pass vacuously.
+    probe = TabPFNRegressor(**kwargs)
+    probe.fit(X_list[0], y_list[0])
+    assert any(
+        m.config.target_transform is not None for m in probe.executor_.ensemble_members
+    )
+
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(**kwargs)
+        ref.fit(X, y)
+        np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), atol=1e-4)
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
+    """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
+
+    predict_batched must clean X_test as predict does. The frames mix a
+    categorical column, an object column, and NaNs placed within the first 5
+    rows so X_test exercises them too.
+    """
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("CUDA device requested but not available.")
+
+    pd = pytest.importorskip("pandas")
+
+    def mkdf(seed: int, n: int = 60) -> tuple[typing.Any, np.ndarray]:
+        r = np.random.RandomState(seed)
+        num = r.randn(n, 3).astype(np.float32)
+        df = pd.DataFrame(
+            {
+                "f0": num[:, 0],
+                "f1": num[:, 1],
+                "f2": num[:, 2],
+                "cat": pd.Categorical(r.choice(["a", "b", "c"], size=n)),
+                "txt": r.choice(["red", "green", "blue"], size=n).astype(object),
+            }
+        )
+        df.loc[[1, 4, 17], "f1"] = np.nan
+        df.loc[[2, 4, 23], "txt"] = None
+        y = (num[:, 0] * 2.0 + 0.1 * r.randn(n)).astype(np.float32)
+        return df, y
+
+    data = [mkdf(s) for s in range(3)]
+    X_tests = [d[0].iloc[:5] for d in data]
+
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    )
+    batched = reg.predict_batched(
+        [d[0] for d in data], [d[1] for d in data], X_tests, output_type="mean"
+    )
+
+    atol = 1e-4 if torch.device(device).type == "cpu" else 1e-2
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(
+            n_estimators=2,
+            device=device,
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), atol=atol)
+
+
+def test__predict_batched__handles_constant_target_dataset() -> None:
+    """A constant-target dataset is answered analytically and stitched back.
+
+    It takes no part in the fused forward, and must not disturb the others.
+    """
+    X_a, y_a = _mk_reg_dataset(0)
+    X_b, _ = _mk_reg_dataset(1)
+    y_b = np.full(X_b.shape[0], 7.5, dtype=np.float32)
+    X_c, y_c = _mk_reg_dataset(2)
+
+    reg = TabPFNRegressor(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float32
+    )
+    out = reg.predict_batched(
+        [X_a, X_b, X_c], [y_a, y_b, y_c], [X_a[:5], X_b[:5], X_c[:5]]
+    )
+
+    assert len(out) == 3
+    np.testing.assert_allclose(out[1], np.full(5, 7.5), atol=1e-6)
+    for i, (X, y) in enumerate([(X_a, y_a), (X_b, y_b), (X_c, y_c)]):
+        ref = TabPFNRegressor(
+            n_estimators=2,
+            device="cpu",
+            random_state=42,
+            inference_precision=torch.float32,
+        )
+        ref.fit(X, y)
+        np.testing.assert_allclose(out[i], ref.predict(X[:5]), atol=1e-4)
+
+
+@pytest.mark.parametrize("device", devices)
+def test__predict_batched__fp16_matches_fp32(device: str) -> None:
+    """predict_batched works with inference_precision=float16.
+
+    Guards the regressor path against the fp16 dtype mismatch fixed for the
+    classifier. Older torch lacks CPU fp16 matmul, so skip CPU there.
+    """
+    if torch.device(device).type == "cpu" and not is_cpu_float16_supported():
+        pytest.skip("CPU float16 matmul not supported in this PyTorch version.")
+
+    data = [_mk_reg_dataset(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    out16 = TabPFNRegressor(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float16,
+    ).predict_batched(X_list, y_list, X_tests)
+    out32 = TabPFNRegressor(
+        n_estimators=2,
+        device=device,
+        random_state=42,
+        inference_precision=torch.float32,
+    ).predict_batched(X_list, y_list, X_tests)
+
+    assert len(out16) == 3
+    for a, b in zip(out16, out32, strict=True):
+        assert a.shape == (5,)
+        # fp16 accumulates differently; only coarse agreement is expected.
+        assert np.abs(a - b).mean() < 0.5 * float(np.std(y_list[0]))
+
+
+def test__predict_batched__rejects_ragged() -> None:
+    """Ragged batches are rejected (padding would corrupt the fused forward)."""
+    X_a, y_a = _mk_reg_dataset(0, n=40)
+    X_b, y_b = _mk_reg_dataset(1, n=30)  # different number of training rows
+
+    reg = TabPFNRegressor(n_estimators=2, device="cpu", random_state=42)
+    with pytest.raises(ValueError, match=r"ragged"):
+        reg.predict_batched([X_a, X_b], [y_a, y_b], [X_a[:3], X_b[:3]])
+
+
+def test__predict_batched__rejects_float64_precision() -> None:
+    """float64 must raise rather than silently compute at float32.
+
+    The fused batch is built at float32 and predict_batched bypasses the
+    float64 assert in _iter_forward_executor, so without this guard a float64
+    request returns float32-precision numbers while claiming predict parity.
+    """
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float64
+    )
+    with pytest.raises(NotImplementedError, match=r"float64"):
+        reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
+def test__predict_batched__float64_inputs_match_per_dataset() -> None:
+    """float64 *arrays* stay supported; only float64 precision is rejected.
+
+    Real feature pipelines hand over float64 (np.asarray of a DataFrame, for
+    one), so this must behave exactly like the float32 case.
+    """
+    data = [_mk_reg_dataset(s) for s in range(2)]
+    data = [(X.astype(np.float64), y.astype(np.float64)) for X, y in data]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    kwargs = {
+        "n_estimators": 2,
+        "device": "cpu",
+        "random_state": 42,
+        "inference_precision": torch.float32,
+    }
+    batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
+    for i, (X, y) in enumerate(data):
+        ref = TabPFNRegressor(**kwargs)
+        ref.fit(X, y)
+        np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), rtol=1e-4)
+
+
+def test__predict_batched__rejects_bad_arguments() -> None:
+    """Length, emptiness, output_type and quantile validation mirror predict."""
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(n_estimators=2, device="cpu", random_state=42)
+
+    with pytest.raises(ValueError, match=r"equal length"):
+        reg.predict_batched([X, X], [y], [X[:3], X[:3]])
+    with pytest.raises(ValueError, match=r"empty dataset list"):
+        reg.predict_batched([], [], [])
+    with pytest.raises(regressor_module.TabPFNValidationError):
+        reg.predict_batched([X], [y], [X[:3]], output_type="nonsense")  # type: ignore[arg-type]
+    with pytest.raises(regressor_module.TabPFNValidationError):
+        reg.predict_batched([X], [y], [X[:3]], output_type="quantiles", quantiles=[1.5])
+
+
+def test__predict_batched__folds_estimators_one_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each estimator output is folded in before the next one is produced.
+
+    Collecting the fused outputs first would keep every estimator's
+    (n_test, n_datasets, n_buckets) tensor alive at once.
+    """
+    data = [_mk_reg_dataset(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    n_folded = 0
+    translate = TabPFNRegressor._translate_batched_logits
+
+    def counting_translate(self: TabPFNRegressor, **kwargs: typing.Any) -> torch.Tensor:
+        nonlocal n_folded
+        n_folded += 1
+        return translate(self, **kwargs)
+
+    iter_outputs = InferenceEngineBatchedNoPreprocessing.iter_outputs
+
+    def checking_iter_outputs(
+        self: InferenceEngineBatchedNoPreprocessing,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Iterator[typing.Any]:
+        for estimator, item in enumerate(iter_outputs(self, *args, **kwargs)):
+            assert n_folded == estimator * len(X_list), (
+                "outputs are being materialized instead of folded in as they arrive"
+            )
+            yield item
+
+    monkeypatch.setattr(
+        TabPFNRegressor, "_translate_batched_logits", counting_translate
+    )
+    monkeypatch.setattr(
+        InferenceEngineBatchedNoPreprocessing, "iter_outputs", checking_iter_outputs
+    )
+
+    reg = TabPFNRegressor(
+        n_estimators=3, device="cpu", random_state=42, inference_precision=torch.float32
+    )
+    reg.predict_batched(X_list, y_list, X_tests)
+    assert n_folded == 3 * len(X_list)
+
+
+def test__predict_batched__does_not_mutate_estimator() -> None:
+    """predict_batched runs on an internal clone, leaving self untouched."""
+    data = [_mk_reg_dataset(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:3] for d in data]
+
+    # An unfitted estimator stays unfitted (no executor_ left behind).
+    reg = TabPFNRegressor(n_estimators=2, device="cpu", random_state=42)
+    reg.predict_batched(X_list, y_list, X_tests)
+    assert not hasattr(reg, "executor_")
+    assert reg.fit_mode != "batched"
+
+    # A prior fit is preserved exactly across a batched call.
+    a_x, a_y = _mk_reg_dataset(99, n=80)
+    fitted = TabPFNRegressor(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float32
+    )
+    fitted.fit(a_x, a_y)
+    before = fitted.predict(a_x[:5])
+    fitted.predict_batched(X_list, y_list, X_tests)
+    after = fitted.predict(a_x[:5])
+    np.testing.assert_array_equal(before, after)

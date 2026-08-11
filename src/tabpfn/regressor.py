@@ -35,6 +35,7 @@ from sklearn.base import (
     RegressorMixin,
     TransformerMixin,
     check_is_fitted,
+    clone,
 )
 from tqdm.auto import tqdm
 
@@ -53,7 +54,10 @@ from tabpfn.constants import (
     ModelVersion,
 )
 from tabpfn.errors import TabPFNValidationError, handle_oom_errors
-from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference import (
+    InferenceEngineBatchedNoPreprocessing,
+    _maybe_run_gpu_preprocessing,
+)
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -1303,6 +1307,328 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     logits=logits,
                 )
 
+            return main_outputs
+
+        return logit_to_output(output_type=output_type)
+
+    def predict_batched(  # noqa: C901, PLR0912
+        self,
+        X_train_list: list[XType],
+        y_train_list: list[YType],
+        X_test_list: list[XType],
+        *,
+        output_type: OutputType = "mean",
+        quantiles: list[float] | None = None,
+    ) -> list[RegressionResultType]:
+        """Predict for several independent datasets in one pass.
+
+        Each triple is preprocessed exactly as ``fit()`` + ``predict()`` does,
+        then all datasets are stacked on the model's batch dimension and scored
+        with a single fused forward per estimator. Equivalent to fitting and
+        predicting each dataset independently. Runs on an internal clone, so
+        ``self`` is unchanged on return.
+
+        Datasets need not share a target scale (each is decoded with its own
+        bar distribution) but must share array shapes; ragged batches are
+        rejected rather than padded.
+
+        Args:
+            X_train_list: Training features, one array per dataset (all same shape).
+            y_train_list: Training targets, one array per dataset.
+            X_test_list: Test features, one array per dataset (all same shape).
+            output_type: As in :meth:`predict`, applied to every dataset.
+            quantiles: As in :meth:`predict`.
+
+        Returns:
+            One entry per dataset, in input order, each being what :meth:`predict`
+            would return for that dataset.
+
+        Raises:
+            ValueError: If the input lists have unequal or zero length, or the
+                training (or test) arrays do not all share one shape.
+            TabPFNValidationError: If ``output_type`` or ``quantiles`` are invalid.
+            NotImplementedError: If ``inference_precision`` is ``torch.float64``,
+                which the fused forward does not support.
+
+        Note:
+            Constant-target datasets are answered analytically and take no part
+            in the fused forward.
+        """
+        # Imported here rather than at module scope: importing
+        # architectures.interface at runtime is circular, as is `finetuning`,
+        # which imports TabPFNRegressor.
+        from tabpfn.architectures.interface import (  # noqa: PLC0415
+            PerformanceOptions,
+        )
+        from tabpfn.finetuning.data_util import (  # noqa: PLC0415
+            RegressorBatch,
+            meta_dataset_collator,
+        )
+
+        if not len(X_train_list) == len(y_train_list) == len(X_test_list):
+            raise ValueError(
+                "X_train_list, y_train_list and X_test_list must have equal length."
+            )
+        if len(X_train_list) == 0:
+            raise ValueError("Nothing to predict: empty dataset list.")
+
+        if self.inference_precision == torch.float64:
+            raise NotImplementedError(
+                "predict_batched does not support inference_precision=torch.float64; "
+                "the fused forward runs at float32. Use predict per dataset instead."
+            )
+
+        if quantiles is None:
+            quantiles = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+        elif not all((0 <= q <= 1) and isinstance(q, float) for q in quantiles):
+            raise TabPFNValidationError(
+                "All quantiles must be between 0 and 1 and floats."
+            )
+        if output_type not in _USABLE_OUTPUT_TYPES:
+            raise TabPFNValidationError(f"Invalid output type: {output_type}")
+
+        # Padding ragged datasets would feed the model fake context rows and leave
+        # padded query rows untrimmed, silently corrupting results.
+        train_shapes = {np.asarray(X).shape for X in X_train_list}
+        test_shapes = {np.asarray(X).shape for X in X_test_list}
+        if len(train_shapes) > 1 or len(test_shapes) > 1:
+            raise ValueError(
+                "predict_batched requires all training arrays to share one shape "
+                "and all test arrays to share one shape (ragged batches are not "
+                f"supported); got train shapes {sorted(train_shapes)} and test "
+                f"shapes {sorted(test_shapes)}. Group datasets by shape and call "
+                "once per group."
+            )
+
+        # Fit on a clone so a prior fit on ``self`` survives and the batched
+        # executor is dropped with the clone. The clone shares the model via the
+        # ``model_path`` param, so there is no reload.
+        worker = clone(self)
+        # "fit_preprocessors" caches the fitted members on the executor, so the
+        # loop below reuses them instead of preprocessing twice.
+        worker.fit_mode = "fit_preprocessors"
+
+        # Constant-target datasets contribute no item to the fused batch, so
+        # ``fused_index`` maps a batch position back to its input index.
+        results: list[RegressionResultType | None] = [None] * len(X_train_list)
+        items: list[RegressorBatch] = []
+        fused_index: list[int] = []
+        raw_space_bardists: list[FullSupportBarDistribution] = []
+        znorm_borders: torch.Tensor | None = None
+
+        for idx, (X, y, X_test) in enumerate(
+            zip(X_train_list, y_train_list, X_test_list, strict=True)
+        ):
+            worker.fit(X, y)
+
+            if worker.is_constant_target_:
+                # fit() returns before building an executor here, so there is
+                # nothing to score.
+                results[idx] = worker._handle_constant_target(
+                    len(np.asarray(X_test)), output_type, quantiles
+                )
+                continue
+
+            # Rebuilt fresh on every fit, so each dataset keeps its own object.
+            raw_space_bardists.append(worker.raw_space_bardist_)
+            # Fixed by the checkpoint, so identical across datasets.
+            if znorm_borders is None:
+                znorm_borders = worker.znorm_space_bardist_.borders.clone()
+
+            # Clean X_test as the standard predict path does, so DataFrames,
+            # categoricals and NaNs behave identically.
+            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            X_test = fix_dtypes(  # noqa: PLW2901
+                X_test,
+                cat_indices=worker.inferred_feature_schema_.indices_for(
+                    FeatureModality.CATEGORICAL
+                ),
+            )
+            X_test = process_text_na_dataframe(  # noqa: PLW2901
+                X=X_test,
+                ord_encoder=getattr(worker, "ordinal_encoder_", None),
+                passthrough_inf=worker.inference_config_.PASSTHROUGH_INF,
+            )
+            members = worker.executor_.ensemble_members
+            x_context, x_query, cat_indices = [], [], []
+            y_context = [
+                torch.as_tensor(np.asarray(m.y_train), dtype=torch.float32)
+                for m in members
+            ]
+            device = worker.devices_[0]
+            for member in members:
+                x_tr = torch.as_tensor(np.asarray(member.X_train), dtype=torch.float32)
+                x_te = torch.as_tensor(
+                    np.asarray(member.transform_X_test(X_test)), dtype=torch.float32
+                )
+                full, schema = _maybe_run_gpu_preprocessing(
+                    torch.cat([x_tr, x_te], dim=0).to(device),
+                    member.gpu_preprocessor,
+                    member.feature_schema,
+                    num_train_rows=x_tr.shape[0],
+                )
+                n = x_tr.shape[0]
+                x_context.append(full[:n])
+                x_query.append(full[n:])
+                cat_indices.append(
+                    schema.indices_for(FeatureModality.CATEGORICAL) or []
+                )
+            n_test = x_query[0].shape[0]
+            items.append(
+                RegressorBatch(
+                    X_context=x_context,
+                    X_query=x_query,
+                    y_context=y_context,
+                    y_query=torch.zeros(n_test),
+                    cat_indices=cat_indices,
+                    # Must come from the members, not ``worker.ensemble_configs_``:
+                    # with n_preprocessing_jobs > 1 ``target_transform`` is fitted in
+                    # a worker process, so only the member's copy carries the fitted
+                    # transform the border mapping needs.
+                    configs=[m.config for m in members],
+                    raw_space_bardist=worker.raw_space_bardist_,
+                    znorm_space_bardist=worker.znorm_space_bardist_,
+                    X_query_raw=torch.zeros(n_test, 1),
+                    y_query_raw=torch.zeros(n_test),
+                )
+            )
+            fused_index.append(idx)
+
+        if items:
+            # The collator keeps only the first item's bar distributions; harmless
+            # because each dataset's own one is tracked in raw_space_bardists.
+            batch = meta_dataset_collator(items)
+            # Set before fit_from_preprocessed so it does not warn about switching.
+            worker.fit_mode = "batched"
+            worker.fit_from_preprocessed(
+                batch.X_context,
+                batch.y_context,
+                batch.cat_indices,
+                batch.configs,
+                performance_options=PerformanceOptions(),
+            )
+            assert znorm_borders is not None
+            std_borders = znorm_borders.cpu().numpy()
+            # One fused forward per estimator, each output
+            # (n_test, n_fused_datasets, n_buckets) with one config per dataset.
+            # Estimators are consumed one at a time and folded straight into the
+            # per-dataset accumulators, so peak memory holds a single estimator's
+            # output rather than every estimator's.
+            accumulated: list[torch.Tensor | None] = [None] * len(fused_index)
+            n_estimators = 0
+            for output, configs_for_est in worker.executor_.iter_outputs(
+                batch.X_query, autocast=worker.use_autocast_, task_type="regression"
+            ):
+                for fused_pos in range(len(fused_index)):
+                    contribution = worker._translate_batched_logits(
+                        output=output[:, fused_pos, :],
+                        config=configs_for_est[fused_pos],
+                        znorm_borders=znorm_borders,
+                        std_borders=std_borders,
+                    )
+                    previous = accumulated[fused_pos]
+                    accumulated[fused_pos] = (
+                        contribution if previous is None else previous + contribution
+                    )
+                n_estimators += 1
+                del output
+
+            for fused_pos, idx in enumerate(fused_index):
+                dataset_logits = accumulated[fused_pos]
+                assert dataset_logits is not None
+                accumulated[fused_pos] = None
+                results[idx] = worker._decode_batched_dataset(
+                    accumulated_logits=dataset_logits,
+                    n_estimators=n_estimators,
+                    raw_space_bardist=raw_space_bardists[fused_pos],
+                    output_type=output_type,
+                    quantiles=quantiles,
+                )
+
+        assert all(r is not None for r in results)
+        return typing.cast("list[RegressionResultType]", results)
+
+    def _translate_batched_logits(
+        self,
+        *,
+        output: torch.Tensor,
+        config: RegressorEnsembleConfig,
+        znorm_borders: torch.Tensor,
+        std_borders: np.ndarray,
+    ) -> torch.Tensor:
+        """Map one estimator's output for one dataset onto the shared borders.
+
+        Same border translation as :meth:`predict`, for a single
+        (estimator, dataset) pair of the fused forward.
+        """
+        out_d = output.float()
+        if self.softmax_temperature != 1:
+            out_d = out_d / self.softmax_temperature
+        if config.target_transform is None:
+            borders_t = std_borders.copy()
+            logit_cancel_mask = None
+        else:
+            logit_cancel_mask, descending_borders, borders_t = transform_borders_one(
+                std_borders,
+                target_transform=config.target_transform,
+                repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
+            )
+            if descending_borders:
+                borders_t = borders_t.flip(-1)  # type: ignore
+        if logit_cancel_mask is not None:
+            out_d = out_d.clone()
+            out_d[..., logit_cancel_mask] = float("-inf")
+
+        transformed = translate_probs_across_borders(
+            out_d,
+            frm=torch.as_tensor(borders_t, device=out_d.device),
+            to=znorm_borders.to(out_d.device),
+        )
+        return transformed.log() if self.average_before_softmax else transformed
+
+    def _decode_batched_dataset(
+        self,
+        *,
+        accumulated_logits: torch.Tensor,
+        n_estimators: int,
+        raw_space_bardist: FullSupportBarDistribution,
+        output_type: OutputType,
+        quantiles: list[float],
+    ) -> RegressionResultType:
+        """Turn one dataset's accumulated logits into its prediction output.
+
+        Same averaging as :meth:`predict`, with this dataset's own raw-space bar
+        distribution as the criterion.
+        """
+        assert n_estimators > 0
+        if self.average_before_softmax:
+            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
+        else:
+            logits = accumulated_logits / n_estimators
+
+        logits = logits.log()
+        if logits.dtype == torch.float16:
+            logits = logits.float()
+
+        logit_to_output = partial(
+            _logits_to_output,
+            logits=logits,
+            criterion=raw_space_bardist,
+            quantiles=quantiles,
+        )
+        if output_type in _OUTPUT_TYPES_COMPOSITE:
+            main_outputs = MainOutputDict(
+                mean=typing.cast("np.ndarray", logit_to_output(output_type="mean")),
+                median=typing.cast("np.ndarray", logit_to_output(output_type="median")),
+                mode=typing.cast("np.ndarray", logit_to_output(output_type="mode")),
+                quantiles=typing.cast(
+                    "list[np.ndarray]", logit_to_output(output_type="quantiles")
+                ),
+            )
+            if output_type == "full":
+                return FullOutputDict(
+                    **main_outputs, criterion=raw_space_bardist, logits=logits
+                )
             return main_outputs
 
         return logit_to_output(output_type=output_type)

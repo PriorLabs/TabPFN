@@ -1575,6 +1575,24 @@ def test__predict_proba_batched__rejects_balance_probabilities() -> None:
         clf.predict_proba_batched([X, X], [y, y], [X[:3], X[:3]])
 
 
+def test__predict_proba_batched__rejects_float64_precision() -> None:
+    """float64 must raise rather than silently compute at float32.
+
+    The fused batch is built at float32 and predict_proba_batched bypasses the
+    float64 assert in _iter_forward_executor, so without this guard a float64
+    request returns float32-precision numbers while claiming predict parity.
+    """
+    r = np.random.RandomState(0)
+    X = r.randn(40, 4).astype(np.float32)
+    y = (X[:, 0] > 0).astype(int)
+
+    clf = TabPFNClassifier(
+        n_estimators=2, device="cpu", random_state=42, inference_precision=torch.float64
+    )
+    with pytest.raises(NotImplementedError, match=r"float64"):
+        clf.predict_proba_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
 def test__predict_proba_batched__does_not_mutate_estimator() -> None:
     """predict_proba_batched runs on an internal clone, leaving self untouched."""
 
