@@ -26,6 +26,10 @@ from tabpfn.utils import infer_random_state
 if TYPE_CHECKING:
     import torch
 
+    from tabpfn.architectures.shared.bar_distribution import (
+        FullSupportBarDistribution,
+    )
+
 
 MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING = 500
 
@@ -170,6 +174,85 @@ def compute_metric_to_minimize(
             f"Supported metrics are: {list(BINARY_METRIC_NAME_TO_OBJECTIVE.keys())}"
         )
     return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
+
+
+def _binned_crps(
+    raw_space_bardist: FullSupportBarDistribution,
+    logits: torch.Tensor,
+    y_true: torch.Tensor,
+) -> torch.Tensor:
+    """The bin-width-weighted CRPS already used as a finetuning loss.
+
+    Delegates to `finetuning.finetuned_regressor`'s implementation.
+
+    Imported lazily: `finetuned_regressor` imports `TabPFNRegressor` at module level,
+    and `regressor` imports this module, so a top-level import raises ImportError on a
+    partially initialized `tabpfn` package.
+    """
+    from tabpfn.finetuning.finetuned_regressor import (  # noqa: PLC0415
+        _ranked_probability_score_loss_from_bar_logits,
+    )
+
+    return _ranked_probability_score_loss_from_bar_logits(
+        # The shared implementation expects (batch, queries, buckets).
+        logits_BQL=logits.reshape(1, -1, logits.shape[-1]),
+        targets_BQ=y_true.reshape(1, -1),
+        bardist_loss_fn=raw_space_bardist,
+        loss_type="crps",
+    )
+
+
+# Objectives for the regression temperature search. Each returns either the loss of
+# every holdout row or, where the underlying implementation only exposes it, the mean
+# loss over the fold;
+REGRESSION_METRIC_NAME_TO_OBJECTIVE: dict[
+    str,
+    Callable[
+        [FullSupportBarDistribution, torch.Tensor, torch.Tensor],
+        torch.Tensor,
+    ],
+] = {
+    # `forward` is the negative log density of each target under the bar distribution.
+    "nll": lambda raw_space_bardist, logits, y_true: raw_space_bardist(logits, y_true),
+    "crps": _binned_crps,
+}
+
+
+def compute_regression_metric_to_minimize(
+    metric_name: RegressorEvalMetrics,
+    raw_space_bardist: FullSupportBarDistribution,
+    logits: torch.Tensor,
+    y_true: torch.Tensor,
+) -> torch.Tensor:
+    """Computes the per-sample losses of a regression metric, to be minimized.
+
+    The metric is evaluated in the units of the original target: `raw_space_bardist`
+    is expected to be the fold's `TabPFNRegressor.raw_space_bardist_`, which undoes
+    the z-normalisation that its regressor applied, and `y_true` is expected to be
+    the untransformed target.
+
+    Args:
+        metric_name: The name of the metric to compute.
+        raw_space_bardist: The bar distribution that gives `logits` their support,
+            with borders in the units of the original target.
+        logits: The aggregated logits of shape [n_samples, n_buckets].
+        y_true: The true targets of shape [n_samples], in the same units as the
+            borders of `raw_space_bardist`, and on the same device.
+
+    Returns:
+        The losses to minimize, either one per sample (shape [n_samples]) or, where the
+        underlying implementation only exposes it, the fold's mean as a scalar. Callers
+        must therefore reduce with `.mean()` and weight by holdout size rather than
+        assuming a per-sample vector; see `find_regression_optimal_temperature`.
+    """
+    if metric_name not in REGRESSION_METRIC_NAME_TO_OBJECTIVE:
+        raise ValueError(
+            f"Metric '{metric_name}' is not supported. Supported metrics are: "
+            f"{list(REGRESSION_METRIC_NAME_TO_OBJECTIVE.keys())}"
+        )
+    return REGRESSION_METRIC_NAME_TO_OBJECTIVE[metric_name](
+        raw_space_bardist, logits, y_true
+    )
 
 
 def get_tuning_splits(

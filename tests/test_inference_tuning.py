@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import torch
 
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
+from tabpfn.finetuning.finetuned_regressor import (
+    _ranked_probability_score_loss_from_bar_logits,
+)
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
@@ -579,6 +584,92 @@ def test__get_tuning_feature_flags__lists_only_the_boolean_feature_fields() -> N
     }
 
 
+def _make_bardist(
+    n_buckets: int = 40,
+    *,
+    scale: float = 1.0,
+    shift: float = 0.0,
+    dtype: torch.dtype = torch.float32,
+) -> FullSupportBarDistribution:
+    """A bar distribution over `[-6, 6] * scale + shift`, in the target's units.
+
+    `dtype` exists for the exact-invariance tests below: in float32 the rescaled
+    borders are not the exact rescaling of the originals, so the geometry itself
+    shifts and swamps the property under test.
+    """
+    borders = torch.linspace(-6.0, 6.0, n_buckets + 1, dtype=dtype) * scale + shift
+    return FullSupportBarDistribution(borders)
+
+
+def _gaussian_logits(
+    raw_space_bardist: FullSupportBarDistribution,
+    means: np.ndarray,
+    sd: float,
+) -> torch.Tensor:
+    """Logits of a Gaussian with width `sd` centred on each of `means`.
+
+    Dividing these by T rescales the width to `sd * sqrt(T)`, so the temperature
+    that best fits targets drawn with width `s_true` is `(s_true / sd) ** 2`.
+    """
+    centers = (raw_space_bardist.borders[:-1] + raw_space_bardist.borders[1:]) / 2
+    means_t = torch.as_tensor(means, dtype=torch.float32)
+    return -0.5 * ((centers[None, :] - means_t[:, None]) / sd) ** 2
+
+
+def _miscalibrated_fold(
+    *,
+    n_samples: int,
+    target_temperature: float,
+    seed: int,
+    scale: float = 1.0,
+) -> tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]:
+    """A fold whose predictions are off by `target_temperature`.
+
+    Targets are drawn with width `scale`, and predicted with width
+    `scale / sqrt(target_temperature)`, so the sweep should recover roughly
+    `target_temperature`.
+    """
+    rng = np.random.default_rng(seed)
+    means = rng.normal(0.0, 1.5 * scale, size=n_samples)
+    y_true = means + rng.normal(0.0, scale, size=n_samples)
+
+    raw_space_bardist = _make_bardist(scale=scale)
+    logits = _gaussian_logits(
+        raw_space_bardist, means, sd=scale / np.sqrt(target_temperature)
+    )
+    return logits, raw_space_bardist, torch.as_tensor(y_true, dtype=torch.float32)
+
+
+
+def test__compute_regression_metric_to_minimize__returns_one_loss_per_sample() -> None:
+    logits, raw_space_bardist, y_true = _miscalibrated_fold(
+        n_samples=17, target_temperature=1.2, seed=9
+    )
+
+    losses = compute_regression_metric_to_minimize(
+        metric_name=RegressorEvalMetrics.NLL,
+        raw_space_bardist=raw_space_bardist,
+        logits=logits,
+        y_true=y_true,
+    )
+
+    assert losses.shape == (17,)
+    assert torch.isfinite(losses).all()
+
+
+def test__compute_regression_metric_to_minimize__rejects_unsupported_metrics() -> None:
+    logits, raw_space_bardist, y_true = _miscalibrated_fold(
+        n_samples=5, target_temperature=1.0, seed=10
+    )
+
+    with pytest.raises(ValueError, match="Metric 'rmse' is not supported"):
+        compute_regression_metric_to_minimize(
+            metric_name="rmse",  # type: ignore[arg-type]
+            raw_space_bardist=raw_space_bardist,
+            logits=logits,
+            y_true=y_true,
+        )
+
 
 def test__get_tuning_temperatures__straddles_the_no_op_temperature() -> None:
     temperatures = get_tuning_temperatures()
@@ -614,6 +705,30 @@ def test__temperature_searches__only_return_values_from_the_shared_grid() -> Non
 
     assert regression_temperature in temperatures
     assert classification_temperature in temperatures
+
+
+def test__compute_regression_metric_to_minimize__crps_delegates_to_finetuning() -> None:
+    # The regression metric must be the *same* function the finetuning loss uses, so
+    # the two cannot drift apart. Compared against a direct call to prove it.
+    raw_space_bardist = _make_bardist()
+    rng = np.random.default_rng(13)
+    logits = torch.as_tensor(rng.normal(size=(9, 40)), dtype=torch.float32)
+    y = torch.as_tensor(rng.normal(size=9), dtype=torch.float32)
+
+    torch.testing.assert_close(
+        compute_regression_metric_to_minimize(
+            metric_name=RegressorEvalMetrics.CRPS,
+            raw_space_bardist=raw_space_bardist,
+            logits=logits,
+            y_true=y,
+        ),
+        _ranked_probability_score_loss_from_bar_logits(
+            logits_BQL=logits.unsqueeze(0),
+            targets_BQ=y.unsqueeze(0),
+            bardist_loss_fn=raw_space_bardist,
+            loss_type="crps",
+        ),
+    )
 
 
 def test__get_tuning_temperatures__contains_exactly_one() -> None:
