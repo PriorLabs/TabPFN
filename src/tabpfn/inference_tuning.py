@@ -19,7 +19,7 @@ from sklearn.metrics import (
     log_loss,
     roc_auc_score,
 )
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import KFold, StratifiedKFold
 
 from tabpfn.utils import infer_random_state
 
@@ -178,33 +178,41 @@ def get_tuning_splits(
     holdout_frac: float,
     n_splits: int = 1,
     random_state: int | np.random.RandomState | np.random.Generator | None = 0,
+    task_type: Literal["classifier", "regressor"] = "classifier",
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
-    """Get stratified tuning split(s) for the given configuration.
+    """Get tuning split(s) for the given configuration.
+
+    Splits are stratified for classification and shuffled-but-unstratified for
+    regression, where the continuous target cannot be stratified on.
 
     Args:
         X: The input data of shape [n_samples, n_features].
         y: The target labels of shape [n_samples].
         holdout_frac: The percentage of the data to hold out for tuning.
-        n_splits: Number of stratified random splits to generate.
+        n_splits: Number of random splits to generate.
         random_state: The random state to use for the split(s).
+        task_type: Whether the splits are for a classifier or a regressor.
 
     Returns:
         Returns a list of splits as tuples of
         (X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh).
         Shape suffixes: Nt=num train samples, F=num features, Nh=num holdout samples.
     """
-    # We want to use StratifiedKFold to ensure that no train samples are used twice.
+    # We want to use (Stratified)KFold to ensure that no train samples are used twice.
     # Therefore, we have to invert the holdout_frac to get the number of folds to
-    # use for StratifiedKFold. Round holdout_frac to 2 digits to avoid needing
+    # use for (Stratified)KFold. Round holdout_frac to 2 digits to avoid needing
     # more than 100 folds
     rounded_holdout_frac = round(holdout_frac, 2)
     n_folds = max(2, round(1 / rounded_holdout_frac))
 
     if isinstance(random_state, np.random.Generator):
-        # StratifiedKFold does not accept np.random.Generator.
+        # (Stratified)KFold does not accept np.random.Generator.
         random_state, _ = infer_random_state(random_state)
 
-    splitter = StratifiedKFold(
+    # A continuous target has no classes to stratify on, so regression uses a plain
+    # shuffled K-fold. This keeps the guarantee that no sample is held out twice.
+    splitter_cls = KFold if task_type == "regressor" else StratifiedKFold
+    splitter = splitter_cls(
         n_splits=n_folds,
         shuffle=True,
         random_state=random_state,
