@@ -84,6 +84,18 @@ class ClassifierTuningConfig(TuningConfig):
     Set to True to enable."""
 
 
+@dataclasses.dataclass
+class RegressorTuningConfig(TuningConfig):
+    """Configuration for tuning the model during fit/predict calls
+    for regression tasks.
+
+    This currently adds no fields beyond the ones inherited from
+    [TuningConfig][tabpfn.inference_tuning.TuningConfig]. It exists so that the
+    task type can be recovered from the configuration alone, and so that
+    regression-only tuning options have a place to live as they are added.
+    """
+
+
 class ClassifierEvalMetrics(str, Enum):
     """Metric by which predictions will be ultimately evaluated on test data."""
 
@@ -92,6 +104,18 @@ class ClassifierEvalMetrics(str, Enum):
     BALANCED_ACCURACY = "balanced_accuracy"
     ROC_AUC = "roc_auc"
     LOG_LOSS = "log_loss"
+
+
+class RegressorEvalMetrics(str, Enum):
+    """Metric by which predictions will be ultimately evaluated on test data."""
+
+    NLL = "nll"
+    """Negative log-likelihood of the targets under the predicted bar
+    distribution, evaluated in the raw target space."""
+
+    CRPS = "crps"
+    """Continuous ranked probability score of the targets under the predicted bar
+    distribution, evaluated in the raw target space."""
 
 
 # Objectives for the one-vs-rest threshold search, so the inputs are always

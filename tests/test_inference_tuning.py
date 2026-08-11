@@ -8,6 +8,9 @@ import pytest
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
+    RegressorEvalMetrics,
+    RegressorTuningConfig,
+    compute_regression_metric_to_minimize,
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
@@ -256,6 +259,68 @@ def test__get_tuning_splits__accepts_numpy_generator_random_state() -> None:
     X_train, X_holdout, y_train, y_holdout = splits[0]
     assert len(X_train) + len(X_holdout) == len(X)
     assert len(y_train) + len(y_holdout) == len(y)
+
+
+@pytest.mark.parametrize(
+    ("num_samples", "expected_holdout_frac", "expected_n_folds"),
+    [
+        (1_000, 0.1, 10),
+        (9_000, 0.2, 3),
+        (20_000, 0.2, 2),
+        (21_000, 0.3, 1),
+    ],
+)
+def test__regressor_tuning_config__resolves_auto_values_like_classifier(
+    num_samples: int,
+    expected_holdout_frac: float,
+    expected_n_folds: int,
+) -> None:
+    tuning_config = RegressorTuningConfig(
+        calibrate_temperature=True,
+        tuning_holdout_frac="auto",
+        tuning_n_folds="auto",
+    )
+
+    resolved = tuning_config.resolve(num_samples=num_samples)
+
+    # `resolve` must preserve the concrete subclass, not degrade to TuningConfig.
+    assert isinstance(resolved, RegressorTuningConfig)
+    assert resolved.calibrate_temperature is True
+    assert resolved.tuning_holdout_frac == expected_holdout_frac
+    assert resolved.tuning_n_folds == expected_n_folds
+    # `resolve` returns a new instance and leaves the original untouched.
+    assert tuning_config.tuning_holdout_frac == "auto"
+    assert tuning_config.tuning_n_folds == "auto"
+
+
+def test__regressor_tuning_config__keeps_explicit_values() -> None:
+    tuning_config = RegressorTuningConfig(
+        calibrate_temperature=True,
+        tuning_holdout_frac=0.15,
+        tuning_n_folds=4,
+    )
+
+    resolved = tuning_config.resolve(num_samples=1_000)
+
+    assert resolved.tuning_holdout_frac == 0.15
+    assert resolved.tuning_n_folds == 4
+
+
+def test__regressor_tuning_config__has_no_classification_only_fields() -> None:
+    # Threshold tuning is classification-only; a regression config must not expose it.
+    assert not hasattr(RegressorTuningConfig(), "tune_decision_thresholds")
+    assert RegressorTuningConfig().calibrate_temperature is False
+
+
+def test__regressor_eval_metrics__round_trips_from_string() -> None:
+    # Constructed from a string the same way `eval_metric` arguments will be.
+    assert RegressorEvalMetrics("nll") is RegressorEvalMetrics.NLL
+    assert RegressorEvalMetrics.NLL == "nll"
+    assert RegressorEvalMetrics.NLL.value == "nll"
+
+    with pytest.raises(ValueError, match="not a valid RegressorEvalMetrics"):
+        RegressorEvalMetrics("rmse")
+
 
 
 def test__get_tuning_temperatures__straddles_the_no_op_temperature() -> None:
