@@ -435,21 +435,47 @@ def _encoding_is_identity(
     )
 
 
-def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
-    """`X`'s values as a freshly allocated, writeable float64 array.
+def _to_numpy_may_alias(X: pd.DataFrame) -> bool:
+    """Whether ``X.to_numpy()`` can hand back a view of the frame's own buffer.
 
-    On a consolidated float64 frame `to_numpy` hands back a transposed -- and under
-    copy-on-write read-only -- view of the single block, so the copy taken here is
-    the only allocation the identity path makes, and it is the array the caller
-    keeps. Routing the same frame through the ordinal encoder costs two more: one
-    to re-materialise it for the hstack, one for the closing `astype`.
+    A single-block frame is handed out as that block: read-only under copy-on-write,
+    writeable and aliasing whatever the frame was built from without it (pandas < 3),
+    which for a numeric ndarray input is the caller's own array. Anything wider has
+    to be materialised into a new array first, so what comes back is private.
+
+    Defensively ``True`` when the block internals are unavailable, so an unrecognised
+    layout is copied rather than handed out.
+    """
+    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
+    return blocks is None or len(blocks) <= 1
+
+
+def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
+    """`X`'s values as a writeable float64 array that the caller owns.
+
+    A multi-block frame is materialised by `to_numpy` into an array nothing else
+    holds, so that single allocation is the one the caller keeps -- copying it again
+    would double the peak to produce the same values. A single-block frame instead
+    hands back a view of its own buffer, so that one is copied; the copy is then the
+    only allocation the identity path makes. Routing the same frame through the
+    ordinal encoder costs two either way: one to re-materialise it for the hstack,
+    one for the closing `astype`.
 
     Column-major because that is what the encoder path has always returned -- its
     `hstack` builds an F-ordered array and the closing `astype` preserves layout --
-    and downstream preprocessing is column-wise. Pinning the order here keeps this
-    a change of cost only, not of what callers receive.
+    and downstream preprocessing is column-wise. Pinning the order here keeps this a
+    change of cost only, not of what callers receive. pandas materialises with the
+    same layout, so the common case needs no rearranging, but the flags are checked
+    rather than assumed and anything else falls back to the copy.
     """
-    return np.array(X.to_numpy(dtype=np.float64, copy=False), order="F", copy=True)
+    values = X.to_numpy(dtype=np.float64, copy=False)
+    if (
+        not _to_numpy_may_alias(X)
+        and values.flags.writeable
+        and values.flags.f_contiguous
+    ):
+        return values
+    return np.array(values, order="F", copy=True)
 
 
 def _apply_ordinal_encoder(

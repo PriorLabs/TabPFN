@@ -14,6 +14,7 @@ from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing import clean_data
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
+    _owned_float64_values,
     fix_dtypes,
     process_text_na_dataframe,
 )
@@ -841,3 +842,53 @@ def test__fix_dtypes__mixed_numeric_dtypes_are_still_cast() -> None:
 
     assert list(frame.dtypes) == [np.dtype("float64")] * 3
     assert np.isnan(frame["a"].to_numpy()[2])
+
+
+# --- ownership of the identity path's output -------------------------------------
+#
+# The identity path hands its array straight to the caller, who writes into it, so it
+# has to own it. How many copies that takes depends on the frame's block layout,
+# which is what these two pin.
+
+
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column, as a recast frame is left."""
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
+
+
+def test__owned_float64_values__hands_a_multi_block_frame_through() -> None:
+    """A frame of many blocks is materialised by `to_numpy`; copying that is waste."""
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = _fragmented_float_frame(values)
+    assert not _is_single_float_block(frame)
+
+    out = _owned_float64_values(frame)
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    assert not np.shares_memory(out, values)
+    # Nothing else references what `to_numpy` built, so it was returned rather than
+    # copied a second time. A copy would own its data outright.
+    assert out.base is not None
+
+
+def test__owned_float64_values__copies_a_single_block_frame() -> None:
+    """A single-block frame is handed out as a view of the array it was built from."""
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = pd.DataFrame(values, copy=False)
+    assert _is_single_float_block(frame)
+    assert np.shares_memory(frame.to_numpy(dtype=np.float64, copy=False), values)
+
+    out = _owned_float64_values(frame)
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    # Writing into the result must not reach the caller's array. Under copy-on-write
+    # the view is read-only, but on pandas 2 it is writeable and aliases `values`.
+    assert not np.shares_memory(out, values)
+    out[0, 0] = 12345.0
+    assert values[0, 0] != 12345.0
