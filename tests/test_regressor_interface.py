@@ -1510,6 +1510,62 @@ def test__predict_batched__rejects_float64_precision() -> None:
         reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
 
 
+def test__predict_batched__rejects_tuning_config() -> None:
+    """tuning_config calibrates a per-dataset temperature → unsupported, raises.
+
+    `ensemble_softmax_temperature_` is fitted on each dataset's own holdout, so
+    a shared batch has no single temperature to apply. Without this guard the
+    fused path silently returned *uncalibrated* predictions while claiming
+    parity with `predict`, and paid for a discarded calibration sweep per
+    dataset on top. Mirrors the classifier's `predict_proba_batched` guard.
+    """
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        model_path=_create_dummy_regressor_model_specs(),
+        tuning_config={"calibrate_temperature": True},
+    )
+    with pytest.raises(NotImplementedError, match=r"tuning_config"):
+        reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
+def test__predict_batched__shares_its_logit_reduction_with_predict() -> None:
+    """The two paths must reduce accumulated logits through the same code.
+
+    `predict_batched` once carried its own copy of the averaging tail and so
+    silently dropped the `ensemble_softmax_temperature_` step that `predict`
+    applies. Pinning both to `_reduce_accumulated_logits` is what stops them
+    drifting apart again, so assert the batched path really routes through it.
+    """
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        inference_precision=torch.float32,
+        model_path=_create_dummy_regressor_model_specs(),
+    )
+    datasets = [_mk_reg_dataset(s, n=40) for s in (0, 1)]
+
+    calls = []
+    original = TabPFNRegressor._reduce_accumulated_logits
+
+    def spy(self, accumulated_logits, n_estimators):  # noqa: ANN202
+        calls.append(n_estimators)
+        return original(self, accumulated_logits, n_estimators)
+
+    with mock.patch.object(TabPFNRegressor, "_reduce_accumulated_logits", spy):
+        reg.predict_batched(
+            [d[0] for d in datasets],
+            [d[1] for d in datasets],
+            [d[0][:5] for d in datasets],
+        )
+
+    # One reduction per dataset, each over the full ensemble.
+    assert calls == [2, 2]
+
+
 def test__predict_batched__float64_inputs_match_per_dataset() -> None:
     """float64 *arrays* stay supported; only float64 precision is rejected.
 

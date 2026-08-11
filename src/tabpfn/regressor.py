@@ -1522,6 +1522,32 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "Cannot make predictions, possibly due to `n_estimators=0`."
             )
 
+        return self._reduce_accumulated_logits(accumulated_logits, n_estimators)
+
+    def _reduce_accumulated_logits(
+        self,
+        accumulated_logits: torch.Tensor,
+        n_estimators: int,
+    ) -> torch.Tensor:
+        """Average the ensemble's accumulated output and apply the temperature.
+
+        The tail shared by `_compute_aggregated_logits` (the `predict` path) and
+        `_decode_batched_dataset` (the `predict_batched` path). Both reach this
+        point with the same quantity -- the sum over estimators of one dataset's
+        bucket probabilities on the `znorm_space_bardist_` borders, already in
+        log space when `average_before_softmax` is set -- so the reduction must
+        stay identical between them. Keeping it in one place is what makes that
+        true; `predict_batched` previously carried its own copy and silently
+        omitted the temperature.
+
+        Args:
+            accumulated_logits: Summed per-estimator output for one dataset.
+            n_estimators: How many estimators contributed to the sum.
+
+        Returns:
+            A `[n_samples, n_buckets]` tensor of log-probabilities with
+            `ensemble_softmax_temperature_` applied.
+        """
         if self.average_before_softmax:
             logits = (accumulated_logits / n_estimators).softmax(dim=-1)
         else:
@@ -1580,8 +1606,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, or the
                 training (or test) arrays do not all share one shape.
             TabPFNValidationError: If ``output_type`` or ``quantiles`` are invalid.
-            NotImplementedError: If ``inference_precision`` is ``torch.float64``,
-                which the fused forward does not support.
+            NotImplementedError: If ``tuning_config`` is configured on the
+                estimator -- the calibrated ensemble temperature is per-dataset
+                state and cannot be applied correctly across a shared batch, so
+                score those datasets individually with :meth:`predict`. Also
+                raised for ``inference_precision=torch.float64``, which the
+                fused forward does not support.
 
         Note:
             Constant-target datasets are answered analytically and take no part
@@ -1604,6 +1634,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         if len(X_train_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+
+        # `ensemble_softmax_temperature_` is calibrated per dataset on that
+        # dataset's own holdout, so there is no single temperature to apply to a
+        # shared batch. Mirrors the same guard in
+        # `TabPFNClassifier.predict_proba_batched`.
+        if self.tuning_config is not None:
+            raise NotImplementedError(
+                "predict_batched does not support tuning_config (ensemble "
+                "temperature calibration); the calibrated temperature is fitted "
+                "per dataset and cannot be applied across a shared batch. Score "
+                "datasets individually with predict."
+            )
 
         if self.inference_precision == torch.float64:
             raise NotImplementedError(
@@ -1830,18 +1872,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> RegressionResultType:
         """Turn one dataset's accumulated logits into its prediction output.
 
-        Same averaging as :meth:`predict`, with this dataset's own raw-space bar
-        distribution as the criterion.
+        Shares :meth:`_reduce_accumulated_logits` with :meth:`predict`, so the
+        two paths average identically, and decodes with this dataset's own
+        raw-space bar distribution as the criterion.
         """
         assert n_estimators > 0
-        if self.average_before_softmax:
-            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
-        else:
-            logits = accumulated_logits / n_estimators
-
-        logits = logits.log()
-        if logits.dtype == torch.float16:
-            logits = logits.float()
+        # `predict_batched` rejects `tuning_config`, so the temperature applied
+        # here is always the 1.0 no-op; the call is shared with `predict` so the
+        # two reductions cannot drift apart again.
+        logits = self._reduce_accumulated_logits(accumulated_logits, n_estimators)
 
         logit_to_output = partial(
             _logits_to_output,
