@@ -18,7 +18,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.architectures.interface import ArchitectureConfig
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
-from tabpfn.inference_tuning import ClassifierEvalMetrics
+from tabpfn.inference_tuning import ClassifierEvalMetrics, RegressorEvalMetrics
 from tabpfn.model_loading import save_tabpfn_model
 
 from .utils import get_pytest_devices, get_pytest_devices_with_mps_marked_slow
@@ -333,6 +333,44 @@ def test_saving_and_loading_with_tuning_config(
     assert loaded_estimator.tuned_classification_thresholds_ is not None
     assert loaded_estimator.softmax_temperature_ is not None
     assert loaded_estimator.eval_metric_ is ClassifierEvalMetrics.F1
+
+
+def test_saving_and_loading_regressor_with_tuning_config(
+    tmp_path: Path,
+) -> None:
+    """Test that a regressor's calibrated temperature survives a round-trip.
+
+    `save_fitted_tabpfn_model` picks up trailing-underscore attributes
+    automatically, so this needs no support in `model_loading.py`; the test is
+    here to prove that, and to catch a future blacklist entry that would drop
+    the calibration silently.
+    """
+    estimator = TabPFNRegressor(
+        device="cpu",
+        random_state=42,
+        eval_metric="nll",
+        # TODO: test the case when dataclass is used
+        tuning_config={
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 1,
+        },
+    )
+    X, y = make_regression(n_samples=50, n_features=5, noise=10.0, random_state=42)
+
+    path = tmp_path / "model.tabpfn_fit"
+    estimator.fit(X, y)
+    estimator.save_fit_state(path)
+    loaded_estimator = TabPFNRegressor.load_from_fit_state(path)
+
+    assert loaded_estimator.eval_metric_ is RegressorEvalMetrics.NLL
+    assert (
+        loaded_estimator.ensemble_softmax_temperature_
+        == estimator.ensemble_softmax_temperature_
+    )
+    # The temperature has to arrive as a live part of the predict path, not just as
+    # a stored number, so compare predictions rather than only the attribute.
+    _assert_roundtrip_predictions(estimator, loaded_estimator, X, cross_device=False)
 
 
 # --- fit_with_cache save/load tests ---

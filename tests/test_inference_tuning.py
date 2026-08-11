@@ -223,6 +223,14 @@ def _softmax_over_estimators(
     probas = exp / exp.sum(axis=-1, keepdims=True)
     return probas.mean(axis=0)
 
+
+def test__find_optimal_temperature__works_when_class_missing_from_holdout() -> None:
+    rng = np.random.default_rng(0)
+    n_estimators, n_samples, n_classes = 2, 50, 3
+    raw_logits = rng.normal(size=(n_estimators, n_samples, n_classes))
+    # Class 2 never appears in the holdout labels.
+    y_true = rng.integers(0, 2, size=n_samples)
+
     temperature = find_optimal_temperature(
         raw_logits=raw_logits,
         y_true=y_true,

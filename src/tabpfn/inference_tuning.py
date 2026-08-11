@@ -547,6 +547,18 @@ def find_regression_optimal_temperature(
     return best_temperature
 
 
+def get_tuning_temperatures() -> np.ndarray:
+    """Gets the candidate softmax temperatures to sweep when calibrating.
+
+    Shared by the classification and regression searches.
+    A temperature above 1 flattens the predicted distribution and one
+    below 1 sharpens it. Contains the default value 1.0
+
+    Returns:
+        The candidate temperatures, in ascending order, in steps of 0.01.
+    """
+    return np.arange(60, 141) / 100.0
+
 
 def get_default_tuning_holdout_frac(n_samples: int) -> float:
     """Gets the default tuning holdout percentage based on a heuristic.
