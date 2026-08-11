@@ -143,6 +143,14 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
     elif isinstance(X, np.ndarray):
         if X.dtype.kind in NUMERIC_DTYPE_KINDS:
             # It's a numeric type, just wrap the array in pandas with the correct dtype
+            #
+            # A wrap, not a copy: when the dtype already matches, the frame returned
+            # from here is backed by the caller's buffer, so it does not own what it
+            # holds. Copy-on-write makes that safe by construction, but pandas 2 is
+            # still supported and there it is not -- a write into such a frame lands
+            # in the caller's array. Every write below either copies the frame first
+            # or replaces whole columns with a new dtype, and `_owned_float64_values`
+            # copies before handing the values back out; keep it that way.
             X = pd.DataFrame(X, copy=False, dtype=numeric_dtype)
             convert_dtype = False
         elif X.dtype.kind in OBJECT_DTYPE_KINDS:
