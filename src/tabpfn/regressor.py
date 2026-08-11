@@ -224,7 +224,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     def __init__(  # noqa: PLR0913
         self,
         *,
-        n_estimators: int = 8,
+        n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
@@ -267,18 +267,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 predictions of `n_estimators`-many forward passes of TabPFN.
                 Each forward pass has (slightly) different input data. Think of this
                 as an ensemble of `n_estimators`-many "prompts" of the input data.
+                With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
+                on wide datasets so every feature is seen by some estimator (i.e.
+                when the data has more than `max_features_per_estimator` features
+                per estimator), to the smallest value that lets every feature
+                appear in at least one ensemble member, emitting a warning when it
+                does so. That auto-scaled value is capped at
+                `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
+                be sampled unless you raise `n_estimators` yourself. An explicit
+                integer is never overridden — if it is too small to cover every
+                feature, a warning is emitted at fit time and the value is used
+                as given.
 
             auto_scale_n_estimators:
-                Whether to automatically increase `n_estimators` when the dataset
-                has more features than a single estimator can see (i.e. more than
-                `max_features_per_estimator` features per estimator). When `True`
-                (default), `n_estimators` is raised to the smallest value that lets
-                every feature appear in at least one ensemble member, emitting a
-                warning when it does so. The auto-scaled value is capped at
-                `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may
-                never be sampled unless you raise `n_estimators` yourself. Set to
-                `False` to keep `n_estimators` exactly as provided; note that some
-                features may then never be sampled.
+                Deprecated, removed in v9 — pass an explicit `n_estimators`
+                instead. Only applies when `n_estimators="auto"`, where `False`
+                keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
+                it for feature coverage, exactly what passing
+                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
+                `FutureWarning` at fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -537,7 +544,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v2().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
@@ -545,7 +552,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v2_5().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
@@ -553,7 +560,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v2_6().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
@@ -561,7 +568,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "model_path": prepend_cache_path(
                     ModelSource.get_regressor_v3().default_filename
                 ),
-                "n_estimators": 8,
+                "n_estimators": "auto",
                 "softmax_temperature": 0.9,
             }
         else:
@@ -776,6 +783,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         # Polynomial features go through sklearn StandardScaler on numpy and
         # are not differentiable; force "no" regardless of the runtime default

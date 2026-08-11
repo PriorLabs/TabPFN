@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
@@ -20,6 +21,7 @@ from tabpfn.preprocessing.configs import (
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality
 from tabpfn.preprocessing.ensemble import (
+    DEFAULT_N_ESTIMATORS,
     TabPFNEnsemblePreprocessor,
     _compute_feature_importance_order,
     _draw_balanced_from_pool,
@@ -1003,17 +1005,42 @@ def test__resolve_feature_subsampling_method__auto_no_subsampling_needed():
     assert result is FeatureSubsamplingMethod.BALANCED
 
 
+def test_default_n_estimators__is_unchanged():
+    """Pin the package default: `n_estimators="auto"` still means 8 estimators.
+
+    Changing this value silently changes runtime and predictions for every user
+    who never touches `n_estimators`, so it should only move deliberately.
+    """
+    assert DEFAULT_N_ESTIMATORS == 8
+
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        resolved = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=10,  # narrow: no coverage scaling in play
+            preprocessor_configs=[cfg],
+        )
+    assert resolved == 8
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test_default_n_estimators__is_the_constructor_default(estimator_cls: type):
+    """Both estimators default to `"auto"`, which resolves to DEFAULT_N_ESTIMATORS."""
+    assert estimator_cls().n_estimators == "auto"
+
+
 def test_scale_n_estimators_for_feature_coverage__no_scaling_when_enough_capacity():
     """At capacity (n_estimators * max_features == n_features): no scaling, no warning."""  # noqa: E501
     cfg = PreprocessorConfig("none", max_features_per_estimator=500)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=8,
-            n_total_features=4000,  # exactly 8 * 500
+            n_estimators="auto",
+            n_total_features=4000,  # exactly DEFAULT_N_ESTIMATORS (8) * 500
             preprocessor_configs=[cfg],
         )
-    assert result == 8
+    assert result == DEFAULT_N_ESTIMATORS
 
 
 def test_scale_n_estimators_for_feature_coverage__scales_up_and_warns():
@@ -1021,7 +1048,7 @@ def test_scale_n_estimators_for_feature_coverage__scales_up_and_warns():
     cfg = PreprocessorConfig("none", max_features_per_estimator=500)
     with pytest.warns(UserWarning, match="Auto-scaling n_estimators"):
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=8,
+            n_estimators="auto",
             n_total_features=5001,  # non-divisible: also exercises ceil rounding
             preprocessor_configs=[cfg],
         )
@@ -1034,12 +1061,70 @@ def test_scale_n_estimators_for_feature_coverage__uses_min_max_features_across_c
     large = PreprocessorConfig("none", max_features_per_estimator=1_000_000)
     with pytest.warns(UserWarning):  # noqa: PT030
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators=2,
-            n_total_features=4000,
+            n_estimators="auto",
+            n_total_features=6000,
             preprocessor_configs=[small, large],
         )
-    # Bound by min budget (500): ceil(4000 / 500) = 8.
-    assert result == 8
+    # Bound by min budget (500): ceil(6000 / 500) = 12.
+    assert result == 12
+
+
+@pytest.mark.parametrize("n_estimators", [2, 8])
+def test_scale_n_estimators_for_feature_coverage__explicit_value_is_never_scaled(
+    n_estimators: int,
+):
+    """An explicitly passed n_estimators is used as-is, without warning."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=n_estimators,
+            n_total_features=n_estimators * 500,  # exactly covered: no warning
+            preprocessor_configs=[cfg],
+        )
+    assert result == n_estimators
+
+
+@pytest.mark.parametrize("n_estimators", [2, 8])
+def test_scale_n_estimators_for_feature_coverage__explicit_value_warns_if_uncovered(
+    n_estimators: int,
+):
+    """Too small an explicit n_estimators warns but is still used as given."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with pytest.warns(UserWarning, match=r"covers at most \d+ of 5001 features"):
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators=n_estimators,
+            n_total_features=5001,  # needs 11 estimators for full coverage
+            preprocessor_configs=[cfg],
+        )
+    assert result == n_estimators
+
+
+def test_scale_n_estimators_for_feature_coverage__auto_scaling_disabled():
+    """Deprecated auto_scale_n_estimators=False keeps "auto" at the default."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with pytest.warns(FutureWarning, match="auto_scale_n_estimators is deprecated"):
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=5001,
+            preprocessor_configs=[cfg],
+            auto_scale_n_estimators=False,
+        )
+    assert result == DEFAULT_N_ESTIMATORS
+
+
+def test_scale_n_estimators_for_feature_coverage__auto_scaling_enabled_does_not_warn():
+    """The default auto_scale_n_estimators=True emits no deprecation warning."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=10,
+            preprocessor_configs=[cfg],
+            auto_scale_n_estimators=True,
+        )
+    assert result == DEFAULT_N_ESTIMATORS
 
 
 @skip_on_macos
