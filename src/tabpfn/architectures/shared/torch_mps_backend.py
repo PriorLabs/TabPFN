@@ -87,7 +87,7 @@ class TorchMPSBackend:
         v_BSJD: torch.Tensor | None,
         **_informational: Any,  # forward-compat context; safe to ignore
     ) -> torch.Tensor:
-        """Run MPS SDPA (k/v arrive dense; the chokepoint dequantizes)."""
+        """Run MPS SDPA (k/v arrive dense; the SDPA wrapper dequantizes)."""
         assert k_BSJD is not None
         assert v_BSJD is not None
         out_BHSD = torch_mps_sdpa(

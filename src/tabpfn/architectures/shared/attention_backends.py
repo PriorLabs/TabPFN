@@ -1,10 +1,9 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 """Registry for swappable attention backends.
 
-Attention calls in the architectures funnel through the shared
-``scaled_dot_product_attention`` chokepoint, which asks this registry who
-should take each one — so an alternative kernel does not have to live in
-this package.
+Attention calls in the architectures funnel through the shared SDPA wrapper,
+``scaled_dot_product_attention``, which asks this registry who should take each
+one — so an alternative kernel does not have to live in this package.
 
 Registration is **explicit**, with no discovery: the shared SDPA module
 registers the in-tree backends at import, and external packages call
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
 class AttentionSpec:
     """The shapes of one attention call, without its tensors.
 
-    Built at the chokepoint from the live tensors, so the numbers describe
+    Built by the SDPA wrapper from the live tensors, so the numbers describe
     exactly the call about to run. A field is ``None`` only when the call
     does not have it (e.g. no keys of their own on the quantized-cache
     path); a backend whose decision depends on such a field must decline.
@@ -55,7 +54,7 @@ class AttentionSpec:
     """Dimensionality of each head."""
 
     dtype: torch.dtype
-    """Effective dtype of q/k/v at the call (autocast-aware)."""
+    """Dtype of q/k/v at the call."""
 
     device: torch.device
     """Device the call runs on."""
@@ -77,7 +76,7 @@ class AttentionBackend(Protocol):
 
     All tensors use the ``(B, S, H, D)`` layout of
     ``shared.scaled_dot_product_attention``. Backends receive dense
-    ``k``/``v`` — the chokepoint dequantizes a quantized KV cache entry
+    ``k``/``v`` — the SDPA wrapper dequantizes a quantized KV cache entry
     exactly once, before dispatch. A backend that wants the entry *as
     stored* (to feed its kernel without materializing a dense copy) sets
     the class attribute ``consumes_quantized_kv = True``; it then receives
@@ -211,7 +210,7 @@ def find_attention_backend(
 
     Describes the call, then takes the first registered backend that prefers
     it. This is the one selection routine: the architectures call it (through
-    the chokepoint) and own no selection logic themselves.
+    the SDPA wrapper) and own no selection logic themselves.
     """
     spec = _spec_from_tensors(q_BSHD, k_BSJD, v_BSJD, quantized_kv=quantized_kv)
     backend: AttentionBackend | None = None

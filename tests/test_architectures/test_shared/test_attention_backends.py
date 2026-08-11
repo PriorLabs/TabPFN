@@ -118,7 +118,7 @@ def test_quantized_kv_is_passed_on_or_dequantized_once(
     consumes_quantized_kv: bool,
 ) -> None:
     """The entry is passed on only to a backend that declares it consumes
-    one; otherwise the chokepoint dequantizes, once.
+    one; otherwise the SDPA wrapper dequantizes, once.
     """
     backend = _RecordingBackend()
     backend.consumes_quantized_kv = consumes_quantized_kv
