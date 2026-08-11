@@ -605,12 +605,14 @@ def _apply_ordinal_encoder(
         # inner encoder its categories from every row.
         ord_encoder.fit(X.iloc[:1])
         selected = _encoder_selection(ord_encoder)
+        if not _can_write_encoded_columns(X, selected):
+            # Bail before learning any categories: `fit_transform` learns them again
+            # from scratch, so doing it first would be a wasted pass over the data.
+            # Only the one-row fit above is lost, which costs no pass at all.
+            return ord_encoder.fit_transform(X)
         if selected:
             ord_encoder.named_transformers_["encoder"].fit(X[selected])
-        if _can_write_encoded_columns(X, selected):
-            return _encode_into_preallocated(X, ord_encoder, selected)
-        # Not assemblable: refit properly and let sklearn do the whole thing.
-        return ord_encoder.fit_transform(X)
+        return _encode_into_preallocated(X, ord_encoder, selected)
     if ord_encoder is not None:
         # Left on sklearn deliberately. `transform` also validates the frame against
         # the one seen at fit -- column count, names, order -- and the assembly above

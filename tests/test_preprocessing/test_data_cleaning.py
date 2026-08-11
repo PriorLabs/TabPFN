@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sklearn.preprocessing import OrdinalEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -1081,9 +1082,19 @@ def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
     assert not clean_module._can_write_encoded_columns(
         frame, clean_module._encoder_selection(encoder.fit(frame.iloc[:1]))
     )
-    # And the real call still works, through sklearn.
-    out = process_text_na_dataframe(
-        frame, ord_encoder=get_ordinal_encoder(), fit_encoder=True
+    # The real call still works, through sklearn, and learns the categories exactly
+    # once. Declining the assembly *after* fitting them would pay for a second pass
+    # over the data and then discard it, since `fit_transform` fits again itself.
+    unpatched_fit = OrdinalEncoder.fit
+    with mock.patch.object(
+        OrdinalEncoder, "fit", autospec=True, side_effect=unpatched_fit
+    ) as fitted:
+        out = process_text_na_dataframe(
+            frame, ord_encoder=get_ordinal_encoder(), fit_encoder=True
+        )
+    rows_per_fit = [len(call.args[1]) for call in fitted.call_args_list]
+    assert rows_per_fit.count(len(frame)) == 1, (
+        f"expected one fit over all {len(frame)} rows, got fits over {rows_per_fit}"
     )
     assert out.shape == (6, 3)
     assert out.dtype == np.float64
