@@ -8,9 +8,15 @@ incompatible with our model. To reduce memory usage, we route to MLX during infe
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
+
+from tabpfn.architectures.shared.attention_backends import AttentionBackend
+
+if TYPE_CHECKING:
+    from tabpfn.architectures.shared.attention_backends import AttentionSpec
 
 try:
     import mlx.core as mx
@@ -22,27 +28,30 @@ except ImportError:
 # this. See https://github.com/ml-explore/mlx/issues/3534.
 os.environ["MLX_ENABLE_TF32"] = "0"
 
+# Below this KV sequence length MLX is slower than torch SDPA, but the memory
+# savings of its flash path are often required to not run out of memory.
+_MLX_MIN_KV_SEQLEN = 128
 
-def is_eligible_for_mlx(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> bool:
-    """True iff MLX can serve this attention call (capability gate, not perf)."""
-    head_dim = q.shape[-1]
+
+def is_eligible_for_mlx(
+    device: torch.device,
+    dtype: torch.dtype,
+    head_dim: int,
+    *,
+    is_grad_enabled: bool,
+) -> bool:
+    """True iff MLX can serve such an attention call (capability gate, not perf).
+
+    Forward-only: the torch->mlx->torch round-trip detaches from autograd,
+    so any call that may need a backward pass is ineligible.
+    """
     _DTYPES = (torch.float16, torch.bfloat16, torch.float32)
     return (
-        mx is not None
-        and (q.is_mps and k.is_mps and v.is_mps)
-        and not (q.requires_grad or k.requires_grad or v.requires_grad)
-        and (q.dtype in _DTYPES and k.dtype in _DTYPES and v.dtype in _DTYPES)
+        device.type == "mps"
+        and not is_grad_enabled
+        and dtype in _DTYPES
         and head_dim <= 128
     )
-
-
-def is_mlx_preferred(
-    q_BHSD: torch.Tensor, k_BJSD: torch.Tensor, v_BJSD: torch.Tensor
-) -> bool:
-    """True iff MLX is preferred for this attention call."""
-    # Note: Inference speed of MLX is worse for seq_len < 1500 but the memory savings
-    # are often required to not run out of memory.
-    return is_eligible_for_mlx(q_BHSD, k_BJSD, v_BJSD) and k_BJSD.shape[2] >= 128
 
 
 def _torch_to_mlx(torch_tensor: torch.Tensor) -> mx.array:
@@ -95,3 +104,54 @@ def flash_attention_mlx(
         out = out[..., :D]
     mx.eval(out)
     return _mlx_to_torch(out, q_BHSD.device, q_BHSD.dtype)
+
+
+class MLXBackend(AttentionBackend):
+    """MLX flash attention as an :class:`~.attention_backends.AttentionBackend`.
+
+    Wraps the eligibility/crossover logic above unchanged; registered at
+    import (below) so MLX keeps its historical auto-dispatch on MPS.
+    """
+
+    name = "mlx"
+
+    @staticmethod
+    def is_available() -> bool:
+        """Whether the mlx package is installed (checked at registration)."""
+        return mx is not None
+
+    def is_preferred(self, spec: AttentionSpec) -> bool:
+        """Eligibility plus the KV-length crossover (also a memory guard).
+
+        Unknown (None) KV lengths never argue for MLX.
+        """
+        return (
+            is_eligible_for_mlx(
+                spec.device,
+                spec.dtype,
+                spec.head_dim,
+                is_grad_enabled=spec.is_grad_enabled,
+            )
+            and (spec.seq_len_kv or 0) >= _MLX_MIN_KV_SEQLEN
+        )
+
+    def run(
+        self,
+        q_BSHD: torch.Tensor,
+        k_BSJD: torch.Tensor | None,
+        v_BSJD: torch.Tensor | None,
+        **_informational: Any,  # forward-compat context; safe to ignore
+    ) -> torch.Tensor:
+        """Run MLX attention (k/v arrive dense; the SDPA wrapper dequantizes)."""
+        assert k_BSJD is not None
+        assert v_BSJD is not None
+        out_BHSD = flash_attention_mlx(
+            q_BSHD.permute(0, 2, 1, 3),
+            k_BSJD.permute(0, 2, 1, 3),
+            v_BSJD.permute(0, 2, 1, 3),
+        )
+        return out_BHSD.permute(0, 2, 1, 3)
+
+
+# Registered by the shared SDPA module, which owns the consult order.
+MLX_BACKEND = MLXBackend()

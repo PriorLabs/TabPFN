@@ -639,7 +639,10 @@ def _chunked_class_attention(
 
     # Single flash-attention call across all chunks
     out_folded = _batched_scaled_dot_product_attention(
-        q_folded, k_folded, v_folded, softmax_scaling_layer=softmax_scaling_layer
+        q_folded,
+        k_folded,
+        v_folded,
+        softmax_scaling_layer=softmax_scaling_layer,
     )
 
     # Unfold and trim padding: (B*K, S, H, D) -> (B, S, H, T)
@@ -768,16 +771,29 @@ class SoftmaxScalingMLP(nn.Module):
 
 def _batched_scaled_dot_product_attention(
     q_BSHD: torch.Tensor,
-    k_BSJD: torch.Tensor,
-    v_BSJD: torch.Tensor,
+    k_BSJD: torch.Tensor | None,
+    v_BSJD: torch.Tensor | None,
     softmax_scaling_layer: nn.Module | None = None,
     _backends_override: list[SDPBackend] | None = None,
+    quantized_kv: QuantizedKVCacheEntry | None = None,
 ) -> torch.Tensor:
-    """SDPA with optional query scaling."""
+    """SDPA with optional query scaling.
+
+    ``n`` for the scaling is the KV sequence length, read from ``k_BSJD`` or
+    the quantized cache entry.
+    """
     if softmax_scaling_layer is not None:
-        src_len = k_BSJD.shape[1]
+        k = quantized_kv.key if quantized_kv is not None else k_BSJD
+        assert k is not None
+        src_len = k.shape[1]
         q_BSHD = softmax_scaling_layer(q_BSHD, src_len)
-    return scaled_dot_product_attention(q_BSHD, k_BSJD, v_BSJD, _backends_override)
+    return scaled_dot_product_attention(
+        q_BSHD,
+        k_BSJD,
+        v_BSJD,
+        _backends_override,
+        quantized_kv=quantized_kv,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -873,7 +889,10 @@ class CrossAttention(nn.Module):
         v = self.v_projection(x_for_key_and_value_BVE).view(B, V, -1, self.head_dim)
 
         out = _batched_scaled_dot_product_attention(
-            q, k, v, softmax_scaling_layer=self.softmax_scaling_layer
+            q,
+            k,
+            v,
+            softmax_scaling_layer=self.softmax_scaling_layer,
         )
 
         return self.out_projection(out.reshape(B, Q, self.head_dim * self.num_heads))
@@ -958,28 +977,36 @@ class ICLAttention(nn.Module):
 
         if cached_kv is not None:
             # Use pre-computed K/V from cache (test-only path)
-            if isinstance(cached_kv, QuantizedKVCacheEntry):
-                cached_kv = cached_kv.dequantize(q.dtype)
             k = cached_kv.key
             v = cached_kv.value
             assert k is not None, "cached key is None"
             assert v is not None, "cached value is None"
-            # Match dtype in case of autocast (e.g. fp32 cache under fp16)
-            if k.dtype != q.dtype:
-                k = k.to(q.dtype)
-                v = v.to(q.dtype)
             # The cache already stores only the test KV heads (sliced at
             # cache-build time), so no slicing is needed here.
             if self.num_kv_heads_test is not None:
                 nh_test_heads = self.num_kv_heads_test
                 assert k.shape[2] == nh_test_heads, "cached key has wrong num heads"
                 assert v.shape[2] == nh_test_heads, "cached value has wrong num heads"
-            out = _batched_scaled_dot_product_attention(
-                q,
-                k,
-                v,
-                softmax_scaling_layer=self.softmax_scaling_layer,
-            )
+            if isinstance(cached_kv, QuantizedKVCacheEntry):
+                # The SDPA wrapper dequantizes unless a backend takes it as is.
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    None,
+                    None,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                    quantized_kv=cached_kv,
+                )
+            else:
+                # Match dtype in case of autocast (e.g. fp32 cache under fp16)
+                if k.dtype != q.dtype:
+                    k = k.to(q.dtype)
+                    v = v.to(q.dtype)
+                out = _batched_scaled_dot_product_attention(
+                    q,
+                    k,
+                    v,
+                    softmax_scaling_layer=self.softmax_scaling_layer,
+                )
         else:
             N = R if single_eval_pos is None else single_eval_pos
             x_train = x_BRE[:, :N]
