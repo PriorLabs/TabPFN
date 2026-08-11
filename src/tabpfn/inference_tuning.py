@@ -414,42 +414,65 @@ def get_default_tuning_n_folds(n_samples: int) -> int:
     return 1
 
 
+def get_tuning_feature_flags(tuning_config: TuningConfig) -> dict[str, bool]:
+    """Gets the tuning feature flags of a tuning configuration by field name.
+
+    Every tuning feature is exposed as a boolean field (e.g.
+    `calibrate_temperature`); the remaining fields configure how tuning is run
+    rather than whether it happens at all. Reading them off the dataclass keeps
+    this task-agnostic, so a config without `tune_decision_thresholds` works.
+
+    Args:
+        tuning_config: The tuning configuration to inspect.
+
+    Returns:
+        A mapping from feature flag name to whether it is enabled, in field
+        declaration order.
+    """
+    return {
+        field.name: value
+        for field in dataclasses.fields(tuning_config)
+        if isinstance(value := getattr(tuning_config, field.name), bool)
+    }
+
+
 def resolve_tuning_config(
-    tuning_config: dict | ClassifierTuningConfig | None,
+    tuning_config: dict | TuningConfig | None,
     num_samples: int,
-) -> ClassifierTuningConfig | None:
+    config_cls: type[TuningConfig] = ClassifierTuningConfig,
+) -> TuningConfig | None:
     """Resolves the tuning configuration by checking if tuning is needed,
-    resolving 'auto' values for holdout parameters, and returning the appropriate
+    resolving 'auto' values for holdout parameters, and building the appropriate
     type of tuning configuration if the input is a dict.
 
     Args:
         tuning_config: The tuning configuration to use. If a dict is provided,
-            the function will infer the appropriate config type based on the keys
-            present (e.g., 'tune_decision_thresholds' indicates
-            ClassificationTuningConfig).
+            it is used as the keyword arguments of `config_cls`.
         num_samples: The number of samples in the training data.
+        config_cls: The tuning configuration class to build a dict input into,
+            e.g. `ClassifierTuningConfig` or `RegressorTuningConfig`. Ignored
+            when `tuning_config` is already a config instance.
 
     Returns:
-        The resolved tuning configuration or None if no tuning is needed.
-        The returned type will be the same as the input type (or inferred from dict).
+        The resolved tuning configuration or None if no tuning is needed. It is
+        the same instance type as the input (or `config_cls` for a dict input);
+        callers needing task-specific fields should narrow it.
     """
     if tuning_config is None:
         return None
 
     tuning_config = (
-        ClassifierTuningConfig(**tuning_config)
+        config_cls(**tuning_config)
         if isinstance(tuning_config, dict)
         else tuning_config
     )
 
-    compute_holdout_logits = bool(
-        tuning_config.calibrate_temperature or tuning_config.tune_decision_thresholds
-    )
-    if not compute_holdout_logits:
+    feature_flags = get_tuning_feature_flags(tuning_config)
+    if not any(feature_flags.values()):
+        enable_options = " or ".join(f"`{name}=True`" for name in feature_flags)
         warnings.warn(
             "You specified a tuning configuration but no tuning features were enabled. "
-            "Set `calibrate_temperature=True` or `tune_decision_thresholds=True` to "
-            "enable tuning.",
+            f"Set {enable_options} to enable tuning.",
             UserWarning,
             stacklevel=3,
         )

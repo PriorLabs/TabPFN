@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from tabpfn.inference_tuning import (
+    MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
     RegressorEvalMetrics,
@@ -14,6 +15,7 @@ from tabpfn.inference_tuning import (
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
+    get_tuning_feature_flags,
     get_tuning_splits,
     get_tuning_temperatures,
     resolve_tuning_config,
@@ -320,6 +322,93 @@ def test__regressor_eval_metrics__round_trips_from_string() -> None:
 
     with pytest.raises(ValueError, match="not a valid RegressorEvalMetrics"):
         RegressorEvalMetrics("rmse")
+
+
+def test__resolve_tuning_config__builds_dict_into_the_requested_config_class() -> None:
+    resolved = resolve_tuning_config(
+        tuning_config={"calibrate_temperature": True},
+        num_samples=1_000,
+        config_cls=RegressorTuningConfig,
+    )
+
+    assert isinstance(resolved, RegressorTuningConfig)
+    assert resolved.calibrate_temperature is True
+    assert resolved.tuning_holdout_frac == 0.1
+    assert resolved.tuning_n_folds == 10
+
+
+def test__resolve_tuning_config__defaults_dicts_to_the_classifier_config() -> None:
+    # Regression guard: a dict without `config_cls` must still become a
+    # `ClassifierTuningConfig`, with its classification-only fields.
+    resolved = resolve_tuning_config(
+        tuning_config={"tune_decision_thresholds": True},
+        num_samples=1_000,
+    )
+
+    assert isinstance(resolved, ClassifierTuningConfig)
+    assert resolved.tune_decision_thresholds is True
+
+
+def test__resolve_tuning_config__keeps_a_config_instance_over_config_cls() -> None:
+    # An already-built config wins; `config_cls` only applies to dict inputs.
+    resolved = resolve_tuning_config(
+        tuning_config=ClassifierTuningConfig(tune_decision_thresholds=True),
+        num_samples=1_000,
+        config_cls=RegressorTuningConfig,
+    )
+
+    assert isinstance(resolved, ClassifierTuningConfig)
+
+
+@pytest.mark.parametrize(
+    ("tuning_config", "expected_options"),
+    [
+        (
+            ClassifierTuningConfig(),
+            "`calibrate_temperature=True` or `tune_decision_thresholds=True`",
+        ),
+        (RegressorTuningConfig(), "`calibrate_temperature=True`"),
+    ],
+)
+def test__resolve_tuning_config__warns_about_the_options_the_config_has(
+    tuning_config: ClassifierTuningConfig | RegressorTuningConfig,
+    expected_options: str,
+) -> None:
+    # The regression config has no `tune_decision_thresholds`, so suggesting it
+    # would send the user after an argument that does not exist.
+    with pytest.warns(UserWarning, match="no tuning features were enabled") as record:
+        resolved = resolve_tuning_config(
+            tuning_config=tuning_config,
+            num_samples=1_000,
+        )
+
+    assert resolved is None
+    assert f"Set {expected_options} to enable tuning." in str(record[0].message)
+
+
+def test__resolve_tuning_config__warns_for_small_datasets_in_both_tasks() -> None:
+    for tuning_config in (
+        ClassifierTuningConfig(calibrate_temperature=True),
+        RegressorTuningConfig(calibrate_temperature=True),
+    ):
+        with pytest.warns(UserWarning, match="samples in the training data"):
+            resolved = resolve_tuning_config(
+                tuning_config=tuning_config,
+                num_samples=MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1,
+            )
+
+        assert resolved is not None
+        assert resolved.calibrate_temperature is True
+
+
+def test__get_tuning_feature_flags__lists_only_the_boolean_feature_fields() -> None:
+    # The holdout knobs configure how tuning runs, not whether it runs.
+    assert get_tuning_feature_flags(
+        ClassifierTuningConfig(calibrate_temperature=True, tuning_n_folds=3)
+    ) == {"calibrate_temperature": True, "tune_decision_thresholds": False}
+    assert get_tuning_feature_flags(RegressorTuningConfig()) == {
+        "calibrate_temperature": False
+    }
 
 
 
