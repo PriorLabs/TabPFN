@@ -36,15 +36,20 @@ Smoke test locally (seconds, ~20 MB on disk; `--string` combines with it):
 
     uv run scripts/bench_clean_data.py --small
 
-Full shape -- needs ~20 GB of RAM and writes ~11 GB per run:
+`clean_data` is pure CPU work -- pandas and numpy, no device involved -- so the
+partition to use is a high-memory CPU one. `cpuhighmem16spot` has 300 nodes at ~123 GB,
+so it is both big enough for the full shape and quick to get hold of:
 
-    srun -p gpuh100flex --gres=gpu:1 --mem=0 --time=01:00:00 \
+    srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py
 
 Mixed columns, at the smaller shape object arrays force (see `--string`):
 
-    srun -p gpuh100flex --gres=gpu:1 --mem=0 --time=01:00:00 \
+    srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py --string
+
+The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
+`scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
 """
 
 from __future__ import annotations

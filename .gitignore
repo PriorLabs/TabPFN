@@ -165,6 +165,9 @@ wandb
 # scripts/bench_clean_data.py baselines (multi-GB output dumps)
 bench_out/
 
+# scripts/profile_clean_data.py reports
+profile_out/
+
 .DS_Store
 ./src/.DS_Store
 
