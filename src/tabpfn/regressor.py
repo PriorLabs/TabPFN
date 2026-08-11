@@ -1507,19 +1507,39 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 batch.configs,
                 performance_options=PerformanceOptions(),
             )
+            assert znorm_borders is not None
+            std_borders = znorm_borders.cpu().numpy()
             # One fused forward per estimator, each output
             # (n_test, n_fused_datasets, n_buckets) with one config per dataset.
-            raw_outputs = list(
-                worker.executor_.iter_outputs(
-                    batch.X_query, autocast=worker.use_autocast_, task_type="regression"
-                )
-            )
-            assert znorm_borders is not None
+            # Estimators are consumed one at a time and folded straight into the
+            # per-dataset accumulators, so peak memory holds a single estimator's
+            # output rather than every estimator's.
+            accumulated: list[torch.Tensor | None] = [None] * len(fused_index)
+            n_estimators = 0
+            for output, configs_for_est in worker.executor_.iter_outputs(
+                batch.X_query, autocast=worker.use_autocast_, task_type="regression"
+            ):
+                for fused_pos in range(len(fused_index)):
+                    contribution = worker._translate_batched_logits(
+                        output=output[:, fused_pos, :],
+                        config=configs_for_est[fused_pos],
+                        znorm_borders=znorm_borders,
+                        std_borders=std_borders,
+                    )
+                    previous = accumulated[fused_pos]
+                    accumulated[fused_pos] = (
+                        contribution if previous is None else previous + contribution
+                    )
+                n_estimators += 1
+                del output
+
             for fused_pos, idx in enumerate(fused_index):
+                dataset_logits = accumulated[fused_pos]
+                assert dataset_logits is not None
+                accumulated[fused_pos] = None
                 results[idx] = worker._decode_batched_dataset(
-                    raw_outputs=raw_outputs,
-                    dataset_pos=fused_pos,
-                    znorm_borders=znorm_borders,
+                    accumulated_logits=dataset_logits,
+                    n_estimators=n_estimators,
                     raw_space_bardist=raw_space_bardists[fused_pos],
                     output_type=output_type,
                     quantiles=quantiles,
@@ -1528,61 +1548,58 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         assert all(r is not None for r in results)
         return typing.cast("list[RegressionResultType]", results)
 
-    def _decode_batched_dataset(  # noqa: C901
+    def _translate_batched_logits(
         self,
         *,
-        raw_outputs: list[tuple[torch.Tensor, list[RegressorEnsembleConfig]]],
-        dataset_pos: int,
+        output: torch.Tensor,
+        config: RegressorEnsembleConfig,
         znorm_borders: torch.Tensor,
+        std_borders: np.ndarray,
+    ) -> torch.Tensor:
+        """Map one estimator's output for one dataset onto the shared borders.
+
+        Same border translation as :meth:`predict`, for a single
+        (estimator, dataset) pair of the fused forward.
+        """
+        out_d = output.float()
+        if self.softmax_temperature != 1:
+            out_d = out_d / self.softmax_temperature
+        if config.target_transform is None:
+            borders_t = std_borders.copy()
+            logit_cancel_mask = None
+        else:
+            logit_cancel_mask, descending_borders, borders_t = transform_borders_one(
+                std_borders,
+                target_transform=config.target_transform,
+                repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
+            )
+            if descending_borders:
+                borders_t = borders_t.flip(-1)  # type: ignore
+        if logit_cancel_mask is not None:
+            out_d = out_d.clone()
+            out_d[..., logit_cancel_mask] = float("-inf")
+
+        transformed = translate_probs_across_borders(
+            out_d,
+            frm=torch.as_tensor(borders_t, device=out_d.device),
+            to=znorm_borders.to(out_d.device),
+        )
+        return transformed.log() if self.average_before_softmax else transformed
+
+    def _decode_batched_dataset(
+        self,
+        *,
+        accumulated_logits: torch.Tensor,
+        n_estimators: int,
         raw_space_bardist: FullSupportBarDistribution,
         output_type: OutputType,
         quantiles: list[float],
     ) -> RegressionResultType:
-        """Decode one dataset's slice of the fused forward.
+        """Turn one dataset's accumulated logits into its prediction output.
 
-        Same border translation and averaging as :meth:`predict`, with this
-        dataset's own raw-space bar distribution as the criterion.
+        Same averaging as :meth:`predict`, with this dataset's own raw-space bar
+        distribution as the criterion.
         """
-        std_borders = znorm_borders.cpu().numpy()
-        accumulated_logits: torch.Tensor | None = None
-        n_estimators = 0
-        for output, configs_for_est in raw_outputs:
-            out_d = output[:, dataset_pos, :].float()
-            if self.softmax_temperature != 1:
-                out_d = out_d / self.softmax_temperature
-            config = configs_for_est[dataset_pos]
-            if config.target_transform is None:
-                borders_t = std_borders.copy()
-                logit_cancel_mask = None
-            else:
-                logit_cancel_mask, descending_borders, borders_t = (
-                    transform_borders_one(
-                        std_borders,
-                        target_transform=config.target_transform,
-                        repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
-                    )
-                )
-                if descending_borders:
-                    borders_t = borders_t.flip(-1)  # type: ignore
-            if logit_cancel_mask is not None:
-                out_d = out_d.clone()
-                out_d[..., logit_cancel_mask] = float("-inf")
-
-            transformed = translate_probs_across_borders(
-                out_d,
-                frm=torch.as_tensor(borders_t, device=out_d.device),
-                to=znorm_borders.to(out_d.device),
-            )
-            if self.average_before_softmax:
-                transformed = transformed.log()
-            accumulated_logits = (
-                transformed
-                if accumulated_logits is None
-                else accumulated_logits + transformed
-            )
-            n_estimators += 1
-
-        assert accumulated_logits is not None
         assert n_estimators > 0
         if self.average_before_softmax:
             logits = (accumulated_logits / n_estimators).softmax(dim=-1)

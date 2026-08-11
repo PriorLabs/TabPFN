@@ -26,6 +26,7 @@ import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
+from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
@@ -1536,6 +1537,54 @@ def test__predict_batched__rejects_bad_arguments() -> None:
         reg.predict_batched([X], [y], [X[:3]], output_type="nonsense")  # type: ignore[arg-type]
     with pytest.raises(regressor_module.TabPFNValidationError):
         reg.predict_batched([X], [y], [X[:3]], output_type="quantiles", quantiles=[1.5])
+
+
+def test__predict_batched__folds_estimators_one_at_a_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each estimator output is folded in before the next one is produced.
+
+    Collecting the fused outputs first would keep every estimator's
+    (n_test, n_datasets, n_buckets) tensor alive at once.
+    """
+    data = [_mk_reg_dataset(s) for s in range(3)]
+    X_list = [d[0] for d in data]
+    y_list = [d[1] for d in data]
+    X_tests = [d[0][:5] for d in data]
+
+    n_folded = 0
+    translate = TabPFNRegressor._translate_batched_logits
+
+    def counting_translate(self: TabPFNRegressor, **kwargs: typing.Any) -> torch.Tensor:
+        nonlocal n_folded
+        n_folded += 1
+        return translate(self, **kwargs)
+
+    iter_outputs = InferenceEngineBatchedNoPreprocessing.iter_outputs
+
+    def checking_iter_outputs(
+        self: InferenceEngineBatchedNoPreprocessing,
+        *args: typing.Any,
+        **kwargs: typing.Any,
+    ) -> typing.Iterator[typing.Any]:
+        for estimator, item in enumerate(iter_outputs(self, *args, **kwargs)):
+            assert n_folded == estimator * len(X_list), (
+                "outputs are being materialized instead of folded in as they arrive"
+            )
+            yield item
+
+    monkeypatch.setattr(
+        TabPFNRegressor, "_translate_batched_logits", counting_translate
+    )
+    monkeypatch.setattr(
+        InferenceEngineBatchedNoPreprocessing, "iter_outputs", checking_iter_outputs
+    )
+
+    reg = TabPFNRegressor(
+        n_estimators=3, device="cpu", random_state=42, inference_precision=torch.float32
+    )
+    reg.predict_batched(X_list, y_list, X_tests)
+    assert n_folded == 3 * len(X_list)
 
 
 def test__predict_batched__does_not_mutate_estimator() -> None:
