@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pytest
 import torch
@@ -20,6 +22,7 @@ from tabpfn.inference_tuning import (
     find_optimal_classification_threshold_single_class,
     find_optimal_classification_thresholds,
     find_optimal_temperature,
+    find_regression_optimal_temperature,
     get_tuning_feature_flags,
     get_tuning_splits,
     get_tuning_temperatures,
@@ -210,26 +213,20 @@ def test__resolve_tuning_config__provides_expected_values_for_auto_config(
     assert resolved_tuning_config.tuning_n_folds == expected_tuning_holdout_n_splits
 
 
-def test__find_optimal_temperature__works_when_class_missing_from_holdout() -> None:
-    rng = np.random.default_rng(0)
-    n_estimators, n_samples, n_classes = 2, 50, 3
-    raw_logits = rng.normal(size=(n_estimators, n_samples, n_classes))
-    # Class 2 never appears in the holdout labels.
-    y_true = rng.integers(0, 2, size=n_samples)
-
-    def logits_to_probabilities_fn(
-        raw_logits: np.ndarray,
-        softmax_temperature: float,
-    ) -> np.ndarray:
-        scaled = raw_logits / softmax_temperature
-        exp = np.exp(scaled - scaled.max(axis=-1, keepdims=True))
-        probas = exp / exp.sum(axis=-1, keepdims=True)
-        return probas.mean(axis=0)
+def _softmax_over_estimators(
+    raw_logits: np.ndarray,
+    softmax_temperature: float,
+) -> np.ndarray:
+    """Stands in for `TabPFNClassifier.logits_to_probabilities`."""
+    scaled = raw_logits / softmax_temperature
+    exp = np.exp(scaled - scaled.max(axis=-1, keepdims=True))
+    probas = exp / exp.sum(axis=-1, keepdims=True)
+    return probas.mean(axis=0)
 
     temperature = find_optimal_temperature(
         raw_logits=raw_logits,
         y_true=y_true,
-        logits_to_probabilities_fn=logits_to_probabilities_fn,
+        logits_to_probabilities_fn=_softmax_over_estimators,
         current_default_temperature=1.0,
     )
 
@@ -640,6 +637,148 @@ def _miscalibrated_fold(
     return logits, raw_space_bardist, torch.as_tensor(y_true, dtype=torch.float32)
 
 
+def _pooled_nll(
+    folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
+    temperature: float,
+) -> float:
+    return float(
+        torch.cat(
+            [
+                compute_regression_metric_to_minimize(
+                    metric_name=RegressorEvalMetrics.NLL,
+                    raw_space_bardist=copy.deepcopy(raw_space_bardist),
+                    logits=logits / temperature,
+                    y_true=y_true,
+                )
+                for logits, raw_space_bardist, y_true in folds
+            ]
+        ).mean()
+    )
+
+
+def test__find_regression_optimal_temperature__widens_overconfident() -> None:
+    # Predictions sharper than the targets warrant: the sweep should widen them.
+    folds = [_miscalibrated_fold(n_samples=400, target_temperature=1.2, seed=0)]
+
+    temperature = find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+
+    assert 1.0 < temperature <= 1.4
+    assert _pooled_nll(folds, temperature) < _pooled_nll(folds, 1.0)
+
+
+def test__find_regression_optimal_temperature__sharpens_underconfident() -> None:
+    # Predictions wider than the targets warrant: the sweep should sharpen them.
+    folds = [_miscalibrated_fold(n_samples=400, target_temperature=0.83, seed=1)]
+
+    temperature = find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+
+    assert 0.6 <= temperature < 1.0
+    assert _pooled_nll(folds, temperature) < _pooled_nll(folds, 1.0)
+
+
+def _optimal_temperature(
+    folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
+) -> float:
+    return find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+
+
+def test__find_regression_optimal_temperature__pools_differing_bardists() -> None:
+    # Each fold's regressor normalises with its own statistics, so the folds carry
+    # different bar distributions and cannot be concatenated into one. The pooled
+    # answer must still land between what either fold would pick alone.
+    sharp_fold = _miscalibrated_fold(n_samples=300, target_temperature=0.8, seed=2)
+    wide_fold = _miscalibrated_fold(
+        n_samples=300, target_temperature=1.3, seed=3, scale=50.0
+    )
+    assert not torch.equal(sharp_fold[1].borders, wide_fold[1].borders)
+
+    sharp_only = _optimal_temperature([sharp_fold])
+    wide_only = _optimal_temperature([wide_fold])
+    pooled = _optimal_temperature([sharp_fold, wide_fold])
+
+    assert sharp_only < pooled < wide_only
+
+
+def test__find_regression_optimal_temperature__weights_folds_by_holdout_size() -> None:
+    # Pooling happens per sample, not per fold, so the bigger holdout dominates.
+    small_fold = _miscalibrated_fold(n_samples=40, target_temperature=0.8, seed=4)
+    big_fold = _miscalibrated_fold(n_samples=1_200, target_temperature=1.3, seed=5)
+
+    small_only = _optimal_temperature([small_fold])
+    big_only = _optimal_temperature([big_fold])
+    pooled = _optimal_temperature([small_fold, big_fold])
+
+    assert abs(pooled - big_only) < abs(pooled - small_only)
+
+
+def test__find_regression_optimal_temperature__is_invariant_to_target_units() -> None:
+    # Rescaling a fold's targets and its bar distribution together is a change of
+    # units, so the chosen temperature must not move even though the NLL value does.
+    in_units = _miscalibrated_fold(n_samples=300, target_temperature=1.25, seed=6)
+    scaled = _miscalibrated_fold(
+        n_samples=300, target_temperature=1.25, seed=6, scale=1_000.0
+    )
+
+    assert _optimal_temperature([in_units]) == _optimal_temperature([scaled])
+    # A wider bucket means a lower density, hence a loss offset by log(1000).
+    assert _pooled_nll([scaled], 1.0) == pytest.approx(
+        _pooled_nll([in_units], 1.0) + np.log(1_000.0), abs=1e-3
+    )
+
+
+def test__find_regression_optimal_temperature__leaves_bardists_unmutated() -> None:
+    # `FullSupportBarDistribution.forward` accumulates into `losses_per_bucket` on
+    # every call; an 82-point sweep must not leak that into the caller's distribution.
+    logits, raw_space_bardist, y_true = _miscalibrated_fold(
+        n_samples=100, target_temperature=1.2, seed=7
+    )
+    before = raw_space_bardist.losses_per_bucket.clone()
+
+    find_regression_optimal_temperature(
+        holdout_folds=[(logits, raw_space_bardist, y_true)],
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+
+    assert torch.equal(raw_space_bardist.losses_per_bucket, before)
+    assert not before.any()
+
+
+@pytest.mark.parametrize("n_samples", [0])
+def test__find_regression_optimal_temperature__falls_back_when_degenerate(
+    n_samples: int,
+) -> None:
+    empty = _miscalibrated_fold(n_samples=n_samples, target_temperature=1.2, seed=8)
+
+    assert (
+        find_regression_optimal_temperature(
+            holdout_folds=[],
+            metric_name=RegressorEvalMetrics.NLL,
+            current_default_temperature=0.9,
+        )
+        == 0.9
+    )
+    assert (
+        find_regression_optimal_temperature(
+            holdout_folds=[empty],
+            metric_name=RegressorEvalMetrics.NLL,
+            current_default_temperature=0.9,
+        )
+        == 0.9
+    )
+
 
 def test__compute_regression_metric_to_minimize__returns_one_loss_per_sample() -> None:
     logits, raw_space_bardist, y_true = _miscalibrated_fold(
@@ -707,6 +846,83 @@ def test__temperature_searches__only_return_values_from_the_shared_grid() -> Non
     assert classification_temperature in temperatures
 
 
+def _pooled(folds, metric, temperature) -> float:
+    """Reproduces the search's pooling: fold means weighted by holdout size."""
+    total = sum(len(y) for _, _, y in folds)
+    return (
+        sum(
+            len(y)
+            * float(
+                compute_regression_metric_to_minimize(
+                    metric_name=metric,
+                    raw_space_bardist=copy.deepcopy(bardist),
+                    logits=logits / temperature,
+                    y_true=y,
+                ).mean()
+            )
+            for logits, bardist, y in folds
+        )
+        / total
+    )
+
+
+@pytest.mark.parametrize(
+    "metric",
+    [RegressorEvalMetrics.NLL, RegressorEvalMetrics.CRPS],
+)
+def test__find_regression_optimal_temperature__every_metric_beats_no_calibration(
+    metric: RegressorEvalMetrics,
+) -> None:
+    # Whichever metric drives the search, the temperature it picks must score at least
+    # as well on that same metric as leaving the distribution alone -- 1.0 is on the
+    # grid, so the sweep can always fall back to it and can never do worse.
+    folds = [_miscalibrated_fold(n_samples=600, target_temperature=1.25, seed=7)]
+
+    temperature = find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=metric,
+        current_default_temperature=1.0,
+    )
+
+    assert temperature in get_tuning_temperatures()
+    assert _pooled(folds, metric, temperature) <= _pooled(folds, metric, 1.0)
+
+
+@pytest.mark.parametrize(
+    "metric", [RegressorEvalMetrics.NLL, RegressorEvalMetrics.CRPS]
+)
+def test__find_regression_optimal_temperature__distributional_metrics_widen(
+    metric: RegressorEvalMetrics,
+) -> None:
+    # Predictions sharper than the targets warrant: both metrics should widen them.
+    folds = [_miscalibrated_fold(n_samples=600, target_temperature=1.25, seed=7)]
+
+    temperature = find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=metric,
+        current_default_temperature=1.0,
+    )
+
+    assert temperature > 1.0
+
+
+def test__find_regression_optimal_temperature__metrics_share_the_search() -> None:
+    # All metrics run through the identical code path and grid, so they can only
+    # differ in *which* grid point wins -- never in the set of candidates.
+    folds = [_miscalibrated_fold(n_samples=500, target_temperature=1.15, seed=8)]
+    grid = get_tuning_temperatures()
+
+    for metric in RegressorEvalMetrics:
+        assert (
+            find_regression_optimal_temperature(
+                holdout_folds=folds,
+                metric_name=metric,
+                current_default_temperature=1.0,
+            )
+            in grid
+        )
+
+
 def test__compute_regression_metric_to_minimize__crps_delegates_to_finetuning() -> None:
     # The regression metric must be the *same* function the finetuning loss uses, so
     # the two cannot drift apart. Compared against a direct call to prove it.
@@ -743,3 +959,25 @@ def test__get_tuning_temperatures__contains_exactly_one() -> None:
     assert 3.14159 / float(temperatures[temperatures == 1.0][0]) == 3.14159
 
 
+@pytest.mark.parametrize("seed", [9, 10, 11])
+def test__find_regression_optimal_temperature__settles_near_the_no_op(
+    seed: int,
+) -> None:
+    """A fold that is already honest must not be pushed far from 1.0.
+
+    This is a statistical statement, not an exact one: even with 4000 holdout rows the
+    empirical optimum wanders a few grid steps around the true one, so the tolerance is
+    a noise floor rather than a claim about the grid. That 1.0 is *exactly* reachable
+    is pinned separately by `test__get_tuning_temperatures__contains_exactly_one`;
+    before the grid change the nearest candidates were 0.995 and 1.005 and neither was
+    a true no-op.
+    """
+    folds = [_miscalibrated_fold(n_samples=4_000, target_temperature=1.0, seed=seed)]
+
+    temperature = find_regression_optimal_temperature(
+        holdout_folds=folds,
+        metric_name=RegressorEvalMetrics.NLL,
+        current_default_temperature=1.0,
+    )
+
+    assert abs(temperature - 1.0) <= 0.05

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import copy
 import dataclasses
 import warnings
 from collections.abc import Callable
@@ -467,6 +468,84 @@ def find_optimal_temperature(
             best_temperature = temperature
 
     return best_temperature
+
+
+def find_regression_optimal_temperature(
+    holdout_folds: list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]],
+    metric_name: RegressorEvalMetrics,
+    current_default_temperature: float,
+) -> float:
+    """Finds the temperature to apply to the aggregated ensemble distribution.
+
+    The temperature acts after ensemble aggregation, as `log -> /T -> softmax`.
+    Because the bar distribution applies `log_softmax` itself, dividing the
+    already-logged aggregated logits by T is exactly that operation. `T > 1` widens
+    the predicted distribution and `T < 1` sharpens it.
+
+    Each fold is kept separate because each fold's regressor normalises the target
+    with its own mean and standard deviation, so each fold's bar distribution has its
+    own borders.
+
+    Args:
+        holdout_folds: One `(logits, raw_space_bardist, y_true)` triple per fold,
+            where `logits` has shape [n_holdout, n_buckets] and `y_true` shape
+            [n_holdout]. Each triple must be internally consistent: the targets in
+            the units of that bar distribution's borders, and all three on the same
+            device.
+        metric_name: The metric to minimize.
+        current_default_temperature: The temperature to fall back to when the sweep
+            has nothing usable to choose from.
+
+    Returns:
+        The temperature that minimizes the metric over the pooled holdout rows.
+    """
+    # `FullSupportBarDistribution.forward` accumulates into its `losses_per_bucket`
+    # buffer on every call, so sweep on copies and leave the callers' bar
+    # distributions clean.
+    folds = [
+        (logits, copy.deepcopy(raw_space_bardist), y_true)
+        for logits, raw_space_bardist, y_true in holdout_folds
+        if logits.shape[0] > 0
+    ]
+    if not folds:
+        return current_default_temperature
+
+    # Imported here rather than at module level so that this module stays free of
+    # torch at import time, as it was before regression calibration existed. `torch`
+    # appears throughout the signatures above, but `from __future__ import
+    # annotations` keeps those unevaluated, and `no_grad` is the only runtime use.
+    import torch  # noqa: PLC0415
+
+    n_holdout_total = sum(logits.shape[0] for logits, _, _ in folds)
+    temperatures = get_tuning_temperatures()
+    best_loss = float("inf")
+    best_temperature = current_default_temperature
+
+    # TODO: think about vectorizing this loop.
+    with torch.no_grad():
+        for temperature in temperatures:
+            current_loss = (
+                sum(
+                    logits.shape[0]
+                    * float(
+                        compute_regression_metric_to_minimize(
+                            metric_name=metric_name,
+                            raw_space_bardist=raw_space_bardist,
+                            logits=logits / temperature,
+                            y_true=y_true,
+                        ).mean()
+                    )
+                    for logits, raw_space_bardist, y_true in folds
+                )
+                / n_holdout_total
+            )
+
+            if np.isfinite(current_loss) and current_loss < best_loss:
+                best_loss = current_loss
+                best_temperature = float(temperature)
+
+    return best_temperature
+
 
 
 def get_default_tuning_holdout_frac(n_samples: int) -> float:
