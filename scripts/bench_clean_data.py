@@ -83,6 +83,8 @@ from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
@@ -172,10 +174,34 @@ _GB = 1e9
 # ---------------------------------------------------------------------------
 
 
-def current_rss_bytes() -> int:
+def _rss_from_statm() -> int:
     """Resident set size of this process, read from /proc/self/statm."""
     with Path("/proc/self/statm").open() as handle:
         return int(handle.read().split()[1]) * _PAGE_SIZE
+
+
+def _pick_rss_reader() -> Callable[[], int]:
+    """How to read RSS here.
+
+    `/proc` on Linux, which is where the numbers that matter are measured and which
+    costs nothing to read. Off it -- a smoke test on a laptop -- fall back to psutil.
+    That is not a dependency of this package, only of the dev environment, so it is
+    imported lazily and only when there is no `/proc` to read instead.
+    """
+    if Path("/proc/self/statm").exists():
+        return _rss_from_statm
+    try:
+        import psutil  # noqa: PLC0415
+    except ImportError:
+        raise RuntimeError(
+            f"no /proc/self/statm on {platform.system()} and psutil is not installed, "
+            "so RSS cannot be sampled here"
+        ) from None
+    process = psutil.Process()
+    return lambda: process.memory_info().rss
+
+
+current_rss_bytes = _pick_rss_reader()
 
 
 class RssSampler:
@@ -896,8 +922,14 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
 
 
 def meminfo_gb(field_name: str) -> float:
-    """Read a /proc/meminfo field in GB."""
-    for line in Path("/proc/meminfo").read_text().splitlines():
+    """Read a /proc/meminfo field in GB, NaN where there is no /proc to read.
+
+    Reported only, never compared, so a host that cannot answer costs nothing.
+    """
+    meminfo = Path("/proc/meminfo")
+    if not meminfo.exists():
+        return float("nan")
+    for line in meminfo.read_text().splitlines():
         if line.startswith(f"{field_name}:"):
             return int(line.split()[1]) * 1024 / _GB
     return float("nan")
