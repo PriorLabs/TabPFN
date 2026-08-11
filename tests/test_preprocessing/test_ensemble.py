@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 from sklearn.preprocessing import PowerTransformer
 
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import (
     generate_classification_ensemble_configs,
     generate_regression_ensemble_configs,
@@ -1002,6 +1003,31 @@ def test__resolve_feature_subsampling_method__auto_no_subsampling_needed():
         auto_min_samples=100_000,
     )
     assert result is FeatureSubsamplingMethod.BALANCED
+
+
+def test_default_n_estimators__is_unchanged():
+    """Pin the package default: `n_estimators="auto"` still means 8 estimators.
+
+    Changing this value silently changes runtime and predictions for every user
+    who never touches `n_estimators`, so it should only move deliberately.
+    """
+    assert DEFAULT_N_ESTIMATORS == 8
+
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        resolved = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=10,  # narrow: no coverage scaling in play
+            preprocessor_configs=[cfg],
+        )
+    assert resolved == 8
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test_default_n_estimators__is_the_constructor_default(estimator_cls: type):
+    """Both estimators default to `"auto"`, which resolves to DEFAULT_N_ESTIMATORS."""
+    assert estimator_cls().n_estimators == "auto"
 
 
 def test_scale_n_estimators_for_feature_coverage__no_scaling_when_enough_capacity():
