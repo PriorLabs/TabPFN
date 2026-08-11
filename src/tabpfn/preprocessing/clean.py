@@ -521,8 +521,19 @@ def _apply_ordinal_encoder(
 ) -> np.ndarray:
     """Run the ordinal-encoding step, or skip it where it cannot change anything.
 
-    Every branch returns a freshly allocated, writeable array, which is what lets the
-    caller cast to float64 with ``copy=False``.
+    Every branch returns an array the caller owns, which is what lets it write the
+    placeholder and +/-inf cells in place and cast to float64 with ``copy=False``.
+    Three of the four allocate outright -- the copy, and the encoder's own hstack at
+    fit and at transform. The fourth, `X.to_numpy()`, does not: for a single-block
+    frame pandas hands back the block itself, read-only under copy-on-write and
+    aliasing the caller's ndarray without it.
+
+    What keeps that branch honest is the identity check above: it takes every frame
+    whose columns are all plain float64, so the frames that reach `to_numpy()` are
+    never float64 throughout and the caller's `astype` has real work to do, which
+    allocates. Widen `_encoding_is_identity` to accept a dtype it does not convert --
+    a nullable ``Float64``, say -- and a view starts escaping. The caller asserts on
+    it rather than leaving that to be noticed downstream.
     """
     if _encoding_is_identity(X, ord_encoder, fit_encoder=fit_encoder):
         if fit_encoder and ord_encoder is not None:
@@ -590,6 +601,14 @@ def process_text_na_dataframe(
         X[string_cols] = X[string_cols].fillna(placeholder)
 
     X_encoded = _apply_ordinal_encoder(X, ord_encoder, fit_encoder=fit_encoder)
+    # Everything below writes into this array and then hands it to the caller, so it
+    # has to be one no one else holds. Read-only means pandas handed back a view of a
+    # frame's block instead: see `_apply_ordinal_encoder` for how that is kept from
+    # happening, and note that on pandas 2 such a view is writeable and would pass
+    # this while quietly writing through to whatever the frame was built from.
+    assert X_encoded.flags.writeable, (
+        "the ordinal-encoding step returned an array it does not own"
+    )
 
     string_cols_ix = [X.columns.get_loc(col) for col in string_cols]
     placeholder_mask = X[string_cols] == placeholder
