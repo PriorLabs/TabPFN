@@ -1100,16 +1100,31 @@ def test_scale_n_estimators_for_feature_coverage__explicit_value_warns_if_uncove
     assert result == n_estimators
 
 
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test_auto_scale_n_estimators__removed_from_constructor(estimator_cls: type):
-    """The removed `auto_scale_n_estimators` argument is gone for good.
+def test_scale_n_estimators_for_feature_coverage__auto_scaling_disabled():
+    """Deprecated auto_scale_n_estimators=False keeps "auto" at the default."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with pytest.warns(FutureWarning, match="auto_scale_n_estimators is deprecated"):
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=5001,
+            preprocessor_configs=[cfg],
+            auto_scale_n_estimators=False,
+        )
+    assert result == DEFAULT_N_ESTIMATORS
 
-    `auto_scale_n_estimators=False` was equivalent to `n_estimators=8`, so it was
-    removed rather than kept as a redundant way to say the same thing.
-    """
-    assert "auto_scale_n_estimators" not in estimator_cls().get_params()
-    with pytest.raises(TypeError, match="auto_scale_n_estimators"):
-        estimator_cls(auto_scale_n_estimators=False)
+
+def test_scale_n_estimators_for_feature_coverage__auto_scaling_enabled_does_not_warn():
+    """The default auto_scale_n_estimators=True emits no deprecation warning."""
+    cfg = PreprocessorConfig("none", max_features_per_estimator=500)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        result = scale_n_estimators_for_feature_coverage(
+            n_estimators="auto",
+            n_total_features=10,
+            preprocessor_configs=[cfg],
+            auto_scale_n_estimators=True,
+        )
+    assert result == DEFAULT_N_ESTIMATORS
 
 
 @skip_on_macos

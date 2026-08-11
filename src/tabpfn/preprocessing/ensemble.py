@@ -1229,6 +1229,7 @@ def scale_n_estimators_for_feature_coverage(
     n_estimators: int | Literal["auto"],
     n_total_features: int,
     preprocessor_configs: Sequence[PreprocessorConfig],
+    auto_scale_n_estimators: bool = True,
 ) -> int:
     """Scale up n_estimators so every feature is included in at least one estimator.
 
@@ -1246,9 +1247,21 @@ def scale_n_estimators_for_feature_coverage(
     the cap binds, full coverage is not reached and some features may never be
     sampled unless the user raises ``n_estimators`` explicitly.
 
-    To opt out of scaling entirely, pass an explicit ``n_estimators``;
-    ``DEFAULT_N_ESTIMATORS`` reproduces the pre-scaling default.
+    ``auto_scale_n_estimators`` (the deprecated constructor argument of the same
+    name) is redundant now that scaling is opt-out by passing an explicit
+    ``n_estimators``: ``False`` merely resolves ``"auto"`` to
+    ``DEFAULT_N_ESTIMATORS``, exactly what passing that integer does. Passing
+    ``False`` emits a ``FutureWarning``; the argument is removed in v9.
     """
+    if not auto_scale_n_estimators:
+        warnings.warn(
+            "auto_scale_n_estimators is deprecated and will be removed in v9. "
+            f"auto_scale_n_estimators=False is equivalent to passing "
+            f"n_estimators={DEFAULT_N_ESTIMATORS}, which also disables "
+            f"feature-coverage scaling; pass that instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
     min_max_features = (
         min(c.max_features_per_estimator for c in preprocessor_configs)
         if preprocessor_configs
@@ -1270,7 +1283,7 @@ def scale_n_estimators_for_feature_coverage(
             )
         return n_estimators
     n_estimators = DEFAULT_N_ESTIMATORS
-    if min_max_features <= 0:
+    if not auto_scale_n_estimators or min_max_features <= 0:
         return n_estimators
     min_required = math.ceil(n_total_features / min_max_features)
     target = min(min_required, MAX_AUTO_SCALED_N_ESTIMATORS)

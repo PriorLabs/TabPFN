@@ -221,6 +221,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
+        auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
@@ -273,6 +274,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 integer is never overridden — if it is too small to cover every
                 feature, a warning is emitted at fit time and the value is used
                 as given.
+
+            auto_scale_n_estimators:
+                Deprecated, removed in v9 — pass an explicit `n_estimators`
+                instead. Only applies when `n_estimators="auto"`, where `False`
+                keeps the auto value at `DEFAULT_N_ESTIMATORS` rather than raising
+                it for feature coverage, exactly what passing
+                `n_estimators=DEFAULT_N_ESTIMATORS` does. Passing `False` emits a
+                `FutureWarning` at fit time.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -483,6 +492,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
+        self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
@@ -769,6 +779,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         # Polynomial features go through sklearn StandardScaler on numpy and
         # are not differentiable; force "no" regardless of the runtime default
@@ -860,6 +871,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
+            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_regression_ensemble_configs(
             num_estimators=self.n_estimators_,
