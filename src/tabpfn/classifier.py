@@ -210,7 +210,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
-        auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
@@ -256,22 +255,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                  forward pass has (slightly) different input data. Think of this as an
                  ensemble of `n_estimators`-many "prompts" of the input data.
                  With the default `"auto"`, this is `DEFAULT_N_ESTIMATORS`, raised
-                 on wide datasets so every feature is seen by some estimator (see
-                 `auto_scale_n_estimators`). An explicit integer is never overridden.
-
-            auto_scale_n_estimators:
-                Only applies when `n_estimators="auto"`; an explicit `n_estimators`
-                is always used exactly as given. When `True` (default), the auto
-                value is raised above `DEFAULT_N_ESTIMATORS` when the dataset has
-                more features than a single estimator can see (i.e. more than
-                `max_features_per_estimator` features per estimator), to the
-                smallest value that lets every feature appear in at least one
-                ensemble member, emitting a warning when it does so. The
-                auto-scaled value is capped at `MAX_AUTO_SCALED_N_ESTIMATORS`;
-                beyond that some features may never be sampled unless you raise
-                `n_estimators` yourself. Set to `False` to keep `"auto"` at
-                `DEFAULT_N_ESTIMATORS`; note that some features may then never be
-                sampled.
+                 on wide datasets so every feature is seen by some estimator (i.e.
+                 when the data has more than `max_features_per_estimator` features
+                 per estimator), to the smallest value that lets every feature
+                 appear in at least one ensemble member, emitting a warning when it
+                 does so. That auto-scaled value is capped at
+                 `MAX_AUTO_SCALED_N_ESTIMATORS`; beyond that some features may never
+                 be sampled unless you raise `n_estimators` yourself. An explicit
+                 integer is never overridden — if it is too small to cover every
+                 feature, a warning is emitted at fit time and the value is used
+                 as given.
 
             categorical_features_indices:
                 The indices of the columns that are suggested to be treated as
@@ -505,7 +498,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """
         super().__init__()
         self.n_estimators = n_estimators
-        self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
@@ -685,7 +677,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=n_features,
             preprocessor_configs=preprocessor_configs,
-            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,
@@ -760,7 +751,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             n_estimators=self.n_estimators,
             n_total_features=feature_schema.num_columns,
             preprocessor_configs=preprocessor_configs,
-            auto_scale_n_estimators=self.auto_scale_n_estimators,
         )
         ensemble_configs = generate_classification_ensemble_configs(
             num_estimators=self.n_estimators_,

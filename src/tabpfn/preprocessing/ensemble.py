@@ -1229,12 +1229,12 @@ def scale_n_estimators_for_feature_coverage(
     n_estimators: int | Literal["auto"],
     n_total_features: int,
     preprocessor_configs: Sequence[PreprocessorConfig],
-    auto_scale_n_estimators: bool = True,
 ) -> int:
     """Scale up n_estimators so every feature is included in at least one estimator.
 
     Scaling only applies to ``n_estimators="auto"``; an explicit integer is always
-    returned unchanged, so the package never overrides a value the user chose.
+    returned unchanged, so the package never overrides a value the user chose. An
+    explicit value too small to cover every feature warns instead of being raised.
 
     With balanced feature subsampling each estimator sees at most
     ``max_features_per_estimator`` features. If
@@ -1246,18 +1246,30 @@ def scale_n_estimators_for_feature_coverage(
     the cap binds, full coverage is not reached and some features may never be
     sampled unless the user raises ``n_estimators`` explicitly.
 
-    When ``auto_scale_n_estimators`` is False the scaling is skipped and ``"auto"``
-    simply resolves to ``DEFAULT_N_ESTIMATORS`` (this is the
-    ``auto_scale_n_estimators`` constructor argument on the estimator); some
-    features may then never be sampled.
+    To opt out of scaling entirely, pass an explicit ``n_estimators``;
+    ``DEFAULT_N_ESTIMATORS`` reproduces the pre-scaling default.
     """
+    min_max_features = (
+        min(c.max_features_per_estimator for c in preprocessor_configs)
+        if preprocessor_configs
+        else 0
+    )
     if n_estimators != "auto":
-        # A value the user chose explicitly is never overridden.
+        # A value the user chose explicitly is never overridden, only warned about.
+        n_covered = n_estimators * min_max_features
+        if 0 < n_covered < n_total_features:
+            warnings.warn(
+                f"n_estimators={n_estimators} covers at most {n_covered} of "
+                f"{n_total_features} features (max_features_per_estimator="
+                f"{min_max_features}); the remaining features are never sampled by "
+                f"any ensemble member. Pass n_estimators >= "
+                f"{math.ceil(n_total_features / min_max_features)}, or "
+                f'n_estimators="auto" to let TabPFN pick a covering value.',
+                UserWarning,
+                stacklevel=2,
+            )
         return n_estimators
     n_estimators = DEFAULT_N_ESTIMATORS
-    if not auto_scale_n_estimators or not preprocessor_configs:
-        return n_estimators
-    min_max_features = min(c.max_features_per_estimator for c in preprocessor_configs)
     if min_max_features <= 0:
         return n_estimators
     min_required = math.ceil(n_total_features / min_max_features)
@@ -1272,8 +1284,8 @@ def scale_n_estimators_for_feature_coverage(
             f"(n_total_features={n_total_features}, "
             f"max_features_per_estimator={min_max_features}); because of the cap "
             f"some features may never be sampled. Pass n_estimators >= "
-            f"{min_required} to cover all features, or set "
-            f"auto_scale_n_estimators=False to disable scaling.",
+            f"{min_required} to cover all features, or any explicit n_estimators "
+            f"to disable scaling.",
             UserWarning,
             stacklevel=2,
         )
@@ -1284,9 +1296,9 @@ def scale_n_estimators_for_feature_coverage(
             f"(n_total_features={n_total_features}, "
             f"max_features_per_estimator={min_max_features}). "
             f"Pass n_estimators >= {target} to silence this warning. "
-            f"If this scaling is not desired, pass an explicit n_estimators (or set "
-            f"auto_scale_n_estimators=False) in the estimator constructor to disable "
-            f"it (note: some features may then never be sampled).",
+            f"If this scaling is not desired, pass an explicit n_estimators in the "
+            f"estimator constructor to disable it (note: some features may then "
+            f"never be sampled).",
             UserWarning,
             stacklevel=2,
         )

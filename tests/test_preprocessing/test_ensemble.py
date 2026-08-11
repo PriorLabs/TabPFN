@@ -1079,24 +1079,37 @@ def test_scale_n_estimators_for_feature_coverage__explicit_value_is_never_scaled
         warnings.simplefilter("error")
         result = scale_n_estimators_for_feature_coverage(
             n_estimators=n_estimators,
-            n_total_features=5001,  # far over capacity: would scale "auto" to 11
+            n_total_features=n_estimators * 500,  # exactly covered: no warning
             preprocessor_configs=[cfg],
         )
     assert result == n_estimators
 
 
-def test_scale_n_estimators_for_feature_coverage__auto_scaling_disabled():
-    """auto_scale_n_estimators=False keeps "auto" at the package default."""
+@pytest.mark.parametrize("n_estimators", [2, 8])
+def test_scale_n_estimators_for_feature_coverage__explicit_value_warns_if_uncovered(
+    n_estimators: int,
+):
+    """Too small an explicit n_estimators warns but is still used as given."""
     cfg = PreprocessorConfig("none", max_features_per_estimator=500)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with pytest.warns(UserWarning, match=r"covers at most \d+ of 5001 features"):
         result = scale_n_estimators_for_feature_coverage(
-            n_estimators="auto",
-            n_total_features=5001,
+            n_estimators=n_estimators,
+            n_total_features=5001,  # needs 11 estimators for full coverage
             preprocessor_configs=[cfg],
-            auto_scale_n_estimators=False,
         )
-    assert result == DEFAULT_N_ESTIMATORS
+    assert result == n_estimators
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test_auto_scale_n_estimators__removed_from_constructor(estimator_cls: type):
+    """The removed `auto_scale_n_estimators` argument is gone for good.
+
+    `auto_scale_n_estimators=False` was equivalent to `n_estimators=8`, so it was
+    removed rather than kept as a redundant way to say the same thing.
+    """
+    assert "auto_scale_n_estimators" not in estimator_cls().get_params()
+    with pytest.raises(TypeError, match="auto_scale_n_estimators"):
+        estimator_cls(auto_scale_n_estimators=False)
 
 
 @skip_on_macos
