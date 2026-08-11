@@ -33,6 +33,11 @@ _FA3_SUPPORTED_HEAD_DIMS = frozenset({64, 96, 128, 192, 256})
 # n_features=100/500); FA3 wins uniformly from n_train=100k upward.
 _FA3_MIN_SEQLEN_FOR_SPEEDUP = 10_000
 
+_FA3_LONG_KV_SEQLEN = 50_000
+_FA3_SPLIT_KV_MAX_SEQLEN_Q = 1024
+_FA3_SPLIT_KV_MAX_SEQLEN_Q_LONG_KV = 4096
+_FA3_SPLIT_KV_NUM_SPLITS = 32
+
 
 @functools.cache
 def _load_fa3_func() -> Callable | None:
@@ -79,7 +84,9 @@ def fa3_attn_func(
 ) -> torch.Tensor:
     """Call ``flash_attn_func`` with the v3 attention layout (B, S, H, D).
 
-    GQA is handled natively by FA3 when ``nheads_q % nheads_k == 0``.
+    GQA is handled natively by FA3 when ``nheads_q % nheads_k == 0``. Short
+    query sequences run split over the KV sequence; see
+    ``_FA3_SPLIT_KV_NUM_SPLITS``.
     """
     fn = _load_fa3_func()
     if fn is None:
@@ -87,7 +94,15 @@ def fa3_attn_func(
             "FA3 path requested but flash_attn_interface is not importable; "
             "see fa3_setup.md (next to this file)."
         )
-    return fn(q, k, v)
+    # determine num_splits manually, because FA3's heuristic num_splits=0
+    # does not compile
+    max_seqlen_q = (
+        _FA3_SPLIT_KV_MAX_SEQLEN_Q_LONG_KV
+        if k.shape[1] > _FA3_LONG_KV_SEQLEN
+        else _FA3_SPLIT_KV_MAX_SEQLEN_Q
+    )
+    splits = _FA3_SPLIT_KV_NUM_SPLITS if q.shape[1] <= max_seqlen_q else 1
+    return fn(q, k, v, num_splits=splits)
 
 
 class FA3Backend(AttentionBackend):
