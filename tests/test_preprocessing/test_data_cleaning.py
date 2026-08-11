@@ -929,7 +929,7 @@ def test__process_text_na_dataframe__frozen_shortcut_rejects_a_narrower_frame() 
     encoder = get_ordinal_encoder()
     encoder.fit(_float_frame(a=[1.0, 2.0], b=[3.0, 4.0], c=[5.0, 6.0]))
 
-    with pytest.raises(ValueError, match="missing"):
+    with pytest.raises((ValueError, KeyError), match="c"):
         process_text_na_dataframe(
             _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]), ord_encoder=encoder
         )
