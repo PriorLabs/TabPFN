@@ -530,6 +530,7 @@ class ManyClassDecoder(nn.Module):
         train_embeddings: torch.Tensor,  # (B, N, E)
         test_embeddings: torch.Tensor,  # (B, M, E)
         targets: torch.Tensor,  # (B, N) - class indices
+        highest_target: int | None = None,  # max(targets), if already on the host
     ) -> torch.Tensor:
         """Perform a forward pass."""
         B, M, _ = test_embeddings.shape
@@ -543,8 +544,10 @@ class ManyClassDecoder(nn.Module):
             empty = test_embeddings.new_empty((0, B, self.max_num_classes))
             return empty + (q_BMHD.sum() + k_BNHD.sum()) * 0.0
 
+        if highest_target is None:
+            highest_target = int(targets.max())
         one_hot_targets_BNHT = (
-            F.one_hot(targets.long(), num_classes=self.max_num_classes)
+            F.one_hot(targets.long(), num_classes=highest_target + 1)
             .to(dtype=q_BMHD.dtype)
             .unsqueeze(2)
             .expand(-1, -1, self.num_heads, -1)
@@ -557,6 +560,11 @@ class ManyClassDecoder(nn.Module):
             softmax_scaling_layer=self.softmax_scaling_layer,
         )
         test_output_BMT = test_output_BMHT.mean(2)  # average over heads
+
+        # Restore the architectural width in case classes were missing
+        missing = self.max_num_classes - test_output_BMT.shape[-1]
+        if missing:
+            test_output_BMT = F.pad(test_output_BMT, (0, missing))
 
         test_output_MBT = test_output_BMT.transpose(0, 1)
         # convert to logits:
@@ -1846,16 +1854,17 @@ class TabPFNV3(Architecture):
                 "the non-cache forward needs the full train+test tensor."
             )
 
-        if (
-            not self.training
-            and self.task_type == "multiclass"
-            and (y > self.n_out - 1).any()
-        ):
-            raise ValueError(
-                "Target is out of range. Make sure to use an ordinal encoded target. "
-                f"Expected target values between 0 and {self.n_out - 1}, but got "
-                f"values greater than {self.n_out - 1}."
-            )
+        # One read of the largest target serves both the range check below and the
+        # decoder's one-hot width, so the pair costs a single synchronisation.
+        highest_target: int | None = None
+        if self.task_type == "multiclass":
+            highest_target = int(y.max())
+            if not self.training and highest_target > self.n_out - 1:
+                raise ValueError(
+                    "Target is out of range. Make sure to use an ordinal encoded "
+                    f"target. Expected target values between 0 and {self.n_out - 1}, "
+                    f"but got values greater than {self.n_out - 1}."
+                )
         x_RiBC = x
         B = x_RiBC.shape[1]
         num_train = y.shape[0]
@@ -1963,6 +1972,7 @@ class TabPFNV3(Architecture):
                 train_emb,
                 test_emb,
                 y_BN[:, :num_train],
+                highest_target=highest_target,
             )
         else:
             test_out = self.output_projection(test_emb.transpose(0, 1))
