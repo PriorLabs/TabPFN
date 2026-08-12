@@ -27,7 +27,17 @@ jobs:
     # cleaner workflow-run history.
     #
     # Skip Dependabot PRs: the Claude action will fail by default on them.
-    if: github.event.pull_request.head.repo.fork == false && github.actor != 'dependabot[bot]'
+    #
+    # Skip release PRs: `release-create-pr.yml` opens them as
+    # github-actions[bot], and the action hard-fails on bot actors that are not
+    # in `allowed_bots` ("Workflow initiated by non-human actor"). They match
+    # the `paths` filter only because they bump `pyproject.toml`, and they
+    # contain no reviewable code — just a version bump and the Towncrier
+    # changelog build. `check-changelog.yml` skips them on the same grounds.
+    if: >-
+      github.event.pull_request.head.repo.fork == false &&
+      github.actor != 'dependabot[bot]' &&
+      !startsWith(github.head_ref, 'release/v')
 
     runs-on: ubuntu-latest
     timeout-minutes: 15
