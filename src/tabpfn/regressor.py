@@ -1312,7 +1312,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 logit_to_output(output_type="quantiles"),
             )
 
-            # Create our typed dictionary
             main_outputs = MainOutputDict(
                 mean=mean_out,
                 median=median_out,
