@@ -1111,13 +1111,14 @@ def test__cast_columns__a_shared_block_is_never_assigned_into() -> None:
     values = np.empty((4, 6), dtype=object)
     values[:, :] = "lvl"
     frame = pd.DataFrame(values, copy=True)
-    if len(frame._mgr.blocks) >= frame.shape[1]:
+    columns = frame.columns[1::2]
+    if not clean_module._cast_columns_share_a_block(frame, columns):
         pytest.skip("this pandas gives an object array a block per column")
 
     with mock.patch.object(
         pd.DataFrame, "__setitem__", autospec=True, side_effect=AssertionError
     ):
-        out = clean_module._cast_columns(frame, frame.columns[1::2], "category")
+        out = clean_module._cast_columns(frame, columns, "category")
 
     assert list(out.dtypes[1::2].map(str)) == ["category"] * 3
     assert list(out.dtypes[0::2].map(str)) == ["object"] * 3
@@ -1139,6 +1140,35 @@ def test__cast_columns__a_block_per_column_frame_keeps_its_own_columns() -> None
 
     assert [str(dtype) for dtype in out.dtypes] == ["float32"] * 3 + ["float64"] * 2
     assert list(frame.dtypes) == before
+
+
+def test__cast_columns__a_shared_block_it_does_not_touch_does_not_count() -> None:
+    """Only the blocks the cast columns sit in decide the route.
+
+    A frame can hold a shared block and still cast cheaply, which is the shape
+    pandas 3 hands the categorical cast: every string column in a block of its own,
+    all the numeric ones consolidated into one. Routing that to `astype` would copy
+    the consolidated block for nothing.
+    """
+    frame = pd.DataFrame(np.random.default_rng(0).standard_normal((8, 4)))
+    frame["a"] = pd.array(range(8), dtype="Int64")
+    frame["b"] = pd.array(range(8), dtype="Int64")
+    assert clean_module._cast_columns_share_a_block(frame, frame.columns) is True
+    assert clean_module._cast_columns_share_a_block(frame, ["a", "b"]) is False
+
+    assignments = []
+    original = pd.DataFrame.__setitem__
+
+    def recording(self, key, value):  # noqa: ANN202
+        assignments.append(key)
+        return original(self, key, value)
+
+    with mock.patch.object(pd.DataFrame, "__setitem__", recording):
+        out = clean_module._cast_columns(frame, ["a", "b"], "float64")
+
+    assert assignments, "the private columns should have been assigned, not astyped"
+    assert [str(dtype) for dtype in out.dtypes[-2:]] == ["float64", "float64"]
+    assert [str(dtype) for dtype in frame.dtypes[-2:]] == ["Int64", "Int64"]
 
 
 def test__fix_dtypes__leaves_a_caller_s_frame_as_it_found_it() -> None:

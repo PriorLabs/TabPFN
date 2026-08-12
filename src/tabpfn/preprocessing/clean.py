@@ -49,6 +49,36 @@ _ASTYPE_KEEPS_UNCAST_COLUMNS = (
 _FLOAT64 = np.dtype(np.float64)
 
 
+def _cast_columns_share_a_block(
+    X: pd.DataFrame,
+    columns: pd.Index | Sequence[Any],
+) -> bool:
+    """Whether any of `columns` sits in a block that holds more than one column.
+
+    That is what makes assigning a cast back expensive: the block a column is deleted
+    from is rebuilt whole, so a column with a block to itself costs nothing and one
+    sharing a block of 400 costs 400 columns' worth of copying. Blocks holding no
+    column being cast are not touched, so they do not count.
+
+    A frame that does not expose its blocks in the shape expected here answers `True`
+    as well, sending it down the route that cannot go quadratic.
+    """
+    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
+    if blocks is None:
+        return True
+    try:
+        columns_in_block = np.zeros(X.shape[1], dtype=np.intp)
+        for block in blocks:
+            positions = block.mgr_locs.as_array
+            columns_in_block[positions] = len(positions)
+        cast_positions = X.columns.get_indexer_for(columns)
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return True
+    if len(cast_positions) == 0 or (cast_positions < 0).any():
+        return True
+    return bool((columns_in_block[cast_positions] > 1).any())
+
+
 def _cast_columns(
     X: pd.DataFrame,
     columns: pd.Index | Sequence[Any],
@@ -72,26 +102,27 @@ def _cast_columns(
       alongside the whole new one: an extra 1.59 GB on the `numeric-object` mix,
       +47.7% of its transient RSS.
 
-    So the layout decides. `astype` where a block is shared, the assignment where it
-    is not, and an unrecognisable frame takes `astype`, which is never pathological
-    in time -- only in memory, and only by one copy.
+    So the layout decides -- and only the layout of the columns being cast, since a
+    delete rebuilds the block its own column sits in and no other. A frame can hold a
+    shared block and still cast cheaply by assignment, which is not a corner case:
+    pandas 3 gives a mixed object frame one block per string column and a single
+    consolidated block for all the numeric ones, so the categorical cast's columns
+    are private there while the frame as a whole is not.
 
-    Duplicate column labels also take `astype`, which is the only one of the two that
-    can express the cast: selecting `["dup", "dup"]` hands back both columns twice
-    over, and the assignment refuses the width it gets back.
+    A frame whose blocks cannot be read takes `astype`, which is never pathological
+    in time -- only in memory, and only by one copy. So do duplicate column labels,
+    `astype` being the only one of the two that can express the cast at all:
+    selecting `["dup", "dup"]` hands back both columns twice over, and the assignment
+    refuses the width it gets back.
     """
     if len(columns) == 0:
         return X
 
-    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
-    if (
-        blocks is not None
-        and len(blocks) >= X.shape[1]
-        and not X.columns.has_duplicates
-    ):
-        # A block per column. Copied shallowly first because the assignment writes
-        # into the frame's own manager: whole columns are replaced, never the arrays
-        # behind them, so the caller keeps both its columns and its data.
+    if not _cast_columns_share_a_block(X, columns) and not X.columns.has_duplicates:
+        # Every column to cast has a block to itself. Copied shallowly first because
+        # the assignment writes into the frame's own manager: whole columns are
+        # replaced, never the arrays behind them, so the caller keeps both its
+        # columns and its data.
         X = X.copy(deep=False)
         X[columns] = X[columns].astype(dtype)
         return X
