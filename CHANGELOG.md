@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.3.0] - 2026-08-12
+
+### Added
+
+- Fine-tuning now supports `validation_frequency` to run validation and early-stopping checks every N epochs. ([#811](https://github.com/PriorLabs/TabPFN/pull/811))
+- Add `ManyClassDecoder.attention_weights`, the canonical per-training-row attention distribution of the multiclass decoder head, so interpretability tooling can read out which training rows drive a prediction without reimplementing the head's internal forward pass. The method exists only on multiclass models that use this decoder. ([#1142](https://github.com/PriorLabs/TabPFN/pull/1142))
+- Add fp8 kv cache dtype. ([#1157](https://github.com/PriorLabs/TabPFN/pull/1157))
+- `fit()` now warns when a column of `X` looks like free text. ([#1159](https://github.com/PriorLabs/TabPFN/pull/1159))
+- Add an opt-in built-model cache to `load_model`, enabled via the `TABPFN_MODEL_CACHE_SIZE` environment variable (default off). When set, repeated loads of the same checkpoint reuse the constructed model instead of rebuilding the architecture and re-running `load_state_dict`. Only the non-mutating (`cache_trainset_representation=False`) build is cached. ([#1162](https://github.com/PriorLabs/TabPFN/pull/1162))
+- Add `TabPFNRegressor.predict_batched`, the regression counterpart to `TabPFNClassifier.predict_proba_batched`. It preprocesses each `(X_train, y_train, X_test)` triple exactly as `fit` + `predict` does, stacks the datasets on the model's batch dimension and scores them with a single fused forward per estimator, then decodes each dataset with its own target standardisation and per-estimator border transforms. Returns one entry per dataset in input order, each with the same structure `predict` would return for that dataset. Datasets must share array shapes; constant-target datasets are answered analytically.
+
+  Both batched methods now raise `NotImplementedError` for `inference_precision=torch.float64` instead of silently computing the fused forward at float32 and returning float32-precision results. ([#1164](https://github.com/PriorLabs/TabPFN/pull/1164))
+- Add an attention-backend registry; the in-tree FA3/torch-MPS/MLX paths now route through it. Behavior unchanged unless a backend is registered. ([#1165](https://github.com/PriorLabs/TabPFN/pull/1165))
+- Add a test that `enable_torch_compile` traces tabpfn without graph breaks. ([#1166](https://github.com/PriorLabs/TabPFN/pull/1166))
+
+### Changed
+
+- Speed up cached prediction on Hopper GPUs with FlashAttention-3 installed, by splitting attention over the key/value sequence when few test rows attend over a large training cache. ([#1168](https://github.com/PriorLabs/TabPFN/pull/1168))
+- `n_estimators` now defaults to `"auto"` on `TabPFNClassifier` and `TabPFNRegressor`. Feature-coverage auto-scaling (raising `n_estimators` on wide datasets so every feature is seen by some estimator) applies only to `"auto"` — an explicitly passed `n_estimators` is always used exactly as given, and warns at fit time if it is too small for every feature to be covered. ([#1171](https://github.com/PriorLabs/TabPFN/pull/1171))
+
+### Fixed
+
+- Fix activation checkpointing during v2, v2.5, and v2.6 fine-tuning after the state-container memory optimization. ([#1138](https://github.com/PriorLabs/TabPFN/pull/1138))
+- - Fixed `fit()` crashing during temperature calibration or threshold tuning
+    (`tuning_config`) when a rare class is absent from the tuning holdout, by
+    passing the full label set to `log_loss` explicitly.
+  - Fixed `fit()` crashing when `random_state` is a `np.random.Generator` and
+    tuning is enabled, by converting the generator to a static seed before it
+    reaches `StratifiedKFold`.
+
+  ([#1140](https://github.com/PriorLabs/TabPFN/pull/1140))
+- fixed the randomness in the truncated SVD to make runs more reproducible. ([#1167](https://github.com/PriorLabs/TabPFN/pull/1167))
+
+### Deprecated
+
+- `auto_scale_n_estimators` is deprecated and will be removed in v9. It only ever applied to `n_estimators="auto"`, where `auto_scale_n_estimators=False` is equivalent to passing `n_estimators=8`; pass an explicit `n_estimators` instead to opt out of feature-coverage scaling. Passing `False` now emits a `FutureWarning` at fit time. ([#1171](https://github.com/PriorLabs/TabPFN/pull/1171))
+
+
 ## [8.2.0] - 2026-07-28
 
 ### Added
