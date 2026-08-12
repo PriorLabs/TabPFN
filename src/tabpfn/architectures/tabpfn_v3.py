@@ -544,7 +544,7 @@ class ManyClassDecoder(nn.Module):
             return empty + (q_BMHD.sum() + k_BNHD.sum()) * 0.0
 
         one_hot_targets_BNHT = (
-            F.one_hot(targets.long(), num_classes=self.max_num_classes)
+            F.one_hot(targets.long(), num_classes=int(targets.max()) + 1)
             .to(dtype=q_BMHD.dtype)
             .unsqueeze(2)
             .expand(-1, -1, self.num_heads, -1)
