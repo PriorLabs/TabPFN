@@ -433,21 +433,21 @@ def _encoding_is_identity(
             fit_encoder
             or ord_encoder is None
             or (
-                # condition 1: the ordinal encoder needs to be reductible to its
-                # passthrough remainder
+                # condition 1: the ordinal encoder has been fitted and needs to
+                # be reducible to its passthrough remainder
                 all(
                     len(columns) == 0
                     for name, _, columns in ord_encoder.transformers_
                     if name != "remainder"
                 )
-                # condition 2: X needs to line up with what the encoder was fitted
+                # condition 2: X needs to line up with what the encoder was fitted on
                 # condition 2.1: encoder needs to have the same input feature shape
                 and getattr(ord_encoder, "n_features_in_", None) == X.shape[1]
                 # condition 2.2: either no fitted feature names, or they match 1:1
                 and (
                     getattr(ord_encoder, "feature_names_in_", None) is None
                     or not all(isinstance(col, str) for col in X.columns)
-                    # compared as plain lists to be dtype-sensitive:
+                    # compared as plain lists to be dtype-insensitive:
                     or list(X.columns) == list(ord_encoder.feature_names_in_)  # ty: ignore[unresolved-attribute]
                 )
             )
