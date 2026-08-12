@@ -40,8 +40,65 @@ OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
+# Before 3.0 `astype` copies every column by default, including the ones it is not
+# casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
+_ASTYPE_KEEPS_UNCAST_COLUMNS = (
+    {"copy": False} if Version(pd.__version__) < Version("3.0.0") else {}
+)
 
 _FLOAT64 = np.dtype(np.float64)
+
+
+def _cast_columns(
+    X: pd.DataFrame,
+    columns: pd.Index | Sequence[Any],
+    dtype: Any,
+) -> pd.DataFrame:
+    """`X` with `columns` cast to `dtype`, by whichever route suits its blocks.
+
+    `X[columns] = X[columns].astype(dtype)` is one `__setitem__` per column before
+    pandas 3, and each one deletes its column out of the block manager. What that
+    costs depends entirely on whether the column has a block to itself:
+
+    * A block holding many columns is rebuilt by an `np.delete` over the whole thing,
+      once per column, so the cast is quadratic in column count. That is the frame
+      the categorical cast is handed -- a freshly built object array, still one
+      block. Measured at 200,000 x 400: 347.7 s and a 805 MB peak, against 9.5 s and
+      1 MB for `astype`.
+    * A block per column, which is what `convert_dtypes` leaves behind, makes the
+      delete free and the two spellings equivalent in time (247 ms against 152 ms)
+      -- but only the assignment releases each source column as it goes. `astype`
+      builds every cast column before assembling them, so it holds the whole old set
+      alongside the whole new one: an extra 1.59 GB on the `numeric-object` mix,
+      +47.7% of its transient RSS.
+
+    So the layout decides. `astype` where a block is shared, the assignment where it
+    is not, and an unrecognisable frame takes `astype`, which is never pathological
+    in time -- only in memory, and only by one copy.
+
+    Duplicate column labels also take `astype`, which is the only one of the two that
+    can express the cast: selecting `["dup", "dup"]` hands back both columns twice
+    over, and the assignment refuses the width it gets back.
+    """
+    if len(columns) == 0:
+        return X
+
+    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
+    if (
+        blocks is not None
+        and len(blocks) >= X.shape[1]
+        and not X.columns.has_duplicates
+    ):
+        # A block per column. Copied shallowly first because the assignment writes
+        # into the frame's own manager: whole columns are replaced, never the arrays
+        # behind them, so the caller keeps both its columns and its data.
+        X = X.copy(deep=False)
+        X[columns] = X[columns].astype(dtype)
+        return X
+
+    # `fromkeys` rather than a comprehension: duplicate labels collapse to one entry,
+    # which is what a single dtype for all of them means anyway.
+    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
 def clean_data(
@@ -126,13 +183,13 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_bool_dtype(dtype)
         or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
     ]
-    if cols:
-        X = X.copy()
-        X[cols] = X[cols].astype("float64")
-    return X
+    # Through `_cast_columns` for the reason given there, which also removes the copy
+    # this needed: it built one so the cast would not land in the caller's frame, and
+    # `astype` does not write into the frame at all.
+    return _cast_columns(X, cols, "float64")
 
 
-def fix_dtypes(  # noqa: D103, C901, PLR0912
+def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -174,9 +231,9 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         use_col_names = is_numeric_indices and not columns_are_numeric
         if use_col_names:
             cat_col_names = [X.columns[i] for i in cat_indices]
-            X[cat_col_names] = X[cat_col_names].astype("category")
+            X = _cast_columns(X, cat_col_names, "category")
         else:
-            X[cat_indices] = X[cat_indices].astype("category")
+            X = _cast_columns(X, cat_indices, "category")
 
     # Alright, pandas can have a few things go wrong.
     #
@@ -200,8 +257,7 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         # `object` at fit (-> passthrough) but `string` at predict; the frozen
         # passthrough then lets raw strings reach the float cast below and crash.
         object_columns = X.select_dtypes(include=["object"]).columns
-        if len(object_columns) > 0:
-            X[object_columns] = X[object_columns].astype("string")
+        X = _cast_columns(X, object_columns, "string")
 
     numerical_columns = X.select_dtypes(include=["number"]).columns
     # Assigning the numeric columns back is not free even when the cast is a no-op:
@@ -213,7 +269,7 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         len(numerical_columns) > 0
         and not (X.dtypes[numerical_columns] == np.dtype(numeric_dtype)).all()
     ):
-        X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
+        X = _cast_columns(X, numerical_columns, numeric_dtype)
     return X
 
 
