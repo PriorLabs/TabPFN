@@ -1531,8 +1531,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """Average the ensemble's accumulated output and apply the temperature.
 
         Args:
-            accumulated_logits: Summed per-estimator output for one dataset.
-                                Already in log space if `average_before_softmax` is True.
+            accumulated_logits:
+                Summed per-estimator output for one dataset. Already in log space
+                if `average_before_softmax` is True.
             n_estimators: How many estimators contributed to the sum.
 
         Returns:

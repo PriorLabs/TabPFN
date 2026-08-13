@@ -1257,7 +1257,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             return
 
-
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:

@@ -189,8 +189,8 @@ REGRESSION_METRIC_NAME_TO_OBJECTIVE: dict[
         torch.Tensor,
     ],
 ] = {
-    # Calling the bar distribution runs `FullSupportBarDistribution.forward`, which returns the
-    # negative log density of each target.
+    # Calling the bar distribution runs `FullSupportBarDistribution.forward`, which
+    # returns the negative log density of each target.
     "nll": lambda raw_space_bardist, logits, y_true: raw_space_bardist(logits, y_true),
     "crps": lambda raw_space_bardist, logits, y_true: (
         ranked_probability_score_loss_from_bar_logits(
