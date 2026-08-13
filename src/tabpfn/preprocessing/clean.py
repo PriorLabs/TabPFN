@@ -81,51 +81,19 @@ def _cast_columns(
     columns: pd.Index | Sequence[Any],
     dtype: Any,
 ) -> pd.DataFrame:
-    """`X` with `columns` cast to `dtype`, by whichever route suits its blocks.
-
-    `X[columns] = X[columns].astype(dtype)` is one `__setitem__` per column before
-    pandas 3, and each one deletes its column out of the block manager. What that
-    costs depends entirely on whether the column has a block to itself:
-
-    * A block holding many columns is rebuilt by an `np.delete` over the whole thing,
-      once per column, so the cast is quadratic in column count. That is the frame
-      the categorical cast is handed -- a freshly built object array, still one
-      block. Measured at 200,000 x 400: 347.7 s and a 805 MB peak, against 9.5 s and
-      1 MB for `astype`.
-    * A block per column, which is what `convert_dtypes` leaves behind, makes the
-      delete free and the two spellings equivalent in time (247 ms against 152 ms)
-      -- but only the assignment releases each source column as it goes. `astype`
-      builds every cast column before assembling them, so it holds the whole old set
-      alongside the whole new one: an extra 1.59 GB on the `numeric-object` mix,
-      +47.7% of its transient RSS.
-
-    So the layout decides -- and only the layout of the columns being cast, since a
-    delete rebuilds the block its own column sits in and no other. A frame can hold a
-    shared block and still cast cheaply by assignment, which is not a corner case:
-    pandas 3 gives a mixed object frame one block per string column and a single
-    consolidated block for all the numeric ones, so the categorical cast's columns
-    are private there while the frame as a whole is not.
-
-    A frame whose blocks cannot be read takes `astype`, which is never pathological
-    in time -- only in memory, and only by one copy. So do duplicate column labels,
-    `astype` being the only one of the two that can express the cast at all:
-    selecting `["dup", "dup"]` hands back both columns twice over, and the assignment
-    refuses the width it gets back.
-    """
+    """Efficiently cast `columns` in `X` to `dtype`."""
     if len(columns) == 0:
         return X
 
     if not _cast_columns_share_a_block(X, columns) and not X.columns.has_duplicates:
-        # Every column to cast has a block to itself. Copied shallowly first because
-        # the assignment writes into the frame's own manager: whole columns are
-        # replaced, never the arrays behind them, so the caller keeps both its
-        # columns and its data.
+        # this path uses less memory when available
+        # Copied shallowly to not copy the columns themselves:
         X = X.copy(deep=False)
         X[columns] = X[columns].astype(dtype)
         return X
 
-    # `fromkeys` rather than a comprehension: duplicate labels collapse to one entry,
-    # which is what a single dtype for all of them means anyway.
+    # fallback: never costly in time
+    # cast only the columns that need to be:
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
@@ -211,9 +179,6 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_bool_dtype(dtype)
         or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
     ]
-    # Through `_cast_columns` for the reason given there, which also removes the copy
-    # this needed: it built one so the cast would not land in the caller's frame, and
-    # `astype` does not write into the frame at all.
     return _cast_columns(X, cols, "float64")
 
 
