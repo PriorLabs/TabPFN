@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Literal
 from typing_extensions import Self
 
 import numpy as np
+import torch
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -22,11 +23,12 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, StratifiedKFold
 
+from tabpfn.architectures.shared.regression_metrics import (
+    ranked_probability_score_loss_from_bar_logits,
+)
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
-    import torch
-
     from tabpfn.architectures.shared.bar_distribution import (
         FullSupportBarDistribution,
     )
@@ -177,35 +179,9 @@ def compute_metric_to_minimize(
     return BINARY_METRIC_NAME_TO_OBJECTIVE[metric_name](y_true, y_pred)
 
 
-def _binned_crps(
-    raw_space_bardist: FullSupportBarDistribution,
-    logits: torch.Tensor,
-    y_true: torch.Tensor,
-) -> torch.Tensor:
-    """The bin-width-weighted CRPS already used as a finetuning loss.
-
-    Delegates to `finetuning.finetuned_regressor`'s implementation.
-
-    Imported lazily: `finetuned_regressor` imports `TabPFNRegressor` at module level,
-    and `regressor` imports this module, so a top-level import raises ImportError on a
-    partially initialized `tabpfn` package.
-    """
-    from tabpfn.finetuning.finetuned_regressor import (  # noqa: PLC0415
-        _ranked_probability_score_loss_from_bar_logits,
-    )
-
-    return _ranked_probability_score_loss_from_bar_logits(
-        # The shared implementation expects (batch, queries, buckets).
-        logits_BQL=logits.reshape(1, -1, logits.shape[-1]),
-        targets_BQ=y_true.reshape(1, -1),
-        bardist_loss_fn=raw_space_bardist,
-        loss_type="crps",
-    )
-
-
-# Objectives for the regression temperature search. Each returns either the loss of
-# every holdout row or, where the underlying implementation only exposes it, the mean
-# loss over the fold;
+# Objectives for the regression temperature search. Each returns the loss of every
+# holdout row, given logits of shape [n_samples, n_buckets] and targets of shape
+# [n_samples].
 REGRESSION_METRIC_NAME_TO_OBJECTIVE: dict[
     str,
     Callable[
@@ -215,7 +191,14 @@ REGRESSION_METRIC_NAME_TO_OBJECTIVE: dict[
 ] = {
     # `forward` is the negative log density of each target under the bar distribution.
     "nll": lambda raw_space_bardist, logits, y_true: raw_space_bardist(logits, y_true),
-    "crps": _binned_crps,
+    "crps": lambda raw_space_bardist, logits, y_true: (
+        ranked_probability_score_loss_from_bar_logits(
+            logits_BQL=logits.unsqueeze(0),
+            targets_BQ=y_true.unsqueeze(0),
+            bardist_loss_fn=raw_space_bardist,
+            loss_type="crps",
+        ).squeeze(0)
+    ),
 }
 
 
@@ -241,10 +224,7 @@ def compute_regression_metric_to_minimize(
             borders of `raw_space_bardist`, and on the same device.
 
     Returns:
-        The losses to minimize, either one per sample (shape [n_samples]) or, where the
-        underlying implementation only exposes it, the fold's mean as a scalar. Callers
-        must therefore reduce with `.mean()` and weight by holdout size rather than
-        assuming a per-sample vector; see `find_regression_optimal_temperature`.
+        The losses to minimize, one per sample, of shape [n_samples].
     """
     if metric_name not in REGRESSION_METRIC_NAME_TO_OBJECTIVE:
         raise ValueError(
@@ -509,12 +489,6 @@ def find_regression_optimal_temperature(
     ]
     if not folds:
         return current_default_temperature
-
-    # Imported here rather than at module level so that this module stays free of
-    # torch at import time, as it was before regression calibration existed. `torch`
-    # appears throughout the signatures above, but `from __future__ import
-    # annotations` keeps those unevaluated, and `no_grad` is the only runtime use.
-    import torch  # noqa: PLC0415
 
     n_holdout_total = sum(logits.shape[0] for logits, _, _ in folds)
     temperatures = get_tuning_temperatures()

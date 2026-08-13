@@ -9,8 +9,8 @@ import pytest
 import torch
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.finetuning.finetuned_regressor import (
-    _ranked_probability_score_loss_from_bar_logits,
+from tabpfn.architectures.shared.regression_metrics import (
+    ranked_probability_score_loss_from_bar_logits,
 )
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
@@ -788,13 +788,18 @@ def test__find_regression_optimal_temperature__falls_back_when_degenerate(
     )
 
 
-def test__compute_regression_metric_to_minimize__returns_one_loss_per_sample() -> None:
+@pytest.mark.parametrize("metric", list(RegressorEvalMetrics))
+def test__compute_regression_metric_to_minimize__returns_one_loss_per_sample(
+    metric: RegressorEvalMetrics,
+) -> None:
+    # Every metric must expose per-row losses, so that the search can pool folds of
+    # differing size without a metric-specific reduction.
     logits, raw_space_bardist, y_true = _miscalibrated_fold(
         n_samples=17, target_temperature=1.2, seed=9
     )
 
     losses = compute_regression_metric_to_minimize(
-        metric_name=RegressorEvalMetrics.NLL,
+        metric_name=metric,
         raw_space_bardist=raw_space_bardist,
         logits=logits,
         y_true=y_true,
@@ -931,7 +936,7 @@ def test__find_regression_optimal_temperature__metrics_share_the_search() -> Non
         )
 
 
-def test__compute_regression_metric_to_minimize__crps_delegates_to_finetuning() -> None:
+def test__compute_regression_metric_to_minimize__crps_uses_the_shared_metric() -> None:
     # The regression metric must be the *same* function the finetuning loss uses, so
     # the two cannot drift apart. Compared against a direct call to prove it.
     raw_space_bardist = _make_bardist()
@@ -946,12 +951,12 @@ def test__compute_regression_metric_to_minimize__crps_delegates_to_finetuning() 
             logits=logits,
             y_true=y,
         ),
-        _ranked_probability_score_loss_from_bar_logits(
+        ranked_probability_score_loss_from_bar_logits(
             logits_BQL=logits.unsqueeze(0),
             targets_BQ=y.unsqueeze(0),
             bardist_loss_fn=raw_space_bardist,
             loss_type="crps",
-        ),
+        ).squeeze(0),
     )
 
 
