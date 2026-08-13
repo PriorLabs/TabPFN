@@ -97,22 +97,22 @@ def _compute_regression_loss(  # noqa: C901
         total_loss = total_loss + ce_loss_weight * ce_losses_BQ.mean()
 
     if crps_loss_weight > 0.0:
-        crps_loss = ranked_probability_score_loss_from_bar_logits(
+        crps_losses_BQ = ranked_probability_score_loss_from_bar_logits(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
             loss_type="crps",
         )
-        total_loss = total_loss + crps_loss_weight * crps_loss
+        total_loss = total_loss + crps_loss_weight * crps_losses_BQ.mean()
 
     if crls_loss_weight > 0.0:
-        crls_loss = ranked_probability_score_loss_from_bar_logits(
+        crls_losses_BQ = ranked_probability_score_loss_from_bar_logits(
             logits_BQL=logits_BQL,
             targets_BQ=targets_BQ,
             bardist_loss_fn=bardist_loss_fn,
             loss_type="crls",
         )
-        total_loss = total_loss + crls_loss_weight * crls_loss
+        total_loss = total_loss + crls_loss_weight * crls_losses_BQ.mean()
 
     if mse_loss_weight > 0.0 or mae_loss_weight > 0.0:
         predictions_mean_BQ = bardist_loss_fn.mean(logits_BQL)
