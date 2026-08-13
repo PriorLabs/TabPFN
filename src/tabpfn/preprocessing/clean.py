@@ -55,18 +55,13 @@ def _cast_columns_share_a_block(
 ) -> bool:
     """Whether any of `columns` sits in a block that holds more than one column.
 
-    That is what makes assigning a cast back expensive: the block a column is deleted
-    from is rebuilt whole, so a column with a block to itself costs nothing and one
-    sharing a block of 400 costs 400 columns' worth of copying. Blocks holding no
-    column being cast are not touched, so they do not count.
-
-    A frame that does not expose its blocks in the shape expected here answers `True`
-    as well, sending it down the route that cannot go quadratic.
+    That would make assigning a cast back expensive: the block a column is deleted
+    from is rebuilt whole.
+    Since columns are assigned one at a time, casting `c` columns out of a block
+    costs `c(c+1)/2` column copies.
     """
-    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
-    if blocks is None:
-        return True
     try:
+        blocks = X._mgr.blocks
         columns_in_block = np.zeros(X.shape[1], dtype=np.intp)
         for block in blocks:
             positions = block.mgr_locs.as_array
@@ -74,9 +69,11 @@ def _cast_columns_share_a_block(
         cast_positions = X.columns.get_indexer_for(columns)
     except (AttributeError, TypeError, ValueError, IndexError):
         return True
-    if len(cast_positions) == 0 or (cast_positions < 0).any():
-        return True
-    return bool((columns_in_block[cast_positions] > 1).any())
+    return (
+        len(cast_positions) == 0
+        or (cast_positions < 0).any().item()
+        or (columns_in_block[cast_positions] > 1).any().item()
+    )
 
 
 def _cast_columns(
