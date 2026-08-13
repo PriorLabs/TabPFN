@@ -1257,8 +1257,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 )
             return
 
-        # `resolve_tuning_config` is task-agnostic; narrow it back down so the
-        # classification-only options below are visible.
+
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:

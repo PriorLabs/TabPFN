@@ -1530,17 +1530,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> torch.Tensor:
         """Average the ensemble's accumulated output and apply the temperature.
 
-        The tail shared by `_compute_aggregated_logits` (the `predict` path) and
-        `_decode_batched_dataset` (the `predict_batched` path). Both reach this
-        point with the same quantity -- the sum over estimators of one dataset's
-        bucket probabilities on the `znorm_space_bardist_` borders, already in
-        log space when `average_before_softmax` is set -- so the reduction must
-        stay identical between them. Keeping it in one place is what makes that
-        true; `predict_batched` previously carried its own copy and silently
-        omitted the temperature.
-
         Args:
             accumulated_logits: Summed per-estimator output for one dataset.
+                                Already in log space if `average_before_softmax` is True.
             n_estimators: How many estimators contributed to the sum.
 
         Returns:
