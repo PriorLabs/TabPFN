@@ -305,6 +305,24 @@ def test__slice_batch_estimators__slices_only_estimator_fields() -> None:
     assert sharded.configs == [["config-2"], ["config-3"]]
 
 
+def test__should_skip_batch__uses_full_estimator_label_union() -> None:
+    """Per-estimator label permutations must not cause a sharded batch skip."""
+    batch = ClassifierBatch(
+        X_context=[torch.tensor([0]), torch.tensor([1])],
+        X_query=[torch.tensor([0]), torch.tensor([1])],
+        y_context=[torch.tensor([0, 0]), torch.tensor([1, 1])],
+        y_query=torch.tensor([[0, 1]]),
+        cat_indices=[[[], []]],
+        configs=[["config-0"], ["config-1"]],  # type: ignore[list-item]
+    )
+    classifier = FinetunedTabPFNClassifier(n_estimators_final_inference=2)
+
+    assert not classifier._should_skip_batch(batch)
+    assert classifier._should_skip_batch(
+        _slice_batch_estimators(batch, _get_estimator_shard(2, 0, 2))
+    )
+
+
 def _state_dicts_equal(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> bool:
     """Return True iff two state dicts have identical keys and tensor values."""
     if a.keys() != b.keys():

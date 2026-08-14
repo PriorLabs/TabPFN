@@ -1098,13 +1098,16 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             for batch in progress_bar:
                 optimizer.zero_grad()
 
+                # Decide whether to skip from the complete estimator ensemble.
+                # Classifier context labels may be permuted per estimator, so a
+                # rank-local shard alone does not preserve the original check's
+                # union-of-labels semantics.
+                should_skip = self._should_skip_batch(batch)
                 rank_batch = (
                     _slice_batch_estimators(batch, estimator_shard)
                     if estimator_shard is not None
                     else batch
                 )
-
-                should_skip = self._should_skip_batch(rank_batch)
                 if using_ddp:
                     # All ranks must agree — if any rank skips, all skip,
                     # otherwise DDP all-reduce in backward will deadlock.
