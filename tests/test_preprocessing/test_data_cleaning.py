@@ -1098,3 +1098,122 @@ def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
     )
     assert out.shape == (6, 3)
     assert out.dtype == np.float64
+
+
+def test__cast_columns__a_shared_block_is_never_assigned_into() -> None:
+    """A frame whose columns share a block must not be cast one `__setitem__` at a time.
+
+    That spelling deletes each column out of the block it sits in, rebuilding the
+    whole block every time, so the cast is quadratic in column count -- the reason
+    the mixed mixes ran for minutes on the lowest supported pandas. It is the layout
+    `fix_dtypes` hands the categorical cast: a freshly built object array.
+    """
+    values = np.empty((4, 6), dtype=object)
+    values[:, :] = "lvl"
+    frame = pd.DataFrame(values, copy=True)
+    columns = frame.columns[1::2]
+    if not clean_module._cast_columns_share_a_block(frame, columns):
+        pytest.skip("this pandas gives an object array a block per column")
+
+    with mock.patch.object(
+        pd.DataFrame, "__setitem__", autospec=True, side_effect=AssertionError
+    ):
+        out = clean_module._cast_columns(frame, columns, "category")
+
+    assert list(out.dtypes[1::2].map(str)) == ["category"] * 3
+    assert list(out.dtypes[0::2].map(str)) == ["object"] * 3
+
+
+def test__cast_columns__a_block_per_column_frame_keeps_its_own_columns() -> None:
+    """The assignment route is taken there, and still must not reach the caller.
+
+    `astype` is the wrong tool once every column has its own block: the delete it
+    avoids is free, and building every cast column before assembling them holds a
+    second full copy of the frame, which cost 47.7% more transient RSS on the
+    `numeric-object` mix.
+    """
+    frame = _fragmented_float_frame(np.random.default_rng(0).standard_normal((8, 5)))
+    assert len(frame._mgr.blocks) >= frame.shape[1]
+    before = list(frame.dtypes)
+
+    out = clean_module._cast_columns(frame, frame.columns[:3], "float32")
+
+    assert [str(dtype) for dtype in out.dtypes] == ["float32"] * 3 + ["float64"] * 2
+    assert list(frame.dtypes) == before
+
+
+def test__cast_columns__a_shared_block_it_does_not_touch_does_not_count() -> None:
+    """Only the blocks the cast columns sit in decide the route.
+
+    A frame can hold a shared block and still cast cheaply, which is the shape
+    pandas 3 hands the categorical cast: every string column in a block of its own,
+    all the numeric ones consolidated into one. Routing that to `astype` would copy
+    the consolidated block for nothing.
+    """
+    frame = pd.DataFrame(np.random.default_rng(0).standard_normal((8, 4)))
+    frame["a"] = pd.array(range(8), dtype="Int64")
+    frame["b"] = pd.array(range(8), dtype="Int64")
+    assert clean_module._cast_columns_share_a_block(frame, frame.columns) is True
+    assert clean_module._cast_columns_share_a_block(frame, ["a", "b"]) is False
+
+    assignments = []
+    original = pd.DataFrame.__setitem__
+
+    def recording(self, key, value):  # noqa: ANN202
+        assignments.append(key)
+        return original(self, key, value)
+
+    with mock.patch.object(pd.DataFrame, "__setitem__", recording):
+        out = clean_module._cast_columns(frame, ["a", "b"], "float64")
+
+    assert assignments, "the private columns should have been assigned, not astyped"
+    assert [str(dtype) for dtype in out.dtypes[-2:]] == ["float64", "float64"]
+    assert [str(dtype) for dtype in frame.dtypes[-2:]] == ["Int64", "Int64"]
+
+
+def test__fix_dtypes__leaves_a_caller_s_frame_as_it_found_it() -> None:
+    """Casting returns a new frame rather than writing into the one handed in."""
+    X, schema = _mixed_frame_inputs()
+    caller_frame = pd.DataFrame(X)
+    before = list(caller_frame.dtypes)
+
+    fix_dtypes(
+        caller_frame, cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
+    )
+
+    assert list(caller_frame.dtypes) == before
+
+
+def test__coerce_nullable_dtypes_to_numpy__converts_without_touching_the_input() -> (
+    None
+):
+    """Nullable and boolean columns become float64; the caller's frame is untouched."""
+    frame = pd.DataFrame(
+        {
+            "nullable": pd.array([1, None, 3], dtype="Int64"),
+            "boolean": pd.array([True, False, None], dtype="boolean"),
+            "text": pd.array(["a", "b", "c"], dtype="string"),
+        }
+    )
+
+    out = clean_module.coerce_nullable_dtypes_to_numpy(frame)
+
+    assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64", "string"]
+    np.testing.assert_array_equal(out["nullable"], [1.0, np.nan, 3.0])
+    np.testing.assert_array_equal(out["boolean"], [1.0, 0.0, np.nan])
+    assert [str(dtype) for dtype in frame.dtypes] == ["Int64", "boolean", "string"]
+
+
+def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
+    """Duplicate labels collapse to one entry in the mapping, and both columns cast.
+
+    Columns of different dtypes under one label remain unsupported -- selecting them
+    by name takes both, so the cast that suits one is applied to the other and
+    raises, before this change as after it.
+    """
+    frame = pd.DataFrame(np.array([[1, 2], [3, 4]], dtype=object))
+    frame.columns = ["dup", "dup"]
+
+    out = fix_dtypes(frame, cat_indices=None)
+
+    assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]

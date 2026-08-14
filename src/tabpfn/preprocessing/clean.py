@@ -40,8 +40,63 @@ OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
+# Before 3.0 `astype` copies every column by default, including the ones it is not
+# casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
+_ASTYPE_KEEPS_UNCAST_COLUMNS = (
+    {"copy": False} if Version(pd.__version__) < Version("3.0.0") else {}
+)
 
 _FLOAT64 = np.dtype(np.float64)
+
+
+def _cast_columns_share_a_block(
+    X: pd.DataFrame,
+    columns: pd.Index | Sequence[Any],
+) -> bool:
+    """Whether any of `columns` sits in a block that holds more than one column.
+
+    That would make assigning a cast back expensive: the block a column is deleted
+    from is rebuilt whole.
+    Since columns are assigned one at a time on pandas < 3, casting `c` columns
+    out of a block costs `c(c+1)/2` column copies.
+    """
+    try:
+        blocks = X._mgr.blocks
+        columns_in_block = np.zeros(X.shape[1], dtype=np.intp)
+        for block in blocks:
+            positions = block.mgr_locs.as_array
+            columns_in_block[positions] = len(positions)
+        cast_positions = X.columns.get_indexer_for(columns)
+    except (AttributeError, TypeError, ValueError, IndexError):
+        return True
+    return (
+        len(cast_positions) == 0
+        or (cast_positions < 0).any().item()
+        or (columns_in_block[cast_positions] > 1).any().item()
+    )
+
+
+def _cast_columns(
+    X: pd.DataFrame,
+    columns: pd.Index | Sequence[Any],
+    dtype: Any,
+) -> pd.DataFrame:
+    """Efficiently cast `columns` in `X` to `dtype`."""
+    if len(columns) == 0:
+        return X
+
+    if not _cast_columns_share_a_block(X, columns) and not X.columns.has_duplicates:
+        # this path uses less memory when available
+        # Copied shallowly to not copy the columns themselves:
+        X = X.copy(deep=False)
+        X[columns] = X[columns].astype(dtype)
+        return X
+
+    # NOTE: this path is there for pandas < 3 compatibility
+
+    # fallback: never costly in time
+    # cast only the columns that need to be:
+    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
 def clean_data(
@@ -126,13 +181,10 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
         if pd.api.types.is_bool_dtype(dtype)
         or (pd.api.types.is_extension_array_dtype(dtype) and dtype.kind in "iuf")
     ]
-    if cols:
-        X = X.copy()
-        X[cols] = X[cols].astype("float64")
-    return X
+    return _cast_columns(X, cols, "float64")
 
 
-def fix_dtypes(  # noqa: D103, C901, PLR0912
+def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
@@ -174,9 +226,9 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         use_col_names = is_numeric_indices and not columns_are_numeric
         if use_col_names:
             cat_col_names = [X.columns[i] for i in cat_indices]
-            X[cat_col_names] = X[cat_col_names].astype("category")
+            X = _cast_columns(X, cat_col_names, "category")
         else:
-            X[cat_indices] = X[cat_indices].astype("category")
+            X = _cast_columns(X, cat_indices, "category")
 
     # Alright, pandas can have a few things go wrong.
     #
@@ -200,8 +252,7 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         # `object` at fit (-> passthrough) but `string` at predict; the frozen
         # passthrough then lets raw strings reach the float cast below and crash.
         object_columns = X.select_dtypes(include=["object"]).columns
-        if len(object_columns) > 0:
-            X[object_columns] = X[object_columns].astype("string")
+        X = _cast_columns(X, object_columns, "string")
 
     numerical_columns = X.select_dtypes(include=["number"]).columns
     # Assigning the numeric columns back is not free even when the cast is a no-op:
@@ -213,7 +264,7 @@ def fix_dtypes(  # noqa: D103, C901, PLR0912
         len(numerical_columns) > 0
         and not (X.dtypes[numerical_columns] == np.dtype(numeric_dtype)).all()
     ):
-        X[numerical_columns] = X[numerical_columns].astype(numeric_dtype)
+        X = _cast_columns(X, numerical_columns, numeric_dtype)
     return X
 
 
