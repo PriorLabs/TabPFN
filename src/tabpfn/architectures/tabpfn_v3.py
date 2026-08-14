@@ -1808,6 +1808,7 @@ class TabPFNV3(Architecture):
         task_type: str | None = None,
         kv_cache: TabPFNV3Cache | None = None,
         return_kv_cache: bool = False,
+        kv_cache_dtype: torch.dtype | None = None,
         x_is_test_only: bool = False,
         # TODO: test_targets_MB needed because model_loading has a condition
         # on its presence. Clean this up.
@@ -1818,6 +1819,10 @@ class TabPFNV3(Architecture):
         | tuple[torch.Tensor | dict[str, torch.Tensor], TabPFNV3Cache | None]
     ):
         """Main forward pass for TabPFN v3.
+
+        When building a KV cache, ``kv_cache_dtype`` quantizes each layer's entry
+        immediately after it is produced. This avoids retaining the complete
+        full-precision cache until the forward pass finishes.
 
         When a KV cache is provided, ``x_is_test_only=True`` lets the
         caller pass only the test rows (shape ``(num_test, 1, D)``) instead
@@ -1888,6 +1893,7 @@ class TabPFNV3(Architecture):
 
         # Per-layer KV entries collected when return_kv_cache is True.
         kv_out: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
+        kv_compute_dtype: torch.dtype | None = None
 
         if kv_cache is not None and not kv_cache.is_empty():
             # Cache path: no y_icl embedding; use cached K/V pairs
@@ -1912,6 +1918,10 @@ class TabPFNV3(Architecture):
                         performance_options.save_peak_memory_factor,
                         return_kv=True,
                     )
+                    assert kv_entry.key is not None
+                    kv_compute_dtype = kv_entry.key.dtype
+                    if kv_cache_dtype is not None:
+                        kv_entry = kv_entry.quantize(kv_cache_dtype)
                     kv_out[layer_idx] = kv_entry
             else:
                 for block in self.icl_blocks:
@@ -1951,11 +1961,12 @@ class TabPFNV3(Architecture):
                 # raw input, whose passed-through +/-inf would poison the mean/std
                 # and turn every standardised test cell into NaN at predict time.
                 assert kv_out
-                # Store train_embeddings at the ICL KV cache dtype.
-                cache_dtype = next(iter(kv_out.values())).key.dtype
+                # Store train_embeddings at the unquantized ICL compute dtype. The
+                # KV entries may already have been quantized layer by layer above.
+                assert kv_compute_dtype is not None
                 built_cache = TabPFNV3Cache(
                     kv=kv_out,
-                    train_embeddings=train_emb.detach().to(cache_dtype),
+                    train_embeddings=train_emb.detach().to(kv_compute_dtype),
                     train_shape=(B, num_train),
                     scaler_cache={k: v.detach() for k, v in scaler_stats.items()},
                     inducing_hidden=(

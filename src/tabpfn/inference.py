@@ -955,6 +955,15 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             time.perf_counter() - fit_preprocess_start
         )
 
+        save_peak_mem_during_build = should_save_peak_mem(
+            memory_saving_mode=save_peak_mem,
+            X_train_shape=tuple[int, int](X_train.shape),
+            X_test_shape=(0, X_train.shape[1]),
+            devices=devices,
+            dtype_byte_size=dtype_byte_size,
+        )
+        stage_caches_on_cpu = keep_cache_on_device and save_peak_mem_during_build
+
         # Build per-estimator caches in parallel across devices
         build_functions = (
             partial(
@@ -965,7 +974,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 model_index=ensemble_member.config._model_index,
                 gpu_preprocessor=ensemble_member.gpu_preprocessor,
                 autocast=autocast,
-                save_peak_mem=save_peak_mem,
+                save_peak_mem=save_peak_mem_during_build,
+                stage_cache_on_cpu=stage_caches_on_cpu,
             )
             for ensemble_member in self.ensemble_members
         )
@@ -977,7 +987,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ),
             devices,
         )
-        self.kv_caches: list = list(timed_caches)
+        built_caches = list(timed_caches)
+        if stage_caches_on_cpu:
+            # Keep already-built caches out of device memory while later ensemble
+            # members are constructed, then restore their original placement.
+            self.kv_caches: list = [cache.to(device) for cache, device in built_caches]
+        else:
+            self.kv_caches = [cache for cache, _device in built_caches]
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
     def _build_cache(
@@ -991,7 +1007,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         gpu_preprocessor: TorchPreprocessingPipeline | None,
         autocast: bool,
         save_peak_mem: bool,
-    ) -> KVCache:
+        stage_cache_on_cpu: bool,
+    ) -> tuple[KVCache, torch.device]:
         """Build KV cache for one ensemble member on the given device.
 
         Called via :func:`parallel_execute` — may run on different devices
@@ -1043,6 +1060,14 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(),
         ):
+            cache_dtype = (
+                KV_CACHE_PRECISION_DTYPES[kv_cache_precision]
+                if kv_cache_precision != "auto"
+                else None
+            )
+            cache_build_kwargs = {}
+            if "kv_cache_dtype" in signature(model.forward).parameters:
+                cache_build_kwargs["kv_cache_dtype"] = cache_dtype
             _, cache = model(
                 X,
                 y,
@@ -1050,14 +1075,15 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 categorical_inds=batched_cat_ix,
                 performance_options=performance_options,
                 return_kv_cache=True,
+                **cache_build_kwargs,
             )
 
         assert cache is not None
-        if kv_cache_precision != "auto":
+        if kv_cache_precision != "auto" and not cache_build_kwargs:
             cache = cache.quantize(KV_CACHE_PRECISION_DTYPES[kv_cache_precision])
-        if self.keep_cache_on_device:
-            return cache
-        return cache.to("cpu")
+        if not self.keep_cache_on_device or stage_cache_on_cpu:
+            cache = cache.to("cpu")
+        return cache, device
 
     @override
     def iter_outputs(
