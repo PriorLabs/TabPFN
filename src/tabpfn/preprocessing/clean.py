@@ -57,8 +57,8 @@ def _cast_columns_share_a_block(
 
     That would make assigning a cast back expensive: the block a column is deleted
     from is rebuilt whole.
-    Since columns are assigned one at a time, casting `c` columns out of a block
-    costs `c(c+1)/2` column copies.
+    Since columns are assigned one at a time on pandas < 3, casting `c` columns
+    out of a block costs `c(c+1)/2` column copies.
     """
     try:
         blocks = X._mgr.blocks
@@ -91,6 +91,8 @@ def _cast_columns(
         X = X.copy(deep=False)
         X[columns] = X[columns].astype(dtype)
         return X
+
+    # NOTE: this path is there for pandas < 3 compatibility
 
     # fallback: never costly in time
     # cast only the columns that need to be:
