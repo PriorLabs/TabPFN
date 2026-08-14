@@ -1808,7 +1808,6 @@ class TabPFNV3(Architecture):
         task_type: str | None = None,
         kv_cache: TabPFNV3Cache | None = None,
         return_kv_cache: bool = False,
-        kv_cache_dtype: torch.dtype | None = None,
         x_is_test_only: bool = False,
         # TODO: test_targets_MB needed because model_loading has a condition
         # on its presence. Clean this up.
@@ -1819,10 +1818,6 @@ class TabPFNV3(Architecture):
         | tuple[torch.Tensor | dict[str, torch.Tensor], TabPFNV3Cache | None]
     ):
         """Main forward pass for TabPFN v3.
-
-        When building a KV cache, ``kv_cache_dtype`` quantizes each layer's entry
-        immediately after it is produced. This avoids retaining the complete
-        full-precision cache until the forward pass finishes.
 
         When a KV cache is provided, ``x_is_test_only=True`` lets the
         caller pass only the test rows (shape ``(num_test, 1, D)``) instead
@@ -1920,8 +1915,8 @@ class TabPFNV3(Architecture):
                     )
                     assert kv_entry.key is not None
                     kv_compute_dtype = kv_entry.key.dtype
-                    if kv_cache_dtype is not None:
-                        kv_entry = kv_entry.quantize(kv_cache_dtype)
+                    if performance_options.kv_cache_dtype is not None:
+                        kv_entry = kv_entry.quantize(performance_options.kv_cache_dtype)
                     kv_out[layer_idx] = kv_entry
             else:
                 for block in self.icl_blocks:

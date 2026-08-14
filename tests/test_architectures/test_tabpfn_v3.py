@@ -483,7 +483,7 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         x,
         y,
         return_kv_cache=True,
-        kv_cache_dtype=cache_dtype,
+        performance_options=PerformanceOptions(kv_cache_dtype=cache_dtype),
     )
     assert full_precision is not None
     assert layerwise is not None

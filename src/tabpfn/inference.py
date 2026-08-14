@@ -1054,20 +1054,17 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
             if save_peak_mem
             else None,
+            kv_cache_dtype=(
+                KV_CACHE_PRECISION_DTYPES[kv_cache_precision]
+                if kv_cache_precision != "auto"
+                else None
+            ),
         )
 
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(),
         ):
-            cache_dtype = (
-                KV_CACHE_PRECISION_DTYPES[kv_cache_precision]
-                if kv_cache_precision != "auto"
-                else None
-            )
-            cache_build_kwargs = {}
-            if "kv_cache_dtype" in signature(model.forward).parameters:
-                cache_build_kwargs["kv_cache_dtype"] = cache_dtype
             _, cache = model(
                 X,
                 y,
@@ -1075,12 +1072,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 categorical_inds=batched_cat_ix,
                 performance_options=performance_options,
                 return_kv_cache=True,
-                **cache_build_kwargs,
             )
 
         assert cache is not None
-        if kv_cache_precision != "auto" and not cache_build_kwargs:
-            cache = cache.quantize(KV_CACHE_PRECISION_DTYPES[kv_cache_precision])
         if not self.keep_cache_on_device or stage_cache_on_cpu:
             cache = cache.to("cpu")
         return cache, device
