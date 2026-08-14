@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from unittest import mock
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,8 +13,16 @@ import torch
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.preprocessing import clean_data
-from tabpfn.preprocessing.clean import process_text_na_dataframe
+from tabpfn.preprocessing import (
+    clean as clean_module,
+    clean_data,
+)
+from tabpfn.preprocessing.clean import (
+    _is_single_float_block,
+    _owned_float64_values,
+    fix_dtypes,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 from tabpfn.validation import ensure_compatible_fit_inputs
@@ -724,3 +734,243 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
     # encode to a valid (non-negative) code; the non-numeric "abc" -> NaN -> unknown.
     assert out[0, 1] == -1
     assert (out[1:, 1] >= 0).all()
+
+
+# --- all-numeric fast path ------------------------------------------------------
+#
+# A numeric ndarray with no categorical columns has nothing to ordinally encode, so
+# `clean_data` converts it straight to float64 instead of building the intermediate
+# DataFrame and copying it back out. These pin the properties that shortcut has to
+# keep: same values, same layout, an owned array, and an encoder that is fitted
+# exactly as the general path leaves it.
+
+
+def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSchema:
+    return FeatureSchema(
+        features=[
+            Feature(
+                name=f"f{i}",
+                modality=FeatureModality.CATEGORICAL
+                if i in cat_indices
+                else FeatureModality.NUMERICAL,
+            )
+            for i in range(n_cols)
+        ]
+    )
+
+
+@pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "bool", "float16"])
+@pytest.mark.parametrize("passthrough_inf", [False, True])
+def test__clean_data__numeric_array_converts_without_intermediate_copy(
+    dtype: str, *, passthrough_inf: bool
+) -> None:
+    """The shortcut returns exactly the float64 cast of its input."""
+    rng = np.random.default_rng(0)
+    X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
+
+    out, encoder, schema = clean_data(
+        X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
+    )
+
+    np.testing.assert_array_equal(out, X.astype(np.float64))
+    assert out.dtype == np.float64
+    assert schema.num_columns == 4
+    # Owned and writeable: callers mutate the cleaned array in place downstream.
+    assert not np.shares_memory(out, X)
+    assert out.flags.writeable
+    # Nothing was selected for encoding, so the encoder learned no categories.
+    assert not hasattr(encoder.named_transformers_["encoder"], "categories_")
+    assert encoder.n_features_in_ == 4
+
+
+@pytest.mark.parametrize("passthrough_inf", [False, True])
+def test__clean_data__non_finite_survive_the_numeric_shortcut(
+    *, passthrough_inf: bool
+) -> None:
+    """NaN and +/-inf come through the shortcut at their original positions."""
+    X = np.arange(12, dtype="float32").reshape(4, 3)
+    X[0, 1] = np.nan
+    X[1, 2] = np.inf
+    X[3, 0] = -np.inf
+
+    out, _, _ = clean_data(
+        X=X, feature_schema=_numeric_schema(3), passthrough_inf=passthrough_inf
+    )
+
+    np.testing.assert_array_equal(out, X.astype(np.float64))
+
+
+def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
+    """The shortcut and the general path agree, value for value.
+
+    A declared categorical column forces the same data down the general path, so
+    the only difference between the two calls is the route taken.
+    """
+    rng = np.random.default_rng(0)
+    X = (rng.integers(0, 4, size=(50, 3))).astype("float64")
+
+    shortcut, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
+    general, encoder, _ = clean_data(
+        X=X, feature_schema=_numeric_schema(3, cat_indices=(0,))
+    )
+
+    # Column 0 is ordinally encoded in the general call; its codes happen to equal
+    # the original small integers, so the two agree everywhere.
+    assert encoder.named_transformers_["encoder"].categories_[0].size == 4
+    np.testing.assert_array_equal(shortcut, general)
+    assert shortcut.dtype == general.dtype
+    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+
+
+def test__fix_dtypes__numeric_array_stays_consolidated() -> None:
+    """A numeric ndarray needs no per-column cast, so its frame stays one block.
+
+    A fragmented frame has to be re-materialised by every later `to_numpy`, which
+    is a full extra copy of the data.
+    """
+    frame = fix_dtypes(np.random.default_rng(0).standard_normal((8, 5)), None)
+
+    assert _is_single_float_block(frame)
+
+
+def test__fix_dtypes__mixed_numeric_dtypes_are_still_cast() -> None:
+    """Skipping the no-op cast must not skip the casts that do something."""
+    raw = pd.DataFrame(
+        {
+            "a": pd.array([1, 2, None], dtype="Int64"),
+            "b": np.array([1.5, 2.5, 3.5], dtype="float32"),
+            "c": [1.0, 2.0, 3.0],
+        }
+    )
+
+    frame = fix_dtypes(raw, cat_indices=None)
+
+    assert list(frame.dtypes) == [np.dtype("float64")] * 3
+    assert np.isnan(frame["a"].to_numpy()[2])
+
+
+# --- ownership of the identity path's output -------------------------------------
+#
+# The identity path hands its array straight to the caller, who writes into it, so it
+# has to own it. How many copies that takes depends on the frame's block layout,
+# which is what these two pin.
+
+
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column, as a recast frame is left."""
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
+
+
+def test__owned_float64_values__assembles_a_multi_block_frame_in_one_buffer() -> None:
+    """A frame of many blocks is assembled directly, never routed through `to_numpy`.
+
+    Asserted through the frame rather than the result, because what the result looks
+    like depends on the pandas: `to_numpy` consolidates the frame in place before
+    pandas 3, so a run that went through it would cost a second full-size buffer and
+    leave the frame holding one block instead of many.
+    """
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = _fragmented_float_frame(values)
+    assert not _is_single_float_block(frame)
+
+    out = _owned_float64_values(frame)
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    assert not np.shares_memory(out, values)
+    # Still one block per column: nothing consolidated it on the way.
+    assert not _is_single_float_block(frame)
+    # And the buffer is the caller's alone -- writing into it cannot reach the frame.
+    assert not any(
+        np.shares_memory(out, frame.iloc[:, position].to_numpy(copy=False))
+        for position in range(frame.shape[1])
+    )
+
+
+def test__owned_float64_values__copies_a_single_block_frame() -> None:
+    """A single-block frame is handed out as a view of the array it was built from."""
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = pd.DataFrame(values, copy=False)
+    assert _is_single_float_block(frame)
+    assert np.shares_memory(frame.to_numpy(dtype=np.float64, copy=False), values)
+
+    out = _owned_float64_values(frame)
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    # Writing into the result must not reach the caller's array. Under copy-on-write
+    # the view is read-only, but on pandas 2 it is writeable and aliases `values`.
+    assert not np.shares_memory(out, values)
+    out[0, 0] = 12345.0
+    assert values[0, 0] != 12345.0
+
+
+# --- the frozen shortcut's preconditions -----------------------------------------
+#
+# At predict time the encoding step is skipped when a fitted encoder selected no
+# columns. Skipping `transform` skips its checks too, so the shortcut is only taken
+# for a frame `transform` would have handled the same way.
+
+
+def _float_frame(**columns: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({name: np.array(values) for name, values in columns.items()})
+
+
+def test__encoding_is_identity__an_unfitted_encoder_is_not_an_empty_selection() -> None:
+    """An encoder that never selected anything because it was never fitted.
+
+    It has no selection to read, which must not be mistaken for having selected no
+    columns -- that would hand the frame back unencoded instead of failing.
+    """
+    with pytest.raises(AttributeError):
+        clean_module._encoding_is_identity(
+            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]),
+            get_ordinal_encoder(),
+            fit_encoder=False,
+        )
+
+
+def test__process_text_na_dataframe__frozen_shortcut_rejects_a_narrower_frame() -> None:
+    """A width sklearn would refuse has to keep failing."""
+    encoder = get_ordinal_encoder()
+    encoder.fit(_float_frame(a=[1.0, 2.0], b=[3.0, 4.0], c=[5.0, 6.0]))
+
+    with pytest.raises((ValueError, KeyError), match="c"):
+        process_text_na_dataframe(
+            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]), ord_encoder=encoder
+        )
+
+
+def test__process_text_na_dataframe__frozen_shortcut_reorders_like_sklearn() -> None:
+    """Reordered columns come back in fit order, as `transform` returns them.
+
+    `ColumnTransformer` selects by name, so it lines a reordered frame back up with
+    the fit-time order. The shortcut returns the frame's own order, which for this
+    frame is a different array -- so it must not be taken here.
+    """
+    fitted_on = _float_frame(a=[1.0, 2.0], b=[3.0, 4.0], c=[5.0, 6.0])
+    encoder = get_ordinal_encoder()
+    encoder.fit(fitted_on)
+
+    out = process_text_na_dataframe(fitted_on[["a", "c", "b"]], ord_encoder=encoder)
+
+    np.testing.assert_array_equal(out, fitted_on.to_numpy())
+
+
+def test__process_text_na_dataframe__frozen_shortcut_taken_when_lined_up() -> None:
+    """The shortcut still applies to the frame the encoder was fitted on."""
+    frame = _float_frame(a=[1.0, 2.0], b=[3.0, 4.0])
+    encoder = get_ordinal_encoder()
+    encoder.fit(frame)
+
+    with mock.patch.object(
+        clean_module, "_owned_float64_values", wraps=clean_module._owned_float64_values
+    ) as shortcut:
+        out = process_text_na_dataframe(frame, ord_encoder=encoder)
+
+    assert shortcut.call_count == 1
+    np.testing.assert_array_equal(out, frame.to_numpy())

@@ -758,6 +758,20 @@ def test__clean_data__handles_infinities_on_categoricals() -> None:
 # pure-pandas semantics: an element is +inf iff ``X == np.inf`` (NA -> False).
 
 
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column.
+
+    Writing a whole column set back is what fragments a frame in pandas, and it is
+    how real inputs get this way: ``fix_dtypes`` reassigns the numeric columns
+    whenever any of them needs casting (a mixed frame of ``Int64``/float32/...).
+    Built explicitly here so the layout under test does not depend on which inputs
+    happen to make ``fix_dtypes`` take that branch.
+    """
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
+
+
 def _numpy_split_inf_masks(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     """The per-block numpy path (numeric columns extracted into one float array)."""
     pos_inf = np.zeros(X.shape, dtype=bool)
@@ -889,8 +903,7 @@ def test__is_single_float_block__distinguishes_consolidated_from_fragmented() ->
     consolidated = pd.DataFrame(rng.standard_normal((4, 3)))
     assert _is_single_float_block(consolidated)
 
-    # fix_dtypes assigns column-by-column, fragmenting into one block per column.
-    fragmented = fix_dtypes(rng.standard_normal((4, 3)), cat_indices=None)
+    fragmented = _fragmented_float_frame(rng.standard_normal((4, 3)))
     assert not _is_single_float_block(fragmented)
 
     # A mixed frame is never a single float block.
@@ -921,16 +934,16 @@ def test__process_text_na_dataframe__single_float_block_round_trips_infs() -> No
 def test__inf_mask__per_block_path_not_slower_than_pandas_on_fragmented() -> None:
     """On a fragmented frame the per-block numpy path beats pure pandas.
 
-    A wide numeric frame shaped like a real post-``fix_dtypes`` input (one block
-    per column) is the layout that reaches ``process_text_na_dataframe`` in
-    practice; there the per-block numpy path beats the whole-frame pandas
+    A wide numeric frame held as one block per column is what reaches
+    ``process_text_na_dataframe`` whenever ``fix_dtypes`` has had to recast the
+    numeric columns; there the per-block numpy path beats the whole-frame pandas
     comparison (~1.5x locally). The assertion is a no-regression guard with
     generous slack so it survives CI noise; marked ``slow`` to run at merge time.
     """
     rng = np.random.default_rng(0)
     X_np = rng.standard_normal((2000, 300))
     X_np[0, 0] = np.inf
-    X = fix_dtypes(X_np, cat_indices=None)
+    X = _fragmented_float_frame(X_np)
     assert not _is_single_float_block(X)  # routed to the per-block path
 
     # Same result, so the speed comparison is apples-to-apples.
