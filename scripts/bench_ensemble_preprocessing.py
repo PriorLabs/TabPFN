@@ -31,7 +31,11 @@ What it measures:
   two boundaries is still caught. RSS rather than tracemalloc because the copies under
   suspicion are numpy buffers, invisible to Python's allocator.
 * **Wall time** -- `torch.utils.benchmark`, median over `--timing-repeats` calls, after
-  `--warmup-calls` untimed ones.
+  `--warmup-calls` untimed ones. Every clock stops after a device synchronise, and the
+  device's allocation high-water mark across the call is recorded: the torch transforms
+  this preprocessor configures are *built* here and *run* by the inference engine, so
+  today that peak is zero, and if it ever is not the timings are still honest (see
+  "Device work" below).
 
 Both metrics, plus every ensemble member's preprocessed `X_train` and a signature of
 the rest of the member, are written to a directory named after the input. On a later
@@ -132,6 +136,8 @@ from tabpfn.preprocessing.ensemble import (
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from tabpfn.preprocessing.configs import ClassifierEnsembleConfig
     from tabpfn.preprocessing.datamodel import FeatureSchema
     from tabpfn.preprocessing.ensemble import TabPFNEnsembleMember
@@ -367,6 +373,71 @@ def build_preprocessor(
 
 
 # ---------------------------------------------------------------------------
+# Device work
+# ---------------------------------------------------------------------------
+#
+# The ensemble preprocessor does have torch transforms -- the quantile/squashing
+# scaler, the SVD, the fingerprint and the shuffle -- but with
+# ENABLE_GPU_PREPROCESSING on `create_preprocessing_pipeline` *removes* those four from
+# the CPU pipeline and `create_gpu_preprocessing_pipeline` only *builds* the
+# `TorchPreprocessingPipeline` that replaces them. The measured call stores that
+# pipeline on each member and returns; the inference engine runs it later, through
+# `_maybe_run_gpu_preprocessing`. The CPU steps do reach for torch, but only in their
+# `isinstance(X, torch.Tensor)` branches, and the table here is a numpy array. So no
+# kernel is launched inside the measured call -- which is also why these runs work at
+# all on a host with no CUDA runtime.
+#
+# That is an invariant, not a law, so it is both guarded and measured: every clock is
+# stopped after a synchronise, and the device's allocation high-water mark is recorded
+# across the call. If work ever moves in here, the timings stay honest and
+# `device.peak_allocated_bytes` says so instead of the report quietly meaning something
+# else.
+
+
+def _no_synchronize() -> None:
+    """Nothing to wait for: there is no device to queue work on."""
+
+
+def _resolve_device_sync() -> Callable[[], None]:
+    """How to wait for queued device work before a clock is read."""
+    if torch.cuda.is_available():
+        return torch.cuda.synchronize
+    return _no_synchronize
+
+
+synchronize_device = _resolve_device_sync()
+
+
+def reset_device_activity() -> None:
+    """Settle the device and zero its allocation high-water mark.
+
+    Called before the entry RSS reading, not after, for a reason beyond the high-water
+    mark: this is where torch creates its CUDA context if nothing has touched the device
+    yet, and a context costs host RSS. Paid here it is part of the baseline; paid on the
+    first synchronise inside the measured call, it would read as that call's transient.
+    """
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+
+
+def device_activity() -> dict[str, Any]:
+    """Whether the device was touched since the last reset, and how much of it.
+
+    Recorded rather than asserted: a non-zero peak is not a failure, it is the signal
+    that this call now does device work and that its wall time is only meaningful
+    because of the synchronise above.
+    """
+    if not torch.cuda.is_available():
+        return {"cuda_available": False, "peak_allocated_bytes": None}
+    return {
+        "cuda_available": True,
+        "peak_allocated_bytes": int(torch.cuda.max_memory_allocated()),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Measurement
 # ---------------------------------------------------------------------------
 
@@ -388,6 +459,7 @@ def measure_memory(
     same peak without growing RSS at all -- which would read as a phantom improvement.
     """
     gc.collect()
+    reset_device_activity()
     sampler = RssSampler(interval_s)
     rss_in = current_rss_bytes()
     sampler.start()
@@ -400,6 +472,7 @@ def measure_memory(
                 parallel_mode=parallel_mode,  # type: ignore[arg-type]
             )
         )
+        synchronize_device()
     finally:
         end = time.perf_counter()
         sampler.stop()
@@ -437,14 +510,22 @@ def measure_time(
     (`max(number // 100, 2)` executions each time), which at the default shape is
     minutes per repeat -- so warm up once here and time the repeats through the same
     inner timer afterwards.
+
+    The synchronise is inside the timed statement, not around it: outside, it would
+    fall between two repeats and leave each one crediting its device work to its
+    successor.
     """
     timer = Timer(
-        stmt="list(iterator(X_train=X, y_train=y, parallel_mode=parallel_mode))",
+        stmt=(
+            "list(iterator(X_train=X, y_train=y, parallel_mode=parallel_mode))\n"
+            "synchronize()"
+        ),
         globals={
             "iterator": preprocessor.fit_transform_ensemble_members_iterator,
             "X": inputs.X_train,
             "y": inputs.y_train,
             "parallel_mode": parallel_mode,
+            "synchronize": synchronize_device,
         },
         num_threads=torch.get_num_threads(),
         label="fit_transform_ensemble_members_iterator",
@@ -778,6 +859,26 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 
+def describe_device_activity(device: dict[str, Any]) -> str:
+    """One line on what the measured call did to the device, if anything."""
+    if not device["cuda_available"]:
+        return (
+            "no CUDA here, so the torch transforms could not have run even if the "
+            "call queued them"
+        )
+    peak = device["peak_allocated_bytes"]
+    if not peak:
+        return (
+            "CUDA present and synchronised, but the call allocated nothing on it -- "
+            "the torch pipeline it builds is run later, by the inference engine"
+        )
+    return (
+        f"the call allocated {peak / _GB:.2f} GB on the device, so torch work now runs "
+        "inside it. The timings are synchronised and so still comparable, but the RSS "
+        "above counts host memory only"
+    )
+
+
 def print_pass_summary(
     recorded: dict[str, Any],
     memory: MemoryProfile,
@@ -995,6 +1096,7 @@ def main(args: argparse.Namespace) -> None:
     members, memory = measure_memory(
         preprocessor, inputs, spec["parallel_mode"], args.sample_interval_ms / 1000
     )
+    device = device_activity()
     print(
         f"\nTransient RSS: {memory.transient_bytes / _GB:.2f} GB "
         f"(entry {memory.rss_in_bytes / _GB:.2f} GB, peak "
@@ -1002,6 +1104,7 @@ def main(args: argparse.Namespace) -> None:
         f"{memory.retained_bytes / _GB:.2f} GB, {memory.n_samples} RSS samples, "
         f"{memory.wall_s:.3f} s cold)"
     )
+    print(f"Device: {describe_device_activity(device)}")
     if memory.n_samples < MIN_USEFUL_RSS_SAMPLES:
         print(
             f"WARNING: only {memory.n_samples} RSS sample(s) landed inside a "
@@ -1074,6 +1177,7 @@ def main(args: argparse.Namespace) -> None:
                         "tolerance": args.tolerance,
                     },
                     "memory": memory.as_dict(),
+                    "device": device,
                     "timing": timing,
                 },
                 indent=2,

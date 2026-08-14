@@ -29,6 +29,16 @@ into measuring different tables or reporting them differently.
 RSS rather than tracemalloc: the copies under suspicion are numpy buffers, which
 allocate outside Python's allocator and so are invisible to tracemalloc.
 
+The torch transforms this preprocessor configures do not run here, so nothing below is
+a GPU measurement: with ENABLE_GPU_PREPROCESSING on, the quantile/squashing scaler, the
+SVD, the fingerprint and the shuffle are dropped from the CPU pipeline and
+`create_gpu_preprocessing_pipeline` only *builds* the `TorchPreprocessingPipeline` that
+replaces them, which the inference engine runs later via
+`_maybe_run_gpu_preprocessing`. Every stage still closes on a device synchronise, so
+that stays true rather than merely assumed: if any of that work moves in here, the
+per-stage times keep meaning what they say, and `device_peak_allocated_gb` in the
+summary reports it.
+
 Two numbers per stage are worth separating:
   * peak_rss - rss_in  : transient overhead, freed before the stage returns
   * rss_out - rss_in   : retained growth, still live afterwards
@@ -93,7 +103,11 @@ from bench_ensemble_preprocessing import (
     PARALLEL_MODES,
     build_ensemble_inputs,
     build_preprocessor,
+    describe_device_activity,
+    device_activity,
+    reset_device_activity,
     resolve_input_spec,
+    synchronize_device,
 )
 from profile_clean_data import (
     Profiler,
@@ -259,7 +273,16 @@ def main(args: argparse.Namespace) -> None:
     preprocessor = build_preprocessor(inputs, spec)
 
     sampler = RssSampler(args.sample_interval_ms / 1000.0)
-    profiler = Profiler(sampler, args.max_stages, root_label=ROOT_LABEL)
+    profiler = Profiler(
+        sampler,
+        args.max_stages,
+        root_label=ROOT_LABEL,
+        # Every stage closes on a synchronise. No stage queues device work today -- the
+        # torch pipeline this call builds is run later, by the inference engine -- so
+        # this costs nothing now and keeps the per-stage attribution correct if any of
+        # it moves in. `device` in the summary records whether it stayed a no-op.
+        synchronize=synchronize_device,
+    )
     function_targets, method_targets = resolve_targets(args)
     undo: list[Callable[[], None]] = patch_functions(
         profiler, function_targets
@@ -272,6 +295,7 @@ def main(args: argparse.Namespace) -> None:
     # included) into a generation collections skip, so those passes only walk what the
     # measured call allocates. Without this the profile takes hours.
     gc.freeze()
+    reset_device_activity()
     baseline_rss_gb = current_rss_bytes() / _GB
     sampler.start()
     try:
@@ -282,6 +306,7 @@ def main(args: argparse.Namespace) -> None:
                 parallel_mode=spec["parallel_mode"],
             )
         )
+        synchronize_device()
     finally:
         sampler.stop()
         for restore in reversed(undo):
@@ -292,6 +317,8 @@ def main(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     root = profiler.stages[0]
+    device = device_activity()
+    print(f"\nDevice: {describe_device_activity(device)}")
     member_gb = sum(member.X_train.nbytes for member in members) / _GB
     peak_gb = max(rss for _, rss in sampler.samples) / _GB if sampler.samples else 0.0
     summary: dict[str, Any] = {
@@ -317,6 +344,15 @@ def main(args: argparse.Namespace) -> None:
         # 1.0 here is memory held at the peak beyond what it hands back.
         "transient_over_members": (
             round(root.transient_bytes / _GB / member_gb, 2) if member_gb else None
+        ),
+        # Zero unless torch work has moved into this call, in which case the stage wall
+        # times below include waiting for it -- every stage closes on a synchronise --
+        # and the RSS columns still count host memory only.
+        "device_cuda_available": device["cuda_available"],
+        "device_peak_allocated_gb": (
+            round(device["peak_allocated_bytes"] / _GB, 3)
+            if device["peak_allocated_bytes"] is not None
+            else None
         ),
         "stages_recorded": len(profiler.stages),
         "stages_skipped_over_cap": profiler.skipped,

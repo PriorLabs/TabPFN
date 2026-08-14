@@ -265,15 +265,23 @@ class Profiler:
         sampler: RssSampler,
         max_stages: int,
         root_label: str = ROOT_LABEL,
+        synchronize: Callable[[], None] | None = None,
     ) -> None:
         """Wrap a started sampler.
 
         `root_label` is the stage recording opens on; a sibling profiler that targets
         another function passes its own.
+
+        `synchronize` is waited on at every stage exit before its clock is read, for a
+        profiled function that queues device work: torch is asynchronous, so without it
+        a stage would be credited only with the launch and whichever stage happened to
+        wait would be charged for the compute. `clean_data` queues none -- it is pandas
+        and numpy throughout -- so it leaves this None and pays nothing for it.
         """
         self.sampler = sampler
         self.max_stages = max_stages
         self.root_label = root_label
+        self.synchronize = synchronize
         self.stages: list[Stage] = []
         self.skipped = 0
         self._depth = 0
@@ -309,6 +317,10 @@ class Profiler:
             yield record
         finally:
             self._depth -= 1
+            # Before the clock, and before the gc pass, so the stage is charged with
+            # its own device work but not with the collection.
+            if self.synchronize is not None:
+                self.synchronize()
             gc.collect()
             record.t_end = time.perf_counter()
             record.rss_out_bytes = current_rss_bytes()
