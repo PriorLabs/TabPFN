@@ -23,7 +23,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import KFold, StratifiedKFold
 
-from tabpfn.architectures.shared.regression_metrics import (
+from tabpfn.regression_metrics import (
     ranked_probability_score_loss_from_bar_logits,
 )
 from tabpfn.utils import infer_random_state

@@ -21,11 +21,11 @@ from sklearn.metrics import mean_squared_error
 from sklearn.utils.validation import check_is_fitted
 
 from tabpfn import TabPFNRegressor
-from tabpfn.architectures.shared.regression_metrics import (
-    ranked_probability_score_loss_from_bar_logits,
-)
 from tabpfn.finetuning.finetuned_base import EvalResult, FinetunedTabPFNBase
 from tabpfn.finetuning.train_util import clone_model_for_evaluation
+from tabpfn.regression_metrics import (
+    ranked_probability_score_loss_from_bar_logits,
+)
 
 logger = logging.getLogger(__name__)
 

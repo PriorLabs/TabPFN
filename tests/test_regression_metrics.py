@@ -6,7 +6,7 @@ import pytest
 import torch
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.architectures.shared.regression_metrics import (
+from tabpfn.regression_metrics import (
     ranked_probability_score_loss_from_bar_logits,
 )
 

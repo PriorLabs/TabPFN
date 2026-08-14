@@ -9,9 +9,6 @@ import pytest
 import torch
 
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
-from tabpfn.architectures.shared.regression_metrics import (
-    ranked_probability_score_loss_from_bar_logits,
-)
 from tabpfn.inference_tuning import (
     MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
     ClassifierEvalMetrics,
@@ -28,6 +25,9 @@ from tabpfn.inference_tuning import (
     get_tuning_temperatures,
     resolve_tuning_config,
     select_robust_optimal_threshold,
+)
+from tabpfn.regression_metrics import (
+    ranked_probability_score_loss_from_bar_logits,
 )
 
 
