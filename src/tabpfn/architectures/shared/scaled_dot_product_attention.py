@@ -84,6 +84,39 @@ _SDPA_BACKENDS = [
 ]
 
 
+# A FlashAttention backward fails with "CUDA error: an illegal memory access was
+# encountered" once
+# ``batch * heads * round_up(seq_q, 128) * head_dim > 2**31``.
+# The forward is fine at the same shapes, and the memory-efficient backend is
+# fine at all of them. The boundary is exact: a padded count of exactly 2**31
+# passes and 1.001 * 2**31 fails, which is consistent with a signed 32-bit
+# element index over a workspace whose query length is padded to the kernel's
+# block size. Measured on an RTX PRO 6000, torch 2.9.0+cu128, bfloat16.
+_FLASH_BACKWARD_MAX_ELEMENTS = 2**31
+_FLASH_QUERY_BLOCK = 128
+
+
+def _flash_backward_num_iterations(
+    q_BHSD: torch.Tensor,
+    num_q_heads: int,
+    backends: list[SDPBackend],
+) -> int:
+    """Batch chunks needed to keep each call inside FlashAttention's index range.
+
+    Returns 1 when FlashAttention cannot be selected, or when a single batch
+    entry already exceeds the range and chunking the batch therefore cannot help.
+    """
+    if SDPBackend.FLASH_ATTENTION not in backends:
+        return 1
+    block = _FLASH_QUERY_BLOCK
+    padded_seq = ((q_BHSD.shape[-2] + block - 1) // block) * block
+    elements_per_batch_entry = num_q_heads * padded_seq * q_BHSD.shape[-1]
+    max_sub_batch = _FLASH_BACKWARD_MAX_ELEMENTS // elements_per_batch_entry
+    if max_sub_batch < 1:
+        return 1
+    return (q_BHSD.shape[0] + max_sub_batch - 1) // max_sub_batch
+
+
 def _torch_sdpa(
     q_BSHD: torch.Tensor,
     k_BSJD: torch.Tensor | None,
@@ -95,7 +128,8 @@ def _torch_sdpa(
     A more robust version of torch.nn.functional.scaled_dot_product_attention:
     enables GQA where needed, and works around the
     CUDA maximum grid size for very large ``batch * heads`` (pytorch #142228)
-    by chunking the batch.
+    and FlashAttention's 32-bit backward indexing
+    (see ``_flash_backward_num_iterations``) by chunking the batch.
     """
     msg = "SDPA expects (B, S, H, D); got tensor of shape"
     assert q_BSHD.dim() == 4, f"{msg} q:{tuple(q_BSHD.shape)}"
@@ -133,6 +167,9 @@ def _torch_sdpa(
         torch._check(q_BHSD.shape[0] >= 1)
     CUDA_MAX_GRID = 65536
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
+    num_iterations = max(
+        num_iterations, _flash_backward_num_iterations(q_BHSD, num_q_heads, backends)
+    )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
     with sdpa_kernel(backends=backends):
