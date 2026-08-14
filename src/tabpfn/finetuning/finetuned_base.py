@@ -293,6 +293,20 @@ def _slice_batch_estimators(
     )
 
 
+def _get_loss_for_logging(
+    loss: torch.Tensor,
+    estimator_shard: _EstimatorShard | None,
+) -> float:
+    """Return the global estimator-mean loss without changing its gradients."""
+    loss_for_logging = loss.detach()
+    if estimator_shard is not None:
+        # ``loss`` includes the DDP gradient-correction scale. Its rank mean is
+        # therefore the global estimator mean, including for uneven shards.
+        loss_for_logging = loss_for_logging / estimator_shard.world_size
+        dist.all_reduce(loss_for_logging, op=dist.ReduceOp.SUM)
+    return float(loss_for_logging.item())
+
+
 @dataclass
 class EvalResult:
     """Container for evaluation results.
@@ -1169,7 +1183,7 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
                 if scheduler is not None:
                     scheduler.step()
 
-                loss_scalar = float(loss.detach().item())
+                loss_scalar = _get_loss_for_logging(loss, estimator_shard)
 
                 epoch_loss_sum += loss_scalar
                 epoch_batches += 1

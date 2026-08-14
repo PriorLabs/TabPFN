@@ -40,6 +40,7 @@ from tabpfn.finetuning.data_util import (
 from tabpfn.finetuning.finetuned_base import (
     EvalResult,
     _get_estimator_shard,
+    _get_loss_for_logging,
     _slice_batch_estimators,
 )
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
@@ -282,6 +283,34 @@ def test__get_estimator_shard__rejects_empty_rank_shards() -> None:
     """Every DDP rank must run a forward/backward to avoid collective deadlock."""
     with pytest.raises(ValueError, match="n_estimators_finetune >= world_size"):
         _get_estimator_shard(2, rank=0, world_size=4)
+
+
+def test__get_loss_for_logging__reports_global_estimator_mean() -> None:
+    """Reporting reverses DDP gradient scaling, including for uneven shards."""
+    shards = [_get_estimator_shard(10, rank, 4) for rank in range(4)]
+    local_means = [1.0, 2.0, 3.0, 4.0]
+    scaled_losses = [
+        mean * shard.gradient_scale
+        for mean, shard in zip(local_means, shards, strict=True)
+    ]
+    reduced_loss = sum(scaled_losses) / len(shards)
+
+    def fake_all_reduce(tensor: torch.Tensor, **_: Any) -> None:
+        tensor.fill_(reduced_loss)
+
+    with patch(
+        "tabpfn.finetuning.finetuned_base.dist.all_reduce",
+        side_effect=fake_all_reduce,
+    ):
+        logged_loss = _get_loss_for_logging(
+            torch.tensor(scaled_losses[0]),
+            shards[0],
+        )
+
+    expected_loss = sum(
+        mean * shard.size for mean, shard in zip(local_means, shards, strict=True)
+    ) / sum(shard.size for shard in shards)
+    assert logged_loss == pytest.approx(expected_loss)
 
 
 def test__slice_batch_estimators__slices_only_estimator_fields() -> None:
