@@ -253,17 +253,27 @@ def safe_describe_payload(value: Any) -> tuple[int, str]:
 
 
 class Profiler:
-    """Collects stages and the RSS trace for one `clean_data` call.
+    """Collects stages and the RSS trace for one call of the profiled function.
 
     Recording is gated on being inside the root stage: the patched pandas methods
     are called all over the place -- generating the input, writing the report -- and
-    only the ones `clean_data` makes are of any interest.
+    only the ones the profiled call makes are of any interest.
     """
 
-    def __init__(self, sampler: RssSampler, max_stages: int) -> None:
-        """Wrap a started sampler."""
+    def __init__(
+        self,
+        sampler: RssSampler,
+        max_stages: int,
+        root_label: str = ROOT_LABEL,
+    ) -> None:
+        """Wrap a started sampler.
+
+        `root_label` is the stage recording opens on; a sibling profiler that targets
+        another function passes its own.
+        """
         self.sampler = sampler
         self.max_stages = max_stages
+        self.root_label = root_label
         self.stages: list[Stage] = []
         self.skipped = 0
         self._depth = 0
@@ -276,7 +286,7 @@ class Profiler:
     @contextmanager
     def stage(self, name: str, payload: Any = None) -> Iterator[Stage | None]:
         """Record one call's timing, RSS window, and payload size."""
-        if not self.active and name != ROOT_LABEL:
+        if not self.active and name != self.root_label:
             yield None
             return
         if len(self.stages) >= self.max_stages:
@@ -575,8 +585,13 @@ def write_report(
     environment: dict[str, Any],
     summary: dict[str, Any],
     out_dir: Path,
+    title: str,
 ) -> None:
-    """Write the CSV, JSON and markdown, and print the table."""
+    """Write the CSV, JSON and markdown, and print the table.
+
+    `title` heads the markdown, so a sibling profiler that reuses this reporting can
+    say which call it attributed.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     frame = stages_frame(stages)
     frame.to_csv(out_dir / "stages.csv", index=False)
@@ -613,7 +628,7 @@ def write_report(
             lambda value: f"`{value}`" if value else ""
         )
 
-    lines = [f"# clean_data host-RAM profile ({summary['mix']})", ""]
+    lines = [f"# {title}", ""]
     lines += ["## Environment", ""]
     lines += [f"- `{key}`: {value}" for key, value in environment.items()]
     lines += ["", "## Summary", ""]
@@ -773,7 +788,14 @@ def main(args: argparse.Namespace) -> None:
             f"\nWARNING: {profiler.skipped} stage(s) went unrecorded past the "
             f"--max-stages cap of {args.max_stages}; the tree below is incomplete."
         )
-    write_report(profiler.stages, sampler, environment, summary, args.out_dir)
+    write_report(
+        profiler.stages,
+        sampler,
+        environment,
+        summary,
+        args.out_dir,
+        title=f"clean_data host-RAM profile ({summary['mix']})",
+    )
 
 
 def get_parser() -> argparse.ArgumentParser:
