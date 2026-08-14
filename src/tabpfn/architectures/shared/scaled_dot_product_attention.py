@@ -86,14 +86,18 @@ _SDPA_BACKENDS = [
 
 # A FlashAttention backward fails with "CUDA error: an illegal memory access was
 # encountered" once
-# ``batch * heads * round_up(seq_q, 128) * head_dim > 2**31``.
+# ``batch * heads * round_up(seq_q, 128) * max(head_dim, 32) > 2**31``.
 # The forward is fine at the same shapes, and the memory-efficient backend is
-# fine at all of them. The boundary is exact: a padded count of exactly 2**31
-# passes and 1.001 * 2**31 fails, which is consistent with a signed 32-bit
-# element index over a workspace whose query length is padded to the kernel's
-# block size. Measured on an RTX PRO 6000, torch 2.9.0+cu128, bfloat16.
+# fine at all of them. Both roundings matter: a query length that is already a
+# multiple of 128 reaches exactly 2**31 and passes, and a head dim of 16 fails
+# at half the raw element count because it is counted as 32. The boundary is
+# exact either side (0.99972 * 2**31 passes, 1.001 * 2**31 fails), which is
+# consistent with a signed 32-bit element index over a workspace padded to the
+# kernel's block sizes. Measured on an RTX PRO 6000, torch 2.9.0+cu128,
+# bfloat16, over head dims 16, 32, 64 and 128.
 _FLASH_BACKWARD_MAX_ELEMENTS = 2**31
 _FLASH_QUERY_BLOCK = 128
+_FLASH_MIN_HEAD_DIM = 32
 
 
 def _flash_backward_num_iterations(
@@ -110,7 +114,8 @@ def _flash_backward_num_iterations(
         return 1
     block = _FLASH_QUERY_BLOCK
     padded_seq = ((q_BHSD.shape[-2] + block - 1) // block) * block
-    elements_per_batch_entry = num_q_heads * padded_seq * q_BHSD.shape[-1]
+    padded_head_dim = max(q_BHSD.shape[-1], _FLASH_MIN_HEAD_DIM)
+    elements_per_batch_entry = num_q_heads * padded_seq * padded_head_dim
     max_sub_batch = _FLASH_BACKWARD_MAX_ELEMENTS // elements_per_batch_entry
     if max_sub_batch < 1:
         return 1

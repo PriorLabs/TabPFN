@@ -12,20 +12,31 @@ from torch.nn.attention import SDPBackend
 
 from tabpfn.architectures.shared.scaled_dot_product_attention import (
     _FLASH_BACKWARD_MAX_ELEMENTS,
+    _FLASH_MIN_HEAD_DIM,
     _FLASH_QUERY_BLOCK,
     _torch_sdpa,
 )
 
-# batch * heads * round_up(seq_q, 128) * head_dim = 2,149,580,800, just over the
-# 2**31 element range of FlashAttention's backward index. Without chunking this
-# faults in backward with an illegal memory access.
+# batch * heads * round_up(seq_q, 128) * max(head_dim, 32) = 2,149,580,800, just
+# over the 2**31 element range of FlashAttention's backward index. Without
+# chunking this faults in backward with an illegal memory access.
 _OVER_RANGE_SHAPE = {"batch": 400, "seq_q": 10_496, "heads": 4, "head_dim": 128}
+# Same count, reached with a head dim small enough to be padded up to 32. The raw
+# element count is only half the range, so a check that ignored the padding would
+# let this through.
+_OVER_RANGE_SMALL_HEAD_DIM = {
+    "batch": 800,
+    "seq_q": 10_496,
+    "heads": 8,
+    "head_dim": 16,
+}
 _SEQ_KV = 128
 
 
 def _padded_elements(batch: int, heads: int, seq_q: int, head_dim: int) -> int:
     block = _FLASH_QUERY_BLOCK
-    return batch * heads * (((seq_q + block - 1) // block) * block) * head_dim
+    padded_seq = ((seq_q + block - 1) // block) * block
+    return batch * heads * padded_seq * max(head_dim, _FLASH_MIN_HEAD_DIM)
 
 
 def _record_sdpa_calls(monkeypatch: pytest.MonkeyPatch) -> list[torch.Size]:
@@ -84,6 +95,31 @@ def test__torch_sdpa__query_over_flash_index_range__chunks_the_batch(
             <= _FLASH_BACKWARD_MAX_ELEMENTS
         )
     assert sum(shape[0] for shape in shapes) == _OVER_RANGE_SHAPE["batch"]
+
+
+def test__torch_sdpa__small_head_dim_over_range__chunks_the_batch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A head dim below 32 is counted as 32, so it hits the range sooner."""
+    shape = _OVER_RANGE_SMALL_HEAD_DIM
+    raw = shape["batch"] * shape["heads"] * shape["seq_q"] * shape["head_dim"]
+    assert raw < _FLASH_BACKWARD_MAX_ELEMENTS, "raw count should look safe"
+    assert (
+        _padded_elements(
+            shape["batch"], shape["heads"], shape["seq_q"], shape["head_dim"]
+        )
+        > _FLASH_BACKWARD_MAX_ELEMENTS
+    )
+
+    shapes = _run_on_meta(monkeypatch, **shape, backends=[SDPBackend.FLASH_ATTENTION])
+
+    assert len(shapes) > 1, "expected the batch to be chunked"
+    for chunk in shapes:
+        sub_batch, heads, seq_q, head_dim = chunk
+        assert (
+            _padded_elements(sub_batch, heads, seq_q, head_dim)
+            <= _FLASH_BACKWARD_MAX_ELEMENTS
+        )
 
 
 def test__torch_sdpa__query_within_flash_index_range__single_call(
