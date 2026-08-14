@@ -37,7 +37,12 @@ from tabpfn.finetuning.data_util import (
     get_preprocessed_dataset_chunks,
     meta_dataset_collator,
 )
-from tabpfn.finetuning.finetuned_base import EvalResult
+from tabpfn.finetuning.finetuned_base import (
+    EvalResult,
+    _get_estimator_shard,
+    _get_loss_for_logging,
+    _slice_batch_estimators,
+)
 from tabpfn.finetuning.finetuned_classifier import FinetunedTabPFNClassifier
 from tabpfn.finetuning.finetuned_regressor import FinetunedTabPFNRegressor
 from tabpfn.finetuning.train_util import get_checkpoint_path_and_epoch_from_output_dir
@@ -256,6 +261,95 @@ def make_param_dependent_loss_side_effect() -> Callable[..., torch.Tensor]:
         return 1e-2 * sum((p**2).sum() for p in params if p.requires_grad)
 
     return _loss
+
+
+def test__get_estimator_shard__covers_estimators_and_scales_gradients() -> None:
+    """Uneven shards cover each estimator and preserve a global-mean gradient."""
+    shards = [_get_estimator_shard(10, rank, 4) for rank in range(4)]
+
+    assert [(shard.start, shard.stop) for shard in shards] == [
+        (0, 3),
+        (3, 6),
+        (6, 8),
+        (8, 10),
+    ]
+    assert [shard.gradient_scale for shard in shards] == pytest.approx(
+        [1.2, 1.2, 0.8, 0.8]
+    )
+    assert sum(shard.size for shard in shards) == 10
+
+
+def test__get_estimator_shard__rejects_empty_rank_shards() -> None:
+    """Every DDP rank must run a forward/backward to avoid collective deadlock."""
+    with pytest.raises(ValueError, match="n_estimators_finetune >= world_size"):
+        _get_estimator_shard(2, rank=0, world_size=4)
+
+
+def test__get_loss_for_logging__reports_global_estimator_mean() -> None:
+    """Reporting reverses DDP gradient scaling, including for uneven shards."""
+    shards = [_get_estimator_shard(10, rank, 4) for rank in range(4)]
+    local_means = [1.0, 2.0, 3.0, 4.0]
+    scaled_losses = [
+        mean * shard.gradient_scale
+        for mean, shard in zip(local_means, shards, strict=True)
+    ]
+    reduced_loss = sum(scaled_losses) / len(shards)
+
+    def fake_all_reduce(tensor: torch.Tensor, **_: Any) -> None:
+        tensor.fill_(reduced_loss)
+
+    with patch(
+        "tabpfn.finetuning.finetuned_base.dist.all_reduce",
+        side_effect=fake_all_reduce,
+    ):
+        logged_loss = _get_loss_for_logging(
+            torch.tensor(scaled_losses[0]),
+            shards[0],
+        )
+
+    expected_loss = sum(
+        mean * shard.size for mean, shard in zip(local_means, shards, strict=True)
+    ) / sum(shard.size for shard in shards)
+    assert logged_loss == pytest.approx(expected_loss)
+
+
+def test__slice_batch_estimators__slices_only_estimator_fields() -> None:
+    """Estimator sharding retains shared query targets and slices nested metadata."""
+    batch = ClassifierBatch(
+        X_context=[torch.tensor([i]) for i in range(4)],
+        X_query=[torch.tensor([10 + i]) for i in range(4)],
+        y_context=[torch.tensor([20 + i]) for i in range(4)],
+        y_query=torch.tensor([[0, 1]]),
+        cat_indices=[[[0], [1], [2], [3]]],
+        configs=[[f"config-{i}"] for i in range(4)],  # type: ignore[list-item]
+    )
+
+    sharded = _slice_batch_estimators(batch, _get_estimator_shard(4, 1, 2))
+
+    assert [tensor.item() for tensor in sharded.X_context] == [2, 3]
+    assert [tensor.item() for tensor in sharded.X_query] == [12, 13]
+    assert [tensor.item() for tensor in sharded.y_context] == [22, 23]
+    assert torch.equal(sharded.y_query, batch.y_query)
+    assert sharded.cat_indices == [[[2], [3]]]
+    assert sharded.configs == [["config-2"], ["config-3"]]
+
+
+def test__should_skip_batch__uses_full_estimator_label_union() -> None:
+    """Per-estimator label permutations must not cause a sharded batch skip."""
+    batch = ClassifierBatch(
+        X_context=[torch.tensor([0]), torch.tensor([1])],
+        X_query=[torch.tensor([0]), torch.tensor([1])],
+        y_context=[torch.tensor([0, 0]), torch.tensor([1, 1])],
+        y_query=torch.tensor([[0, 1]]),
+        cat_indices=[[[], []]],
+        configs=[["config-0"], ["config-1"]],  # type: ignore[list-item]
+    )
+    classifier = FinetunedTabPFNClassifier(n_estimators_final_inference=2)
+
+    assert not classifier._should_skip_batch(batch)
+    assert classifier._should_skip_batch(
+        _slice_batch_estimators(batch, _get_estimator_shard(2, 0, 2))
+    )
 
 
 def _state_dicts_equal(a: dict[str, torch.Tensor], b: dict[str, torch.Tensor]) -> bool:

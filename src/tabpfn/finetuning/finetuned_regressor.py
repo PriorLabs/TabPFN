@@ -203,6 +203,9 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             Defaults to 8.
         use_activation_checkpointing: Whether to use activation checkpointing to
             reduce memory usage. Defaults to True.
+        shard_estimators_across_gpus: When True under DDP, shard the fine-tuning
+            estimators across ranks to reduce per-rank activation memory. Defaults
+            to False.
         save_checkpoint_interval: Number of epochs between checkpoint saves. This
             only has an effect if `output_dir` is provided during the `fit()` call.
             If None, no intermediate checkpoints are saved. The best model checkpoint
@@ -262,6 +265,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         n_estimators_validation: int = 2,
         n_estimators_final_inference: int = 8,
         use_activation_checkpointing: bool = True,
+        shard_estimators_across_gpus: bool = False,
         save_checkpoint_interval: int | None = 10,
         use_fixed_preprocessing_seed: bool = True,
         experiment_logger: FinetuningLogger | None = None,
@@ -298,6 +302,7 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
             n_estimators_validation=n_estimators_validation,
             n_estimators_final_inference=n_estimators_final_inference,
             use_activation_checkpointing=use_activation_checkpointing,
+            shard_estimators_across_gpus=shard_estimators_across_gpus,
             save_checkpoint_interval=save_checkpoint_interval,
             use_fixed_preprocessing_seed=use_fixed_preprocessing_seed,
             experiment_logger=experiment_logger,
@@ -382,14 +387,14 @@ class FinetunedTabPFNRegressor(FinetunedTabPFNBase, RegressorMixin):
         num_bars = bardist_loss_fn.num_bars
         assert y_query_batch.shape[1] == Q
         assert B == 1
-        assert self.n_estimators_finetune == E
+        assert self._local_n_estimators_ == E
         assert num_bars == L
 
         # Reshape for bar distribution loss: treat estimator dim as batch dim
         # permute to shape (B, E, Q, L) then reshape to (B*E, Q, L)
         logits_BQL = logits_QBEL.permute(1, 2, 0, 3).reshape(B * E, Q, L)
 
-        targets_BQ = y_query_batch.repeat(B * self.n_estimators_finetune, 1).to(
+        targets_BQ = y_query_batch.repeat(B * self._local_n_estimators_, 1).to(
             self.device
         )
 
