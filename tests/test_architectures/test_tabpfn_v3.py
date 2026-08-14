@@ -495,8 +495,10 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
         actual = layerwise.kv[layer_idx]
         assert isinstance(expected, QuantizedKVCacheEntry)
         assert isinstance(actual, QuantizedKVCacheEntry)
-        assert torch.equal(actual.key, expected.key)
-        assert torch.equal(actual.value, expected.value)
+        # torch.equal lacks CPU float8 support in the lowest supported PyTorch.
+        # Comparing after an exact float32 widening works for int8 and float8.
+        assert torch.equal(actual.key.float(), expected.key.float())
+        assert torch.equal(actual.value.float(), expected.value.float())
         assert torch.equal(actual.key_scale, expected.key_scale)
         assert torch.equal(actual.value_scale, expected.value_scale)
 
