@@ -60,4 +60,17 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         self, X: np.ndarray | torch.Tensor, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
         assert self.sel_ is not None, "You must call fit first"
+        if self._keeps_every_column():
+            # Selecting every column with a boolean mask still builds a full copy of
+            # the array -- 10.7 GB on a 666,667 x 2,000 fit -- to hand back exactly
+            # what it was given. Nothing downstream may mutate the result in place
+            # (the pipeline copies before the first step runs), so returning the input
+            # is equivalent.
+            return X, None, None
         return X[:, self.sel_], None, None
+
+    def _keeps_every_column(self) -> bool:
+        """Whether the fitted selection drops nothing."""
+        if isinstance(self.sel_, torch.Tensor):
+            return bool(torch.all(self.sel_))
+        return all(self.sel_)  # type: ignore[arg-type]
