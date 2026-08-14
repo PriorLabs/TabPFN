@@ -989,8 +989,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         )
         built_caches = list(timed_caches)
         if stage_caches_on_cpu:
-            # Keep already-built caches out of device memory while later ensemble
-            # members are constructed, then restore their original placement.
+            # Each completed cache was staged on CPU by _build_cache while the
+            # remaining ensemble members were being constructed. Now that every
+            # build has finished, move each cache back to its build device.
             self.kv_caches: list = [cache.to(device) for cache, device in built_caches]
         else:
             self.kv_caches = [cache for cache, _device in built_caches]
@@ -1013,6 +1014,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         Called via :func:`parallel_execute` — may run on different devices
         in parallel threads.
+
+        Returns:
+            A tuple containing the completed cache and its build device. The
+            device is also the cache's destination for inference. The cache
+            tensors themselves are on CPU when ``stage_cache_on_cpu`` is true
+            (or when ``keep_cache_on_device`` is false); otherwise, they remain
+            on the returned device.
         """
         model = self.model_caches[model_index].get(device)
         kv_cache_precision = _resolve_kv_cache_precision(
