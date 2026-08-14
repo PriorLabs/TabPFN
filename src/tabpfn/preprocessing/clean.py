@@ -224,6 +224,14 @@ def _column_kind(dtype: Any) -> str:
     return dtype.kind
 
 
+def _encoder_selection(ord_encoder: OrderPreservingColumnTransformer) -> list[Any]:
+    """The columns a fitted encoder takes, in the order it holds them."""
+    return next(
+        (cols for name, _, cols in ord_encoder.transformers_ if name == "encoder"),
+        [],
+    )
+
+
 def _is_single_float_block(X: pd.DataFrame) -> bool:
     """True if ``X`` is backed by a single contiguous numpy float block.
 
@@ -262,10 +270,7 @@ def _align_columns_to_fitted_dtypes(
     encoder = ord_encoder.named_transformers_.get("encoder")
     if encoder is None or not hasattr(encoder, "categories_"):
         return X
-    selected = next(
-        (cols for name, _, cols in ord_encoder.transformers_ if name == "encoder"),
-        [],
-    )
+    selected = _encoder_selection(ord_encoder)
     to_string, to_numeric = [], []
     for col, categories in zip(selected, encoder.categories_, strict=True):
         fit_kind = categories.dtype.kind
@@ -505,6 +510,63 @@ def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
     return out
 
 
+def _can_write_encoded_columns(X: pd.DataFrame, selected: list[Any]) -> bool:
+    """Whether the encoded array can be assembled column by column.
+
+    Two things have to hold. Every column the encoder does *not* take must already be
+    plain float64, so writing it into a float64 output is a copy and not a conversion
+    that could differ from the one `ColumnTransformer` would have done -- notably an
+    `object` column, which the encoder's dtype selector skips and the old path carried
+    through as objects until the closing cast. And the column names must be unique,
+    since each column is placed by name.
+    """
+    if X.columns.has_duplicates:
+        return False
+    taken = set(selected)
+    return all(
+        dtype == _FLOAT64
+        for column, dtype in zip(X.columns, X.dtypes, strict=True)
+        if column not in taken
+    )
+
+
+def _encode_into_preallocated(
+    X: pd.DataFrame,
+    ord_encoder: OrderPreservingColumnTransformer,
+    selected: list[Any],
+) -> np.ndarray:
+    """Assemble the encoded array by writing each column straight to its final place.
+
+    `ColumnTransformer` gets the same result in three full-size arrays: one per
+    transformer, a second from stacking them, and a third from the gather
+    `_preserve_order` needs to undo the stacking's column order. A mixed-column clean
+    reaches its RAM peak twice inside that -- once in the stack, once in the gather --
+    which is why removing either one alone changes nothing. Writing into the output
+    costs one array, plus the block of codes the encoder returns.
+
+    Column order is the frame's own, so no reordering is needed afterwards, and the
+    layout is column-major to match what the stack used to produce.
+    """
+    positions = {column: index for index, column in enumerate(X.columns)}
+    taken = set(selected)
+    out = np.empty(X.shape, dtype=np.float64, order="F")
+
+    if selected:
+        # One call rather than one per column: the encoder validates against the
+        # column count it was fitted on, so its codes come as a single block.
+        codes = ord_encoder.named_transformers_["encoder"].transform(X[selected])
+        out[:, [positions[column] for column in selected]] = codes
+        del codes
+
+    # Per column, so no full-width temporary is built for the passthrough half; each
+    # write is a copy out of the frame's block, which `_can_write_encoded_columns` has
+    # established is already float64.
+    for column, index in positions.items():
+        if column not in taken:
+            out[:, index] = X[column].to_numpy(dtype=np.float64, copy=False)
+    return out
+
+
 def _apply_ordinal_encoder(
     X: pd.DataFrame,
     ord_encoder: OrderPreservingColumnTransformer | None,
@@ -515,8 +577,8 @@ def _apply_ordinal_encoder(
 
     Every branch returns an array the caller owns, which is what lets it write the
     placeholder and +/-inf cells in place and cast to float64 with ``copy=False``.
-    Three of the four allocate outright -- the copy, and the encoder's own hstack at
-    fit and at transform. The fourth, `X.to_numpy()`, does not: for a single-block
+    Three of the four allocate outright -- the copy, the preallocated output, the
+    encoder's own hstack. The fourth, `X.to_numpy()`, does not: for a single-block
     frame pandas hands back the block itself, read-only under copy-on-write and
     aliasing the caller's ndarray without it.
 
@@ -536,8 +598,26 @@ def _apply_ordinal_encoder(
             ord_encoder.fit(X.iloc[:1])
         return _owned_float64_values(X)
     if fit_encoder and ord_encoder is not None:
-        return ord_encoder.fit_transform(X)
+        # `ColumnTransformer.fit` is implemented as `fit_transform`, so fitting on the
+        # whole frame would run the very transform the assembly below replaces. Fit on
+        # one row for the column bookkeeping instead -- widths and output indices do
+        # not depend on the row count for a one-to-one encoder -- and then teach the
+        # inner encoder its categories from every row.
+        ord_encoder.fit(X.iloc[:1])
+        selected = _encoder_selection(ord_encoder)
+        if not _can_write_encoded_columns(X, selected):
+            # Bail before learning any categories: `fit_transform` learns them again
+            # from scratch, so doing it first would be a wasted pass over the data.
+            # Only the one-row fit above is lost, which costs no pass at all.
+            return ord_encoder.fit_transform(X)
+        if selected:
+            ord_encoder.named_transformers_["encoder"].fit(X[selected])
+        return _encode_into_preallocated(X, ord_encoder, selected)
     if ord_encoder is not None:
+        # Left on sklearn deliberately. `transform` also validates the frame against
+        # the one seen at fit -- column count, names, order -- and the assembly above
+        # does not, so using it here would trade a real check for memory the wrapper
+        # has already validated by other means.
         return ord_encoder.transform(X)
     return X.to_numpy()
 

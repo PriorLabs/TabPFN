@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from sklearn.preprocessing import OrdinalEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -974,3 +975,126 @@ def test__process_text_na_dataframe__frozen_shortcut_taken_when_lined_up() -> No
 
     assert shortcut.call_count == 1
     np.testing.assert_array_equal(out, frame.to_numpy())
+
+
+# --- mixed-column assembly -------------------------------------------------------
+#
+# With categorical columns present, `clean_data` writes the encoded columns straight
+# into the output array rather than letting `ColumnTransformer` stack its
+# transformers' outputs and then reorder them. These pin what that has to preserve:
+# the fitted encoder sklearn would have produced, and the values in the right places.
+
+
+def _mixed_frame_inputs(
+    n: int = 200, levels: int = 6
+) -> tuple[np.ndarray, FeatureSchema]:
+    """An object array of alternating numeric and low-cardinality string columns."""
+    rng = np.random.default_rng(0)
+    cols = 6
+    X = np.empty((n, cols), dtype=object)
+    numeric_cols, string_cols = range(0, cols, 2), range(1, cols, 2)
+    X[:, numeric_cols] = rng.standard_normal((n, len(numeric_cols)))
+    names = np.array([f"lvl_{i:02d}" for i in range(levels)], dtype=object)
+    X[:, string_cols] = names[rng.integers(0, levels, (n, len(string_cols)))]
+    return X, _numeric_schema(cols, cat_indices=tuple(string_cols))
+
+
+def test__clean_data__mixed_columns_take_the_assembly_path() -> None:
+    """The assembly is used, and its result is placed by column, not by transformer."""
+    X, schema = _mixed_frame_inputs()
+
+    with mock.patch(
+        "tabpfn.preprocessing.clean._encode_into_preallocated",
+        wraps=clean_module._encode_into_preallocated,
+    ) as assembled:
+        out, _encoder, _ = clean_data(X=X, feature_schema=schema)
+
+    assert assembled.call_count == 1, "fell back to ColumnTransformer.fit_transform"
+    # Numeric columns keep their own values, in their own positions -- the thing the
+    # reorder used to be responsible for.
+    for index in range(0, X.shape[1], 2):
+        np.testing.assert_array_equal(out[:, index], X[:, index].astype(np.float64))
+    # Encoded columns hold codes within the learned range, at their own positions.
+    for index in range(1, X.shape[1], 2):
+        assert set(np.unique(out[:, index])) <= set(range(6))
+    assert out.dtype == np.float64
+    assert out.flags.writeable
+
+
+def test__clean_data__assembly_fits_the_encoder_sklearn_would_have() -> None:
+    """The one-row structural fit plus a full refit must leave sklearn's own state.
+
+    The encoder is stored on the estimator and drives predict, so any divergence here
+    outlives the call that produced it.
+    """
+    X, schema = _mixed_frame_inputs()
+    frame = fix_dtypes(
+        X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
+    )
+
+    _, assembled, _ = clean_data(X=X, feature_schema=schema)
+    reference = get_ordinal_encoder()
+    reference.fit_transform(frame)
+
+    assert reference.n_features_in_ == assembled.n_features_in_
+    assert reference.output_indices_ == assembled.output_indices_
+    assert reference.sparse_output_ == assembled.sparse_output_
+    assert [(name, cols) for name, _, cols in reference.transformers_] == [
+        (name, cols) for name, _, cols in assembled.transformers_
+    ]
+    for expected, got in zip(
+        reference.named_transformers_["encoder"].categories_,
+        assembled.named_transformers_["encoder"].categories_,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(expected, got)
+
+
+def test__clean_data__assembly_matches_the_column_transformer_exactly() -> None:
+    """Same values as routing the same frame through the encoder itself."""
+    X, schema = _mixed_frame_inputs()
+    frame = fix_dtypes(
+        X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
+    )
+
+    assembled, _, _ = clean_data(X=X, feature_schema=schema)
+    expected = get_ordinal_encoder().fit_transform(frame).astype(np.float64)
+
+    np.testing.assert_array_equal(assembled, expected)
+
+
+def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
+    """A column the encoder skips but that is not float64 must not be assembled.
+
+    `object` is not in the encoder's dtype selection, so it reaches the output through
+    the passthrough; writing it into a float64 array is not the conversion the
+    encoder's path would have done, so the assembly has to decline.
+    """
+    frame = pd.DataFrame(
+        {
+            "num": np.arange(6, dtype="float64"),
+            "cat": pd.Categorical(["a", "b"] * 3),
+            "obj": np.array([1, 2, 3, 4, 5, 6], dtype=object),
+        }
+    )
+    encoder = get_ordinal_encoder()
+
+    assert not clean_module._can_write_encoded_columns(
+        frame, clean_module._encoder_selection(encoder.fit(frame.iloc[:1]))
+    )
+    # The real call still works, through sklearn, and learns the categories exactly
+    # once. Declining the assembly *after* fitting them would pay for a second pass
+    # over the data and then discard it, since `fit_transform` fits again itself.
+    unpatched_fit = OrdinalEncoder.fit
+    with mock.patch.object(
+        OrdinalEncoder, "fit", autospec=True, side_effect=unpatched_fit
+    ) as fitted:
+        out = process_text_na_dataframe(
+            frame, ord_encoder=get_ordinal_encoder(), fit_encoder=True
+        )
+    rows_per_fit = [len(call.args[1]) for call in fitted.call_args_list]
+    assert rows_per_fit.count(len(frame)) == 1, (
+        f"expected one fit over all {len(frame)} rows, got fits over {rows_per_fit}"
+    )
+    assert out.shape == (6, 3)
+    assert out.dtype == np.float64
