@@ -1888,6 +1888,7 @@ class TabPFNV3(Architecture):
 
         # Per-layer KV entries collected when return_kv_cache is True.
         kv_out: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
+        kv_compute_dtype: torch.dtype | None = None
 
         if kv_cache is not None and not kv_cache.is_empty():
             # Cache path: no y_icl embedding; use cached K/V pairs
@@ -1912,6 +1913,10 @@ class TabPFNV3(Architecture):
                         performance_options.save_peak_memory_factor,
                         return_kv=True,
                     )
+                    assert kv_entry.key is not None
+                    kv_compute_dtype = kv_entry.key.dtype
+                    if performance_options.kv_cache_dtype is not None:
+                        kv_entry = kv_entry.quantize(performance_options.kv_cache_dtype)
                     kv_out[layer_idx] = kv_entry
             else:
                 for block in self.icl_blocks:
@@ -1951,11 +1956,12 @@ class TabPFNV3(Architecture):
                 # raw input, whose passed-through +/-inf would poison the mean/std
                 # and turn every standardised test cell into NaN at predict time.
                 assert kv_out
-                # Store train_embeddings at the ICL KV cache dtype.
-                cache_dtype = next(iter(kv_out.values())).key.dtype
+                # Store train_embeddings at the unquantized ICL compute dtype. The
+                # KV entries may already have been quantized layer by layer above.
+                assert kv_compute_dtype is not None
                 built_cache = TabPFNV3Cache(
                     kv=kv_out,
-                    train_embeddings=train_emb.detach().to(cache_dtype),
+                    train_embeddings=train_emb.detach().to(kv_compute_dtype),
                     train_shape=(B, num_train),
                     scaler_cache={k: v.detach() for k, v in scaler_stats.items()},
                     inducing_hidden=(

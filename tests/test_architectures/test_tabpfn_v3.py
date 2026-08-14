@@ -468,6 +468,42 @@ def test__kv_cache_entry__quantize_dequantize_roundtrip() -> None:
 
 
 @torch.no_grad()
+@pytest.mark.parametrize("cache_dtype", [torch.int8, FP8_KV_DTYPE])
+def test__kv_cache__layerwise_quantization_matches_post_forward(
+    cache_dtype: torch.dtype,
+) -> None:
+    """Quantizing during construction produces the same cache as afterward."""
+    arch = _get_model()
+    torch.manual_seed(42)
+    x = torch.randn(20, 1, 5, dtype=torch.float32) * 0.1
+    y = torch.randint(0, 10, (10,), dtype=torch.float32)
+
+    _, full_precision = arch(x, y, return_kv_cache=True)
+    _, layerwise = arch(
+        x,
+        y,
+        return_kv_cache=True,
+        performance_options=PerformanceOptions(kv_cache_dtype=cache_dtype),
+    )
+    assert full_precision is not None
+    assert layerwise is not None
+    post_forward = full_precision.quantize(cache_dtype)
+
+    assert layerwise.train_embeddings.dtype == full_precision.train_embeddings.dtype
+    for layer_idx in post_forward.kv:
+        expected = post_forward.kv[layer_idx]
+        actual = layerwise.kv[layer_idx]
+        assert isinstance(expected, QuantizedKVCacheEntry)
+        assert isinstance(actual, QuantizedKVCacheEntry)
+        # torch.equal lacks CPU float8 support in the lowest supported PyTorch.
+        # Comparing after an exact float32 widening works for int8 and float8.
+        assert torch.equal(actual.key.float(), expected.key.float())
+        assert torch.equal(actual.value.float(), expected.value.float())
+        assert torch.equal(actual.key_scale, expected.key_scale)
+        assert torch.equal(actual.value_scale, expected.value_scale)
+
+
+@torch.no_grad()
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16, torch.float16])
 def test__kv_cache_entry__quantize_all_zero_is_finite(dtype: torch.dtype) -> None:
     """All-zero inputs must round-trip without NaN/Inf across float dtypes.

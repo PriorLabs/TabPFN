@@ -522,7 +522,7 @@ def test__explicit_kv_cache__produces_outputs() -> None:
         devices=[torch.device("cpu")],
         dtype_byte_size=4,
         force_inference_dtype=None,
-        save_peak_mem="auto",
+        save_peak_mem=True,
         autocast=False,
     )
     # _build_cache runs once per ensemble member during engine construction.

@@ -10,6 +10,7 @@ from dataclasses import asdict
 from typing import Any, Literal, Protocol, overload
 from typing_extensions import override
 
+import torch
 from pydantic.dataclasses import dataclass
 from torch import Tensor, nn
 
@@ -106,6 +107,14 @@ class PerformanceOptions:
     result in longer inference time for the first forward pass, during which
     compile and autotune will be run. Tuning results are cached, so should
     persist across runs."""
+
+    kv_cache_dtype: torch.dtype | None = None
+    """Quantize each KV-cache layer to this dtype as it is constructed.
+
+    ``None`` keeps the model's compute dtype. Architectures that support explicit
+    KV-cache quantization can use this to avoid retaining a complete full-precision
+    cache before converting it to its storage dtype.
+    """
 
 
 class ArchitectureModule(Protocol):
