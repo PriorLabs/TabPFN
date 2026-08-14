@@ -1240,6 +1240,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         tuning_config_resolved = resolve_tuning_config(
             tuning_config=self.tuning_config,
             num_samples=X.shape[0],
+            config_cls=ClassifierTuningConfig,
         )
         if tuning_config_resolved is None:
             if self.eval_metric_ is ClassifierEvalMetrics.F1:
@@ -1262,6 +1263,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     stacklevel=2,
                 )
             return
+
+        assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
             warnings.warn(

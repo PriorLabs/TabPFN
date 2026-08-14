@@ -7,11 +7,12 @@ import itertools
 import os
 import typing
 from collections.abc import Callable
-from typing import Literal
+from typing import Any, Literal
 from unittest import mock
 
 import numpy as np
 import pytest
+import sklearn.base
 import sklearn.datasets
 import torch
 from sklearn import config_context
@@ -24,13 +25,23 @@ from torch import nn
 
 import tabpfn.regressor as regressor_module
 from tabpfn import TabPFNRegressor
+from tabpfn.architectures import tabpfn_v2_5
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.base import RegressorModelSpecs, initialize_tabpfn_model
 from tabpfn.constants import ModelVersion
 from tabpfn.inference import InferenceEngineBatchedNoPreprocessing
+from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_tuning import (
+    MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING,
+    RegressorEvalMetrics,
+    RegressorTuningConfig,
+    get_tuning_temperatures,
+)
 from tabpfn.model_loading import ModelSource, prepend_cache_path
 from tabpfn.preprocessing import PreprocessorConfig
 from tabpfn.settings import settings
 from tabpfn.utils import infer_devices
+from tabpfn.validation import ensure_compatible_predict_input_sklearn
 
 from .utils import (
     get_pytest_devices,
@@ -1499,6 +1510,62 @@ def test__predict_batched__rejects_float64_precision() -> None:
         reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
 
 
+def test__predict_batched__rejects_tuning_config() -> None:
+    """tuning_config calibrates a per-dataset temperature → unsupported, raises.
+
+    `ensemble_softmax_temperature_` is fitted on each dataset's own holdout, so
+    a shared batch has no single temperature to apply. Without this guard the
+    fused path silently returned *uncalibrated* predictions while claiming
+    parity with `predict`, and paid for a discarded calibration sweep per
+    dataset on top. Mirrors the classifier's `predict_proba_batched` guard.
+    """
+    X, y = _mk_reg_dataset(0, n=40)
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        model_path=_create_dummy_regressor_model_specs(),
+        tuning_config={"calibrate_temperature": True},
+    )
+    with pytest.raises(NotImplementedError, match=r"tuning_config"):
+        reg.predict_batched([X, X], [y, y], [X[:3], X[:3]])
+
+
+def test__predict_batched__shares_its_logit_reduction_with_predict() -> None:
+    """The two paths must reduce accumulated logits through the same code.
+
+    `predict_batched` once carried its own copy of the averaging tail and so
+    silently dropped the `ensemble_softmax_temperature_` step that `predict`
+    applies. Pinning both to `_reduce_accumulated_logits` is what stops them
+    drifting apart again, so assert the batched path really routes through it.
+    """
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        inference_precision=torch.float32,
+        model_path=_create_dummy_regressor_model_specs(),
+    )
+    datasets = [_mk_reg_dataset(s, n=40) for s in (0, 1)]
+
+    calls = []
+    original = TabPFNRegressor._reduce_accumulated_logits
+
+    def spy(self, accumulated_logits, n_estimators):  # noqa: ANN202
+        calls.append(n_estimators)
+        return original(self, accumulated_logits, n_estimators)
+
+    with mock.patch.object(TabPFNRegressor, "_reduce_accumulated_logits", spy):
+        reg.predict_batched(
+            [d[0] for d in datasets],
+            [d[1] for d in datasets],
+            [d[0][:5] for d in datasets],
+        )
+
+    # One reduction per dataset, each over the full ensemble.
+    assert calls == [2, 2]
+
+
 def test__predict_batched__float64_inputs_match_per_dataset() -> None:
     """float64 *arrays* stay supported; only float64 precision is rejected.
 
@@ -1610,3 +1677,328 @@ def test__predict_batched__does_not_mutate_estimator() -> None:
     fitted.predict_batched(X_list, y_list, X_tests)
     after = fitted.predict(a_x[:5])
     np.testing.assert_array_equal(before, after)
+
+
+def _create_dummy_regressor_model_specs() -> RegressorModelSpecs:
+    """A tiny in-memory model, so tuning tests need no checkpoint download."""
+    # The regression head is sized by `max_num_classes`, so it has to match
+    # `num_buckets` or the bucket logits do not fit.
+    num_buckets = 100
+    minimal_config = tabpfn_v2_5.TabPFNV2p5Config(
+        emsize=8,
+        features_per_group=1,
+        max_num_classes=num_buckets,
+        nhead=2,
+        nlayers=2,
+        num_buckets=num_buckets,
+    )
+    return RegressorModelSpecs(
+        model=tabpfn_v2_5.get_architecture(
+            config=minimal_config,
+            cache_trainset_representation=False,
+        ),
+        architecture_config=minimal_config,
+        inference_config=InferenceConfig.get_default(
+            task_type="regression",
+            model_version=ModelVersion.V2_5,
+        ),
+        norm_criterion=FullSupportBarDistribution(
+            torch.linspace(-3, 3, num_buckets + 1)
+        ),
+    )
+
+
+def test__compute_holdout_validation_data__returns_self_consistent_triples() -> None:
+    X, y = sklearn.datasets.make_regression(
+        n_samples=120, n_features=4, noise=10.0, random_state=0
+    )
+    # Shift the target well away from zero mean and unit variance, so that raw
+    # units are clearly distinguishable from z-normalised ones.
+    y = y * 3.0 + 100.0
+    regressor = TabPFNRegressor(
+        n_estimators=1,
+        random_state=0,
+        device="cpu",
+        model_path=_create_dummy_regressor_model_specs(),
+    )
+
+    folds = regressor._compute_holdout_validation_data(
+        X=X, y=y, holdout_frac=0.5, n_folds=2
+    )
+
+    assert len(folds) == 2
+    for logits, raw_space_bardist, y_holdout in folds:
+        n_holdout = len(X) // 2
+        assert logits.shape == (n_holdout, raw_space_bardist.num_bars)
+        assert y_holdout.shape == (n_holdout,)
+        # The bar distribution scores these targets directly, so all three must
+        # agree on device and the targets must match the borders' dtype.
+        assert y_holdout.device == logits.device
+        assert y_holdout.dtype == raw_space_bardist.borders.dtype
+        # Targets are in the units of the original column, not z-normalised.
+        assert float(y_holdout.mean()) == pytest.approx(y.mean(), abs=5 * y.std())
+        # The borders are in the target's units too. They need not bracket every
+        # target -- the outermost buckets carry half-normal tails -- but their
+        # span tracks the target's spread rather than a z-normalised one.
+        borders = raw_space_bardist.borders
+        assert borders.min() < np.median(y) < borders.max()
+        assert float(borders.max() - borders.min()) > y.std()
+
+    # Each fold normalises with its own statistics, which is exactly why the
+    # folds cannot be concatenated and scored under one bar distribution.
+    assert not torch.equal(folds[0][1].borders, folds[1][1].borders)
+
+
+def test__compute_holdout_validation_data__skips_constant_training_targets() -> None:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 4))
+    # One single distinct target value: with two folds it lands in exactly one
+    # fold's holdout, leaving that fold's *training* half constant.
+    y = np.full(40, 7.0)
+    y[3] = 9.0
+    regressor = TabPFNRegressor(
+        n_estimators=1,
+        random_state=0,
+        device="cpu",
+        model_path=_create_dummy_regressor_model_specs(),
+    )
+
+    folds = regressor._compute_holdout_validation_data(
+        X=X, y=y, holdout_frac=0.5, n_folds=2
+    )
+
+    # The fold whose training half is constant has a degenerate two-border
+    # distribution and no executor, so it is dropped rather than scored.
+    assert len(folds) == 1
+
+    # With no variation at all, every fold is dropped and calibration has nothing
+    # to work with -- `find_regression_optimal_temperature` falls back gracefully.
+    assert (
+        regressor._compute_holdout_validation_data(
+            X=X, y=np.full(40, 7.0), holdout_frac=0.5, n_folds=2
+        )
+        == []
+    )
+
+
+def _tuning_regressor_kwargs(**overrides: Any) -> dict[str, Any]:
+    """Constructor arguments for a cheap, download-free calibration test."""
+    return {
+        "n_estimators": 1,
+        "random_state": 0,
+        "device": "cpu",
+        "inference_precision": torch.float32,
+        "model_path": _create_dummy_regressor_model_specs(),
+        **overrides,
+    }
+
+
+def _make_tuning_sized_regression_data(
+    n_samples: int = MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING + 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Regression data big enough that tuning does not warn about the sample count."""
+    return sklearn.datasets.make_regression(
+        n_samples=n_samples, n_features=4, noise=10.0, random_state=0
+    )
+
+
+@pytest.mark.parametrize(
+    ("eval_metric", "expected"),
+    [
+        (None, RegressorEvalMetrics.NLL),
+        ("nll", RegressorEvalMetrics.NLL),
+        ("crps", RegressorEvalMetrics.CRPS),
+        (RegressorEvalMetrics.CRPS, RegressorEvalMetrics.CRPS),
+    ],
+)
+def test__fit__with_calibrate_temperature__honours_each_eval_metric(
+    eval_metric: str | RegressorEvalMetrics | None,
+    expected: RegressorEvalMetrics,
+) -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        eval_metric=eval_metric,
+        tuning_config={
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 1,
+        },
+        **_tuning_regressor_kwargs(),
+    )
+    regressor.fit(X, y)
+
+    assert regressor.eval_metric_ is expected
+    # Every metric drives the same search, so the winner is always a grid point.
+    assert regressor.ensemble_softmax_temperature_ in set(get_tuning_temperatures())
+    assert regressor.predict(X[:8]).shape == (8,)
+
+
+def test__fit__with_calibrate_temperature__sets_temperature_and_predicts() -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 1,
+        },
+        **_tuning_regressor_kwargs(),
+    )
+    regressor.fit(X, y)
+
+    assert regressor.eval_metric_ is RegressorEvalMetrics.NLL
+    assert isinstance(regressor.ensemble_softmax_temperature_, float)
+    assert np.isfinite(regressor.ensemble_softmax_temperature_)
+    # The search only ever returns a point of the shared grid, so a value outside
+    # it would mean the fallback fired and no calibration happened.
+    assert regressor.ensemble_softmax_temperature_ in set(get_tuning_temperatures())
+
+    # Every output type still has the shape it had before calibration existed: the
+    # temperature is applied to the aggregated logits, which every output reads.
+    X_test = X[:20]
+    n_test = len(X_test)
+    for output_type in ("mean", "median", "mode"):
+        prediction = regressor.predict(X_test, output_type=output_type)
+        assert prediction.shape == (n_test,)
+        assert np.isfinite(prediction).all()
+
+    quantiles = [0.1, 0.5, 0.9]
+    quantile_predictions = regressor.predict(
+        X_test, output_type="quantiles", quantiles=quantiles
+    )
+    assert len(quantile_predictions) == len(quantiles)
+    assert all(q.shape == (n_test,) for q in quantile_predictions)
+
+    main_output = regressor.predict(X_test, output_type="main")
+    assert set(main_output) == {"mean", "median", "mode", "quantiles"}
+
+    full_output = regressor.predict(X_test, output_type="full")
+    assert full_output["logits"].shape == (
+        n_test,
+        regressor.raw_space_bardist_.num_bars,
+    )
+    assert torch.isfinite(full_output["logits"]).all()
+
+
+def test__fit__without_tuning_config__leaves_the_temperature_a_no_op() -> None:
+    X, y = _make_tuning_sized_regression_data(n_samples=100)
+    regressor = TabPFNRegressor(**_tuning_regressor_kwargs())
+    regressor.fit(X, y)
+
+    assert regressor.ensemble_softmax_temperature_ == 1.0
+
+    # A model pickled before this attribute existed has to predict identically, and
+    # the `temperature != 1.0` guard has to make the division vanish rather than
+    # apply a floating-point round trip. Both are what keeps an uncalibrated fit
+    # bit-identical to one from before calibration was added.
+    logits_with_attribute = regressor._compute_aggregated_logits(
+        ensure_compatible_predict_input_sklearn(X[:20], regressor)
+    )
+    del regressor.ensemble_softmax_temperature_
+    logits_without_attribute = regressor._compute_aggregated_logits(
+        ensure_compatible_predict_input_sklearn(X[:20], regressor)
+    )
+    assert torch.equal(logits_with_attribute, logits_without_attribute)
+
+
+def test__fit__constant_target_with_tuning_config__skips_calibration() -> None:
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(40, 4))
+    y = np.full(40, 7.0)
+
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 1,
+        },
+        **_tuning_regressor_kwargs(),
+    )
+    # No tuning warning is expected: a constant target returns from `fit` before the
+    # tuning configuration is ever resolved.
+    regressor.fit(X, y)
+
+    # A constant target returns from `fit` before calibration: there is no executor
+    # to produce holdout logits and nothing to calibrate. The attribute still has
+    # to exist, because every fitted estimator exposes it.
+    assert regressor.is_constant_target_
+    assert regressor.ensemble_softmax_temperature_ == 1.0
+    assert np.all(regressor.predict(X) == 7.0)
+
+
+def test__fit__tuning_config_without_features_enabled__warns_and_is_ignored() -> None:
+    X, y = _make_tuning_sized_regression_data()
+    regressor = TabPFNRegressor(
+        tuning_config={"calibrate_temperature": False},
+        **_tuning_regressor_kwargs(),
+    )
+
+    with pytest.warns(
+        UserWarning,
+        match=r".*no tuning features were enabled.*`calibrate_temperature=True`.*",
+    ):
+        regressor.fit(X, y)
+
+    assert regressor.ensemble_softmax_temperature_ == 1.0
+
+
+def test__fit__small_dataset_with_tuning__warns_but_succeeds() -> None:
+    X, y = _make_tuning_sized_regression_data(
+        n_samples=MIN_NUM_SAMPLES_RECOMMENDED_FOR_TUNING - 1
+    )
+    regressor = TabPFNRegressor(
+        tuning_config={
+            "calibrate_temperature": True,
+            "tuning_holdout_frac": 0.5,
+            "tuning_n_folds": 1,
+        },
+        **_tuning_regressor_kwargs(),
+    )
+
+    with pytest.warns(
+        UserWarning,
+        match=r".*We recommend tuning only for datasets with more than.*",
+    ):
+        regressor.fit(X, y)
+
+    # The warning is advice, not a veto: calibration still runs.
+    assert regressor.ensemble_softmax_temperature_ in set(get_tuning_temperatures())
+    assert regressor.predict(X[:5]).shape == (5,)
+
+
+def test__fit__invalid_eval_metric__raises() -> None:
+    regressor = TabPFNRegressor(eval_metric="mae", **_tuning_regressor_kwargs())
+    X, y = _make_tuning_sized_regression_data(n_samples=40)
+
+    with pytest.raises(ValueError, match=r"Invalid eval_metric: `mae`"):
+        regressor.fit(X, y)
+
+
+@pytest.mark.parametrize(
+    ("eval_metric", "tuning_config"),
+    [
+        (None, None),
+        ("nll", {"calibrate_temperature": True}),
+        (RegressorEvalMetrics.NLL, RegressorTuningConfig(calibrate_temperature=True)),
+    ],
+)
+def test__eval_metric_and_tuning_config__round_trip_through_sklearn_clone(
+    eval_metric: str | RegressorEvalMetrics | None,
+    tuning_config: dict | RegressorTuningConfig | None,
+) -> None:
+    regressor = TabPFNRegressor(eval_metric=eval_metric, tuning_config=tuning_config)
+
+    params = regressor.get_params()
+    assert params["eval_metric"] == eval_metric
+    assert params["tuning_config"] == tuning_config
+
+    # sklearn requires `__init__` to store its arguments unmodified: `clone` raises a
+    # RuntimeError if the constructed object's params are not the very objects it was
+    # given. Any normalisation of `eval_metric` or `tuning_config` in `__init__` --
+    # which is why both are validated in `fit` instead -- would fail here.
+    cloned = sklearn.base.clone(regressor)
+    assert cloned.eval_metric == eval_metric
+    assert cloned.tuning_config == tuning_config
+
+    round_tripped = TabPFNRegressor().set_params(**params)
+    assert round_tripped.eval_metric == eval_metric
+    assert round_tripped.tuning_config == tuning_config

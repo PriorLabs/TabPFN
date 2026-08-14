@@ -58,6 +58,13 @@ from tabpfn.inference import (
     InferenceEngineBatchedNoPreprocessing,
     _maybe_run_gpu_preprocessing,
 )
+from tabpfn.inference_tuning import (
+    RegressorEvalMetrics,
+    RegressorTuningConfig,
+    find_regression_optimal_temperature,
+    get_tuning_splits,
+    resolve_tuning_config,
+)
 from tabpfn.model_loading import (
     ModelSource,
     load_fitted_tabpfn_model,
@@ -153,6 +160,8 @@ class FullOutputDict(MainOutputDict):
 RegressionResultType = np.ndarray | list[np.ndarray] | MainOutputDict | FullOutputDict
 """The type hint for the return value of the `predict` method."""
 
+DEFAULT_REGRESSION_EVAL_METRIC = RegressorEvalMetrics.NLL
+
 
 class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """TabPFNRegressor class."""
@@ -221,6 +230,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
+    eval_metric_: RegressorEvalMetrics
+    """The validated evaluation metric to optimize for during prediction."""
+
+    ensemble_softmax_temperature_: float
+    """The temperature applied to the aggregated ensemble distribution at predict
+    time, after the per-estimator `softmax_temperature`. This is `1.0`, a no-op, when
+    no temperature calibration is done."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
@@ -253,6 +270,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_preprocessing_jobs: int = 1,
         inference_config: dict | InferenceConfig | None = None,
         differentiable_input: bool = False,
+        eval_metric: str | RegressorEvalMetrics | None = None,
+        tuning_config: dict | RegressorTuningConfig | None = None,
         show_progress_bar: bool = False,
     ) -> None:
         """Construct a TabPFN regressor.
@@ -491,6 +510,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Less relevant for standard regression fine-tuning compared to
                 prompt-tuning.
 
+            eval_metric:
+                Metric by which predictions will be evaluated on test data for
+                temperature calibration.
+                For currently supported metrics, see
+                [tabpfn.inference_tuning.RegressorEvalMetrics][].
+
+            tuning_config:
+                The settings to use to tune the model's predictions for the specified
+                `eval_metric`. See
+                [tabpfn.inference_tuning.RegressorTuningConfig][] for details
+                and options.
+
             show_progress_bar:
                 Whether to show a progress bar during inference. Defaults to False.
         """
@@ -519,6 +550,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.random_state = random_state
         self.inference_config = inference_config
         self.differentiable_input = differentiable_input
+        self.eval_metric = eval_metric
+        self.tuning_config = tuning_config
 
         if n_jobs is not None:
             warnings.warn(
@@ -898,6 +931,33 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return ensemble_configs, X, y, self.znorm_space_bardist_
 
+    def _get_tuning_regressor(self, **overwrite_kwargs: Any) -> TabPFNRegressor:
+        """Return a fresh regressor configured for holdout tuning."""
+        params = self.get_params(deep=False)
+
+        # Avoids sharing mutable config across instances
+        for key in params:
+            try:
+                if isinstance(params.get(key), dict):
+                    params[key] = copy.deepcopy(params[key])
+            except Exception as e:  # noqa: BLE001
+                logging.warning(
+                    "Error during initialization of tuning regressor when trying "
+                    f"to deepcopy configuration with name `{key}`: {e}. "
+                    "Falling back to original configuration"
+                )
+
+        forced = {
+            "fit_mode": "fit_preprocessors",
+            "differentiable_input": False,
+            "tuning_config": None,  # never tune inside tuning
+        }
+
+        params.update(forced)
+        params.update(overwrite_kwargs)
+
+        return TabPFNRegressor(**params)
+
     def fit_from_preprocessed(
         self,
         X_preprocessed: list[torch.Tensor],
@@ -1069,6 +1129,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Returns:
             self
         """
+        # Validate eval_metric here instead of in __init__ as per sklearn convention
+        self.eval_metric_ = _validate_eval_metric(self.eval_metric)
+        # Set here as well as in `_maybe_calibrate_ensemble_temperature` below, so
+        # that the constant-target fit, which returns before calibration, still
+        # exposes the attribute.
+        self.ensemble_softmax_temperature_ = 1.0
+
         if self.differentiable_input:
             raise ValueError(
                 "differentiable_input=True requires fit_with_differentiable_input "
@@ -1113,6 +1180,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
             # No need to create an inference engine for a constant prediction
             return self
+
+        # Must run on the raw `y`, before the z-normalisation below: each fold's
+        # tuning regressor derives its own mean/std from its own training split.
+        self._maybe_calibrate_ensemble_temperature(X=X, y=y)
 
         mean, std = np.mean(y), np.std(y)
         # TODO: y_train_std_ and y_train_mean_ don't seem to be used anywhere else.
@@ -1171,7 +1242,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> FullOutputDict: ...
 
     @config_context(transform_output="default")  # type: ignore
-    def predict(  # noqa: C901, PLR0912
+    def predict(
         self,
         X: XType,
         *,
@@ -1227,6 +1298,195 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
+        logits = self._compute_aggregated_logits(X)
+
+        # Determine and return intended output type
+        logit_to_output = partial(
+            _logits_to_output,
+            logits=logits,
+            criterion=self.raw_space_bardist_,
+            quantiles=quantiles,
+        )
+        if output_type in ["full", "main"]:
+            # Create a dictionary of outputs with proper typing via TypedDict
+            # Get individual outputs with proper typing
+            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
+            median_out = typing.cast(
+                "np.ndarray", logit_to_output(output_type="median")
+            )
+            mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
+            quantiles_out = typing.cast(
+                "list[np.ndarray]",
+                logit_to_output(output_type="quantiles"),
+            )
+
+            main_outputs = MainOutputDict(
+                mean=mean_out,
+                median=median_out,
+                mode=mode_out,
+                quantiles=quantiles_out,
+            )
+
+            if output_type == "full":
+                # Return full output with criterion and logits
+                return FullOutputDict(
+                    **main_outputs,
+                    criterion=self.raw_space_bardist_,
+                    logits=logits,
+                )
+
+            return main_outputs
+
+        return logit_to_output(output_type=output_type)
+
+    def _maybe_calibrate_ensemble_temperature(self, X: XType, y: YType) -> None:
+        """If a `tuning_config` was given, calibrate the ensemble temperature.
+
+        The regressor analogue of the classifier's
+        `_maybe_calibrate_temperature_and_tune_decision_thresholds`. Fits
+        throwaway regressors on cross-validation splits of `X`/`y`, sweeps the
+        temperature against `eval_metric_` on their pooled holdout rows, and
+        stores the winner in `ensemble_softmax_temperature_`, which
+        `_compute_aggregated_logits` applies to every prediction.
+
+        `y` must be the *raw* target: each fold's regressor performs its own
+        z-normalisation, and passing an already-normalised `y` would normalise
+        it twice.
+
+        Unlike the classifier's counterpart there are no metric-specific
+        warnings, as NLL is the only supported metric and calibrating the
+        temperature always targets it directly.
+        """
+        assert self.eval_metric_ is not None
+
+        # Always set this, so the attribute exists on every fitted estimator
+        # regardless of whether tuning runs (sklearn compatibility). 1.0 is a
+        # no-op, leaving predictions bit-identical to an uncalibrated fit.
+        self.ensemble_softmax_temperature_ = 1.0
+
+        tuning_config_resolved = resolve_tuning_config(
+            tuning_config=self.tuning_config,
+            num_samples=X.shape[0],
+            config_cls=RegressorTuningConfig,
+        )
+        if tuning_config_resolved is None:
+            return
+
+        if not tuning_config_resolved.calibrate_temperature:
+            return
+
+        holdout_folds = self._compute_holdout_validation_data(
+            X=X,
+            y=y,
+            holdout_frac=float(tuning_config_resolved.tuning_holdout_frac),
+            n_folds=int(tuning_config_resolved.tuning_n_folds),
+        )
+
+        # Falls back to the current no-op temperature if every fold was
+        # dropped, e.g. because each training split had a constant target.
+        self.ensemble_softmax_temperature_ = find_regression_optimal_temperature(
+            holdout_folds=holdout_folds,
+            metric_name=self.eval_metric_,
+            current_default_temperature=self.ensemble_softmax_temperature_,
+        )
+
+    def _compute_holdout_validation_data(
+        self,
+        X: XType,
+        y: YType,
+        holdout_frac: float,
+        n_folds: int,
+    ) -> list[tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]]:
+        """Compute holdout validation data, one entry per cross-validation fold.
+
+        Folds are kept separate rather than concatenated: every
+        fold normalises the target with its own mean and standard deviation, so
+        every fold's `raw_space_bardist_` has its own borders and only scores that
+        fold's own logits correctly.
+
+        Returns:
+            One `(logits, raw_space_bardist, y_holdout)` triple per usable fold.
+            `logits` has shape `[n_holdout_samples, n_buckets]`, and `y_holdout`
+            shape `[n_holdout_samples]` in the *original* units of the target, to
+            match the borders of the fold's `raw_space_bardist`. Folds whose
+            training target turned out to be constant are omitted, so the list may
+            be shorter than `n_folds` and may be empty.
+        """
+        splits = get_tuning_splits(
+            X=copy.deepcopy(X),
+            y=copy.deepcopy(y),
+            holdout_frac=holdout_frac,
+            random_state=self.random_state,
+            n_splits=n_folds,
+            task_type="regressor",
+        )
+
+        holdout_folds: list[
+            tuple[torch.Tensor, FullSupportBarDistribution, torch.Tensor]
+        ] = []
+        # suffixes: Nt=num_train_samples, F=num_features, Nh=num_holdout_samples,
+        # B=num buckets
+        for X_train_NtF, X_holdout_NhF, y_train_Nt, y_holdout_Nh in splits:
+            tuning_regressor = self._get_tuning_regressor()
+            with warnings.catch_warnings():
+                # Filter expected warnings during tuning
+                warnings.filterwarnings(
+                    "ignore",
+                    message=".*haven't specified any tuning configuration*",
+                    category=UserWarning,
+                )
+                tuning_regressor.fit(X_train_NtF, y_train_Nt)
+
+            if tuning_regressor.is_constant_target_:
+                # This fold's training split is single-valued, so its regressor
+                # returned early with a degenerate two-border distribution and no
+                # executor. There is nothing to calibrate against; skip the fold.
+                continue
+
+            # The tuning regressor has no `ensemble_softmax_temperature_`, so these
+            # are the untempered aggregated logits, with the per-estimator
+            # `softmax_temperature` correctly still applied.
+            X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
+                X_holdout_NhF, tuning_regressor
+            )
+            logits_NhB = tuning_regressor._compute_aggregated_logits(X_holdout_NhF)
+
+            # `raw_space_bardist_` undoes this fold's normalisation, so the targets
+            # are scored in their original units and need no transformation --
+            # only a tensor of the dtype and device the bar distribution expects.
+            raw_space_bardist = tuning_regressor.raw_space_bardist_
+            y_holdout_Nh_tensor = torch.as_tensor(
+                y_holdout_Nh,
+                dtype=raw_space_bardist.borders.dtype,
+                device=logits_NhB.device,
+            )
+            holdout_folds.append((logits_NhB, raw_space_bardist, y_holdout_Nh_tensor))
+
+        return holdout_folds
+
+    def _compute_aggregated_logits(self, X: XType) -> torch.Tensor:
+        """Run the ensemble and aggregate it into one log-probability tensor.
+
+        Each estimator's bucket probabilities are translated onto the
+        `znorm_space_bardist_` borders, averaged across the ensemble
+        (before or after the softmax, per `average_before_softmax` flat),
+        and returned in log space.
+
+        Shared by `predict` and `_maybe_calibrate_ensemble_temperature`.
+
+        `X` must already have passed `ensure_compatible_predict_input_sklearn`;
+        the remaining dtype/NA preprocessing happens here. Constant-target
+        models have no executor and must be routed to
+        `_handle_constant_target` by the caller instead.
+
+        Args:
+            X: The validated input data.
+
+        Returns:
+            A `[n_samples, n_buckets]` tensor of log-probabilities over the
+            `znorm_space_bardist_` buckets, with the calibrated
+            `ensemble_softmax_temperature_` applied.
+        """
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
@@ -1269,6 +1529,25 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 "Cannot make predictions, possibly due to `n_estimators=0`."
             )
 
+        return self._reduce_accumulated_logits(accumulated_logits, n_estimators)
+
+    def _reduce_accumulated_logits(
+        self,
+        accumulated_logits: torch.Tensor,
+        n_estimators: int,
+    ) -> torch.Tensor:
+        """Average the ensemble's accumulated output and apply the temperature.
+
+        Args:
+            accumulated_logits:
+                Summed per-estimator output for one dataset. Already in log space
+                if `average_before_softmax` is True.
+            n_estimators: How many estimators contributed to the sum.
+
+        Returns:
+            A `[n_samples, n_buckets]` tensor of log-probabilities with
+            `ensemble_softmax_temperature_` applied.
+        """
         if self.average_before_softmax:
             logits = (accumulated_logits / n_estimators).softmax(dim=-1)
         else:
@@ -1279,45 +1558,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if logits.dtype == torch.float16:
             logits = logits.float()
 
-        # Determine and return intended output type
-        logit_to_output = partial(
-            _logits_to_output,
-            logits=logits,
-            criterion=self.raw_space_bardist_,
-            quantiles=quantiles,
-        )
-        if output_type in ["full", "main"]:
-            # Create a dictionary of outputs with proper typing via TypedDict
-            # Get individual outputs with proper typing
-            mean_out = typing.cast("np.ndarray", logit_to_output(output_type="mean"))
-            median_out = typing.cast(
-                "np.ndarray", logit_to_output(output_type="median")
-            )
-            mode_out = typing.cast("np.ndarray", logit_to_output(output_type="mode"))
-            quantiles_out = typing.cast(
-                "list[np.ndarray]",
-                logit_to_output(output_type="quantiles"),
-            )
+        # The calibrated temperature acts on the aggregated logits of n_estimators:
+        # softmax(log(sum(probs_i)/T)). The softmax is implicit, as
+        # `FullSupportBarDistribution.compute_scaled_log_probs` applies
+        # `log_softmax` to whatever it receives. `getattr` keeps models pickled
+        # before this attribute existed loadable; the guard keeps the
+        # uncalibrated path allocation-free and bit-identical.
+        temperature = getattr(self, "ensemble_softmax_temperature_", 1.0)
+        if temperature != 1.0:
+            logits = logits / temperature
 
-            # Create our typed dictionary
-            main_outputs = MainOutputDict(
-                mean=mean_out,
-                median=median_out,
-                mode=mode_out,
-                quantiles=quantiles_out,
-            )
-
-            if output_type == "full":
-                # Return full output with criterion and logits
-                return FullOutputDict(
-                    **main_outputs,
-                    criterion=self.raw_space_bardist_,
-                    logits=logits,
-                )
-
-            return main_outputs
-
-        return logit_to_output(output_type=output_type)
+        return logits
 
     def predict_batched(  # noqa: C901, PLR0912
         self,
@@ -1355,8 +1606,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             ValueError: If the input lists have unequal or zero length, or the
                 training (or test) arrays do not all share one shape.
             TabPFNValidationError: If ``output_type`` or ``quantiles`` are invalid.
-            NotImplementedError: If ``inference_precision`` is ``torch.float64``,
-                which the fused forward does not support.
+            NotImplementedError: If ``tuning_config`` is configured on the
+                estimator -- the calibrated ensemble temperature is per-dataset
+                state and cannot be applied correctly across a shared batch, so
+                score those datasets individually with :meth:`predict`. Also
+                raised for ``inference_precision=torch.float64``, which the
+                fused forward does not support.
 
         Note:
             Constant-target datasets are answered analytically and take no part
@@ -1379,6 +1634,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             )
         if len(X_train_list) == 0:
             raise ValueError("Nothing to predict: empty dataset list.")
+
+        # `ensemble_softmax_temperature_` is calibrated per dataset on that
+        # dataset's own holdout, so there is no single temperature to apply to a
+        # shared batch. Mirrors the same guard in
+        # `TabPFNClassifier.predict_proba_batched`.
+        if self.tuning_config is not None:
+            raise NotImplementedError(
+                "predict_batched does not support tuning_config (ensemble "
+                "temperature calibration); the calibrated temperature is fitted "
+                "per dataset and cannot be applied across a shared batch. Score "
+                "datasets individually with predict."
+            )
 
         if self.inference_precision == torch.float64:
             raise NotImplementedError(
@@ -1605,18 +1872,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ) -> RegressionResultType:
         """Turn one dataset's accumulated logits into its prediction output.
 
-        Same averaging as :meth:`predict`, with this dataset's own raw-space bar
-        distribution as the criterion.
+        Shares :meth:`_reduce_accumulated_logits` with :meth:`predict`, so the
+        two paths average identically, and decodes with this dataset's own
+        raw-space bar distribution as the criterion.
         """
         assert n_estimators > 0
-        if self.average_before_softmax:
-            logits = (accumulated_logits / n_estimators).softmax(dim=-1)
-        else:
-            logits = accumulated_logits / n_estimators
-
-        logits = logits.log()
-        if logits.dtype == torch.float16:
-            logits = logits.float()
+        # `predict_batched` rejects `tuning_config`, so the temperature applied
+        # here is always the 1.0 no-op; the call is shared with `predict` so the
+        # two reductions cannot drift apart again.
+        logits = self._reduce_accumulated_logits(accumulated_logits, n_estimators)
 
         logit_to_output = partial(
             _logits_to_output,
@@ -1899,3 +2163,19 @@ def _logits_to_output(
         raise ValueError(f"Invalid output type: {output_type}")
 
     return output.cpu().detach().numpy()
+
+
+def _validate_eval_metric(
+    eval_metric: str | RegressorEvalMetrics | None,
+) -> RegressorEvalMetrics:
+    if eval_metric is None:
+        return DEFAULT_REGRESSION_EVAL_METRIC
+    if isinstance(eval_metric, RegressorEvalMetrics):
+        return eval_metric
+    try:
+        return RegressorEvalMetrics(eval_metric)  # Convert string to Enum
+    except ValueError as err:
+        valid_values = [e.value for e in RegressorEvalMetrics]
+        raise ValueError(
+            f"Invalid eval_metric: `{eval_metric}`. Must be one of {valid_values}"
+        ) from err

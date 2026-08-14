@@ -431,6 +431,48 @@ def test__compute_regression_loss__rps_vs_rls_matches_expected_value() -> None:
     assert combined_loss.item() == pytest.approx(expected_rps + expected_rls)
 
 
+@pytest.mark.parametrize(
+    "loss_weights",
+    [
+        {"ce_loss_weight": 1.0},
+        {"crps_loss_weight": 1.0},
+        {"crls_loss_weight": 1.0},
+        {"mse_loss_weight": 1.0},
+        {"mae_loss_weight": 1.0},
+        {"ce_loss_weight": 1.0, "crps_loss_weight": 1.0, "crls_loss_weight": 1.0},
+    ],
+)
+def test__compute_regression_loss__reduces_every_term_to_a_scalar(
+    loss_weights: dict[str, float],
+) -> None:
+    """Every term must be reduced before it is summed into the total.
+
+    `ranked_probability_score_loss_from_bar_logits` returns one loss per query, so a
+    term that forgets `.mean()` broadcasts `total_loss` to (B, Q) and `backward()`
+    fails. More than one query is essential here: with Q=1 an unreduced term still
+    holds a single element, so `.item()` succeeds and hides the missing reduction.
+    """
+    borders = torch.linspace(-2.0, 2.0, steps=9, dtype=torch.float32)
+    bardist_loss_fn = BarDistribution(borders=borders, ignore_nan_targets=True)
+    torch.manual_seed(0)
+    logits_BQL = torch.randn(
+        (2, 3, bardist_loss_fn.num_bars), dtype=torch.float32, requires_grad=True
+    )
+    targets_BQ = torch.tensor([[0.5, -1.0, 1.5], [-0.5, 1.0, 0.25]])
+
+    total_loss = _compute_regression_loss(
+        logits_BQL=logits_BQL,
+        targets_BQ=targets_BQ,
+        bardist_loss_fn=bardist_loss_fn,
+        **{"ce_loss_weight": 0.0, **loss_weights},
+    )
+
+    assert total_loss.shape == ()
+    # The symptom a non-scalar total actually produces during finetuning.
+    total_loss.backward()
+    assert logits_BQL.grad is not None
+
+
 def test_regressor_dataset_and_collator_batches_type(
     variable_synthetic_regression_dataset_collection: list[
         tuple[np.ndarray, np.ndarray]
