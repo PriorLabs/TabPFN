@@ -189,12 +189,14 @@ _PROBAS_ABSENT_CLASS = np.array(
 def test__find_optimal_classification_thresholds__absent_class_is_neutral(
     metric_name: ClassifierEvalMetrics,
 ) -> None:
-    """A class with no holdout rows gets the mean tuned threshold, not a searched one.
+    """A class with no holdout rows gets the tuned geometric mean, not a searched one.
 
-    Searching on such a class yields an arbitrary threshold, since every candidate
-    scores identically: roc_auc collapses to the smallest threshold in the grid
-    (nan losses making argmin return 0), which is a large boost applied to the
-    class with the least evidence, while the remaining metrics suppress it.
+    Searching on such a class yields a degenerate threshold: roc_auc collapses to
+    the smallest threshold in the grid (nan losses making argmin return 0), which
+    is a large boost applied to the class with the least evidence, while the
+    remaining metrics converge on a negatives-driven plateau that suppresses it.
+    The geometric mean is the neutral fill because thresholds act as divisive
+    reweights, so only their ratios matter.
     """
     thresholds = find_optimal_classification_thresholds(
         metric_name=metric_name,
@@ -205,7 +207,16 @@ def test__find_optimal_classification_thresholds__absent_class_is_neutral(
 
     assert thresholds.shape == (4,)
     assert np.isfinite(thresholds).all()
-    assert thresholds[3] == pytest.approx(float(np.mean(thresholds[:3])))
+    # Pin the tuned classes to a direct search, so an implementation that also
+    # skips a tunable class cannot pass by making the fill self-consistent.
+    for i in range(3):
+        assert thresholds[i] == find_optimal_classification_threshold_single_class(
+            metric_name=metric_name,
+            y_true=(i == _Y_TRUE_ABSENT_CLASS).astype(int),
+            y_pred_probas=_PROBAS_ABSENT_CLASS[:, i],
+        )
+    geometric_mean = float(np.exp(np.mean(np.log(thresholds[:3]))))
+    assert thresholds[3] == pytest.approx(geometric_mean)
 
 
 def test__find_optimal_classification_thresholds__single_class_holdout_is_a_noop() -> (
@@ -247,6 +258,23 @@ def test__select_robust_optimal_threshold__all_non_finite_losses_returns_midpoin
 def test__select_robust_optimal_threshold__ignores_non_finite_losses() -> None:
     """A nan must never win the minimum over a finite loss."""
     thresholds_and_losses = [(0.1, float("nan")), (0.5, -1.0), (0.9, 0.0)]
+
+    chosen = select_robust_optimal_threshold(
+        thresholds_and_losses=thresholds_and_losses
+    )
+
+    assert chosen == pytest.approx(0.5)
+
+
+def test__select_robust_optimal_threshold__nan_loses_to_small_positive_losses() -> None:
+    """A nan must lose even when every finite loss is positive.
+
+    log_loss is the one metric whose losses are positive, so an internal fill
+    value such as 0.0 would win its argmin outright. The finite losses here sit
+    more than plateau_delta above 0.0 to pin that the fill can neither win the
+    minimum nor join the plateau.
+    """
+    thresholds_and_losses = [(0.1, float("nan")), (0.5, 0.01), (0.9, 0.02)]
 
     chosen = select_robust_optimal_threshold(
         thresholds_and_losses=thresholds_and_losses
