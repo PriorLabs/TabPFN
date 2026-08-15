@@ -216,8 +216,10 @@ def find_optimal_classification_thresholds(
         is_class_i = y_true == i
         if not is_class_i.any() or is_class_i.all():
             # Rare classes can miss the holdout entirely (StratifiedKFold allocates
-            # folds by class count). Every threshold then scores identically and the
-            # search returns an arbitrary value, so assign a neutral one below.
+            # folds by class count). The search then has no positive class to trade
+            # off against: every threshold scores identically for f1 and roc_auc,
+            # and the remaining metrics reward never predicting the class, so the
+            # searched value is degenerate either way. Assign a neutral one below.
             continue
 
         tuned_by_class[i] = find_optimal_classification_threshold_single_class(
@@ -226,13 +228,19 @@ def find_optimal_classification_thresholds(
             y_pred_probas=y_pred_probas[:, i],
         )
 
-    # Thresholds are applied as a divisive reweight (``probas / threshold``), so an
-    # untunable class sits neutral among the tuned ones when it carries their mean.
-    # A constant will not do: tuned thresholds sit near 0.6 for accuracy but near
-    # 0.2 for f1, so any constant boosts the class under one metric and suppresses
-    # it under another. With nothing tuned the thresholds are uniform, which the
-    # caller's renormalization cancels.
-    neutral = float(np.mean(list(tuned_by_class.values()))) if tuned_by_class else 1.0
+    # Thresholds are applied as a divisive reweight (``probas / threshold``, then
+    # renormalize), so only threshold ratios matter and the neutral value for an
+    # untunable class is the geometric mean of the tuned ones: it carries the
+    # average multiplier on the log scale, where the reweight is linear. A constant
+    # will not do: tuned thresholds sit near 0.6 for accuracy but near 0.2 for f1,
+    # so any constant boosts the class under one metric and suppresses it under
+    # another. With nothing tuned the thresholds are uniform, which the caller's
+    # renormalization cancels.
+    neutral = (
+        float(np.exp(np.mean(np.log(list(tuned_by_class.values())))))
+        if tuned_by_class
+        else 1.0
+    )
 
     return np.array([tuned_by_class.get(i, neutral) for i in range(n_classes)])
 
