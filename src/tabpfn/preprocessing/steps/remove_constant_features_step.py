@@ -62,10 +62,7 @@ class RemoveConstantFeaturesStep(PreprocessingStep):
         assert self.sel_ is not None, "You must call fit first"
         if self._keeps_every_column():
             # Selecting every column with a boolean mask still builds a full copy of
-            # the array -- 10.7 GB on a 666,667 x 2,000 fit -- to hand back exactly
-            # what it was given. Nothing downstream may mutate the result in place
-            # (the pipeline copies before the first step runs), so returning the input
-            # is equivalent.
+            # the array
             return X, None, None
         return X[:, self.sel_], None, None
 

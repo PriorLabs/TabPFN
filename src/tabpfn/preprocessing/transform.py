@@ -70,10 +70,7 @@ def _fit_preprocessing_one(
         X_train = X_train[..., feature_indices]
         feature_schema = feature_schema.slice_for_indices(feature_indices.tolist())
     if not isinstance(X_train, torch.Tensor):
-        # Only the labels are copied. `PreprocessingPipeline._process_steps` already
-        # copies the features before any step can touch them -- that is what keeps the
-        # caller's array immutable -- so copying them here too held a second full-size
-        # array for the whole call, 10.7 GB of the peak on a 666,667 x 2,000 fit.
+        # PreprocessingPipeline._process_steps already copies X_train
         y_train = y_train.copy()
 
     res = pipeline.fit_transform(X_train, feature_schema)

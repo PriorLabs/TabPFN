@@ -223,16 +223,8 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
             )
 
             if not categorical_features:
-                # Nothing to encode, so the transformer below would come out a
-                # whole-table passthrough -- and a ColumnTransformer passthrough still
-                # rebuilds the array, once for the block and once for the hstack of the
-                # blocks: 21.3 GB of the peak on a 666,667 x 2,000 fit, for an output
-                # equal to its input. `None` takes the same path as the "numeric" and
-                # "none" modes and hands `X` straight back. The schema is identical
-                # either way: with no encoded columns the remainder covers every output
-                # position and maps 1:1 onto the input columns, in order, which is what
-                # both `_columntransformer_output_names` and
-                # `_carry_over_input_feature_metadata` reduce to.
+                # Nothing to encode, and a ColumnTransformer passthrough
+                # would rebuild the array
                 return None, categorical_features
 
             ct = ColumnTransformer(

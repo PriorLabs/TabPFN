@@ -371,22 +371,13 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self._set_ancestors(new_schema, feature_schema, layout)
 
         # A transform scheduled onto the GPU leaves "none" behind on this side, which
-        # the registry maps to the identity `FunctionTransformer`. When the layout also
-        # hands every input column back in its own position, the ColumnTransformer's
-        # only remaining effect on the data is to rebuild the array -- once for the
-        # transformed block, once for the hstack of the blocks -- and hand back what it
-        # was given: 21.3 GB of the peak on a 666,667 x 2,000 fit. The schema does still
-        # change (columns are renamed, given ancestors, and annotated as GPU targets),
-        # so only the data pass is skipped.
-        #
-        # Decided from the transformer object rather than the preset name, so a registry
-        # change that gives "none" something to do cannot silently keep this path; and
-        # from the layout rather than the flags that built it, so any reordering or
-        # appending disqualifies it without having to enumerate the combinations.
+        # the registry maps to the identity `FunctionTransformer`.
         self.data_is_unchanged_ = (
+            # FunctionTransformer(func=None, validate=False) is the identity function
             isinstance(_transformer, FunctionTransformer)
             and _transformer.func is None
             and not _transformer.validate
+            # also check if the column order should change
             and [column.source_ix for column in layout] == all_feats_ix
         )
         self.transformer_ = None if self.data_is_unchanged_ else transformer
