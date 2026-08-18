@@ -21,20 +21,49 @@
 > [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/PriorLabs/TabPFN/blob/main/examples/notebooks/TabPFN_Demo_Local.ipynb)
 
 ### Installation
+
 ```bash
 pip install tabpfn
 ```
 
-TabPFN supports Python 3.10+. `pip install tabpfn` installs a compatible
-PyTorch build automatically. If you want a smaller CPU-only install, need a
-PyTorch build for a specific accelerator or CUDA version, or want platform
-notes for Windows and WSL, choose the matching command from the
-[PyTorch installation selector](https://pytorch.org/get-started/locally/) before
-installing TabPFN.
+TabPFN supports **Python 3.10+** (3.10, 3.11, 3.12, 3.13, 3.14).
+`pip install tabpfn` installs a compatible PyTorch build automatically.
 
-Note: For best performance on Apple Silicon/MPS, consider installing a PyTorch
-version after the nightly "2.13.0.dev20260510". This enables flash attention
-without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
+#### Supported Operating Systems
+
+| OS | Status | Notes |
+|---|---|---|
+| **Linux** (x86_64) | Fully supported | Recommended for GPU workloads with CUDA. |
+| **macOS** (Apple Silicon) | Fully supported | [MLX](https://github.com/ml-explore/mlx) is installed automatically for accelerated inference. For best MPS performance, use a PyTorch nightly after `2.13.0.dev20260510` (enables flash attention without MLX's GPU-CPU-GPU roundtrip). |
+| **macOS** (Intel) | Supported | CPU-only; no MPS/GPU acceleration. |
+| **Windows** (x86_64) | Supported | Works with both CPU and CUDA. If you hit `Windows fatal exception: code 0xc000001d`, set `ONEDNN_MAX_CPU_ISA=AVX512_CORE_FP16` (likely an upstream PyTorch/oneDNN bug). |
+| **Windows via WSL2** | Fully supported | Recommended over native Windows for GPU workloads; follows the Linux instructions. |
+
+#### CPU vs GPU Install
+
+By default, `pip install tabpfn` pulls in a PyTorch build that matches your
+platform (often GPU-enabled). You can control this by installing PyTorch
+*before* TabPFN:
+
+**CPU-only** (smaller download, no CUDA required):
+```bash
+# Install CPU-only PyTorch first, then TabPFN
+pip install torch --index-url https://download.pytorch.org/whl/cpu
+pip install tabpfn
+```
+
+**GPU (CUDA)** — pick the command for your CUDA version from the
+[PyTorch installation selector](https://pytorch.org/get-started/locally/):
+```bash
+# Example for CUDA 12.8
+pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install tabpfn
+```
+
+> **Tip:** On CPU, only moderate datasets are feasible (the default TabPFN-3
+> allows up to 5,000 samples; older versions up to 1,000). For larger datasets
+> or faster inference, a GPU is strongly recommended — even older GPUs with
+> ~8 GB VRAM work well.
 
 
 ### Basic Usage
