@@ -453,10 +453,12 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def _transform(
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
-        assert self.data_is_unchanged_ is not None, "You must call fit first"
-        if self.data_is_unchanged_:
+        # Read through `getattr`: an estimator pickled by a version that predates
+        # `data_is_unchanged_` has no such attribute, and always carries a transformer,
+        # so the skip is off for it and the assert below is what reports "not fitted".
+        if getattr(self, "data_is_unchanged_", False):
             return X, None, None
-        assert self.transformer_ is not None
+        assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X), None, None
 
     @override
