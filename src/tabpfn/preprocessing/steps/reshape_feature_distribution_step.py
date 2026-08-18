@@ -477,8 +477,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # so the skip is off for it and the assert below is what reports "not fitted".
         if getattr(self, "data_is_unchanged_", False):
             return X, None, None
-        if self.column_order_ is not None:
-            return X[:, self.column_order_], None, None
+        column_order = getattr(self, "column_order_", None)
+        if column_order is not None:
+            return X[:, column_order], None, None
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X), None, None
 
