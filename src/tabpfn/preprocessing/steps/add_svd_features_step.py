@@ -19,20 +19,17 @@ from tabpfn.utils import infer_random_state
 
 
 def _pin_layout(X: np.ndarray) -> np.ndarray:
-    """Return ``X`` in the memory layout this step's solver is calibrated on.
+    """Return ``X`` in Fortran order, the layout this step's solver is calibrated on.
 
     ``TruncatedSVD(algorithm="arpack")`` is an iterative Lanczos solver, and on a
     near-degenerate spectrum -- singular values within a fraction of a percent of each
     other, which wide tables routinely produce -- the basis it converges to depends on
     the order the underlying BLAS accumulates in, and so on whether the array it is
     handed is C- or Fortran-contiguous. The values are unaffected and so is the
-    subspace; which basis of it comes back is not.
+    subspace; which basis of it comes back is not. Pinning the layout here is what
+    keeps the components stable against a layout change in any earlier step.
 
-    Upstream steps decide that layout only by accident (sklearn's column indexing and
-    ``hstack`` happen to return Fortran-contiguous arrays), so without pinning it here
-    an unrelated change to an earlier step silently rotates these features. Fortran
-    order is what the pipeline has always produced, so pinning it keeps the components
-    that were previously returned. A no-op when the input already has it.
+    A no-op when the input is already Fortran-contiguous.
     """
     return np.asfortranarray(X)
 
