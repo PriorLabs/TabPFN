@@ -22,7 +22,7 @@ really does, so a change can be told apart from a float-only one:
   per column -- the layout pandas has to materialise before it can hand the values
   back, and so the one where a copy of that is worth avoiding.
 
-Each mix keeps its own baseline.
+Each mix keeps its own baseline, and `--mix all` runs all three of them.
 
 What it measures:
 
@@ -56,8 +56,31 @@ Either object-array mix, at the smaller shape they force (see `--mix`):
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py --mix half-string
 
-    srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
-        uv run scripts/bench_clean_data.py --mix numeric-object
+Or every mix in one command -- a child process each, tabled together at the end, so a
+change is answered for on all three tables rather than the one it was written against:
+
+    srun -p cpuhighmem16spot --mem=0 --time=02:00:00 \
+        uv run scripts/bench_clean_data.py --mix all --reference main
+
+Every mix in such a run is measured whether the ones before it passed or not, and one
+that trips a gate reports nothing for the checks after it -- so `--tolerance 0.05` is
+worth passing when what is wanted is the whole table rather than the gate.
+
+`--mix all` covers the column axis. The other axis worth covering before believing a
+change is the supported dependency range, since what this costs -- and occasionally
+what it returns -- depends on what numpy and pandas do underneath. That is one
+invocation per interpreter, each with its own `--out-root` so their baselines cannot
+mix. To build the floor of the range, matching the `lowest-direct` leg of CI:
+
+    UV_PROJECT_ENVIRONMENT=../.venv_low uv sync --group ci \
+        --resolution lowest-direct --python 3.10
+    uv pip install --python ../.venv_low/bin/python setuptools
+    ../.venv_low/bin/python scripts/bench_clean_data.py --mix all \
+        --reference main --out-root bench_out/clean_data_lowest
+
+That `uv pip install` is needed because `torch.utils.benchmark` imports
+`cpp_extension` -> `setuptools` on older torch, and nothing in the dependency floor
+pulls it in.
 
 The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
 `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
@@ -73,6 +96,7 @@ import json
 import os
 import pickle
 import platform
+import re
 import resource
 import shlex
 import shutil
@@ -123,6 +147,11 @@ SEED = 0
 MIX_NUMERIC = "numeric"
 MIX_HALF_STRING = "half-string"
 MIX_NUMERIC_OBJECT = "numeric-object"
+MIXES = (MIX_NUMERIC, MIX_HALF_STRING, MIX_NUMERIC_OBJECT)
+
+# Not a mix but a request for every one of them, a child process each; see
+# `run_every_mix`.
+MIX_ALL = "all"
 
 # Both of the others reach `clean_data` as an object array (see their generators),
 # which costs a pointer *and* a Python object per cell -- roughly 40 bytes against
@@ -926,7 +955,11 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
             "HEAD,\nso this compares a commit against itself."
         )
 
-    run_dir = args.out_root / "_reference_runs" / sha[:12]
+    # Named for the mix as well as the commit, because `--mix all` runs three of
+    # these in turn and each clears its run directory on the way in: one shared
+    # directory would have every mix but the last lose the outputs
+    # `--keep-reference-run` asked to keep.
+    run_dir = args.out_root / "_reference_runs" / sha[:12] / spec["mix"]
     if run_dir.exists():
         shutil.rmtree(run_dir)
     forwarded = child_arguments(args, spec)
@@ -975,6 +1008,226 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
             print(f"\nKept the comparison's outputs in {run_dir}")
         elif run_dir.exists():
             shutil.rmtree(run_dir)
+
+
+# ---------------------------------------------------------------------------
+# Every mix in one command
+# ---------------------------------------------------------------------------
+#
+# `--mix all` runs this script once per mix, a child process each, and tables the
+# three results together. Separate processes rather than one loop, because the gated
+# metric is a *process* peak: a mix measured after another one starts on a heap the
+# previous one already grew and fragmented, and would have its transient read against
+# that. Under `--reference` each of those children spawns the usual two grandchildren,
+# so comparing every mix against a commit is six measured processes.
+#
+# The children are handed this run's own argv with `--mix` substituted, rather than a
+# spec resolved here: each mix carries its own default shape, and forwarding the flags
+# verbatim is what lets every child apply its own. (`--reference`'s two children are
+# the opposite case -- there the spec is resolved up front precisely so the two sides
+# cannot disagree about what they measured.)
+#
+# The table is read back off what the children printed, which makes their report lines
+# an interface. Nothing else in either script prints a metric in these shapes.
+_COMPARED_METRIC = re.compile(
+    r"^ +(transient RSS|median wall time): +([\d.]+) (?:GB|s) -> ([\d.]+) (?:GB|s)",
+    re.MULTILINE,
+)
+_MEASURED_RSS = re.compile(r"^Transient RSS: ([\d.]+) GB", re.MULTILINE)
+_MEASURED_MEDIAN = re.compile(r"^Wall time: median ([\d.]+) s", re.MULTILINE)
+
+# Printed once every recorded output has been matched. Absent from a run that recorded
+# a baseline rather than gating against one: there was nothing to match it against.
+_OUTPUTS_MATCHED = re.compile(r"identical to the recorded ones")
+
+MIX_TABLE_HEADER = ("mix", "transient RSS", "median wall time", "status")
+
+
+@dataclasses.dataclass(frozen=True)
+class MixOutcome:
+    """One mix's child process, as that child's own output described it."""
+
+    mix: str
+    exit_code: int
+    outputs_identical: bool
+    # (baseline, this run), or (None, this run) where the child had no baseline to
+    # compare against, or None where it never got as far as printing the metric.
+    rss_gb: tuple[float | None, float] | None
+    median_s: tuple[float | None, float] | None
+
+    @classmethod
+    def from_output(cls, mix: str, exit_code: int, output: str) -> MixOutcome:
+        """Read one child's two gated metrics out of everything it printed."""
+        compared = {
+            match.group(1): (float(match.group(2)), float(match.group(3)))
+            for match in _COMPARED_METRIC.finditer(output)
+        }
+        return cls(
+            mix=mix,
+            exit_code=exit_code,
+            outputs_identical=bool(_OUTPUTS_MATCHED.search(output)),
+            rss_gb=compared.get("transient RSS")
+            or last_measured(_MEASURED_RSS, output),
+            median_s=compared.get("median wall time")
+            or last_measured(_MEASURED_MEDIAN, output),
+        )
+
+    @property
+    def ok(self) -> bool:
+        """Whether the child exited cleanly, i.e. nothing it checked regressed."""
+        return self.exit_code == 0
+
+    def status(self) -> str:
+        """This mix's verdict, for the table's last column."""
+        if not self.ok:
+            return f"exit {self.exit_code}"
+        return "ok" if self.outputs_identical else "recorded"
+
+
+def last_measured(pattern: re.Pattern[str], output: str) -> tuple[None, float] | None:
+    """The last absolute reading of a metric, as a pair with no baseline in it.
+
+    The last rather than the first, because under `--reference` the reference side
+    prints its readings before the working tree's, and it is the working tree's that is
+    wanted when the comparison never got as far as a summary.
+    """
+    readings = pattern.findall(output)
+    return (None, float(readings[-1])) if readings else None
+
+
+def format_metric(
+    pair: tuple[float | None, float] | None,
+    unit: str,
+    places: int,
+) -> str:
+    """One metric cell: `baseline -> this run (delta)`, or the reading on its own."""
+    if pair is None:
+        return "not reported"
+    baseline, current = pair
+    if baseline is None:
+        return f"{current:.{places}f} {unit}"
+    return (
+        f"{baseline:.{places}f} -> {current:.{places}f} {unit} "
+        f"({change_pct(current, baseline)})"
+    )
+
+
+def render_mix_table(outcomes: list[MixOutcome]) -> list[str]:
+    """The mixes as one markdown table, a row each."""
+    rows = [
+        (
+            outcome.mix,
+            format_metric(outcome.rss_gb, "GB", 2),
+            format_metric(outcome.median_s, "s", 3),
+            outcome.status(),
+        )
+        for outcome in outcomes
+    ]
+    widths = [
+        max(len(cell) for cell in column)
+        for column in zip(MIX_TABLE_HEADER, *rows, strict=True)
+    ]
+
+    def row(cells: tuple[str, ...]) -> str:
+        padded = (cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
+        return "| " + " | ".join(padded) + " |"
+
+    return [
+        row(MIX_TABLE_HEADER),
+        row(tuple(":" + "-" * (width - 1) for width in widths)),
+        *(row(cells) for cells in rows),
+    ]
+
+
+def argv_without_mix(argv: list[str]) -> list[str]:
+    """This run's arguments with `--mix all` taken back out, for a child to respell.
+
+    Only the long form and its `=` spelling are dropped, which is every way this
+    script's `--mix` is spelled in practice. Anything that slips through is harmless
+    anyway: the child's `--mix` is appended last, and argparse lets the last one win.
+    """
+    remaining = []
+    skip_value = False
+    for entry in argv:
+        if skip_value:
+            skip_value = False
+        elif entry == "--mix":
+            skip_value = True
+        elif not entry.startswith("--mix="):
+            remaining.append(entry)
+    return remaining
+
+
+def run_mix_child(command: list[str], mix: str) -> tuple[int, str]:
+    """Run one mix to completion, streaming its output through and keeping a copy.
+
+    The copy is what the summary table is read off; the streaming is so a run that
+    takes an hour still says what it is doing while it does it. `PYTHONUNBUFFERED`
+    because the child's stdout is a pipe here rather than a terminal, which would
+    otherwise leave it block-buffered -- and under `--reference` its own children write
+    to that same pipe, so their output would land ahead of the lines introducing them.
+    """
+    print("\n" + "=" * 79)
+    print(f"mix {mix}: {shlex.join(command)}")
+    print("=" * 79, flush=True)
+    captured = []
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
+    ) as child:
+        for line in child.stdout:
+            print(line, end="")
+            captured.append(line)
+    return child.returncode, "".join(captured)
+
+
+def print_mix_report(args: argparse.Namespace, outcomes: list[MixOutcome]) -> None:
+    """The consolidated table, and what to make of anything odd in it."""
+    against = (
+        f"vs {args.reference}"
+        if args.reference is not None
+        else "vs the recorded baselines"
+    )
+    print("\n" + "=" * 79)
+    print(f"Every mix {against}, one process each")
+    print("=" * 79 + "\n")
+    print("\n".join(render_mix_table(outcomes)))
+    print("\nEach mix carries its own shape, so read a column down, not a row across.")
+    if any(outcome.ok and not outcome.outputs_identical for outcome in outcomes):
+        print(
+            "'recorded' means that mix had no baseline to gate against, so it wrote "
+            "one instead of checking one."
+        )
+    failed = [outcome.mix for outcome in outcomes if not outcome.ok]
+    if failed:
+        print(
+            f"\n{len(failed)} of {len(outcomes)} mixes failed: {', '.join(failed)}. "
+            "Each one's FAIL banner is above, in its own output; a mix that fails one "
+            "check reports nothing for the checks after it."
+        )
+
+
+def run_every_mix(args: argparse.Namespace, script: Path, argv: list[str]) -> int:
+    """Run one child per mix and table what they reported.
+
+    Every mix runs whether the ones before it passed or not -- a failure is a result
+    like any other here -- and the exit code is the worst of them.
+    """
+    forwarded = argv_without_mix(argv)
+    outcomes = []
+    for index, mix in enumerate(MIXES):
+        command = [sys.executable, str(script), *forwarded, "--mix", mix]
+        # Only the first child may rebuild the reference worktree; the rest share it,
+        # and would tear down and `uv sync` the same commit again.
+        if index > 0 and "--refresh-reference" in command:
+            command.remove("--refresh-reference")
+        exit_code, output = run_mix_child(command, mix)
+        outcomes.append(MixOutcome.from_output(mix, exit_code, output))
+    print_mix_report(args, outcomes)
+    return 0 if all(outcome.ok for outcome in outcomes) else 1
 
 
 # ---------------------------------------------------------------------------
@@ -1191,10 +1444,24 @@ def load_baseline_for_comparison(
     return recorded
 
 
+def delegated_exit_code(args: argparse.Namespace) -> int | None:
+    """The exit code of whichever child-process mode was asked for, if either was.
+
+    `--mix all` and `--reference` measure nothing themselves: both resolve to child
+    runs of this script, and their verdict is the children's.
+    """
+    if args.mix == MIX_ALL:
+        return run_every_mix(args, Path(__file__).resolve(), sys.argv[1:])
+    if args.reference is not None:
+        return run_reference_comparison(args)
+    return None
+
+
 def main(args: argparse.Namespace) -> None:
     """Measure `clean_data`, and gate it against a reference or a recorded baseline."""
-    if args.reference is not None:
-        sys.exit(run_reference_comparison(args))
+    delegated = delegated_exit_code(args)
+    if delegated is not None:
+        sys.exit(delegated)
 
     spec = resolve_input_spec(args)
     out_dir = args.out_root / shape_dir_name(
@@ -1349,7 +1616,7 @@ def get_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mix",
         default=MIX_NUMERIC,
-        choices=[MIX_NUMERIC, MIX_HALF_STRING, MIX_NUMERIC_OBJECT],
+        choices=[*MIXES, MIX_ALL],
         help="Column make-up. 'numeric' is the profiled float table. 'half-string' "
         f"makes every other column a low-cardinality string ({STRING_LEVELS} distinct "
         "values, so it detects as categorical), which is what exercises the ordinal "
@@ -1357,7 +1624,8 @@ def get_parser() -> argparse.ArgumentParser:
         "encodes nothing but forces a recast of every column. The latter two arrive "
         "as object arrays, far heavier per cell, so they also lower the default shape "
         f"to {OBJECT_PROFILER_ROWS} rows x {OBJECT_COLS} cols. Each keeps its own "
-        "baseline directory.",
+        "baseline directory. 'all' runs the three of them in sequence, a child "
+        "process each, and prints what they reported as one table.",
     )
     parser.add_argument(
         "--input-dtype",
