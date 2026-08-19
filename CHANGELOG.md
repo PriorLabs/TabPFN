@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.4.0] - 2026-08-19
+
+### Added
+
+- `TabPFNRegressor` now accepts `eval_metric` and `tuning_config` arguments: passing `tuning_config={"calibrate_temperature": True}` makes `fit()` calibrate the temperature of the aggregated ensemble distribution on a holdout, sharpening or widening the predicted distribution as the data demands and improving every `predict()` output type, including the predicted quantiles. Set `eval_metric` to `"nll"` (the default, negative log-likelihood), `"crps"` (continuous ranked probability score, the same implementation used by the finetuning loss) to choose which quantity the calibration optimises; they weight the predicted distribution differently and pick noticeably different temperatures, so pick the metric you will be judged by. ([#1172](https://github.com/PriorLabs/TabPFN/pull/1172))
+- In the previous setup, all GPUs in finetuning with DDP held all activations of all estimators in memory. This PR divides estimator activations across the available GPUs. ([#1182](https://github.com/PriorLabs/TabPFN/pull/1182))
+
+### Changed
+
+- The temperature grid searched when calibrating `TabPFNClassifier`'s softmax temperature now contains 1.0 exactly, so calibration can leave a distribution untouched. Previously the grid straddled 1.0 without including it, meaning a calibrated model always applied some correction even when none was warranted. Calibrated temperatures may therefore differ slightly from previous releases. ([#1172](https://github.com/PriorLabs/TabPFN/pull/1172))
+- `fit()` cleans large tables with far less memory and time: the redundant float64 copies are gone, cutting both transient memory and wall time by about two thirds on a 5.3 GB all-numeric table. ([#1173](https://github.com/PriorLabs/TabPFN/pull/1173))
+- `fit()` uses less memory on tables with categorical columns: the encoded array is now assembled in place instead of being stacked and then reordered, cutting transient memory by about a quarter on a half-string table. ([#1174](https://github.com/PriorLabs/TabPFN/pull/1174))
+- `fit()` no longer slows to a crawl on wide tables with categorical columns under pandas < 3: the dtype casts no longer rebuild the frame one column at a time, which took minutes on a 333,333 x 400 table and now takes seconds. ([#1180](https://github.com/PriorLabs/TabPFN/pull/1180))
+- Reduce peak GPU memory during KV-cache construction by quantizing layers as they are built and temporarily staging completed estimator caches on CPU in memory-saving mode. ([#1183](https://github.com/PriorLabs/TabPFN/pull/1183))
+
+### Fixed
+
+- `TabPFNRegressor.predict_batched` now raises `NotImplementedError` when the estimator was constructed with a `tuning_config`, instead of silently returning uncalibrated predictions. The ensemble temperature is calibrated on each dataset's own holdout, so a fused batch has no single temperature to apply; score such datasets individually with `predict`. This matches the existing guard in `TabPFNClassifier.predict_proba_batched`. ([#1172](https://github.com/PriorLabs/TabPFN/pull/1172))
+
+
 ## [8.3.0] - 2026-08-12
 
 ### Added
