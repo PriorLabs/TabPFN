@@ -68,19 +68,24 @@ worth passing when what is wanted is the whole table rather than the gate.
 
 `--mix all` covers the column axis. The other axis worth covering before believing a
 change is the supported dependency range, since what this costs -- and occasionally
-what it returns -- depends on what numpy and pandas do underneath. That is one
-invocation per interpreter, each with its own `--out-root` so their baselines cannot
-mix. To build the floor of the range, matching the `lowest-direct` leg of CI:
+what it returns -- depends on what numpy and pandas do underneath. `--environment`
+takes that one, an interpreter per flag, and the two multiply into a grid of a child
+process per cell. To build the floor of the range, matching the `lowest-direct` leg of
+CI, and then measure both ends of it against `main`:
 
     UV_PROJECT_ENVIRONMENT=../.venv_low uv sync --group ci \
         --resolution lowest-direct --python 3.10
     uv pip install --python ../.venv_low/bin/python setuptools
-    ../.venv_low/bin/python scripts/bench_clean_data.py --mix all \
-        --reference main --out-root bench_out/clean_data_lowest
+
+    srun -p cpuhighmem16spot --mem=0 --time=04:00:00 \
+        uv run scripts/bench_clean_data.py --mix all --reference main \
+            --environment highest=.venv/bin/python \
+            --environment lowest=../.venv_low/bin/python
 
 That `uv pip install` is needed because `torch.utils.benchmark` imports
 `cpp_extension` -> `setuptools` on older torch, and nothing in the dependency floor
-pulls it in.
+pulls it in. Each label keeps its baselines in a subdirectory of `--out-root` of its
+own, because one recorded against a different dependency set is not comparable with it.
 
 The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
 `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
@@ -1011,15 +1016,22 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Every mix in one command
+# The grid: every mix, under every interpreter
 # ---------------------------------------------------------------------------
 #
-# `--mix all` runs this script once per mix, a child process each, and tables the
-# three results together. Separate processes rather than one loop, because the gated
-# metric is a *process* peak: a mix measured after another one starts on a heap the
-# previous one already grew and fragmented, and would have its transient read against
-# that. Under `--reference` each of those children spawns the usual two grandchildren,
-# so comparing every mix against a commit is six measured processes.
+# A change wants answering for on more than the one table it was written against: on
+# every column mix, since a float table exercises different code than one with
+# categorical columns, and at both ends of the supported dependency range, since what
+# this costs -- and occasionally what it returns -- depends on what numpy and pandas do
+# underneath. `--mix all` takes the first axis, `--environment` the second, and
+# together they are a grid of one child process per cell, tabled at the end.
+#
+# A child process per cell rather than one loop, because the gated metric is a
+# *process* peak: a mix measured after another one starts on a heap the previous one
+# already grew and fragmented, and would have its transient read against that. A
+# second interpreter is a child process by definition. Under `--reference` each cell's
+# child spawns the usual two grandchildren, so comparing every mix against a commit is
+# six measured processes.
 #
 # The children are handed this run's own argv with `--mix` substituted, rather than a
 # spec resolved here: each mix carries its own default shape, and forwarding the flags
@@ -1040,13 +1052,37 @@ _MEASURED_MEDIAN = re.compile(r"^Wall time: median ([\d.]+) s", re.MULTILINE)
 # a baseline rather than gating against one: there was nothing to match it against.
 _OUTPUTS_MATCHED = re.compile(r"identical to the recorded ones")
 
-MIX_TABLE_HEADER = ("mix", "transient RSS", "median wall time", "status")
+# What each interpreter is asked for before the grid starts. Not an f-string: the
+# braces are the probe's own, evaluated by the interpreter being probed.
+_VERSION_PROBE = (
+    "import sys, numpy, pandas, sklearn, torch; "
+    "print(f'python {sys.version.split()[0]} numpy {numpy.__version__} "
+    "pandas {pandas.__version__} sklearn {sklearn.__version__} "
+    "torch {torch.__version__}')"
+)
+
+METRIC_COLUMNS = ("mix", "transient RSS", "median wall time", "status")
 
 
 @dataclasses.dataclass(frozen=True)
-class MixOutcome:
-    """One mix's child process, as that child's own output described it."""
+class Environment:
+    """One interpreter the grid is measured under."""
 
+    # None for the interpreter this is running under, which carries no label because it
+    # keeps its baselines in `--out-root` itself, where they have always been.
+    label: str | None
+    interpreter: str
+
+    def name(self) -> str:
+        """How this environment is spoken about in the report."""
+        return self.label or "this interpreter"
+
+
+@dataclasses.dataclass(frozen=True)
+class CellOutcome:
+    """One cell's child process, as that child's own output described it."""
+
+    environment: Environment
     mix: str
     exit_code: int
     outputs_identical: bool
@@ -1056,13 +1092,20 @@ class MixOutcome:
     median_s: tuple[float | None, float] | None
 
     @classmethod
-    def from_output(cls, mix: str, exit_code: int, output: str) -> MixOutcome:
+    def from_output(
+        cls,
+        environment: Environment,
+        mix: str,
+        exit_code: int,
+        output: str,
+    ) -> CellOutcome:
         """Read one child's two gated metrics out of everything it printed."""
         compared = {
             match.group(1): (float(match.group(2)), float(match.group(3)))
             for match in _COMPARED_METRIC.finditer(output)
         }
         return cls(
+            environment=environment,
             mix=mix,
             exit_code=exit_code,
             outputs_identical=bool(_OUTPUTS_MATCHED.search(output)),
@@ -1078,10 +1121,84 @@ class MixOutcome:
         return self.exit_code == 0
 
     def status(self) -> str:
-        """This mix's verdict, for the table's last column."""
+        """This cell's verdict, for the table's last column."""
         if not self.ok:
             return f"exit {self.exit_code}"
         return "ok" if self.outputs_identical else "recorded"
+
+    def name(self) -> str:
+        """How this cell is named in its banner and in the failure list."""
+        return cell_name(self.environment, self.mix)
+
+
+def cell_name(environment: Environment, mix: str) -> str:
+    """One cell's name: the mix, qualified by the environment where there is one."""
+    if environment.label is None:
+        return mix
+    return f"{environment.label}/{mix}"
+
+
+def parse_environments(entries: list[str] | None) -> list[Environment]:
+    """The interpreters to measure under: this one, unless others were named.
+
+    A label becomes a directory name, since each environment keeps its own baselines,
+    so it is checked for being usable as one -- and for being unique -- before an hour
+    of measuring is spent writing into the wrong place.
+    """
+    if not entries:
+        return [Environment(label=None, interpreter=sys.executable)]
+
+    environments: list[Environment] = []
+    problems = []
+    for entry in entries:
+        label, _, interpreter = entry.partition("=")
+        if not label or "/" in label or label in {".", ".."}:
+            problems.append(
+                f"--environment {entry!r} does not begin with a label usable as a "
+                "directory name, as in 'lowest=../.venv_low/bin/python'"
+            )
+        elif any(label == existing.label for existing in environments):
+            problems.append(
+                f"--environment label {label!r} was given twice, and the two of them "
+                "would share a baseline directory"
+            )
+        else:
+            environments.append(
+                Environment(label=label, interpreter=interpreter or sys.executable)
+            )
+    if problems:
+        fail(problems)
+    return environments
+
+
+def describe_interpreters(environments: list[Environment]) -> list[str]:
+    """The library versions each interpreter resolves, for the report header.
+
+    Probed before anything is measured, because an interpreter that cannot import what
+    is measured here fails every cell it owns, and finding that out an hour in is worse
+    than not having started. Skipped when `--environment` was not given: the versions
+    are then the ones every child prints for itself anyway.
+    """
+    lines = []
+    problems = []
+    for environment in environments:
+        probe = subprocess.run(
+            [environment.interpreter, "-c", _VERSION_PROBE],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if probe.returncode == 0:
+            lines.append(f"  {environment.name()}: {probe.stdout.strip()}")
+        else:
+            detail = (probe.stderr.strip() or "it printed nothing").splitlines()[-1]
+            problems.append(
+                f"{environment.interpreter} cannot import what is measured here, so "
+                f"every cell under it would fail: {detail}"
+            )
+    if problems:
+        fail(problems)
+    return lines
 
 
 def last_measured(pattern: re.Pattern[str], output: str) -> tuple[None, float] | None:
@@ -1112,8 +1229,13 @@ def format_metric(
     )
 
 
-def render_mix_table(outcomes: list[MixOutcome]) -> list[str]:
-    """The mixes as one markdown table, a row each."""
+def render_grid_table(outcomes: list[CellOutcome]) -> list[str]:
+    """The grid as one markdown table, a cell per row.
+
+    The environment column appears only when `--environment` named any, so a run over
+    the mixes alone reads as the list of mixes it is.
+    """
+    header = METRIC_COLUMNS
     rows = [
         (
             outcome.mix,
@@ -1123,9 +1245,15 @@ def render_mix_table(outcomes: list[MixOutcome]) -> list[str]:
         )
         for outcome in outcomes
     ]
+    if any(outcome.environment.label is not None for outcome in outcomes):
+        header = ("environment", *header)
+        rows = [
+            (outcome.environment.name(), *row)
+            for outcome, row in zip(outcomes, rows, strict=True)
+        ]
+
     widths = [
-        max(len(cell) for cell in column)
-        for column in zip(MIX_TABLE_HEADER, *rows, strict=True)
+        max(len(cell) for cell in column) for column in zip(header, *rows, strict=True)
     ]
 
     def row(cells: tuple[str, ...]) -> str:
@@ -1133,33 +1261,55 @@ def render_mix_table(outcomes: list[MixOutcome]) -> list[str]:
         return "| " + " | ".join(padded) + " |"
 
     return [
-        row(MIX_TABLE_HEADER),
+        row(header),
         row(tuple(":" + "-" * (width - 1) for width in widths)),
         *(row(cells) for cells in rows),
     ]
 
 
-def argv_without_mix(argv: list[str]) -> list[str]:
-    """This run's arguments with `--mix all` taken back out, for a child to respell.
+def argv_without(argv: list[str], flags: set[str]) -> list[str]:
+    """This run's arguments with the given flags, and their values, taken back out.
 
-    Only the long form and its `=` spelling are dropped, which is every way this
-    script's `--mix` is spelled in practice. Anything that slips through is harmless
-    anyway: the child's `--mix` is appended last, and argparse lets the last one win.
+    Only the long forms and their `=` spellings are dropped, which is every way these
+    are spelled in practice. A `--mix` or `--out-root` that slipped through would be
+    harmless anyway -- the child's own is appended last, and argparse lets the last one
+    win -- but a surviving `--environment` would have that child fan out again, so the
+    flags this drops are not all optional.
     """
     remaining = []
     skip_value = False
     for entry in argv:
         if skip_value:
             skip_value = False
-        elif entry == "--mix":
+        elif entry in flags:
             skip_value = True
-        elif not entry.startswith("--mix="):
+        elif not any(entry.startswith(f"{flag}=") for flag in flags):
             remaining.append(entry)
     return remaining
 
 
-def run_mix_child(command: list[str], mix: str) -> tuple[int, str]:
-    """Run one mix to completion, streaming its output through and keeping a copy.
+def cell_command(
+    args: argparse.Namespace,
+    script: Path,
+    argv: list[str],
+    environment: Environment,
+    mix: str,
+) -> list[str]:
+    """The child command for one cell: its own interpreter, mix and baselines."""
+    dropped = {"--mix", "--environment"}
+    if environment.label is not None:
+        dropped.add("--out-root")
+    command = [environment.interpreter, str(script), *argv_without(argv, dropped)]
+    if environment.label is not None:
+        # A labelled environment keeps its baselines under a directory of its own: one
+        # recorded against a different dependency set is not comparable with it, and
+        # `environment_drift` would reject it anyway, rightly.
+        command += ["--out-root", str(args.out_root / environment.label)]
+    return [*command, "--mix", mix]
+
+
+def run_cell_child(command: list[str], name: str) -> tuple[int, str]:
+    """Run one cell to completion, streaming its output through and keeping a copy.
 
     The copy is what the summary table is read off; the streaming is so a run that
     takes an hour still says what it is doing while it does it. `PYTHONUNBUFFERED`
@@ -1168,7 +1318,7 @@ def run_mix_child(command: list[str], mix: str) -> tuple[int, str]:
     to that same pipe, so their output would land ahead of the lines introducing them.
     """
     print("\n" + "=" * 79)
-    print(f"mix {mix}: {shlex.join(command)}")
+    print(f"{name}: {shlex.join(command)}")
     print("=" * 79, flush=True)
     captured = []
     with subprocess.Popen(
@@ -1184,7 +1334,11 @@ def run_mix_child(command: list[str], mix: str) -> tuple[int, str]:
     return child.returncode, "".join(captured)
 
 
-def print_mix_report(args: argparse.Namespace, outcomes: list[MixOutcome]) -> None:
+def print_grid_report(
+    args: argparse.Namespace,
+    outcomes: list[CellOutcome],
+    described: list[str],
+) -> None:
     """The consolidated table, and what to make of anything odd in it."""
     against = (
         f"vs {args.reference}"
@@ -1192,41 +1346,54 @@ def print_mix_report(args: argparse.Namespace, outcomes: list[MixOutcome]) -> No
         else "vs the recorded baselines"
     )
     print("\n" + "=" * 79)
-    print(f"Every mix {against}, one process each")
+    print(f"{len(outcomes)} cell(s) {against}, a process each")
     print("=" * 79 + "\n")
-    print("\n".join(render_mix_table(outcomes)))
-    print("\nEach mix carries its own shape, so read a column down, not a row across.")
+    if described:
+        print("\n".join(described) + "\n")
+    print("\n".join(render_grid_table(outcomes)))
+    print(
+        "\nEach mix carries its own shape, so only cells of the same mix are "
+        "comparable with each other."
+    )
     if any(outcome.ok and not outcome.outputs_identical for outcome in outcomes):
         print(
-            "'recorded' means that mix had no baseline to gate against, so it wrote "
+            "'recorded' means that cell had no baseline to gate against, so it wrote "
             "one instead of checking one."
         )
-    failed = [outcome.mix for outcome in outcomes if not outcome.ok]
+    failed = [outcome.name() for outcome in outcomes if not outcome.ok]
     if failed:
         print(
-            f"\n{len(failed)} of {len(outcomes)} mixes failed: {', '.join(failed)}. "
-            "Each one's FAIL banner is above, in its own output; a mix that fails one "
+            f"\n{len(failed)} of {len(outcomes)} cells failed: {', '.join(failed)}. "
+            "Each one's FAIL banner is above, in its own output; a cell that fails one "
             "check reports nothing for the checks after it."
         )
 
 
-def run_every_mix(args: argparse.Namespace, script: Path, argv: list[str]) -> int:
-    """Run one child per mix and table what they reported.
+def run_grid(args: argparse.Namespace, script: Path, argv: list[str]) -> int:
+    """Run a child per cell of the grid and table what they all reported.
 
-    Every mix runs whether the ones before it passed or not -- a failure is a result
-    like any other here -- and the exit code is the worst of them.
+    Every cell is measured whether the ones before it passed or not -- a failure is a
+    result like any other here -- and the exit code is the worst of them.
     """
-    forwarded = argv_without_mix(argv)
+    environments = parse_environments(args.environment)
+    mixes = MIXES if args.mix == MIX_ALL else (args.mix,)
+    described = describe_interpreters(environments) if args.environment else []
+    if described:
+        print("Measuring under:")
+        print("\n".join(described))
+
+    cells = [(environment, mix) for environment in environments for mix in mixes]
     outcomes = []
-    for index, mix in enumerate(MIXES):
-        command = [sys.executable, str(script), *forwarded, "--mix", mix]
-        # Only the first child may rebuild the reference worktree; the rest share it,
-        # and would tear down and `uv sync` the same commit again.
+    for index, (environment, mix) in enumerate(cells):
+        command = cell_command(args, script, argv, environment, mix)
+        # Only the first cell may rebuild the reference worktree. The rest share it --
+        # it is a checkout of source, the same whichever interpreter reads it -- and
+        # would tear down and re-add the same commit again.
         if index > 0 and "--refresh-reference" in command:
             command.remove("--refresh-reference")
-        exit_code, output = run_mix_child(command, mix)
-        outcomes.append(MixOutcome.from_output(mix, exit_code, output))
-    print_mix_report(args, outcomes)
+        exit_code, output = run_cell_child(command, cell_name(environment, mix))
+        outcomes.append(CellOutcome.from_output(environment, mix, exit_code, output))
+    print_grid_report(args, outcomes, described)
     return 0 if all(outcome.ok for outcome in outcomes) else 1
 
 
@@ -1447,11 +1614,11 @@ def load_baseline_for_comparison(
 def delegated_exit_code(args: argparse.Namespace) -> int | None:
     """The exit code of whichever child-process mode was asked for, if either was.
 
-    `--mix all` and `--reference` measure nothing themselves: both resolve to child
-    runs of this script, and their verdict is the children's.
+    `--mix all`, `--environment` and `--reference` measure nothing themselves: all
+    three resolve to child runs of this script, and their verdict is the children's.
     """
-    if args.mix == MIX_ALL:
-        return run_every_mix(args, Path(__file__).resolve(), sys.argv[1:])
+    if args.mix == MIX_ALL or args.environment:
+        return run_grid(args, Path(__file__).resolve(), sys.argv[1:])
     if args.reference is not None:
         return run_reference_comparison(args)
     return None
@@ -1626,6 +1793,18 @@ def get_parser() -> argparse.ArgumentParser:
         f"to {OBJECT_PROFILER_ROWS} rows x {OBJECT_COLS} cols. Each keeps its own "
         "baseline directory. 'all' runs the three of them in sequence, a child "
         "process each, and prints what they reported as one table.",
+    )
+    parser.add_argument(
+        "--environment",
+        action="append",
+        metavar="LABEL=PYTHON",
+        default=None,
+        help="An interpreter to measure under, repeatable, as in "
+        "'lowest=../.venv_low/bin/python'. Each label keeps its baselines in a "
+        "subdirectory of --out-root of its own, since one recorded against a different "
+        "dependency set is not comparable with it. Combines with --mix all into the "
+        "whole grid, a child process per cell. Defaults to just this interpreter, with "
+        "its baselines in --out-root itself.",
     )
     parser.add_argument(
         "--input-dtype",

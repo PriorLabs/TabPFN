@@ -71,8 +71,16 @@ change is answered for on all three tables rather than the one it was written ag
 Every mix in such a run is measured whether the ones before it passed or not, and one
 that trips a gate reports nothing for the checks after it -- so `--tolerance 0.05` is
 worth passing when what is wanted is the whole table rather than the gate. That covers
-the column axis; the dependency-range axis is one invocation per interpreter, for which
-`bench_clean_data.py`'s header has the recipe.
+the column axis; `--environment` takes the other one, an interpreter per flag, and the
+two multiply into a grid of a child process per cell:
+
+    srun -p cpuhighmem16spot --mem=0 --time=04:00:00 \
+        uv run scripts/bench_ensemble_preprocessing.py --mix all --reference main \
+            --environment highest=.venv/bin/python \
+            --environment lowest=../.venv_low/bin/python
+
+`bench_clean_data.py`'s header has the recipe for building that floor of the supported
+dependency range.
 
 The full numeric shape writes ~11 GB per estimator per run. Pair either with
 `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
@@ -128,7 +136,7 @@ from bench_clean_data import (
     resolve_reference,
     resolve_shape,
     run_child,
-    run_every_mix,
+    run_grid,
     timing_as_dict,
     train_rows_for,
     verify_reference_ran_the_reference,
@@ -1081,11 +1089,11 @@ def print_inputs(inputs: EnsembleInputs, spec: dict[str, Any]) -> None:
 def delegated_exit_code(args: argparse.Namespace) -> int | None:
     """The exit code of whichever child-process mode was asked for, if either was.
 
-    `--mix all` and `--reference` measure nothing themselves: both resolve to child
-    runs of this script, and their verdict is the children's.
+    `--mix all`, `--environment` and `--reference` measure nothing themselves: all
+    three resolve to child runs of this script, and their verdict is the children's.
     """
-    if args.mix == MIX_ALL:
-        return run_every_mix(args, Path(__file__).resolve(), sys.argv[1:])
+    if args.mix == MIX_ALL or args.environment:
+        return run_grid(args, Path(__file__).resolve(), sys.argv[1:])
     if args.reference is not None:
         return run_reference_comparison(args)
     return None
@@ -1254,6 +1262,18 @@ def get_parser() -> argparse.ArgumentParser:
         "through the ensemble pipelines is exercised. Each keeps its own baseline. "
         "'all' runs the three of them in sequence, a child process each, and prints "
         "what they reported as one table.",
+    )
+    parser.add_argument(
+        "--environment",
+        action="append",
+        metavar="LABEL=PYTHON",
+        default=None,
+        help="An interpreter to measure under, repeatable, as in "
+        "'lowest=../.venv_low/bin/python'. Each label keeps its baselines in a "
+        "subdirectory of --out-root of its own, since one recorded against a different "
+        "dependency set is not comparable with it. Combines with --mix all into the "
+        "whole grid, a child process per cell. Defaults to just this interpreter, with "
+        "its baselines in --out-root itself.",
     )
     parser.add_argument(
         "--input-dtype",
