@@ -175,7 +175,7 @@ def _torch_sdpa(
         num_iterations = max(
             num_iterations,
             _flash_backward_num_iterations(q_BHSD, num_q_heads, backends),
-         )
+        )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
     with sdpa_kernel(backends=backends):

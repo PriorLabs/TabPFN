@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 import torch
@@ -17,14 +17,29 @@ from tabpfn.architectures.shared.scaled_dot_product_attention import (
     _torch_sdpa,
 )
 
+
+class _Shape(TypedDict):
+    """The query shape of an SDPA call, unpacked into the helpers below."""
+
+    batch: int
+    seq_q: int
+    heads: int
+    head_dim: int
+
+
 # batch * heads * round_up(seq_q, 128) * max(head_dim, 32) = 2,149,580,800, just
 # over the 2**31 element range of FlashAttention's backward index. Without
 # chunking this faults in backward with an illegal memory access.
-_OVER_RANGE_SHAPE = {"batch": 400, "seq_q": 10_496, "heads": 4, "head_dim": 128}
+_OVER_RANGE_SHAPE: _Shape = {
+    "batch": 400,
+    "seq_q": 10_496,
+    "heads": 4,
+    "head_dim": 128,
+}
 # Same count, reached with a head dim small enough to be padded up to 32. The raw
 # element count is only half the range, so a check that ignored the padding would
 # let this through.
-_OVER_RANGE_SMALL_HEAD_DIM = {
+_OVER_RANGE_SMALL_HEAD_DIM: _Shape = {
     "batch": 800,
     "seq_q": 10_496,
     "heads": 8,
@@ -68,13 +83,23 @@ def _run_on_meta(
     heads: int,
     head_dim: int,
     backends: list[SDPBackend] | None,
+    requires_grad: bool = True,
 ) -> list[torch.Size]:
-    """Drive `_torch_sdpa` on meta tensors, which carry shape but no storage."""
+    """Drive `_torch_sdpa` on meta tensors, which carry shape but no storage.
+
+    Only the backward exceeds the index range, so the inputs require grad
+    unless a test is about the inference path.
+    """
     shapes = _record_sdpa_calls(monkeypatch)
-    kwargs = {"device": "meta", "dtype": torch.bfloat16}
-    q = torch.empty((batch, seq_q, heads, head_dim), **kwargs)
-    k = torch.empty((batch, _SEQ_KV, heads, head_dim), **kwargs)
-    v = torch.empty((batch, _SEQ_KV, heads, head_dim), **kwargs)
+
+    def meta_input(*shape: int) -> torch.Tensor:
+        return torch.empty(
+            shape, device="meta", dtype=torch.bfloat16, requires_grad=requires_grad
+        )
+
+    q = meta_input(batch, seq_q, heads, head_dim)
+    k = meta_input(batch, _SEQ_KV, heads, head_dim)
+    v = meta_input(batch, _SEQ_KV, heads, head_dim)
     _torch_sdpa(q, k, v, backends)
     return shapes
 
@@ -150,6 +175,32 @@ def test__torch_sdpa__flash_not_selectable__does_not_chunk(
     assert len(shapes) == 1
 
 
+def test__torch_sdpa__inputs_without_grad__does_not_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the backward faults, so inference must not pay for chunking."""
+    shapes = _run_on_meta(
+        monkeypatch,
+        **_OVER_RANGE_SHAPE,
+        backends=[SDPBackend.FLASH_ATTENTION],
+        requires_grad=False,
+    )
+
+    assert len(shapes) == 1
+
+
+def test__torch_sdpa__grad_disabled__does_not_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Inputs requiring grad under `no_grad` still record no backward."""
+    with torch.no_grad():
+        shapes = _run_on_meta(
+            monkeypatch, **_OVER_RANGE_SHAPE, backends=[SDPBackend.FLASH_ATTENTION]
+        )
+
+    assert len(shapes) == 1
+
+
 def _cuda_bytes_available() -> int:
     if not torch.cuda.is_available():
         return 0
@@ -177,16 +228,14 @@ def test__torch_sdpa__query_over_flash_index_range__backward_runs_on_cuda() -> N
         > _FLASH_BACKWARD_MAX_ELEMENTS
     ), "shape no longer exceeds the range this test is about"
 
-    kwargs = {"device": "cuda", "dtype": torch.bfloat16, "requires_grad": True}
-    q = torch.randn(
-        (shape["batch"], shape["seq_q"], shape["heads"], shape["head_dim"]), **kwargs
-    )
-    k = torch.randn(
-        (shape["batch"], _SEQ_KV, shape["heads"], shape["head_dim"]), **kwargs
-    )
-    v = torch.randn(
-        (shape["batch"], _SEQ_KV, shape["heads"], shape["head_dim"]), **kwargs
-    )
+    def cuda_input(*size: int) -> torch.Tensor:
+        return torch.randn(
+            size, device="cuda", dtype=torch.bfloat16, requires_grad=True
+        )
+
+    q = cuda_input(shape["batch"], shape["seq_q"], shape["heads"], shape["head_dim"])
+    k = cuda_input(shape["batch"], _SEQ_KV, shape["heads"], shape["head_dim"])
+    v = cuda_input(shape["batch"], _SEQ_KV, shape["heads"], shape["head_dim"])
 
     out = _torch_sdpa(q, k, v, [SDPBackend.FLASH_ATTENTION])
     out.sum().backward()
