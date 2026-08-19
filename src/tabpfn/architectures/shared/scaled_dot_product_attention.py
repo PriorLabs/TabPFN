@@ -172,9 +172,15 @@ def _torch_sdpa(
         torch._check(q_BHSD.shape[0] >= 1)
     CUDA_MAX_GRID = 65536
     num_iterations = (num_parallel_calls + CUDA_MAX_GRID - 1) // CUDA_MAX_GRID
-    num_iterations = max(
-        num_iterations, _flash_backward_num_iterations(q_BHSD, num_q_heads, backends)
+    needs_sdpa_backward = torch.is_grad_enabled() and any(
+        tensor.requires_grad for tensor in (q_BHSD, keys, values)
     )
+
+    if needs_sdpa_backward:
+        num_iterations = max(
+            num_iterations,
+            _flash_backward_num_iterations(q_BHSD, num_q_heads, backends),
+         )
     sub_batch = (q_BHSD.shape[0] + num_iterations - 1) // num_iterations
 
     with sdpa_kernel(backends=backends):
