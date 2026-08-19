@@ -517,15 +517,7 @@ class ManyClassDecoder(nn.Module):
         self.softmax_scaling_layer = softmax_scaling_layer
 
     def project_keys(self, train_embeddings: torch.Tensor) -> torch.Tensor:
-        """Project train embeddings to per-head keys: (B, N, E) -> (B, N, H, D).
-
-        Split out of the forward pass so cached inference can run it once when
-        the cache is built and store the result (see
-        :attr:`TabPFNV3Cache.decoder_keys`), instead of re-projecting every
-        train row on every predict. The projection is a plain linear map with
-        no dependence on the test rows or on ``N``, so the cached keys are
-        exactly what the forward pass would have recomputed.
-        """
+        """Project train embeddings to per-head keys: (B,N,E)->(B,N,H,D)."""
         k_BNE = self.k_projection(train_embeddings)
         h, d = self.num_heads, self.head_dim
         return k_BNE.view(*k_BNE.shape[:2], h, d).contiguous()
