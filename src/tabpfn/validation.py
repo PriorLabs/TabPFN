@@ -21,6 +21,7 @@ from sklearn.utils.multiclass import check_classification_targets
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import check_array, validate_data
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
+from tabpfn.preprocessing.input_conversion import InputTypeConverter
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -45,7 +46,9 @@ def ensure_compatible_fit_inputs(
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
     max_cpu_samples: int = 1000,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
+) -> tuple[
+    np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None, InputTypeConverter
+]:
     """Validate and convert inputs to standardized format.
 
     Args:
@@ -61,19 +64,26 @@ def ensure_compatible_fit_inputs(
         max_cpu_samples: Sample count above which CPU inference raises by default.
 
     Returns:
-        A tuple of five elements:
+        A tuple of six elements:
         - the validated input data X as np.ndarray,
         - target data y as np.ndarray,
         - feature names as npt.NDArray[Any] | None,
         - number of features as int
         - target name if the input was a Series, otherwise None
+        - the fitted input type converter
     """
     # Preserve the name of the target data, if it exists.
     original_y_name: str | None = str(y.name) if isinstance(y, pd.Series) else None
 
     # Rely on sklearn's validation to return feature names to be consistent
     # with sklearn interfaces.
-    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
+    (
+        X,
+        y,
+        feature_names_in,
+        n_features_in,
+        input_converter,
+    ) = ensure_compatible_fit_inputs_sklearn(
         X,
         y,
         estimator=estimator,
@@ -88,7 +98,7 @@ def ensure_compatible_fit_inputs(
         devices=devices,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    return X, y, feature_names_in, n_features_in, original_y_name
+    return X, y, feature_names_in, n_features_in, original_y_name, input_converter
 
 
 def ensure_compatible_predict_input_sklearn(
@@ -99,6 +109,9 @@ def ensure_compatible_predict_input_sklearn(
 
     Note that this also changes the type of X to np.ndarray.
     """
+    converter = getattr(estimator, "input_converter_", None)
+    if converter is not None:
+        X = converter.transform(X)
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
@@ -161,7 +174,8 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
+    input_converter: InputTypeConverter | None = None,
+) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, InputTypeConverter]:
     """Validate the input data for fitting with standard input.
 
     Note that this also changes the type of X and y to np.ndarray.
@@ -171,11 +185,22 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
+        input_converter: An already fitted converter to reuse. Pass the one fitted
+            on the training split when validating a held-out split, so both get the
+            same conversions. A new one is fitted when this is None.
 
     Returns:
         A tuple of the validated input data X, target data y, feature names,
-        and number of features.
+        number of features, and the fitted input type converter.
     """
+    # Runs before `validate_data`, which is where the dataframe becomes an array and
+    # where `n_features_in_` and `feature_names_in_` are recorded. Predict converts
+    # first too, so both describe the converted frame at both ends.
+    if input_converter is None:
+        input_converter = InputTypeConverter()
+        X = input_converter.fit_transform(X)
+    else:
+        X = input_converter.transform(X)
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
@@ -226,7 +251,13 @@ def ensure_compatible_fit_inputs_sklearn(
     # NOTE: Theoretically we don't need to return the feature names and number,
     # but it makes it clearer in the calling code that these variables now exist
     # and can be set on the estimator.
-    return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
+    return (
+        X,
+        y,
+        getattr(estimator, "feature_names_in_", None),
+        estimator.n_features_in_,
+        input_converter,
+    )
 
 
 def validate_num_classes(

@@ -8,11 +8,11 @@ version = "8.4.0"
 dependencies = [
   "torch>=2.5",
   "safetensors>=0.4.0",
-  "numpy>=1.21.6",
-  "scikit-learn>=1.2.0",
+  "numpy>=1.23.5",
+  "scikit-learn>=1.4.2",
   "typing_extensions>=4.12.0",
   "scipy>=1.11.1",
-  "pandas>=1.4.0",
+  "pandas>=1.5.3",
   "einops>=0.4.0",
   "huggingface-hub>=0.23.0",
   "pydantic>=2.8.0",
@@ -21,6 +21,7 @@ dependencies = [
   "tqdm>=4.66.0",
   "filelock>=3.11.0",
   "lightgbm>=4.4",
+  "skrub>=0.10",
   "mlx>=0.29.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 requires-python = ">=3.10"
@@ -339,6 +340,7 @@ module = [
   "torch.*",
   "kditransform.*",
   "lightgbm.*",
+  "skrub.*",
 ]
 ignore_missing_imports = true
 

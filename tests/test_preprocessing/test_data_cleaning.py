@@ -76,14 +76,16 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
+        X, y, feature_names, n_features, original_y_name, _ = (
+            ensure_compatible_fit_inputs(
+                X,
+                y,
+                estimator=classifier,
+                max_num_samples=10_000,
+                max_num_features=500,
+                ignore_pretraining_limits=False,
+                devices=cpu_devices,
+            )
         )
 
         assert X.shape == (3, 2)
@@ -99,7 +101,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
         y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
+        _, _, feature_names, _, _, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -118,7 +120,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
+        _, _, _, _, original_y_name, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -595,8 +597,10 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     categories and raise a ``TypeError`` (``'<' not supported between 'float' and
     'str'`` / ``ufunc 'isnan' not supported``).
 
-    The fit/predict dtype drift now coerces the column to string and warns, treating its
-    values as unseen categories instead of crashing.
+    Input type conversion casts the column back to string before the encoder sees it,
+    so its values arrive as unseen categories instead of crashing. The values no longer
+    reach the fit/predict drift check as a mismatch, so no warning is raised on this
+    path; the numpy-array path below still warns.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -620,10 +624,12 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
     clf.fit(X_fit, y)
 
-    with pytest.warns(UserWarning, match="differs.*from fit time"):
-        proba = clf.predict_proba(X_pred)
+    proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
+    # None of the numeric values can match a fit category, so all are unseen.
+    converted = clf.input_converter_.transform(X_pred)
+    assert not set(converted["code"]) & set(X_fit["code"])
 
 
 def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:

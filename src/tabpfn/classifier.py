@@ -109,6 +109,7 @@ if TYPE_CHECKING:
     )
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.input_conversion import InputTypeConverter
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -189,6 +190,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The label encoder used to encode the target variable."""
 
     ordinal_encoder_: OrderPreservingColumnTransformer
+    input_converter_: InputTypeConverter
     """The column transformer used to preprocess categorical data to be numeric."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
@@ -716,7 +718,14 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Data validation and cleaning
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        (
+            X,
+            y,
+            feature_names,
+            n_features,
+            original_y_name,
+            input_converter,
+        ) = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -743,6 +752,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
+        self.input_converter_ = input_converter
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)

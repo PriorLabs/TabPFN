@@ -115,6 +115,7 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.input_conversion import InputTypeConverter
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -228,6 +229,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The inference engine used to make predictions."""
 
     ordinal_encoder_: OrderPreservingColumnTransformer
+    input_converter_: InputTypeConverter
     """The column transformer used to preprocess categorical data to be numeric."""
 
     eval_metric_: RegressorEvalMetrics
@@ -855,7 +857,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
+        (
+            X,
+            y,
+            feature_names,
+            n_features,
+            _,
+            input_converter,
+        ) = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -886,6 +895,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
+        self.input_converter_ = input_converter
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
