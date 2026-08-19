@@ -4,15 +4,29 @@
 
 from __future__ import annotations
 
+import functools
 import platform
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
+from torch import Tensor, nn
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.architectures.interface import (
+    Architecture,
+    ArchitectureConfig,
+    PerformanceOptions,
+)
+from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
+from tabpfn.base import ClassifierModelSpecs, RegressorModelSpecs
+from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
+from tabpfn.inference_config import InferenceConfig
+from tabpfn.model_loading import download_model, resolve_model_path
+from tabpfn.settings import settings
 from tests.utils import get_pytest_devices
 
 devices = get_pytest_devices()
@@ -155,6 +169,9 @@ READ_ONLY_INPUT_KINDS = [
     "with_inf",
 ]
 
+STAND_IN_MAX_NUM_CLASSES = 10
+STAND_IN_NUM_BUCKETS = 64
+
 
 @pytest.mark.parametrize("estimator_class", [TabPFNRegressor, TabPFNClassifier])
 @pytest.mark.parametrize("input_kind", READ_ONLY_INPUT_KINDS)
@@ -175,6 +192,7 @@ def test__fit_and_predict__do_not_write_into_the_callers_arrays(
     )
 
     estimator = estimator_class(
+        model_path=_get_stand_in_model_specs(estimator_class),
         n_estimators=2,
         device="cpu",
         random_state=0,
@@ -207,6 +225,7 @@ def test__fit_and_predict__do_not_modify_the_callers_dataframe(
     y_train_before = y_train.copy(deep=True)
 
     estimator = estimator_class(
+        model_path=_get_stand_in_model_specs(estimator_class),
         n_estimators=2,
         device="cpu",
         random_state=0,
@@ -360,4 +379,108 @@ def _get_dataframe_dataset(
         X.iloc[n_train:].copy(deep=True),
         y_train,
         {"PASSTHROUGH_INF": True},
+    )
+
+
+class _ConstantOutputModel(Architecture):
+    """A stand-in architecture whose forward pass returns constant logits.
+
+    The tests using it assert on their own inputs rather than on predictions, and
+    everything that could touch those inputs — validation, cleaning, and the
+    ensemble preprocessing — runs before the model is reached. Real weights would
+    therefore only add a checkpoint download and a forward pass to each case.
+    """
+
+    def __init__(self, n_outputs: int) -> None:
+        """Create a model emitting `n_outputs` logits per test row."""
+        super().__init__()
+        self.n_outputs = n_outputs
+        # The inference engine reads the model's device off its first parameter.
+        self.parameter = nn.Parameter(torch.tensor(1.0))
+
+    def forward(
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        task_type: str | None = None,
+    ) -> Tensor | dict[str, Tensor]:
+        """Return zero logits for every test row, see `Architecture.forward`."""
+        del categorical_inds, performance_options, task_type
+        features = x["main"] if isinstance(x, dict) else x
+        n_rows, batch_size = features.shape[0], features.shape[1]
+        targets = y["main"] if isinstance(y, dict) else y
+        n_train_rows = 0 if targets is None else targets.shape[0]
+
+        out = features.new_zeros((n_rows - n_train_rows, batch_size, self.n_outputs))
+        return out if only_return_standard_out else {"standard": out}
+
+    @property
+    def embedding_dim(self) -> int:
+        """The width of the (never produced) embeddings."""
+        return 2
+
+    @property
+    def features_per_group(self) -> int:
+        """The number of features the model packs into one token."""
+        return 2
+
+    def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
+        """No-op: this model has no layers to configure."""
+
+
+@functools.cache
+def _get_shipped_inference_config(
+    which: Literal["classifier", "regressor"],
+) -> InferenceConfig:
+    """Read the shipped model's inference config without materialising its weights.
+
+    The preprocessing under test is the one the default model selects, and from
+    v2.6 on that configuration lives inside the checkpoint rather than in
+    `InferenceConfig.get_default`. Reading it back memory-mapped costs a few tens
+    of milliseconds once per session and leaves the weights on disk.
+    """
+    version = settings.tabpfn.model_version
+    (path,), _, (name,), _ = resolve_model_path(None, which, version=version.value)
+    if not path.exists():
+        result = download_model(path, version=version, which=which, model_name=name)
+        if result != "ok":
+            raise RuntimeError(f"Could not download {name}: {result}")
+
+    checkpoint = Checkpoint(path)
+    raw = (
+        checkpoint.load()
+        if checkpoint.is_safetensors
+        else torch.load(str(path), map_location="cpu", weights_only=False, mmap=True)
+    )
+    return InferenceConfig(**raw["inference_config"])
+
+
+def _get_stand_in_model_specs(
+    estimator_class: type[TabPFNClassifier] | type[TabPFNRegressor],
+) -> ClassifierModelSpecs | RegressorModelSpecs:
+    """Return specs that make an estimator run on `_ConstantOutputModel`.
+
+    Passing specs as `model_path` is the supported way to supply an already
+    constructed model, so the estimator's own code path stays intact: it runs the
+    shipped preprocessing and only the forward pass is a stand-in.
+    """
+    if issubclass(estimator_class, TabPFNClassifier):
+        return ClassifierModelSpecs(
+            model=_ConstantOutputModel(STAND_IN_MAX_NUM_CLASSES),
+            architecture_config=ArchitectureConfig(
+                max_num_classes=STAND_IN_MAX_NUM_CLASSES
+            ),
+            inference_config=_get_shipped_inference_config("classifier"),
+        )
+    return RegressorModelSpecs(
+        model=_ConstantOutputModel(STAND_IN_NUM_BUCKETS),
+        architecture_config=ArchitectureConfig(num_buckets=STAND_IN_NUM_BUCKETS),
+        inference_config=_get_shipped_inference_config("regressor"),
+        norm_criterion=FullSupportBarDistribution(
+            torch.linspace(-5.0, 5.0, STAND_IN_NUM_BUCKETS + 1)
+        ),
     )
