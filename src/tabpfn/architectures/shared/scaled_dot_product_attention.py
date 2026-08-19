@@ -88,13 +88,8 @@ _SDPA_BACKENDS = [
 # encountered" once
 # ``batch * heads * round_up(seq_q, 128) * max(head_dim, 32) > 2**31``.
 # The forward is fine at the same shapes, and the memory-efficient backend is
-# fine at all of them. Both roundings matter: a query length that is already a
-# multiple of 128 reaches exactly 2**31 and passes, and a head dim of 16 fails
-# at half the raw element count because it is counted as 32. The boundary is
-# exact either side (0.99972 * 2**31 passes, 1.001 * 2**31 fails), which is
-# consistent with a signed 32-bit element index over a workspace padded to the
-# kernel's block sizes. Measured on an RTX PRO 6000, torch 2.9.0+cu128,
-# bfloat16, over head dims 16, 32, 64 and 128.
+# fine at all of them. Note that the kernel pads internally, so we round to
+# query_block and min_head_dim sizes.
 _FLASH_BACKWARD_MAX_ELEMENTS = 2**31
 _FLASH_QUERY_BLOCK = 128
 _FLASH_MIN_HEAD_DIM = 32
