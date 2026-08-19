@@ -69,22 +69,19 @@ worth passing when what is wanted is the whole table rather than the gate.
 `--mix all` covers the column axis. The other axis worth covering before believing a
 change is the supported dependency range, since what this costs -- and occasionally
 what it returns -- depends on what numpy and pandas do underneath. `--environment`
-takes that one, an interpreter per flag, and the two multiply into a grid of a child
-process per cell. To build the floor of the range, matching the `lowest-direct` leg of
-CI, and then measure both ends of it against `main`:
-
-    UV_PROJECT_ENVIRONMENT=../.venv_low uv sync --group ci \
-        --resolution lowest-direct --python 3.10
-    uv pip install --python ../.venv_low/bin/python setuptools
+takes that one: `lowest` and `highest` are its two ends, built here on first use the
+way CI builds its own two legs, and `current` is this interpreter, named so it can sit
+in the grid beside them.
 
     srun -p cpuhighmem16spot --mem=0 --time=04:00:00 \
         uv run scripts/bench_clean_data.py --mix all --reference main \
-            --environment highest=.venv/bin/python \
-            --environment lowest=../.venv_low/bin/python
+            --environment lowest --environment highest
 
-That `uv pip install` is needed because `torch.utils.benchmark` imports
-`cpp_extension` -> `setuptools` on older torch, and nothing in the dependency floor
-pulls it in. Each label keeps its baselines in a subdirectory of `--out-root` of its
+The first use of `lowest` or `highest` resolves and downloads a virtualenv under
+`--environment-root`, which takes a couple of minutes and a few GB of disk (torch
+brings its CUDA wheels either way); later runs reuse it, and `--refresh-environments`
+rebuilds it. `LABEL=PYTHON` measures under an interpreter of your own instead. Each
+environment but `current` keeps its baselines in a subdirectory of `--out-root` of its
 own, because one recorded against a different dependency set is not comparable with it.
 
 The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
@@ -1063,19 +1060,49 @@ _VERSION_PROBE = (
 
 METRIC_COLUMNS = ("mix", "transient RSS", "median wall time", "status")
 
+# `--environment current`: this interpreter, named so it can be asked for alongside the
+# built ones rather than being the thing you get by asking for nothing.
+CURRENT_ENVIRONMENT = "current"
+
+# The two ends of the dependency range the project supports, as (python version, uv
+# resolution) -- the same two legs CI runs, in `.github/workflows/ci.yml`: 3.10 with
+# every direct dependency at its floor, and 3.14 with all of them at their newest.
+# Asking for one of these builds it, so the range can be covered from one command
+# without hand-building a virtualenv first.
+BUILT_ENVIRONMENTS = {
+    "lowest": ("3.10", "lowest-direct"),
+    "highest": ("3.14", "highest"),
+}
+
 
 @dataclasses.dataclass(frozen=True)
 class Environment:
     """One interpreter the grid is measured under."""
 
-    # None for the interpreter this is running under, which carries no label because it
-    # keeps its baselines in `--out-root` itself, where they have always been.
-    label: str | None
+    # How it is named, in the report and in its cells' banners. None for the
+    # interpreter this runs under when nothing named it: there is then nothing for it
+    # to be told apart from.
+    name: str | None
     interpreter: str
+    # Subdirectory of `--out-root` its baselines go in, None to write into `--out-root`
+    # itself. `current` writes there, where a run that passed no `--environment` at all
+    # has always written, so the two gate against the same recorded numbers.
+    baseline_dir: str | None
+    # (python version, uv resolution) when this script builds the environment itself,
+    # None when the interpreter is expected to be there already.
+    recipe: tuple[str, str] | None = None
 
-    def name(self) -> str:
+    def describe(self) -> str:
         """How this environment is spoken about in the report."""
-        return self.label or "this interpreter"
+        return self.name or "this interpreter"
+
+    def qualify(self, mix: str) -> str:
+        """The name of one of its cells: the mix, qualified by this environment."""
+        return mix if self.name is None else f"{self.name}/{mix}"
+
+    def venv(self) -> Path:
+        """The virtualenv its interpreter lives in, for the ones built here."""
+        return Path(self.interpreter).parent.parent
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1128,47 +1155,136 @@ class CellOutcome:
 
     def name(self) -> str:
         """How this cell is named in its banner and in the failure list."""
-        return cell_name(self.environment, self.mix)
+        return self.environment.qualify(self.mix)
 
 
-def cell_name(environment: Environment, mix: str) -> str:
-    """One cell's name: the mix, qualified by the environment where there is one."""
-    if environment.label is None:
-        return mix
-    return f"{environment.label}/{mix}"
-
-
-def parse_environments(entries: list[str] | None) -> list[Environment]:
+def parse_environments(entries: list[str] | None, root: Path) -> list[Environment]:
     """The interpreters to measure under: this one, unless others were named.
 
-    A label becomes a directory name, since each environment keeps its own baselines,
-    so it is checked for being usable as one -- and for being unique -- before an hour
-    of measuring is spent writing into the wrong place.
+    A label becomes a directory name, since every environment but `current` keeps its
+    own baselines, so it is checked for being usable as one -- and for being unique --
+    before an hour of measuring is spent writing into the wrong place.
     """
     if not entries:
-        return [Environment(label=None, interpreter=sys.executable)]
+        return [Environment(name=None, interpreter=sys.executable, baseline_dir=None)]
 
     environments: list[Environment] = []
     problems = []
     for entry in entries:
-        label, _, interpreter = entry.partition("=")
-        if not label or "/" in label or label in {".", ".."}:
+        name, separator, interpreter = entry.partition("=")
+        problem = environment_problem(name, interpreter, named=bool(separator))
+        if problem:
+            problems.append(f"--environment {entry!r}: {problem}")
+        elif any(name == existing.name for existing in environments):
             problems.append(
-                f"--environment {entry!r} does not begin with a label usable as a "
-                "directory name, as in 'lowest=../.venv_low/bin/python'"
-            )
-        elif any(label == existing.label for existing in environments):
-            problems.append(
-                f"--environment label {label!r} was given twice, and the two of them "
-                "would share a baseline directory"
+                f"--environment {name!r} was given twice, and the two of them would "
+                "share a baseline directory"
             )
         else:
-            environments.append(
-                Environment(label=label, interpreter=interpreter or sys.executable)
-            )
+            environments.append(build_or_find(name, interpreter, root))
     if problems:
         fail(problems)
     return environments
+
+
+def environment_problem(name: str, interpreter: str, *, named: bool) -> str | None:
+    """Why one `--environment` cannot be honoured, or None if it can."""
+    keywords = ", ".join([CURRENT_ENVIRONMENT, *BUILT_ENVIRONMENTS])
+    if not named:
+        if name in {CURRENT_ENVIRONMENT, *BUILT_ENVIRONMENTS}:
+            return None
+        return (
+            f"{name!r} is not one of the environments this builds ({keywords}); give "
+            "an interpreter of your own as LABEL=PYTHON"
+        )
+    if name in {CURRENT_ENVIRONMENT, *BUILT_ENVIRONMENTS}:
+        return (
+            f"{name!r} names an environment this script provides, so it takes no "
+            "interpreter; label yours something else"
+        )
+    if not name or "/" in name or name in {".", ".."}:
+        return (
+            "does not begin with a label usable as a directory name, as in "
+            "'mine=../.venv_mine/bin/python'"
+        )
+    if not interpreter:
+        return "names no interpreter; write it as LABEL=PYTHON"
+    return None
+
+
+def build_or_find(name: str, interpreter: str, root: Path) -> Environment:
+    """One `--environment`, resolved into where its interpreter is or will be."""
+    if name == CURRENT_ENVIRONMENT:
+        return Environment(name=name, interpreter=sys.executable, baseline_dir=None)
+    if name in BUILT_ENVIRONMENTS:
+        return Environment(
+            name=name,
+            interpreter=str(root / name / "bin" / "python"),
+            baseline_dir=name,
+            recipe=BUILT_ENVIRONMENTS[name],
+        )
+    return Environment(name=name, interpreter=interpreter, baseline_dir=name)
+
+
+def provision_environments(environments: list[Environment], *, refresh: bool) -> None:
+    """Build the virtualenvs for the environments this script owns.
+
+    `uv venv` and `uv pip install` rather than the `uv sync` CI uses, because a sync at
+    a non-default `--resolution` rewrites this checkout's `uv.lock` -- which would
+    leave the next plain `uv run` here installing the floor of the dependency range
+    too, silently, long after the benchmark was forgotten about.
+    """
+    for environment in environments:
+        if environment.recipe is None:
+            continue
+        python_version, resolution = environment.recipe
+        venv = environment.venv()
+        if refresh and venv.exists():
+            print(f"Removing the {environment.name} environment at {venv}")
+            shutil.rmtree(venv)
+        if Path(environment.interpreter).exists():
+            print(f"Reusing the {environment.name} environment at {venv}")
+            continue
+
+        print(
+            f"\nBuilding the {environment.name} environment at {venv}: python "
+            f"{python_version}, --resolution {resolution}. Resolving and downloading "
+            "it takes a couple of minutes and a few GB; later runs reuse it."
+        )
+        run_uv(["uv", "venv", str(venv), "--python", python_version])
+        run_uv(
+            [
+                "uv",
+                "pip",
+                "install",
+                "--python",
+                environment.interpreter,
+                "--resolution",
+                resolution,
+                "--group",
+                "ci",
+                "--editable",
+                ".",
+            ]
+        )
+        # `torch.utils.benchmark` imports `cpp_extension` -> `setuptools` on older
+        # torch, and nothing in the dependency floor pulls it in. Deliberately not at
+        # `resolution`: the floor of setuptools itself is not what is being measured.
+        run_uv(
+            ["uv", "pip", "install", "--python", environment.interpreter, "setuptools"]
+        )
+
+
+def run_uv(command: list[str]) -> None:
+    """Run one uv command against this checkout, failing the run if it does not.
+
+    Its output goes straight through: these are the slowest part of a grid, and a
+    resolution that cannot be satisfied is worth reading in full.
+    """
+    print(f"  {shlex.join(command)}", flush=True)
+    code = subprocess.run(command, check=False, cwd=REPO_ROOT).returncode
+    if code:
+        fail([f"{shlex.join(command)} failed with exit code {code}"])
 
 
 def describe_interpreters(environments: list[Environment]) -> list[str]:
@@ -1177,19 +1293,23 @@ def describe_interpreters(environments: list[Environment]) -> list[str]:
     Probed before anything is measured, because an interpreter that cannot import what
     is measured here fails every cell it owns, and finding that out an hour in is worse
     than not having started. Skipped when `--environment` was not given: the versions
-    are then the ones every child prints for itself anyway.
+    are then the ones the single child prints for itself anyway.
     """
     lines = []
     problems = []
     for environment in environments:
-        probe = subprocess.run(
-            [environment.interpreter, "-c", _VERSION_PROBE],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            probe = subprocess.run(
+                [environment.interpreter, "-c", _VERSION_PROBE],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError as error:
+            problems.append(f"{environment.interpreter} cannot be run: {error}")
+            continue
         if probe.returncode == 0:
-            lines.append(f"  {environment.name()}: {probe.stdout.strip()}")
+            lines.append(f"  {environment.describe()}: {probe.stdout.strip()}")
         else:
             detail = (probe.stderr.strip() or "it printed nothing").splitlines()[-1]
             problems.append(
@@ -1245,10 +1365,10 @@ def render_grid_table(outcomes: list[CellOutcome]) -> list[str]:
         )
         for outcome in outcomes
     ]
-    if any(outcome.environment.label is not None for outcome in outcomes):
+    if any(outcome.environment.name is not None for outcome in outcomes):
         header = ("environment", *header)
         rows = [
-            (outcome.environment.name(), *row)
+            (outcome.environment.describe(), *row)
             for outcome, row in zip(outcomes, rows, strict=True)
         ]
 
@@ -1297,14 +1417,14 @@ def cell_command(
 ) -> list[str]:
     """The child command for one cell: its own interpreter, mix and baselines."""
     dropped = {"--mix", "--environment"}
-    if environment.label is not None:
+    if environment.baseline_dir is not None:
         dropped.add("--out-root")
     command = [environment.interpreter, str(script), *argv_without(argv, dropped)]
-    if environment.label is not None:
-        # A labelled environment keeps its baselines under a directory of its own: one
-        # recorded against a different dependency set is not comparable with it, and
-        # `environment_drift` would reject it anyway, rightly.
-        command += ["--out-root", str(args.out_root / environment.label)]
+    if environment.baseline_dir is not None:
+        # Its own baseline directory: one recorded against a different dependency set
+        # is not comparable with it, and `environment_drift` would reject it anyway,
+        # rightly.
+        command += ["--out-root", str(args.out_root / environment.baseline_dir)]
     return [*command, "--mix", mix]
 
 
@@ -1375,11 +1495,12 @@ def run_grid(args: argparse.Namespace, script: Path, argv: list[str]) -> int:
     Every cell is measured whether the ones before it passed or not -- a failure is a
     result like any other here -- and the exit code is the worst of them.
     """
-    environments = parse_environments(args.environment)
+    environments = parse_environments(args.environment, args.environment_root)
     mixes = MIXES if args.mix == MIX_ALL else (args.mix,)
+    provision_environments(environments, refresh=args.refresh_environments)
     described = describe_interpreters(environments) if args.environment else []
     if described:
-        print("Measuring under:")
+        print("\nMeasuring under:")
         print("\n".join(described))
 
     cells = [(environment, mix) for environment in environments for mix in mixes]
@@ -1391,7 +1512,7 @@ def run_grid(args: argparse.Namespace, script: Path, argv: list[str]) -> int:
         # would tear down and re-add the same commit again.
         if index > 0 and "--refresh-reference" in command:
             command.remove("--refresh-reference")
-        exit_code, output = run_cell_child(command, cell_name(environment, mix))
+        exit_code, output = run_cell_child(command, environment.qualify(mix))
         outcomes.append(CellOutcome.from_output(environment, mix, exit_code, output))
     print_grid_report(args, outcomes, described)
     return 0 if all(outcome.ok for outcome in outcomes) else 1
@@ -1799,12 +1920,29 @@ def get_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="LABEL=PYTHON",
         default=None,
-        help="An interpreter to measure under, repeatable, as in "
-        "'lowest=../.venv_low/bin/python'. Each label keeps its baselines in a "
-        "subdirectory of --out-root of its own, since one recorded against a different "
-        "dependency set is not comparable with it. Combines with --mix all into the "
-        "whole grid, a child process per cell. Defaults to just this interpreter, with "
-        "its baselines in --out-root itself.",
+        help="An interpreter to measure under, repeatable. 'lowest' and 'highest' are "
+        "the two ends of the supported dependency range, built under "
+        "--environment-root on first use the way CI builds its own legs; 'current' is "
+        "this interpreter, named so it can sit in the grid beside them; anything else "
+        "is LABEL=PYTHON, an interpreter of your own. Each of them but 'current' keeps "
+        "its baselines in a subdirectory of --out-root of its own, since one recorded "
+        "against a different dependency set is not comparable with it. Combines with "
+        "--mix all into the whole grid, a child process per cell. Defaults to just "
+        "this interpreter, with its baselines in --out-root itself.",
+    )
+    parser.add_argument(
+        "--environment-root",
+        type=Path,
+        default=Path("bench_out/environments"),
+        help="Where the virtualenvs for 'lowest' and 'highest' are built, one per "
+        "environment. The first run against one pays for its resolution and download; "
+        "later ones reuse it.",
+    )
+    parser.add_argument(
+        "--refresh-environments",
+        action="store_true",
+        help="Rebuild the virtualenvs of any built environment this run asks for, "
+        "before using them.",
     )
     parser.add_argument(
         "--input-dtype",

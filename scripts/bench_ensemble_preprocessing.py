@@ -71,16 +71,15 @@ change is answered for on all three tables rather than the one it was written ag
 Every mix in such a run is measured whether the ones before it passed or not, and one
 that trips a gate reports nothing for the checks after it -- so `--tolerance 0.05` is
 worth passing when what is wanted is the whole table rather than the gate. That covers
-the column axis; `--environment` takes the other one, an interpreter per flag, and the
-two multiply into a grid of a child process per cell:
+the column axis; `--environment` takes the other one, and the two multiply into a grid
+of a child process per cell. `lowest` and `highest` are the two ends of the supported
+dependency range, built here on first use the way CI builds its own two legs:
 
     srun -p cpuhighmem16spot --mem=0 --time=04:00:00 \
         uv run scripts/bench_ensemble_preprocessing.py --mix all --reference main \
-            --environment highest=.venv/bin/python \
-            --environment lowest=../.venv_low/bin/python
+            --environment lowest --environment highest
 
-`bench_clean_data.py`'s header has the recipe for building that floor of the supported
-dependency range.
+See `bench_clean_data.py`'s header for what those cost and where they are kept.
 
 The full numeric shape writes ~11 GB per estimator per run. Pair either with
 `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
@@ -1268,12 +1267,29 @@ def get_parser() -> argparse.ArgumentParser:
         action="append",
         metavar="LABEL=PYTHON",
         default=None,
-        help="An interpreter to measure under, repeatable, as in "
-        "'lowest=../.venv_low/bin/python'. Each label keeps its baselines in a "
-        "subdirectory of --out-root of its own, since one recorded against a different "
-        "dependency set is not comparable with it. Combines with --mix all into the "
-        "whole grid, a child process per cell. Defaults to just this interpreter, with "
-        "its baselines in --out-root itself.",
+        help="An interpreter to measure under, repeatable. 'lowest' and 'highest' are "
+        "the two ends of the supported dependency range, built under "
+        "--environment-root on first use the way CI builds its own legs; 'current' is "
+        "this interpreter, named so it can sit in the grid beside them; anything else "
+        "is LABEL=PYTHON, an interpreter of your own. Each of them but 'current' keeps "
+        "its baselines in a subdirectory of --out-root of its own, since one recorded "
+        "against a different dependency set is not comparable with it. Combines with "
+        "--mix all into the whole grid, a child process per cell. Defaults to just "
+        "this interpreter, with its baselines in --out-root itself.",
+    )
+    parser.add_argument(
+        "--environment-root",
+        type=Path,
+        default=Path("bench_out/environments"),
+        help="Where the virtualenvs for 'lowest' and 'highest' are built, one per "
+        "environment. The first run against one pays for its resolution and download; "
+        "later ones reuse it.",
+    )
+    parser.add_argument(
+        "--refresh-environments",
+        action="store_true",
+        help="Rebuild the virtualenvs of any built environment this run asks for, "
+        "before using them.",
     )
     parser.add_argument(
         "--input-dtype",
