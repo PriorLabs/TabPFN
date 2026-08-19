@@ -621,3 +621,26 @@ def test__norm_and_kdi__output_schema_column_count():
     result_append = step_append.fit_transform(X, schema)
     assert result_append.X.shape[1] == 3 * n_features
     assert result_append.feature_schema.num_columns == 3 * n_features
+
+
+def test__reshape__transform__estimator_without_data_is_unchanged_attribute():
+    """A step unpickled without ``data_is_unchanged_`` transforms through
+    ``transformer_``.
+
+    Estimators pickled by a version that predates the attribute restore without it, and
+    predicting on one must not fail on the lookup.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.random((50, 4))
+    schema = _get_schema(num_columns=4)
+
+    step = ReshapeFeatureDistributionsStep(
+        transform_name="safepower",
+        apply_to_categorical=False,
+        append_to_original=False,
+        random_state=0,
+    )
+    expected = step.fit_transform(X, schema).X
+
+    del step.data_is_unchanged_
+    np.testing.assert_array_equal(step.transform(X).X, expected)

@@ -222,6 +222,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 f" or 'ordinal_shuffled' it was {self.categorical_transform_name}"
             )
 
+            if not categorical_features:
+                # Nothing to encode, and a ColumnTransformer passthrough
+                # would rebuild the array
+                return None, categorical_features
+
             ct = ColumnTransformer(
                 [
                     (

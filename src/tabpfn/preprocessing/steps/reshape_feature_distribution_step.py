@@ -261,13 +261,23 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self.max_features_per_estimator = max_features_per_estimator
         self.schedule_gpu_transform = schedule_gpu_transform
         self.transformer_: Pipeline | ColumnTransformer | None = None
+        self.data_is_unchanged_: bool | None = None
+        """Whether this step's transformer would hand the data back untouched, in which
+        case it is not built and the data pass is skipped. ``None`` until fitted, so
+        "not fitted yet" stays distinguishable from "fitted to a no-op"."""
 
     def _create_transformers_and_new_schema(
         self,
         n_samples: int,
         n_features: int,
         feature_schema: FeatureSchema,
-    ) -> tuple[Pipeline | ColumnTransformer, FeatureSchema]:
+    ) -> tuple[Pipeline | ColumnTransformer | None, FeatureSchema]:
+        """Build the transformer for this step, and the schema its output has.
+
+        Returns ``None`` for the transformer when the assembled one would not change
+        the data at all -- see `data_is_unchanged_`. The schema is built the same way
+        either way.
+        """
         if "adaptive" in self.transform_name:
             raise NotImplementedError("Adaptive preprocessing raw removed.")
 
@@ -332,8 +342,6 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             sparse_threshold=0.0,  # No sparse
         )
 
-        self.transformer_ = transformer
-
         # Compute output feature count for modality update
         # Include: base features + appended transformed (if append_to_original).
         # Multi-output transforms (e.g. the "norm_and_kdi" FeatureUnion) emit
@@ -362,6 +370,18 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         )
         self._set_ancestors(new_schema, feature_schema, layout)
 
+        # A transform scheduled onto the GPU leaves "none" behind on this side, which
+        # the registry maps to the identity `FunctionTransformer`.
+        self.data_is_unchanged_ = (
+            # FunctionTransformer(func=None, validate=False) is the identity function
+            isinstance(_transformer, FunctionTransformer)
+            and _transformer.func is None
+            and not _transformer.validate
+            # also check if the column order should change
+            and [column.source_ix for column in layout] == all_feats_ix
+        )
+        self.transformer_ = None if self.data_is_unchanged_ else transformer
+
         if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
                 # Output: [original_all, transformed_copies]
@@ -378,7 +398,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
                     f, scheduled_gpu_transform=self.schedule_gpu_transform
                 )
 
-        return transformer, new_schema
+        return self.transformer_, new_schema
 
     def _set_ancestors(
         self,
@@ -424,7 +444,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features,
             feature_schema,
         )
-        transformer.fit(X)
+        if transformer is not None:
+            transformer.fit(X)
         self.transformer_ = transformer
         return output_schema
 
@@ -432,6 +453,11 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
     def _transform(
         self, X: np.ndarray, *, is_test: bool = False
     ) -> tuple[np.ndarray, np.ndarray | None, FeatureModality | None]:
+        # Read through `getattr`: an estimator pickled by a version that predates
+        # `data_is_unchanged_` has no such attribute, and always carries a transformer,
+        # so the skip is off for it and the assert below is what reports "not fitted".
+        if getattr(self, "data_is_unchanged_", False):
+            return X, None, None
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X), None, None
 
@@ -458,7 +484,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features,
             feature_schema,
         )
-        x_transformed = transformer.fit_transform(X)
+        x_transformed = X if transformer is None else transformer.fit_transform(X)
         self.transformer_ = transformer
         self.feature_schema_updated_ = output_schema
 

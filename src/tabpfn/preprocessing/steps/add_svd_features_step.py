@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 from typing_extensions import override
 
+import numpy as np
 from sklearn.decomposition import TruncatedSVD
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -16,8 +17,21 @@ from tabpfn.preprocessing.pipeline_interface import PreprocessingStep
 from tabpfn.preprocessing.steps.utils import make_scaler_safe
 from tabpfn.utils import infer_random_state
 
-if TYPE_CHECKING:
-    import numpy as np
+
+def _pin_layout(X: np.ndarray) -> np.ndarray:
+    """Return ``X`` in Fortran order, the layout this step's solver is calibrated on.
+
+    ``TruncatedSVD(algorithm="arpack")`` is an iterative Lanczos solver, and on a
+    near-degenerate spectrum -- singular values within a fraction of a percent of each
+    other, which wide tables routinely produce -- the basis it converges to depends on
+    the order the underlying BLAS accumulates in, and so on whether the array it is
+    handed is C- or Fortran-contiguous. The values are unaffected and so is the
+    subspace; which basis of it comes back is not. Pinning the layout here is what
+    keeps the components stable against a layout change in any earlier step.
+
+    A no-op when the input is already Fortran-contiguous.
+    """
+    return np.asfortranarray(X)
 
 
 def get_svd_n_components(
@@ -99,7 +113,7 @@ class AddSVDFeaturesStep(PreprocessingStep):
             n_features,
             random_state=static_seed,
         )
-        transformer.fit(X)
+        transformer.fit(_pin_layout(X))
 
         self.transformer_ = transformer
         self.feature_schema_updated_ = feature_schema
@@ -116,7 +130,8 @@ class AddSVDFeaturesStep(PreprocessingStep):
         assert self.feature_schema_updated_ is not None
         assert self.transformer_ is not None
 
-        return X, self.transformer_.transform(X), FeatureModality.NUMERICAL
+        # Only the solver's input is pinned; `X` itself is handed back as it came.
+        return X, self.transformer_.transform(_pin_layout(X)), FeatureModality.NUMERICAL
 
 
 def get_svd_features_transformer(
