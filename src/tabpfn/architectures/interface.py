@@ -242,6 +242,8 @@ class Architecture(nn.Module, ABC):
             standard decoder.
             Otherwise, a dictionary containing the output of each decoder, and also:
                 - "train_embeddings": The output of the encoder on the training data.
+                  Only present when the forward pass actually ran the training
+                  rows; a pass served from a `kv_cache` may omit it.
                 - "test_embeddings": The output of the encoder on the test data.
             Particular models may also return additional information.
         """

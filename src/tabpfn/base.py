@@ -458,6 +458,13 @@ def get_embeddings(
         data_source : {"train", "test"}, default="test"
             Select the transformer output to return. Use ``"train"`` to obtain
             embeddings from the training tokens and ``"test"`` for the test tokens.
+            ``"train"`` requires a fit mode that keeps the training rows around;
+            it is not available with ``fit_mode="fit_with_cache"``, whose predict
+            pass never runs the training rows through the transformer.
+
+    Raises:
+        TabPFNValidationError: If ``data_source="train"`` and the model was
+            fitted with ``fit_mode="fit_with_cache"``.
 
     Returns:
         np.ndarray
@@ -471,6 +478,19 @@ def get_embeddings(
                 emb_concat = emb.reshape(emb.shape[1], -1)
     """
     check_is_fitted(model)
+
+    if data_source == "train" and isinstance(
+        model.executor_, InferenceEngineExplicitKVCache
+    ):
+        # The cached predict pass only ever sees the test rows: the cache holds
+        # the ICL key/value pairs and the projected decoder keys, not the train
+        # embeddings themselves, so there is nothing to return here.
+        raise TabPFNValidationError(
+            'get_embeddings(..., data_source="train") is not supported with '
+            'fit_mode="fit_with_cache", because the cached predict pass does not '
+            "run the training rows through the transformer. Refit the model with "
+            'fit_mode="fit_preprocessors" to obtain training embeddings.'
+        )
 
     data_map = {"train": "train_embeddings", "test": "test_embeddings"}
 
