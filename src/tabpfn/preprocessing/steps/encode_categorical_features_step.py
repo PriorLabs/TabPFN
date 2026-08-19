@@ -170,19 +170,16 @@ def _encode_into_preallocated(
 ) -> np.ndarray:
     """Assemble the ordinal-encoded array by writing each part to its final place.
 
-    `ColumnTransformer` reaches the same result through three full-size allocations'
-    worth of array: the block of codes, the passthrough block, and the hstack of the
-    two. Writing into one preallocated output costs the output plus the codes, which on
-    a half-categorical table takes a third off this step's peak.
+    `codes` takes the leading columns, in `categorical_features` order; the columns of
+    `X` those codes stand for are dropped, and every other column follows in input
+    order. The dtype is the promotion of the two blocks' dtypes, so the writes below
+    are the only cast, and the memory order is Fortran when both blocks are already
+    Fortran-contiguous and C otherwise.
 
-    Column order, dtype and memory layout are all the ones `ColumnTransformer`
-    produces: encoded columns first, then the remainder in input order; the dtype its
-    hstack would have promoted to, so a write here is the same cast it would have made;
-    and the layout its hstack would have chosen, which depends on the blocks (see
-    below). The layout is not cosmetic -- the sklearn SVD that can run downstream
-    converges to a different basis on a C- than on a Fortran-contiguous input -- and
-    matching it costs nothing: filling a row-major output column by column measured
-    218 ms at 100,000 x 400, against 220 ms for the hstack.
+    This function matches `ColumnTransformer` outputs, dtype and matrix layout;
+    C vs Fortran layout is important to any downstream sklearn SVD.
+
+    Only the output and `codes` are ever held at once, never a full-size intermediate.
     """
     taken = set(categorical_features)
     remainder = [index for index in range(X.shape[1]) if index not in taken]
