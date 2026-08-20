@@ -304,6 +304,9 @@ def find_optimal_classification_thresholds(
 ) -> np.ndarray:
     """Finds the optimal thresholds for each class in a one-vs-rest (OvR) fashion.
 
+    Classes with no positive (or no negative) rows in the holdout carry no signal
+    to tune on and are assigned a neutral threshold instead of a searched one.
+
     Args:
         metric_name: The name of the metric to optimize.
         y_true: The true labels of shape [n_samples].
@@ -313,22 +316,41 @@ def find_optimal_classification_thresholds(
     Returns:
         The optimal thresholds of shape [n_classes].
     """
-    optimal_thresholds = []
+    tuned_by_class: dict[int, float] = {}
 
     # TODO: vectorize this loop loop and the one in
     # find_optimal_classification_threshold_single_class.
     for i in range(n_classes):
-        y_true_ovr = (y_true == i).astype(int)
-        y_pred_probas_ovr = y_pred_probas[:, i]
-        best_thresh = find_optimal_classification_threshold_single_class(
+        is_class_i = y_true == i
+        if not is_class_i.any() or is_class_i.all():
+            # Rare classes can miss the holdout entirely (StratifiedKFold allocates
+            # folds by class count). The search then has no positive class to trade
+            # off against: every threshold scores identically for f1 and roc_auc,
+            # and the remaining metrics reward never predicting the class, so the
+            # searched value is degenerate either way. Assign a neutral one below.
+            continue
+
+        tuned_by_class[i] = find_optimal_classification_threshold_single_class(
             metric_name=metric_name,
-            y_true=y_true_ovr,
-            y_pred_probas=y_pred_probas_ovr,
+            y_true=is_class_i.astype(int),
+            y_pred_probas=y_pred_probas[:, i],
         )
 
-        optimal_thresholds.append(best_thresh)
+    # Thresholds are applied as a divisive reweight (``probas / threshold``, then
+    # renormalize), so only threshold ratios matter and the neutral value for an
+    # untunable class is the geometric mean of the tuned ones: it carries the
+    # average multiplier on the log scale, where the reweight is linear. A constant
+    # will not do: tuned thresholds sit near 0.6 for accuracy but near 0.2 for f1,
+    # so any constant boosts the class under one metric and suppresses it under
+    # another. With nothing tuned the thresholds are uniform, which the caller's
+    # renormalization cancels.
+    neutral = (
+        float(np.exp(np.mean(np.log(list(tuned_by_class.values())))))
+        if tuned_by_class
+        else 1.0
+    )
 
-    return np.array(optimal_thresholds)
+    return np.array([tuned_by_class.get(i, neutral) for i in range(n_classes)])
 
 
 def find_optimal_classification_threshold_single_class(
@@ -384,6 +406,17 @@ def select_robust_optimal_threshold(
     """
     thresholds = np.array([t for t, _ in thresholds_and_losses], dtype=float)
     losses = np.array([f for _, f in thresholds_and_losses], dtype=float)
+
+    finite = np.isfinite(losses)
+    if not finite.any():
+        # Every threshold scored non-finite (e.g. roc_auc_score returns nan when
+        # y_true holds a single label). np.argmin would return index 0 here, the
+        # smallest threshold in the grid and so the most aggressive reweight
+        # available, rather than a neutral choice. Prefer the midpoint.
+        return float(np.median(thresholds))
+    # Non-finite losses must never win the argmin below.
+    losses = np.where(finite, losses, np.inf)
+
     best_loss = float(np.min(losses))
     close_mask = losses <= (best_loss + plateau_delta)
 
