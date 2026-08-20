@@ -8,7 +8,8 @@ import copy
 import dataclasses
 import math
 import warnings
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections import Counter
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
 from itertools import chain, product, repeat
 from typing import TYPE_CHECKING, Literal, TypeVar
 
@@ -605,6 +606,99 @@ def _generate_class_permutations(
     raise ValueError(f"Unknown {class_shift_method=}")
 
 
+def _balanced_preprocessor_indices(
+    num_estimators: int,
+    n_preprocessors: int,
+) -> list[int]:
+    """Assign a preprocessor config index to each estimator, in equal-sized blocks.
+
+    E.g. ``(5, 2) -> [0, 0, 1, 1, 0]``: each config is used
+    ``num_estimators // n_preprocessors`` times, and the leftover estimators go
+    to the first configs.
+    """
+    balance_count = num_estimators // n_preprocessors
+    indices = _balance(range(n_preprocessors), balance_count)
+    leftover = num_estimators - len(indices)
+    if leftover > 0:
+        indices.extend(range(leftover))
+    return indices
+
+
+def _permutation_key(permutation: np.ndarray | None) -> bytes | None:
+    """Hashable identity of a class permutation, for counting distinct ones."""
+    return None if permutation is None else np.asarray(permutation).tobytes()
+
+
+def _cross_class_permutations_with_members(
+    class_permutations: Sequence[np.ndarray | None],
+    member_groups: Sequence[Hashable],
+) -> list[np.ndarray | None]:
+    """Reorder class permutations so they vary within each group of like members.
+
+    ``_generate_class_permutations`` repeats each unique permutation in a
+    contiguous block, and ``_balanced_preprocessor_indices`` lays out the
+    preprocessor configs in contiguous blocks too. Zipping the two lists
+    position by position therefore makes the two choices collinear: block one
+    always meets block one. Binary classification suffers most, because it only
+    has two permutations, so an ensemble of any size covers just
+    ``n_preprocessors`` of the ``2 * n_preprocessors`` possible
+    (preprocessor, class order) recipes.
+
+    This deals the permutations across the groups instead, taking one slot from
+    each group in turn and preferring a permutation that group has not used yet.
+    A group is everything about a member that is already fixed at this point --
+    its preprocessor config and its model index -- so the permutation ends up
+    crossed with both rather than aligned to either.
+
+    The result is a reordering of the same permutations, so every marginal is
+    untouched: each permutation, preprocessor and model is used exactly as often
+    as before, and only which ones meet changes. Crossing the axes therefore
+    costs nothing in compute.
+    """
+    positions_per_group: dict[Hashable, list[int]] = {}
+    for position, group in enumerate(member_groups):
+        positions_per_group.setdefault(group, []).append(position)
+
+    if len(positions_per_group) < 2:
+        # Nothing to cross against; leave the ensemble exactly as it was.
+        return list(class_permutations)
+
+    # Visit one slot of every group before moving on to the next slot. Groups can
+    # differ in length when num_estimators is not a multiple of the number of
+    # configs, hence the length guard.
+    groups = list(positions_per_group.values())
+    deal_order = [
+        positions[slot]
+        for slot in range(max(len(p) for p in groups))
+        for positions in groups
+        if slot < len(positions)
+    ]
+
+    # Hand out the most repeated permutations first: they are the ones at risk of
+    # having to repeat inside a group, and spending them while every group is
+    # still empty is what keeps the pairing collision-free.
+    counts = Counter(_permutation_key(p) for p in class_permutations)
+    remaining = sorted(class_permutations, key=lambda p: -counts[_permutation_key(p)])
+    used_per_group: dict[Hashable, set[bytes | None]] = {
+        group: set() for group in positions_per_group
+    }
+    reordered: list[np.ndarray | None] = [None] * len(class_permutations)
+
+    for position in deal_order:
+        used = used_per_group[member_groups[position]]
+        # Prefer a permutation this group has not been paired with yet; once
+        # every remaining permutation is a repeat for it, order no longer
+        # matters and we take the next one.
+        pick = next(
+            (i for i, p in enumerate(remaining) if _permutation_key(p) not in used), 0
+        )
+        permutation = remaining.pop(pick)
+        used.add(_permutation_key(permutation))
+        reordered[position] = permutation
+
+    return reordered
+
+
 def _find_max_input_features(
     pipeline: PreprocessingPipeline,
     n_samples: int,
@@ -1029,6 +1123,7 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     num_models: int,
     outlier_removal_std: float | None,
     passthrough_inf: bool = False,
+    cross_class_permutation_and_preprocessor: bool = False,
 ) -> list[ClassifierEnsembleConfig]:
     """Generate ensemble configurations for classification.
 
@@ -1044,6 +1139,10 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
         num_models: Number of models to use.
         outlier_removal_std: The standard deviation to remove outliers.
         passthrough_inf: Whether to pass infinite values through to the model.
+        cross_class_permutation_and_preprocessor: Whether to cross the class
+            permutation with the preprocessor config (and the model index)
+            across the ensemble instead of pairing them in aligned blocks. See
+            ``_cross_class_permutations_with_members``.
 
     Returns:
         List of ensemble configurations.
@@ -1053,20 +1152,24 @@ def generate_classification_ensemble_configs(  # noqa: PLR0913
     featshifts = np.arange(start, start + num_estimators)
     featshifts = rng.choice(featshifts, size=num_estimators, replace=False)  # type: ignore[arg-type]
 
-    class_permutations = _generate_class_permutations(
+    class_permutations: Sequence[np.ndarray | None] = _generate_class_permutations(
         num_estimators=num_estimators,
         class_shift_method=class_shift_method,
         n_classes=n_classes,
         rng=rng,
     )
 
-    balance_count = num_estimators // len(preprocessor_configs)
-    configs_ = _balance(preprocessor_configs, balance_count)
-    leftover = num_estimators - len(configs_)
-    if leftover > 0:
-        configs_.extend(preprocessor_configs[:leftover])
-
+    preprocessor_indices = _balanced_preprocessor_indices(
+        num_estimators, len(preprocessor_configs)
+    )
     model_indices = [i % num_models for i in range(num_estimators)]
+
+    if cross_class_permutation_and_preprocessor:
+        class_permutations = _cross_class_permutations_with_members(
+            class_permutations,
+            list(zip(preprocessor_indices, model_indices, strict=True)),
+        )
+    configs_ = [preprocessor_configs[i] for i in preprocessor_indices]
 
     return [
         ClassifierEnsembleConfig(

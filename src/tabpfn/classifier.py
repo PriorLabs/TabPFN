@@ -771,6 +771,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             polynomial_features=self.inference_config_.POLYNOMIAL_FEATURES,
             preprocessor_configs=preprocessor_configs,
             class_shift_method=self.inference_config_.CLASS_SHIFT_METHOD,
+            cross_class_permutation_and_preprocessor=self.inference_config_.CROSS_CLASS_PERMUTATION_AND_PREPROCESSOR,
             n_classes=self.n_classes_,
             random_state=random_state,
             num_models=len(self.models_),

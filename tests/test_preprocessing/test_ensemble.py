@@ -1514,3 +1514,204 @@ def test__generate_regression_ensemble_configs__target_transforms_not_shared():
         "Ensemble configs share target_transform instances; fitting one member "
         "would clobber the fitted state of the others."
     )
+
+
+# --- crossing the class permutation with the preprocessor config ------------
+
+
+def _classification_configs(
+    *,
+    n_classes: int,
+    num_estimators: int,
+    n_preprocessors: int = 2,
+    num_models: int = 1,
+    cross: bool,
+    random_state: int = 0,
+    class_shift_method: str | None = "shuffle",
+) -> list:
+    names = ["none", "quantile_uni_coarse", "safepower", "squashing_scaler_default"]
+    return generate_classification_ensemble_configs(
+        num_estimators=num_estimators,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(names[i], categorical_name="numeric")
+            for i in range(n_preprocessors)
+        ],
+        class_shift_method=class_shift_method,
+        n_classes=n_classes,
+        random_state=random_state,
+        num_models=num_models,
+        outlier_removal_std=None,
+        cross_class_permutation_and_preprocessor=cross,
+    )
+
+
+def _recipes(configs) -> set[tuple]:
+    return {
+        (
+            config.preprocess_config.name,
+            None
+            if config.class_permutation is None
+            else tuple(config.class_permutation),
+        )
+        for config in configs
+    }
+
+
+def _marginals(configs) -> tuple[dict, dict, dict]:
+    from collections import Counter  # noqa: PLC0415
+
+    return (
+        Counter(config.preprocess_config.name for config in configs),
+        Counter(
+            None
+            if config.class_permutation is None
+            else tuple(config.class_permutation)
+            for config in configs
+        ),
+        Counter(config._model_index for config in configs),
+    )
+
+
+@pytest.mark.parametrize("num_estimators", [4, 8, 32])
+def test__crossing__binary_gets_all_four_recipes(num_estimators: int) -> None:
+    """Binary is the case the aligned blocks hurt: 2 of 4 recipes, at any size."""
+    aligned = _classification_configs(
+        n_classes=2, num_estimators=num_estimators, cross=False
+    )
+    crossed = _classification_configs(
+        n_classes=2, num_estimators=num_estimators, cross=True
+    )
+
+    assert len(_recipes(aligned)) == 2
+    assert len(_recipes(crossed)) == 4
+
+
+def test__crossing__is_off_by_default() -> None:
+    """The default must stay collinear so predictions do not change."""
+    default = generate_classification_ensemble_configs(
+        num_estimators=8,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig("none", categorical_name="numeric"),
+            PreprocessorConfig("quantile_uni_coarse", categorical_name="numeric"),
+        ],
+        class_shift_method="shuffle",
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+    explicit = _classification_configs(n_classes=2, num_estimators=8, cross=False)
+
+    assert _recipes(default) == _recipes(explicit)
+    assert len(_recipes(default)) == 2
+
+
+@pytest.mark.parametrize("n_classes", [2, 3, 4, 10])
+@pytest.mark.parametrize("num_estimators", [1, 2, 3, 5, 8, 32])
+@pytest.mark.parametrize("n_preprocessors", [1, 2, 3])
+def test__crossing__preserves_every_marginal(
+    n_classes: int, num_estimators: int, n_preprocessors: int
+) -> None:
+    """Crossing only changes which choices meet, never how often each is used."""
+    aligned = _classification_configs(
+        n_classes=n_classes,
+        num_estimators=num_estimators,
+        n_preprocessors=n_preprocessors,
+        num_models=2,
+        cross=False,
+    )
+    crossed = _classification_configs(
+        n_classes=n_classes,
+        num_estimators=num_estimators,
+        n_preprocessors=n_preprocessors,
+        num_models=2,
+        cross=True,
+    )
+
+    assert len(crossed) == num_estimators
+    assert _marginals(aligned) == _marginals(crossed)
+
+
+@pytest.mark.parametrize("n_classes", [2, 3, 4, 10])
+@pytest.mark.parametrize("num_estimators", [2, 3, 4, 5, 8, 32])
+@pytest.mark.parametrize("n_preprocessors", [2, 3])
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test__crossing__never_reduces_distinct_recipes(
+    n_classes: int, num_estimators: int, n_preprocessors: int, seed: int
+) -> None:
+    """The point of the option: more distinct (preprocessor, class order) pairs."""
+    aligned = _classification_configs(
+        n_classes=n_classes,
+        num_estimators=num_estimators,
+        n_preprocessors=n_preprocessors,
+        random_state=seed,
+        cross=False,
+    )
+    crossed = _classification_configs(
+        n_classes=n_classes,
+        num_estimators=num_estimators,
+        n_preprocessors=n_preprocessors,
+        random_state=seed,
+        cross=True,
+    )
+
+    assert len(_recipes(crossed)) >= len(_recipes(aligned))
+
+
+@pytest.mark.parametrize("n_preprocessors", [1, 2])
+def test__crossing__is_a_noop_without_class_shifting(n_preprocessors: int) -> None:
+    """With CLASS_SHIFT_METHOD=None there is no second axis to cross against."""
+    aligned = _classification_configs(
+        n_classes=3,
+        num_estimators=8,
+        n_preprocessors=n_preprocessors,
+        class_shift_method=None,
+        cross=False,
+    )
+    crossed = _classification_configs(
+        n_classes=3,
+        num_estimators=8,
+        n_preprocessors=n_preprocessors,
+        class_shift_method=None,
+        cross=True,
+    )
+
+    assert [c.preprocess_config.name for c in aligned] == [
+        c.preprocess_config.name for c in crossed
+    ]
+    assert all(c.class_permutation is None for c in crossed)
+
+
+def test__crossing__single_preprocessor_and_model_leaves_order_untouched() -> None:
+    """One group means nothing to cross against; the ensemble must be unchanged."""
+    aligned = _classification_configs(
+        n_classes=2, num_estimators=8, n_preprocessors=1, cross=False
+    )
+    crossed = _classification_configs(
+        n_classes=2, num_estimators=8, n_preprocessors=1, cross=True
+    )
+
+    for a, c in zip(aligned, crossed, strict=True):
+        np.testing.assert_array_equal(a.class_permutation, c.class_permutation)
+
+
+def test__crossing__binary_crosses_with_the_model_index_too() -> None:
+    """Two models, two preprocessors, two class orders: 8 members, 8 recipes."""
+    configs = _classification_configs(
+        n_classes=2, num_estimators=8, n_preprocessors=2, num_models=2, cross=True
+    )
+    recipes = {
+        (
+            config.preprocess_config.name,
+            tuple(config.class_permutation),
+            config._model_index,
+        )
+        for config in configs
+    }
+    assert len(recipes) == 8

@@ -96,6 +96,25 @@ class InferenceConfig:
         - If None, no class shifting is done.
     """
 
+    CROSS_CLASS_PERMUTATION_AND_PREPROCESSOR: bool = False
+    """Whether the class permutation and the preprocessor config are crossed across
+    the classification ensemble, instead of being paired in aligned blocks.
+
+    Both choices are laid out in contiguous blocks (all of preprocessor A, then all
+    of preprocessor B; all of class order 1, then all of class order 2) and then
+    zipped position by position, which makes them perfectly correlated. Binary
+    classification loses the most: with two preprocessor configs an ensemble covers
+    only 2 of the 4 possible (preprocessor, class order) recipes, at any ensemble
+    size. When ``True``, the permutations are dealt across the ensemble so that
+    each one lands on a member whose preprocessor config (and model index, when
+    several checkpoints are ensembled) it has not been paired with yet, giving a
+    binary ensemble 4 distinct recipes for the same compute. How often each
+    preprocessor and each class order is used does not change, only which ones meet.
+
+    This only affects classification, and is a no-op when there is a single
+    preprocessor config and a single model, or when ``CLASS_SHIFT_METHOD`` is None.
+    """
+
     FINGERPRINT_FEATURE: bool = True
     """Whether to add a fingerprint feature to the data. The added feature is a hash of
     the row, counting up for duplicates. This helps TabPFN to distinguish between
