@@ -17,6 +17,7 @@ from tabpfn.preprocessing.target_transform import (
     UNSTANDARDIZE_STEP,
     UnstandardizeTarget,
     rebind_target_transform_statistics,
+    robust_target_scale,
     wrap_target_transform,
 )
 
@@ -124,11 +125,107 @@ def test__wrap_target_transform__is_picklable() -> None:
 
 
 def test__unstandardize_target__transform_and_inverse_are_inverses() -> None:
-    step = UnstandardizeTarget(mean=3.0, std=2.0)
     x = np.array([[-1.0], [0.0], [2.5]])
+    step = UnstandardizeTarget(mean=3.0, std=2.0).fit(x)
 
+    assert step.scale_ == 1.0
     np.testing.assert_allclose(step.transform(x), x * 2.0 + 3.0)
     np.testing.assert_allclose(step.inverse_transform(step.transform(x)), x)
+
+
+def test__unstandardize_target__scale_normalized__divides_by_the_robust_scale() -> None:
+    """Scale-normalised, the step returns the target divided by its own scale."""
+    x = np.array([[-1.0], [0.0], [2.5]])
+    step = UnstandardizeTarget(mean=3.0, std=2.0, scale_normalized=True).fit(x)
+
+    scale = robust_target_scale(x * 2.0 + 3.0)
+    assert step.scale_ == scale
+    np.testing.assert_allclose(step.transform(x), (x * 2.0 + 3.0) / scale)
+    np.testing.assert_allclose(step.inverse_transform(step.transform(x)), x)
+
+
+def test__robust_target_scale__falls_back_for_a_mostly_zero_target() -> None:
+    """A zero-inflated target has a zero median, which cannot be a divisor."""
+    y = np.array([0.0, 0.0, 0.0, 0.0, 2.0, 6.0])
+
+    assert robust_target_scale(y) == pytest.approx(np.mean(np.abs(y)))
+    assert robust_target_scale(np.zeros(4)) == 1.0
+
+
+@pytest.mark.parametrize("name", TRANSFORM_NAMES)
+def test__wrap_target_transform__scale_normalized__standardizes_scaled_target(
+    name: str,
+) -> None:
+    """Scale-normalised, the transform sees the target divided by its scale.
+
+    The zero point of the target is preserved, only its scale is normalised.
+    """
+    y = _skewed_positive_target()
+    y_znorm, mean, std = _znorm(y)
+
+    wrapped = wrap_target_transform(
+        _get_transform(name, len(y)), mean=mean, std=std, scale_normalized=True
+    ).fit_transform(y_znorm.reshape(-1, 1))
+
+    scaled = y / robust_target_scale(y)
+    unwrapped = (
+        _get_transform(name, len(y)).fit_transform(scaled.reshape(-1, 1)).astype(float)
+    )
+    expected = (unwrapped - unwrapped.mean()) / unwrapped.std()
+
+    np.testing.assert_allclose(wrapped, expected, atol=1e-10)
+
+
+@pytest.mark.parametrize("name", TRANSFORM_NAMES)
+def test__wrap_target_transform__scale_normalized__inverse_returns_znormalized(
+    name: str,
+) -> None:
+    """The z-normalised space of the borders must survive the scale normalisation."""
+    y = _skewed_positive_target()
+    y_znorm, mean, std = _znorm(y)
+
+    pipeline = wrap_target_transform(
+        _get_transform(name, len(y)), mean=mean, std=std, scale_normalized=True
+    )
+    transformed = pipeline.fit_transform(y_znorm.reshape(-1, 1))
+
+    np.testing.assert_allclose(
+        pipeline.inverse_transform(transformed).ravel(), y_znorm, atol=1e-8
+    )
+
+
+def test__wrap_target_transform__scale_normalized__is_invariant_to_target_units() -> (
+    None
+):
+    """Scale normalisation is the point: the units of the target stop mattering.
+
+    Without it, Yeo-Johnson on a target far from unit scale degenerates, since
+    its bend sits at zero with a fixed unit offset.
+    """
+    y = _skewed_positive_target()
+
+    def model_target(target: np.ndarray, *, scale_normalized: bool) -> np.ndarray:
+        y_znorm, mean, std = _znorm(target)
+        pipeline = wrap_target_transform(
+            _get_transform("safepower", len(target)),
+            mean=mean,
+            std=std,
+            scale_normalized=scale_normalized,
+        )
+        return pipeline.fit_transform(y_znorm.reshape(-1, 1)).ravel()
+
+    np.testing.assert_allclose(
+        model_target(y, scale_normalized=True),
+        model_target(y * 1e-6, scale_normalized=True),
+        atol=1e-6,
+    )
+    # The unnormalised composition is not invariant, which is what motivates
+    # the scale normalisation in the first place.
+    assert not np.allclose(
+        model_target(y, scale_normalized=False),
+        model_target(y * 1e-6, scale_normalized=False),
+        atol=1e-6,
+    )
 
 
 def test__rebind_target_transform_statistics__updates_wrapped_transforms() -> None:

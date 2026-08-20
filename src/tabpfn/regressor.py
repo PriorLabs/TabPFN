@@ -89,7 +89,10 @@ from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
-from tabpfn.preprocessing.target_transform import wrap_target_transform
+from tabpfn.preprocessing.target_transform import (
+    SCALE_NORMALIZED_TARGET_TRANSFORMS,
+    wrap_target_transform,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -922,6 +925,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     possible_target_transforms[y_target_preprocessor],
                     mean=self.y_train_mean_,
                     std=self.y_train_std_,
+                    scale_normalized=(
+                        y_target_preprocessor in SCALE_NORMALIZED_TARGET_TRANSFORMS
+                    ),
                 )
             )
 

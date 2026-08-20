@@ -1415,6 +1415,34 @@ def test__fit__no_target_transform__leaves_the_target_znormalized() -> None:
     np.testing.assert_allclose(member_y, (y - y.mean()) / y.std(), atol=1e-8)
 
 
+def test__fit__safepower__sees_the_scale_normalized_target() -> None:
+    """`safepower` is Yeo-Johnson, which is scale-normalised before it runs.
+
+    Its bend sits at zero with a fixed unit offset, so it needs the target at
+    unit scale to stay well-posed -- but not centred, or it loses the zero
+    point a positive target is anchored to.
+    """
+    X, y = _mk_skewed_reg_dataset(0)
+    kwargs = {
+        "n_estimators": 1,
+        "device": "cpu",
+        "random_state": 42,
+        "inference_config": {"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("safepower",)},
+    }
+
+    reg = TabPFNRegressor(**kwargs)
+    reg.fit(X, y)
+    scaled = TabPFNRegressor(**kwargs)
+    scaled.fit(X, y / 1000.0)
+
+    # Rescaling the target must leave the model's input untouched.
+    np.testing.assert_allclose(
+        np.asarray(reg.executor_.ensemble_members[0].y_train),
+        np.asarray(scaled.executor_.ensemble_members[0].y_train),
+        atol=1e-6,
+    )
+
+
 def test__fit__none_target_transform__is_treated_as_no_transform() -> None:
     """The ``"none"`` preset is the identity, so it must not be composed.
 
