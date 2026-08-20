@@ -26,28 +26,53 @@ concurrency:
 jobs:
   reapprove:
     name: Restore dismissed approval
-    # Three checks:
-    # - This PR comes from an org member or owner
-    # - The dismissed review comes from an org member or owner. Without this, an
-    #   external user can trigger this bot to approve a PR by submitting an approval
-    #   themselves. Not a big risk, as the PR's author must still be an internal user.
-    #   We include 'github-actions[bot]' so that the workflow can reapprove again after
-    #   a second push from the user.
-    # - The PR does not come from a fork, for defence in depth.
-    if: >
-      (
-        github.event.pull_request.author_association == 'MEMBER' ||
-        github.event.pull_request.author_association == 'OWNER'
-      ) &&
-      (
-        github.event.review.author_association == 'MEMBER' ||
-        github.event.review.author_association == 'OWNER' ||
-        github.event.review.user.login == 'github-actions[bot]'
-      ) &&
-      github.event.pull_request.head.repo.full_name == github.repository
+    # The PR does not come from a fork. This also means the author has write access to
+    # the repository, as otherwise they could not have pushed the branch. The next step
+    # checks the author's org membership as well, for defence in depth.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-slim
     steps:
+      - name: Check the author and the reviewer are org members
+        id: membership
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          # We cannot read the memberships with GITHUB_TOKEN.
+          github-token: ${{ secrets.PRIORLABS_ORG_MEMBERSHIP_READ_PAT }}
+          script: |
+            const org = context.repo.owner;
+
+            async function isOrgMember(username) {
+              try {
+                await github.rest.orgs.checkMembershipForUser({ org, username });
+                return true;
+              } catch (error) {
+                if (error.status === 404) {
+                  return false;
+                }
+                throw error;
+              }
+            }
+
+            const author = context.payload.pull_request.user.login;
+            if (!(await isOrgMember(author))) {
+              core.info(`The author ${author} is not an org member, not approving.`);
+              return;
+            }
+
+            // Without this check, an external user can trigger this bot to approve a PR
+            // by submitting an approval themselves. Not a big risk, as the PR's author
+            // must still be an internal user. We include 'github-actions[bot]' so that
+            // the workflow can reapprove again after a second push from the user.
+            const reviewer = context.payload.review.user.login;
+            if (reviewer !== "github-actions[bot]" && !(await isOrgMember(reviewer))) {
+              core.info(`The reviewer ${reviewer} is not an org member, not approving.`);
+              return;
+            }
+
+            core.setOutput("trusted", "true");
+
       - name: Restore the dismissed approval
+        if: steps.membership.outputs.trusted == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
