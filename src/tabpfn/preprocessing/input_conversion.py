@@ -13,11 +13,6 @@ if TYPE_CHECKING:
 
     from tabpfn.constants import XType
 
-#: Above this many distinct values a string column is treated as high cardinality.
-#: Both cardinality branches are passed through, so this only decides which one a
-#: column takes, not what happens to it.
-CARDINALITY_THRESHOLD = 40
-
 
 def make_datetime_encoder() -> DatetimeEncoder:
     """Build the encoder that turns a datetime column into numeric features.
@@ -70,11 +65,15 @@ class InputTypeConverter:
             return X
         from skrub import TableVectorizer  # noqa: PLC0415
 
+        # Passing both cardinality branches through leaves every string column
+        # exactly as it arrived, so skrub's own `cardinality_threshold` has no
+        # effect here and is left unset. Whether a string column is a category or
+        # text stays with `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` downstream. Handing
+        # that split to skrub instead would be a way to drop one of the two.
         self.vectorizer_ = TableVectorizer(
             low_cardinality="passthrough",
             high_cardinality="passthrough",
             numeric="passthrough",
-            cardinality_threshold=CARDINALITY_THRESHOLD,
             datetime=make_datetime_encoder(),
         )
         return self.vectorizer_.fit_transform(X)
