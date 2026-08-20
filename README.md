@@ -123,7 +123,7 @@ For high-throughput or massive-scale production environments, we offer an **Ente
 We're building the future of tabular machine learning and would love your involvement:
 
 1. **Connect & Learn**:
-   - Join our [Discord Community](https://discord.gg/VJRuU3bSxt)
+   - Join our [Discord Community](https://discord.gg/BHnX2Ptf4j)
    - Read our [Documentation](https://priorlabs.ai/docs)
    - Check out [GitHub Issues](https://github.com/priorlabs/tabpfn/issues)
 
