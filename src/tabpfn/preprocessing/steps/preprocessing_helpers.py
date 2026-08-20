@@ -172,19 +172,7 @@ class EfficientColumnTransformer(ColumnTransformer):
                 super().fit_transform(X, y, **params), original_columns
             )
 
-        codes = None
-        if selected:
-            # `fit_transform` rather than a fit and then a transform: it is one pass
-            # over one slice of the selected columns, where the second pass would have
-            # to hold that slice for the whole of it.
-            codes = self.named_transformers_[name].fit_transform(
-                _column_subset(X, selected)
-            )
-            # What `_hstack` does with a sparse block whose density beat
-            # `sparse_threshold`, and what a `set_output` on the transformer itself
-            # would otherwise leave here.
-            codes = np.asarray(codes.toarray() if sparse.issparse(codes) else codes)
-        return self._assemble(X, name, codes, selected)
+        return self._assemble(X, name, selected)
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:
@@ -195,7 +183,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         is the one where they are settled in advance, by `_changes_no_value`.
         """
         if self._changes_no_value(X, params):
-            return self._assemble(X, None, None, [])
+            return self._assemble(X, None, [])
         original_columns = _input_columns(X)
         return self._in_input_order(super().transform(X, **params), original_columns)
 
@@ -332,13 +320,28 @@ class EfficientColumnTransformer(ColumnTransformer):
             if column not in taken
         )
 
-    def _assemble(
-        self,
-        X: XType,
-        name: str | None,
-        codes: np.ndarray | None,
-        selected: list[Any],
-    ) -> np.ndarray:
+    def _transformed_block(
+        self, X: XType, name: str | None, selected: list[Any]
+    ) -> np.ndarray | None:
+        """The named transformer's own output over the columns it selected.
+
+        `None` when there is nothing selected, without touching the transformer -- which
+        is the only case `transform` reaches this through, so nothing is fitted there.
+
+        `fit_transform` rather than a fit and then a transform: it is one pass over one
+        slice of the selected columns, where a second pass would have to hold that slice
+        for the whole of it.
+        """
+        if not selected:
+            return None
+        codes = self.named_transformers_[name].fit_transform(
+            _column_subset(X, selected)
+        )
+        # What `_hstack` does with a sparse block whose density beat `sparse_threshold`,
+        # and what a `set_output` on the transformer itself would otherwise leave here.
+        return np.asarray(codes.toarray() if sparse.issparse(codes) else codes)
+
+    def _assemble(self, X: XType, name: str | None, selected: list[Any]) -> np.ndarray:
         """Write the transformer's block and every other column to its final place.
 
         The array returned is one nothing else has ever referenced, which is what lets a
@@ -349,8 +352,16 @@ class EfficientColumnTransformer(ColumnTransformer):
         through into the frame, and copying it costs a second full-size buffer on top of
         the consolidation. Going column by column costs one buffer on every version, and
         leaves the frame's own blocks alone.
+
+        The transformer's block is computed here rather than handed in so that it can be
+        dropped the moment it is written. `np.empty` faults a page in only when it is
+        written to, so the output appears in RSS as its columns are filled: a caller
+        still holding the block while the passthrough half fills the rest would have the
+        whole output *and* the block resident at once, which the block dying first
+        avoids.
         """
         destination, passthrough = self._output_positions(X, name, selected)
+        codes = self._transformed_block(X, name, selected)
         dtype = self._assembled_dtype(X, codes, passthrough)
         order = self._assembled_order(X, codes, passthrough)
 
@@ -370,6 +381,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         out = np.empty(X.shape, dtype=dtype, order=order)
         if codes is not None:
             out[:, destination] = codes
+            del codes
         # Per column, so the passthrough half never needs a full-width temporary of its
         # own; each write is a copy out of the container's own buffer.
         for position, source in passthrough:
