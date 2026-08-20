@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 import pytest
+from sklearn.compose import ColumnTransformer
 
 from tabpfn.preprocessing.datamodel import (
     Feature,
@@ -17,9 +18,7 @@ from tabpfn.preprocessing.datamodel import (
 )
 from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
-from tabpfn.preprocessing.steps.encode_categorical_features_step import (
-    _encode_into_preallocated,
-)
+from tabpfn.preprocessing.steps.preprocessing_helpers import EfficientColumnTransformer
 
 
 def _make_feature_schema(n_features: int, cat_indices: list[int]) -> FeatureSchema:
@@ -558,9 +557,9 @@ class TestCarryOverGpuTransformMarks:
 # The preallocated assembly against the ColumnTransformer it replaces
 # ---------------------------------------------------------------------------
 #
-# `_encode_into_preallocated` exists only to reach `ColumnTransformer`'s result with
-# fewer full-size arrays, so sklearn is the oracle: these compare against a
-# ColumnTransformer fitted the ordinary way and fail on any drift from it.
+# The step's `EfficientColumnTransformer` exists only to reach `ColumnTransformer`'s
+# result with fewer full-size arrays, so sklearn is the oracle: these compare against a
+# plain ColumnTransformer over the same transformers and fail on any drift from it.
 
 
 def _ordinal_case(
@@ -582,6 +581,14 @@ def _ordinal_case(
     return X.astype(dtype)
 
 
+def _plain_column_transformer(
+    X: np.ndarray, cat_indices: list[int]
+) -> ColumnTransformer:
+    """The step's ordinal transformer as a stock `ColumnTransformer`: the oracle."""
+    ct, _ = EncodeCategoricalFeaturesStep("ordinal")._get_transformer(X, cat_indices)
+    return ColumnTransformer(list(ct.transformers), remainder=ct.remainder)
+
+
 @pytest.mark.parametrize(
     ("dtype", "cat_indices", "with_nan"),
     [
@@ -599,7 +606,7 @@ def _ordinal_case(
         pytest.param(np.float64, [0, 1, 2, 3], False, id="one-passthrough"),
     ],
 )
-def test__encode_into_preallocated__matches_column_transformer(
+def test__efficient_column_transformer__matches_column_transformer(
     dtype: Any,
     cat_indices: list[int],
     with_nan: bool,
@@ -613,17 +620,13 @@ def test__encode_into_preallocated__matches_column_transformer(
     """
     X = _ordinal_case(dtype, cat_indices, with_nan=with_nan)
 
-    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
-    reference_ct, _ = step._get_transformer(X, cat_indices)
-    reference = reference_ct.fit_transform(X)
+    ct, _ = EncodeCategoricalFeaturesStep("ordinal")._get_transformer(X, cat_indices)
+    assert isinstance(ct, EfficientColumnTransformer)
+    reference = ColumnTransformer(
+        list(ct.transformers), remainder=ct.remainder
+    ).fit_transform(X)
 
-    ct, ct_cat_features = step._get_transformer(X, cat_indices)
-    # What the step does: the column bookkeeping from one row, the codes from all.
-    ct.fit(X[:1])
-    codes = ct.named_transformers_["ordinal_encoder"].fit_transform(
-        X[:, ct_cat_features]
-    )
-    assembled = _encode_into_preallocated(X, codes, ct_cat_features)
+    assembled = ct.fit_transform(X)
 
     assert assembled.shape == reference.shape
     assert assembled.dtype == reference.dtype
@@ -647,10 +650,7 @@ def test__encode_categorical__ordinal__step_output_matches_column_transformer() 
     step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
     result = step.fit_transform(X.copy(), schema)
 
-    reference_ct, _ = EncodeCategoricalFeaturesStep(
-        "ordinal", random_state=0
-    )._get_transformer(X, cat_indices)
-    reference = reference_ct.fit_transform(X)
+    reference = _plain_column_transformer(X, cat_indices).fit_transform(X)
 
     np.testing.assert_array_equal(result.X, reference)
     assert np.isfortran(result.X) == np.isfortran(reference)
@@ -671,9 +671,7 @@ def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> No
     step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
     step.fit_transform(X.copy(), schema)
 
-    reference_ct, _ = EncodeCategoricalFeaturesStep(
-        "ordinal", random_state=0
-    )._get_transformer(X, cat_indices)
+    reference_ct = _plain_column_transformer(X, cat_indices)
     reference_ct.fit(X)
 
     fitted = step.categorical_transformer_.named_transformers_["ordinal_encoder"]

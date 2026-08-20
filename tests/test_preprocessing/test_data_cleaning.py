@@ -25,7 +25,10 @@ from tabpfn.preprocessing.clean import (
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    EfficientColumnTransformer,
+    get_ordinal_encoder,
+)
 from tabpfn.validation import ensure_compatible_fit_inputs
 
 
@@ -1003,9 +1006,11 @@ def test__clean_data__mixed_columns_take_the_assembly_path() -> None:
     """The assembly is used, and its result is placed by column, not by transformer."""
     X, schema = _mixed_frame_inputs()
 
-    with mock.patch(
-        "tabpfn.preprocessing.clean._encode_into_preallocated",
-        wraps=clean_module._encode_into_preallocated,
+    with mock.patch.object(
+        EfficientColumnTransformer,
+        "_assemble",
+        autospec=True,
+        side_effect=EfficientColumnTransformer._assemble,
     ) as assembled:
         out, _encoder, _ = clean_data(X=X, feature_schema=schema)
 
@@ -1079,9 +1084,8 @@ def test__clean_data__object_passthrough_falls_back_to_the_encoder() -> None:
     )
     encoder = get_ordinal_encoder()
 
-    assert not clean_module._can_write_encoded_columns(
-        frame, clean_module._encoder_selection(encoder.fit(frame.iloc[:1]))
-    )
+    encoder.fit(frame.iloc[:1])
+    assert not encoder._can_assemble(frame, frame.iloc[:1], encoder.selected_columns())
     # The real call still works, through sklearn, and learns the categories exactly
     # once. Declining the assembly *after* fitting them would pay for a second pass
     # over the data and then discard it, since `fit_transform` fits again itself.
