@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import Literal, overload
+from collections.abc import Callable
+from typing import Any, Literal, overload
 from typing_extensions import override
 
 import numpy as np
@@ -14,10 +15,17 @@ import torch
 from numpy.random import default_rng
 from torch import Tensor, nn
 
-from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn import (
+    TabPFNClassifier,
+    TabPFNRegressor,
+)
 from tabpfn.architectures import tabpfn_v2
 from tabpfn.architectures.interface import Architecture, PerformanceOptions
-from tabpfn.architectures.kv_cache import KVCacheEntry
+from tabpfn.architectures.kv_cache import (
+    KVCacheEntry,
+    QuantizedKVCacheEntry,
+    stack_kv_entries,
+)
 from tabpfn.architectures.shared import workaround_mps_linear_bug
 from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
@@ -911,3 +919,218 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
             "int8", architecture=arch, device=torch.device("cpu")
         )
     assert resolved == "auto"
+
+
+def _fit_cached_ensemble(
+    estimator: str, device: str, n_train: int, n_test: int, n_estimators: int = 4
+) -> tuple[Any, np.ndarray, Callable[[Any, np.ndarray], np.ndarray]]:
+    """Fit a float64 `fit_with_cache` estimator; return (model, X_test, predict)."""
+    if estimator == "classifier":
+        X, y = sklearn.datasets.make_classification(
+            n_samples=n_train + n_test,
+            n_features=5,
+            n_informative=3,
+            n_classes=3,
+            random_state=0,
+        )
+        model = TabPFNClassifier(
+            n_estimators=n_estimators,
+            random_state=42,
+            device=device,
+            inference_precision=torch.float64,
+            fit_mode="fit_with_cache",
+        )
+
+        def predict(m, x) -> np.ndarray:
+            return m.predict_proba(x)
+    else:
+        X, y, _ = sklearn.datasets.make_regression(
+            n_samples=n_train + n_test, n_features=5, random_state=0, coef=True
+        )
+        model = TabPFNRegressor(
+            n_estimators=n_estimators,
+            random_state=42,
+            device=device,
+            inference_precision=torch.float64,
+            fit_mode="fit_with_cache",
+        )
+
+        def predict(m, x) -> np.ndarray:
+            return m.predict(x, output_type="mean")
+
+    model.fit(X[:n_train], y[:n_train])
+    return model, X[n_train:], predict
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+@pytest.mark.parametrize("estimator", ["classifier", "regressor"])
+@pytest.mark.parametrize("kv_cache_precision", ["auto", "int8"])
+def test__batched_estimators__matches_sequential(
+    estimator: str,
+    device: str,
+    kv_cache_precision: str,
+) -> None:
+    """Fusing the ensemble into one forward must match one forward per member.
+
+    Run in float64 so the only remaining difference is the changed reduction
+    order of the batched attention. Both KV cache precisions are covered
+    because the batched path stacks the cache *without* dequantizing it, and a
+    stacked per-member scale that failed to broadcast would show up here.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    model, X_test, predict = _fit_cached_ensemble(estimator, device, 48, 13)
+    engine = model.executor_
+    assert isinstance(engine, InferenceEngineExplicitKVCache)
+    engine.kv_cache_precision = kv_cache_precision
+
+    assert engine.batch_estimators
+    # fit must not build the stack -- it is a predict-only feature.
+    assert engine._batched_caches is None
+    pred_batched = predict(model, X_test)
+    assert engine._batched_caches, "first predict should have built the stack"
+
+    engine.batch_estimators = False
+    pred_sequential = predict(model, X_test)
+
+    np.testing.assert_allclose(pred_batched, pred_sequential, rtol=1e-8, atol=1e-8)
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__batched_estimators__bounded_by_max_batched_test_rows(
+    device: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row budget applies to group_size * n_test, not n_test alone.
+
+    The batched forward puts every member's test rows through the ICL stack at
+    once and does not chunk, so it has to respect the same budget the
+    sequential path chunks against -- scaled by the group size.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    n_estimators = 4
+    model, X_test, predict = _fit_cached_ensemble(
+        "classifier", device, 48, 9, n_estimators=n_estimators
+    )
+    engine = model.executor_
+    # The budget is answered from the members, so it works before any build.
+    assert engine._batched_caches is None
+    idxs, *rest = engine._estimator_groups().values()
+    assert not rest
+    assert len(idxs) == n_estimators
+
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 8 * n_estimators)
+    assert engine._can_batch_estimators(only_return_standard_out=True, n_test=8)
+    assert not engine._can_batch_estimators(only_return_standard_out=True, n_test=9)
+
+    # Chunking off (0) means no bound here either.
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 0)
+    assert engine._can_batch_estimators(only_return_standard_out=True, n_test=1_000_000)
+
+    # get_embeddings needs the dict output, which the batched path cannot make.
+    assert not engine._can_batch_estimators(only_return_standard_out=False, n_test=1)
+
+    # Falling back over the budget must still predict the same values.
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 8 * n_estimators)
+    pred_fallback = predict(model, X_test)
+    monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", 0)
+    np.testing.assert_allclose(
+        predict(model, X_test), pred_fallback, rtol=1e-8, atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__batched_estimators__stack_shares_per_member_storage(device: str) -> None:
+    """The batched cache must take over member storage, not duplicate it.
+
+    The per-member caches stay live (stages 0-2 and the sequential fallback
+    read them), so a stack that copied would double the resident KV cache --
+    the dominant allocation for a large training set.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    model, X_test, predict = _fit_cached_ensemble("classifier", device, 48, 5)
+    engine = model.executor_
+    predict(model, X_test)  # builds the stack
+    (idxs, batched_cache), *rest = engine._batched_caches.values()
+    assert not rest, "expected a single group for one model and one train size"
+
+    for batch_pos, member_idx in enumerate(idxs):
+        member = engine.kv_caches[member_idx]
+        for layer_idx, stacked in batched_cache.kv.items():
+            entry = member.kv[layer_idx]
+            assert (
+                entry.key.untyped_storage().data_ptr()
+                == stacked.key.untyped_storage().data_ptr()
+            )
+            # ... and the member's slice must still dequantize to its own values.
+            torch.testing.assert_close(
+                entry.key, stacked.key[batch_pos : batch_pos + 1]
+            )
+
+        # The decoder keys are the other big train-derived tensor, aliased too.
+        assert member.decoder_keys is not None
+        assert batched_cache.decoder_keys is not None
+        assert (
+            member.decoder_keys.untyped_storage().data_ptr()
+            == batched_cache.decoder_keys.untyped_storage().data_ptr()
+        )
+        torch.testing.assert_close(
+            member.decoder_keys,
+            batched_cache.decoder_keys[batch_pos : batch_pos + 1],
+        )
+
+
+def test__stack_kv_entries__preserves_quantization_with_broadcast_scales() -> None:
+    """Stacking quantized entries keeps them quantized, with per-member scales.
+
+    A single shared scale would silently rescale every member but the one it
+    came from, so assert each slice dequantizes exactly as it did alone.
+    """
+    torch.manual_seed(0)
+    entries = [
+        KVCacheEntry(key=torch.randn(1, 6, 2, 4), value=torch.randn(1, 6, 2, 4))
+        for _ in range(3)
+    ]
+    # Distinct magnitudes per member => distinct quantization scales.
+    for scale, entry in zip([0.1, 1.0, 25.0], entries, strict=True):
+        entry.key = entry.key * scale
+        entry.value = entry.value * scale
+    quantized = [e.quantize(torch.int8) for e in entries]
+    assert len({q.key_scale.item() for q in quantized}) == 3
+
+    stacked = stack_kv_entries(quantized)
+
+    assert isinstance(stacked, QuantizedKVCacheEntry)
+    assert stacked.key.dtype == torch.int8
+    assert stacked.key.shape == (3, 6, 2, 4)
+    assert stacked.key_scale.shape == (3, 1, 1, 1)
+
+    stacked_dequantized = stacked.dequantize(torch.float32)
+    for i, single in enumerate(quantized):
+        expected = single.dequantize(torch.float32)
+        torch.testing.assert_close(
+            stacked_dequantized.key[i : i + 1], expected.key, rtol=0, atol=0
+        )
+        torch.testing.assert_close(
+            stacked_dequantized.value[i : i + 1], expected.value, rtol=0, atol=0
+        )
+
+
+def test__stack_kv_entries__dense_entries_stay_dense() -> None:
+    """Unquantized caches (kv_cache_precision="auto") stack as dense entries."""
+    entries = [
+        KVCacheEntry(key=torch.randn(1, 6, 2, 4), value=torch.randn(1, 6, 2, 4))
+        for _ in range(3)
+    ]
+    stacked = stack_kv_entries(entries)
+
+    assert isinstance(stacked, KVCacheEntry)
+    assert stacked.key.shape == (3, 6, 2, 4)
+    torch.testing.assert_close(
+        stacked.key, torch.cat([e.key for e in entries], dim=0), rtol=0, atol=0
+    )

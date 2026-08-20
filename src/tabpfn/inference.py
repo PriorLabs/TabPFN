@@ -895,6 +895,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         autocast: bool,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
+        batch_estimators: bool = True,
     ) -> None:
         """Initialize the explicit KV cache inference engine.
 
@@ -926,6 +927,13 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
                 dtype.
+            batch_estimators: If True (default), fuse all ensemble members that
+                share a model and train-row count into a single batched forward
+                at predict time (ICL transformer + decoder run once over the
+                stacked batch). Requires the architecture to expose
+                ``forward_cached_ensemble``; otherwise falls back to the
+                sequential per-estimator path. Set False to force the
+                sequential path (e.g. for benchmarking).
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -938,6 +946,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # Kept as the raw request; resolved per ensemble member in _build_cache
         # against that member's own architecture (see _resolve_kv_cache_precision).
         self.kv_cache_precision = kv_cache_precision
+        self.batch_estimators = batch_estimators
         self.ensemble_preprocessor = ensemble_preprocessor
 
         # Place model copies on all devices before building caches
@@ -996,6 +1005,15 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         else:
             self.kv_caches = [cache for cache, _device in built_caches]
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
+
+        # The stacked batched cache is built on first predict, not here -- see
+        # ``_ensure_batched_caches``. It is train-derived, so one build serves
+        # every predict, but fit must not pay for a feature only predict uses.
+        # Grouped by (model_index, N_train); ``None`` until built, ``{}`` when
+        # the architecture does not support it.
+        self._batched_caches: dict[tuple[int, int], tuple[list[int], object]] | None = (
+            None
+        )
 
     def _build_cache(
         self,
@@ -1112,6 +1130,17 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             dtype_byte_size=self.dtype_byte_size,
         )
 
+        if self._can_batch_estimators(
+            only_return_standard_out=only_return_standard_out, n_test=X.shape[0]
+        ):
+            self._ensure_batched_caches(devices[0])
+            # Empty means the architecture cannot batch -- fall through.
+            if self._batched_caches:
+                yield from self._iter_outputs_batched(
+                    X, autocast=autocast, save_peak_mem=save_peak_mem, device=devices[0]
+                )
+                return
+
         model_forward_functions = (
             partial(
                 self._call_model,
@@ -1145,6 +1174,225 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         self._speed_metrics["predict_model_forward_seconds"] = (
             timed_outputs.elapsed_seconds
         )
+
+    def _can_batch_estimators(
+        self, *, only_return_standard_out: bool, n_test: int
+    ) -> bool:
+        """Whether the batched predict path can be used for this call.
+
+        Answered without building anything, so the caller can decide before
+        paying for the stack. ``self._batched_caches == {}`` records an
+        architecture that turned out not to support batching, so a failed build
+        is not retried on every predict.
+
+        Restricted to a single device: the batched forward runs on one device,
+        so with several the sequential path is faster — it spreads members
+        across all of them via :func:`parallel_execute`.
+
+        Also bounded by ``settings.tabpfn.max_batched_test_rows``, the row
+        budget the sequential path already chunks against. Batching multiplies
+        the rows in one forward by the group size, so the budget applies to
+        ``group_size * n_test``: it keeps the batched forward's activation
+        footprint at par with one sequential chunk, and it is also where the
+        speedup runs out (measured on an RTX PRO 6000, ~2.6x at 64 test rows,
+        1.3x at 4096, nothing left by 32768). ``max_batched_test_rows = 0``
+        disables chunking, and disables this bound with it.
+
+        Note the batched path does not chunk, so without this the largest
+        group would set the footprint with nothing to cap it.
+        """
+        if not (
+            only_return_standard_out
+            and self.batch_estimators
+            and self._batched_caches != {}
+            and len(self.get_devices()) == 1
+        ):
+            return False
+
+        max_rows = settings.tabpfn.max_batched_test_rows
+        if max_rows <= 0:
+            return True
+        largest_group = max(len(idxs) for idxs in self._estimator_groups().values())
+        return largest_group * n_test <= max_rows
+
+    def _estimator_groups(self) -> dict[tuple[int, int], list[int]]:
+        """Ensemble members grouped into the sets that can share a forward.
+
+        Members in a group share a model and a train-row count, so their caches
+        stack along the batch dim. Derived from the members alone, so it is
+        available before the stack is built.
+        """
+        groups: dict[tuple[int, int], list[int]] = {}
+        for i, em in enumerate(self.ensemble_members):
+            groups.setdefault((em.config._model_index, len(em.y_train)), []).append(i)
+        return groups
+
+    def _ensure_batched_caches(self, device: torch.device) -> None:
+        """Build the stacked caches on first use, and only then.
+
+        The stack is train-derived, so this happens once and every later
+        predict reuses it -- but it is built here, on the first predict that
+        wants it, rather than at fit, which must not pay for a predict-only
+        feature.
+        """
+        if self._batched_caches is None:
+            self._build_batched_caches(device)
+
+    def _build_batched_caches(self, device: torch.device) -> None:
+        """Build the per-group pre-stacked batched caches.
+
+        Groups members by ``(model_index, N_train)`` — members in a group share
+        the model and train-row count, so their per-member caches stack along
+        the batch dim. For each group the stacked ICL K/V, decoder keys and
+        (for classification) decoder targets are built via
+        ``model.build_batched_cache`` and stored in ``self._batched_caches``,
+        keyed by group with the member indices in that group.
+
+        Call through :meth:`_ensure_batched_caches` so this runs once, on the
+        first predict that needs it. ``alias_sources`` hands the per-member
+        storage over to the stack, so the result costs roughly nothing beyond
+        the caches that already existed. Leaves ``self._batched_caches`` an
+        empty mapping for architectures without ``build_batched_cache``
+        support, so predict falls back to sequential and does not retry.
+        """
+        dtype = self.force_inference_dtype or torch.float32
+        groups = self._estimator_groups()
+
+        built: dict[tuple[int, int], tuple[list[int], object]] = {}
+        for key, idxs in groups.items():
+            model = self.model_caches[key[0]].get(device)
+            if not hasattr(model, "build_batched_cache"):
+                self._batched_caches = {}
+                return
+
+            member_caches = []
+            for i in idxs:
+                cache_on_device = self.kv_caches[i].to(device)
+                if self.keep_cache_on_device:
+                    self.kv_caches[i] = cache_on_device
+                member_caches.append(cache_on_device)
+
+            targets = None
+            if getattr(model, "task_type", None) == "multiclass":
+                targets = torch.stack(
+                    [
+                        torch.as_tensor(
+                            self.ensemble_members[i].y_train,
+                            dtype=dtype,
+                            device=device,
+                        ).reshape(-1)
+                        for i in idxs
+                    ],
+                    dim=0,
+                )
+
+            built[key] = (
+                idxs,
+                # alias_sources: the stack takes over the per-member K/V
+                # storage rather than duplicating it, so holding both costs
+                # (almost) nothing on top of the sequential path.
+                model.build_batched_cache(
+                    member_caches, targets=targets, alias_sources=True
+                ),
+            )
+
+        self._batched_caches = built
+
+    def _iter_outputs_batched(
+        self,
+        X: np.ndarray,
+        *,
+        autocast: bool,
+        save_peak_mem: bool,
+        device: torch.device,
+    ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
+        """Predict by fusing ensemble members into batched forward passes.
+
+        Consumes the pre-stacked per-group caches built once by
+        ``_build_batched_caches`` (train-derived). The only per-predict work is
+        preprocessing the test rows per member; the ICL transformer and decoder
+        then run once per group over the stacked batch. Outputs are yielded in
+        ``self.ensemble_members`` order.
+        """
+        assert self._batched_caches is not None
+        dtype = self.force_inference_dtype or torch.float32
+        results: list[torch.Tensor | None] = [None] * len(self.ensemble_members)
+        forward_time = 0.0
+
+        for key, (idxs, batched_cache) in self._batched_caches.items():
+            model = self.model_caches[key[0]].get(device)
+
+            xs: list[torch.Tensor] = []
+            ys: list[torch.Tensor] = []
+            caches: list = []
+            for i in idxs:
+                em = self.ensemble_members[i]
+                X_test_tensor = torch.as_tensor(
+                    em.transform_X_test(X), dtype=dtype, device=device
+                ).unsqueeze(1)
+                y_train = torch.as_tensor(em.y_train, dtype=dtype, device=device)
+
+                X_test_tensor, _ = _maybe_run_gpu_preprocessing(
+                    X_test_tensor,
+                    gpu_preprocessor=em.gpu_preprocessor,
+                    num_train_rows=0,
+                    use_fitted_cache=True,
+                    feature_schema=em.feature_schema,
+                )
+                if self.force_inference_dtype is not None:
+                    X_test_tensor = X_test_tensor.type(self.force_inference_dtype)
+                    y_train = y_train.type(self.force_inference_dtype)
+
+                # Per-member cache still needed for stages 0-2 (scaler stats /
+                # inducing hidden); kept on device across calls when configured.
+                cache_on_device = self.kv_caches[i].to(device)
+                if self.keep_cache_on_device:
+                    self.kv_caches[i] = cache_on_device
+
+                xs.append(X_test_tensor)
+                ys.append(y_train)
+                caches.append(cache_on_device)
+
+            performance_options = model.get_default_performance_options()
+            performance_options = dataclasses.replace(
+                performance_options,
+                save_peak_memory_factor=DEFAULT_SAVE_PEAK_MEMORY_FACTOR
+                if save_peak_mem
+                else None,
+            )
+
+            # Sync before/after so forward_time is the real forward compute:
+            # the pre-sync flushes queued test preprocessing/upload so it is not
+            # attributed here, the post-sync waits for the forward kernels
+            # (which are otherwise async). Negligible overhead.
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            forward_start = time.perf_counter()
+            with (
+                get_autocast_context(device, enabled=autocast),
+                torch.inference_mode(),
+            ):
+                # (N_test, B, ...) with B == len(idxs)
+                batched_out = model.forward_cached_ensemble(
+                    xs,
+                    ys,
+                    caches,
+                    batched_cache=batched_cache,
+                    performance_options=performance_options,
+                )
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            forward_time += time.perf_counter() - forward_start
+
+            for batch_pos, i in enumerate(idxs):
+                results[i] = batched_out[:, batch_pos].to(device)
+
+        self._speed_metrics["predict_model_forward_seconds"] = forward_time
+
+        for i, em in enumerate(self.ensemble_members):
+            output = results[i]
+            assert output is not None
+            yield output, em.config
 
     def _call_model(  # noqa: PLR0913
         self,
@@ -1275,6 +1523,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         # Attach CPU copies of KV caches for portable serialization.
         state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
+        # Batched caches are derived, device-resident, and rebuilt from the
+        # per-member caches — don't pickle them. A reloaded engine rebuilds on
+        # its first predict (see _ensure_batched_caches).
+        state_copy._batched_caches = None
         return state_copy
 
     @override
@@ -1286,6 +1538,14 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # iter_outputs redistributes them across devices on the next predict.
         if self.keep_cache_on_device and getattr(self, "kv_caches", None):
             self.kv_caches = [cache.to(devices[0]) for cache in self.kv_caches]
+
+        # The batched-cache stash is device-resident, so drop it: leaving it in
+        # place would pin memory on the device we just left. The next predict
+        # rebuilds it for the new device (see _ensure_batched_caches). Guarded
+        # by getattr because .to() runs once during __init__ before the
+        # attribute exists.
+        if getattr(self, "_batched_caches", None) is not None:
+            self._batched_caches = None
 
 
 def _prepare_model_inputs(

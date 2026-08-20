@@ -14,7 +14,9 @@ symmetric quantization.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import cast
 
 import torch
 from torch import Tensor
@@ -163,6 +165,53 @@ class QuantizedKVCacheEntry:
             key=_dequantize_tensor(self.key, self.key_scale, dtype),
             value=_dequantize_tensor(self.value, self.value_scale, dtype),
         )
+
+
+def stack_kv_entries(
+    entries: Sequence[KVCacheEntry | QuantizedKVCacheEntry],
+) -> KVCacheEntry | QuantizedKVCacheEntry:
+    """Stack per-estimator cache entries along the batch dim into one entry.
+
+    Each input entry holds one estimator's K/V of shape
+    ``(1, N_train, num_kv_heads, head_dim)``; the keys/values are concatenated
+    along dim 0 to give a single ``(B, N_train, num_kv_heads, head_dim)`` entry.
+
+    Quantization is preserved. Per-tensor scales differ per estimator, so they
+    are stacked into shape ``(B, 1, 1, 1)`` -- ``_dequantize_tensor`` multiplies
+    by the scale, so that broadcasts over the batch dim and reproduces each
+    estimator's own scale exactly. Keeping the stack quantized matters: the
+    attention wrapper dequantizes one layer at a time, so a dequantized stack
+    would hold every layer at full precision for the cache's whole lifetime.
+
+    Requires every entry to share ``N_train``, ``num_kv_heads``, ``head_dim``
+    and quantization state (true across estimators when row subsampling is off).
+    """
+    if isinstance(entries[0], QuantizedKVCacheEntry):
+        assert all(isinstance(e, QuantizedKVCacheEntry) for e in entries), (
+            "cannot stack a mix of quantized and dense KV cache entries"
+        )
+        quantized = cast("list[QuantizedKVCacheEntry]", list(entries))
+        assert all(e.is_valid() for e in quantized)
+        return QuantizedKVCacheEntry(
+            key=torch.cat([e.key for e in quantized], dim=0),
+            value=torch.cat([e.value for e in quantized], dim=0),
+            key_scale=torch.stack([e.key_scale.reshape(()) for e in quantized]).reshape(
+                -1, 1, 1, 1
+            ),
+            value_scale=torch.stack(
+                [e.value_scale.reshape(()) for e in quantized]
+            ).reshape(-1, 1, 1, 1),
+        )
+
+    assert all(isinstance(e, KVCacheEntry) for e in entries), (
+        "cannot stack a mix of quantized and dense KV cache entries"
+    )
+    dense = cast("list[KVCacheEntry]", list(entries))
+    assert all(e.is_valid() for e in dense)
+    return KVCacheEntry(
+        key=torch.cat([e.key for e in dense], dim=0),
+        value=torch.cat([e.value for e in dense], dim=0),
+    )
 
 
 @dataclass
