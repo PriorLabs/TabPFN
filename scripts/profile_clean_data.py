@@ -110,7 +110,6 @@ FUNCTION_TARGETS: tuple[tuple[str, str], ...] = (
     ("tabpfn.preprocessing.clean", "fix_dtypes"),
     ("tabpfn.preprocessing.clean", "process_text_na_dataframe"),
     ("tabpfn.preprocessing.clean", "_apply_ordinal_encoder"),
-    ("tabpfn.preprocessing.clean", "_encode_into_preallocated"),
     ("tabpfn.preprocessing.clean", "_owned_float64_values"),
     # Only reached with PASSTHROUGH_INF; a module-level alias, so patching the
     # attribute is what the call site sees.
@@ -121,18 +120,25 @@ FUNCTION_TARGETS: tuple[tuple[str, str], ...] = (
 # pandas methods below are not also charged for building the input or the report.
 ROOT_LABEL = "clean_data"
 
-# Where the mixed-column peak actually lives: the ordinal encoder builds each
-# transformer's output and then stacks them, holding two full-size arrays at once,
-# and our subclass reorders the result afterwards.
+# Where the mixed-column peak used to live: the ordinal encoder builds each
+# transformer's output and then stacks them, holding two full-size arrays at once, and
+# our subclass reorders the result afterwards. `_assemble` is the write-in-place that
+# stands in for both -- if it does not appear, the encoder fell back to sklearn's path,
+# and `_hstack` and `_preserve_order` say what that cost.
 SKLEARN_METHOD_TARGETS: tuple[tuple[str, str, str], ...] = (
     (
         "tabpfn.preprocessing.steps.preprocessing_helpers",
-        "OrderPreservingColumnTransformer",
+        "EfficientColumnTransformer",
         "fit_transform",
     ),
     (
         "tabpfn.preprocessing.steps.preprocessing_helpers",
-        "OrderPreservingColumnTransformer",
+        "EfficientColumnTransformer",
+        "_assemble",
+    ),
+    (
+        "tabpfn.preprocessing.steps.preprocessing_helpers",
+        "EfficientColumnTransformer",
         "_preserve_order",
     ),
     ("sklearn.compose", "ColumnTransformer", "fit_transform"),

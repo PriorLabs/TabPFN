@@ -203,11 +203,23 @@ STEP_METHOD_TARGETS: tuple[tuple[str, str, str], ...] = tuple(
 
 # The sklearn machinery the steps lean on. `ColumnTransformer` is the important one: it
 # materialises each transformer's output and then stacks them, so the peak inside it is
-# two copies of the columns it was given.
+# two copies of the columns it was given. `EfficientColumnTransformer` is what the
+# ordinal encoding uses in its place, and `_assemble` is the write-in-place that
+# replaces the stack -- if it does not appear, that transformer fell back.
 SKLEARN_METHOD_TARGETS: tuple[tuple[str, str, str], ...] = (
     ("sklearn.compose", "ColumnTransformer", "fit_transform"),
     ("sklearn.compose", "ColumnTransformer", "transform"),
     ("sklearn.compose", "ColumnTransformer", "_hstack"),
+    (
+        "tabpfn.preprocessing.steps.preprocessing_helpers",
+        "EfficientColumnTransformer",
+        "fit_transform",
+    ),
+    (
+        "tabpfn.preprocessing.steps.preprocessing_helpers",
+        "EfficientColumnTransformer",
+        "_assemble",
+    ),
     ("sklearn.preprocessing", "OrdinalEncoder", "fit_transform"),
     ("sklearn.preprocessing", "StandardScaler", "fit_transform"),
     ("sklearn.decomposition", "TruncatedSVD", "fit_transform"),
