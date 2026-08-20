@@ -14,6 +14,7 @@ import pandas as pd
 import pytest
 import sklearn.base
 from sklearn.compose import ColumnTransformer
+from sklearn.exceptions import NotFittedError
 from sklearn.preprocessing import (
     FunctionTransformer,
     OneHotEncoder,
@@ -660,3 +661,93 @@ def test__efficient_column_transformer__clones_like_a_column_transformer() -> No
     assert clone.sparse_threshold == 0.0
     assert clone.verbose_feature_names_out is False
     assert clone.preserves_column_order is transformer.preserves_column_order
+
+
+# --- ownership of the assembled output --------------------------------------------
+#
+# The assembly hands its array straight to the caller, who writes into it, so it has to
+# own it. How many copies that takes depends on the frame's block layout, which is what
+# these pin. The frames here are all float64, so the encoder selects nothing and the
+# whole step is the cast -- the case where taking `to_numpy`'s result would have been
+# tempting.
+
+
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column, as a recast frame is left."""
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
+
+
+@pytest.mark.parametrize("fit", [True, False], ids=["fit_transform", "transform"])
+def test__order_preserving_column_transformer__owns_a_multi_block_frames_output(
+    *, fit: bool
+) -> None:
+    """A frame of many blocks is assembled directly, never routed through `to_numpy`.
+
+    Asserted through the frame rather than the result, because what the result looks
+    like depends on the pandas: `to_numpy` consolidates the frame in place before
+    pandas 3, so a run that went through it would cost a second full-size buffer and
+    leave the frame holding one block instead of many.
+    """
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = _fragmented_float_frame(values)
+    transformer = get_ordinal_encoder()
+
+    out = (
+        transformer.fit_transform(frame)
+        if fit
+        else transformer.fit(frame).transform(frame)
+    )
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    assert not np.shares_memory(out, values)
+    # Still one block per column: nothing consolidated it on the way.
+    assert len(frame._mgr.blocks) == frame.shape[1]
+    # And the buffer is the caller's alone -- writing into it cannot reach the frame.
+    assert not any(
+        np.shares_memory(out, frame.iloc[:, position].to_numpy(copy=False))
+        for position in range(frame.shape[1])
+    )
+
+
+@pytest.mark.parametrize("fit", [True, False], ids=["fit_transform", "transform"])
+def test__order_preserving_column_transformer__owns_a_single_block_frames_output(
+    *, fit: bool
+) -> None:
+    """A single-block frame is handed out by pandas as a view of its own buffer."""
+    values = np.random.default_rng(0).standard_normal((8, 5))
+    frame = pd.DataFrame(values, copy=False)
+    assert len(frame._mgr.blocks) == 1
+    assert np.shares_memory(frame.to_numpy(dtype=np.float64, copy=False), values)
+    transformer = get_ordinal_encoder()
+
+    out = (
+        transformer.fit_transform(frame)
+        if fit
+        else transformer.fit(frame).transform(frame)
+    )
+
+    np.testing.assert_array_equal(out, values)
+    assert out.flags.writeable
+    assert out.flags.f_contiguous
+    # Writing into the result must not reach the caller's array. Under copy-on-write
+    # the view pandas hands out is read-only, but on pandas 2 it is writeable and
+    # aliases `values`.
+    assert not np.shares_memory(out, values)
+    out[0, 0] = 12345.0
+    assert values[0, 0] != 12345.0
+
+
+def test__efficient_column_transformer__an_unfitted_transform_is_not_an_identity() -> (
+    None
+):
+    """A transformer that never selected anything because it was never fitted.
+
+    It has no selection to read, which must not be mistaken for having selected no
+    columns -- that would hand the input back untransformed instead of failing.
+    """
+    with pytest.raises(NotFittedError):
+        get_ordinal_encoder().transform(_mixed_frame())

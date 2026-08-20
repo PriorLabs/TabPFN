@@ -57,6 +57,33 @@ def _column_values(X: XType, position: int) -> np.ndarray:
     return X[:, position]
 
 
+def to_numpy_may_alias(X: pd.DataFrame) -> bool:
+    """Whether `X.to_numpy()` can hand back a view of the frame's own buffer.
+
+    A single-block frame is handed out as that block: read-only under copy-on-write,
+    writeable and aliasing whatever the frame was built from without it (pandas < 3),
+    which for a numeric ndarray input is the caller's own array. Anything wider has to
+    be materialised into a new array first, so what comes back is private.
+
+    Defensively `True` when the block internals are unavailable, so an unrecognised
+    layout is copied rather than handed out.
+    """
+    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
+    return blocks is None or len(blocks) <= 1
+
+
+def _converts_in_one_call(X: XType) -> bool:
+    """Whether `X` can hand out every column at once more cheaply than one at a time.
+
+    An array can, trivially. A frame only when `to_numpy` would hand back a block it
+    already holds, so that copying it is the single allocation -- not when it would
+    have to materialise one, and above all not when it would consolidate the frame in
+    place to do so, which is what pandas before 3 does and what costs a second
+    full-size buffer on top.
+    """
+    return not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)
+
+
 def _hands_columns_through(remainder: Any) -> bool:
     """Whether `remainder` returns the columns it is handed, untouched.
 
@@ -89,9 +116,11 @@ class EfficientColumnTransformer(ColumnTransformer):
     `fit` goes one further and builds no output at all, where `ColumnTransformer.fit`
     -- implemented as `fit_transform` -- pays for a full-size result and discards it.
 
-    `transform` is deliberately left on sklearn. It validates the input against the
-    one seen at fit -- column count, names, order -- which the assembly does not, so
-    replacing it would trade a real check for memory the fit path has already saved.
+    `transform` stays on sklearn, which validates the input against the one seen at fit
+    -- column count, names, order -- where the assembly makes no such check. The one
+    exception is the input for which those checks are settled in advance and the fitted
+    transformer provably changes nothing: there the step is a cast, and the cast is
+    assembled.
     """
 
     # Whether the output keeps the input's column order rather than
@@ -113,7 +142,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         Decided on the same conditions as the assembly, so that the state left here is
         either sklearn's own or one those conditions vouch for.
         """
-        if not self._may_assemble(X, y, params):
+        if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
             return super().fit(X, y, **params)
         probe = self._fit_column_bookkeeping(X)
         name, selected = self._named_selection()
@@ -127,7 +156,7 @@ class EfficientColumnTransformer(ColumnTransformer):
     def fit_transform(self, X: XType, y: YType = None, **params: Any) -> XType:
         """Fit and transform, writing each column straight to its final place."""
         original_columns = _input_columns(X)
-        if not self._may_assemble(X, y, params):
+        if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
             return self._in_input_order(
                 super().fit_transform(X, y, **params), original_columns
             )
@@ -159,7 +188,14 @@ class EfficientColumnTransformer(ColumnTransformer):
 
     @override
     def transform(self, X: XType, **params: Any) -> XType:
-        """Left to `ColumnTransformer`; only the column order is restored after it."""
+        """Left to `ColumnTransformer`, unless it provably cannot change a value.
+
+        Its checks against the input seen at fit -- width, names, order -- are why it is
+        left there at all: the assembly makes none of them. So the one case taken here
+        is the one where they are settled in advance, by `_changes_no_value`.
+        """
+        if self._changes_no_value(X, params):
+            return self._assemble(X, None, None, [])
         original_columns = _input_columns(X)
         return self._in_input_order(super().transform(X, **params), original_columns)
 
@@ -172,35 +208,67 @@ class EfficientColumnTransformer(ColumnTransformer):
         _, selected = self._named_selection()
         return selected or []
 
-    def _may_assemble(self, X: XType, y: YType, params: dict[str, Any]) -> bool:
-        """Whether the transformers as configured could be written into one array.
+    def _may_assemble(self, X: XType, params: dict[str, Any]) -> bool:
+        """Whether an output of this shape could be written into one array at all.
+
+        Routed metadata is declined outright: nothing with the shape assembled here has
+        any use for it. So is an input that is neither an array nor a frame -- a sparse
+        one would be densified by the array written into here, which is not what
+        `ColumnTransformer` hands back -- and a `set_output` asking for a frame, which
+        this returns none of.
+        """
+        if params or not isinstance(X, (np.ndarray, pd.DataFrame)):
+            return False
+        output_config = getattr(self, "_sklearn_output_config", {}).get(
+            "transform", get_config()["transform_output"]
+        )
+        return _hands_columns_through(self.remainder) and output_config == "default"
+
+    @property
+    def _is_one_to_one(self) -> bool:
+        """Whether at most one transformer is configured, and it maps column to column.
 
         Read off the specification rather than a fitted state, so that a transformer
         this rejects never sees the one-row fit below -- which for one that cannot be
         fitted on a single row, a quantile transform say, is the difference between a
         fallback and a crash.
-
-        A `y` or routed metadata is declined outright: the one-row fit would have to
-        be given something to match it, and no transformer with the shape assembled here
-        has any use for either. So is an input that is neither an array nor a frame:
-        a sparse one would be densified by the array written into here, which is not
-        what `ColumnTransformer` hands back.
         """
-        if y is not None or params or not isinstance(X, (np.ndarray, pd.DataFrame)):
-            return False
-        named = [
-            (name, transformer)
-            for name, transformer, _ in self.transformers
-            if name != "remainder"
-        ]
-        output_config = getattr(self, "_sklearn_output_config", {}).get(
-            "transform", get_config()["transform_output"]
+        named = [t for name, t, _ in self.transformers if name != "remainder"]
+        return len(named) <= 1 and all(
+            isinstance(transformer, OneToOneFeatureMixin) for transformer in named
         )
+
+    def _changes_no_value(self, X: XType, params: dict[str, Any]) -> bool:
+        """Whether transforming `X` provably leaves every value where it was.
+
+        Three things have to hold. The fitted transformer must have selected nothing, so
+        the step is its passthrough remainder and there is no code to compute. `X` must
+        be one the columns can be written out of. And it must line up with the input
+        seen at fit -- same width, same names in the same order -- because sklearn lines
+        a reordered frame back up with the fit-time order where the assembly would keep
+        the input's own, and because skipping `transform` skips the checks that would
+        have caught a frame not lining up at all.
+        """
+        if not hasattr(self, "transformers_"):
+            # Unfitted. `transform` is the one that should say so.
+            return False
+        # An empty list, not merely a falsy one: a selection this cannot read is one
+        # whose columns might well be transformed.
+        if self._named_selection()[1] != []:
+            return False
+        if (
+            not self._may_assemble(X, params)
+            or self.sparse_output_
+            or self.n_features_in_ != X.shape[1]
+            or not self._can_place_columns(X, [])
+        ):
+            return False
+        names = getattr(self, "feature_names_in_", None)
         return (
-            len(named) <= 1
-            and all(isinstance(t, OneToOneFeatureMixin) for _, t in named)
-            and _hands_columns_through(self.remainder)
-            and output_config == "default"
+            names is None
+            or not isinstance(X, pd.DataFrame)
+            # Compared as plain lists to be dtype-insensitive.
+            or list(X.columns) == list(names)
         )
 
     def _fit_column_bookkeeping(self, X: XType) -> XType:
@@ -234,16 +302,25 @@ class EfficientColumnTransformer(ColumnTransformer):
         one-to-oneness is checked rather than taken on the mixin's word: every input
         column has to reach exactly one output column, or the array the assembly
         allocates is the wrong shape and the bookkeeping around it is wrong too.
-
-        A frame carries one more condition. Every column the transformer does *not*
-        take has to be plain float64 already, so writing it into the float64 output is a
-        copy and not a conversion that could differ from the one `ColumnTransformer`
-        would have done -- notably an `object` column, which a dtype selector skips
-        and the stacking path carries through as objects until the caller's closing
-        cast. And the column keys have to be unique, since each column is placed by key.
         """
-        if selected is None or self.sparse_output_ or probe.shape[1] != X.shape[1]:
-            return False
+        return (
+            selected is not None
+            and not self.sparse_output_
+            and probe.shape[1] == X.shape[1]
+            and self._can_place_columns(X, selected)
+        )
+
+    def _can_place_columns(self, X: XType, selected: list[Any]) -> bool:
+        """Whether `X`'s columns can be written out of it one at a time.
+
+        Always, for an array. A frame carries two conditions. Every column the
+        transformer does *not* take has to be plain float64 already, so writing it into
+        the float64 output is a copy and not a conversion that could differ from the one
+        `ColumnTransformer` would have done -- notably an `object` column, which a dtype
+        selector skips and the stacking path carries through as objects until the
+        caller's closing cast. And the column keys have to be unique, since each column
+        is placed by key.
+        """
         if not isinstance(X, pd.DataFrame):
             return True
         if X.columns.has_duplicates:
@@ -262,13 +339,35 @@ class EfficientColumnTransformer(ColumnTransformer):
         codes: np.ndarray | None,
         selected: list[Any],
     ) -> np.ndarray:
-        """Write the transformer's block and every other column to its final place."""
+        """Write the transformer's block and every other column to its final place.
+
+        The array returned is one nothing else has ever referenced, which is what lets a
+        caller write into what it gets back. Notably it is never `to_numpy`'s result as
+        it stands: pandas 3 materialises a many-block frame into a private array, which
+        could be taken as it is, but earlier versions consolidate the frame *in place*
+        first and return a view of the block they just built -- taking that would write
+        through into the frame, and copying it costs a second full-size buffer on top of
+        the consolidation. Going column by column costs one buffer on every version, and
+        leaves the frame's own blocks alone.
+        """
         destination, passthrough = self._output_positions(X, name, selected)
-        out = np.empty(
-            X.shape,
-            dtype=self._assembled_dtype(X, codes, passthrough),
-            order=self._assembled_order(X, codes, passthrough),
-        )
+        dtype = self._assembled_dtype(X, codes, passthrough)
+        order = self._assembled_order(X, codes, passthrough)
+
+        if codes is None and _converts_in_one_call(X):
+            # Nothing was transformed, so the output is the whole input converted, in
+            # input order -- which both layouts agree on when the selection is empty.
+            # One call for all of it where that is the cheaper way to reach the same
+            # single allocation: measured at 50,000 x 2,000, going column by column
+            # instead costs 46% more wall time.
+            values = (
+                X.to_numpy(dtype=dtype, copy=False)
+                if isinstance(X, pd.DataFrame)
+                else X
+            )
+            return np.array(values, dtype=dtype, order=order, copy=True)
+
+        out = np.empty(X.shape, dtype=dtype, order=order)
         if codes is not None:
             out[:, destination] = codes
         # Per column, so the passthrough half never needs a full-width temporary of its

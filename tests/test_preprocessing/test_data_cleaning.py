@@ -20,7 +20,6 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
-    _owned_float64_values,
     fix_dtypes,
     process_text_na_dataframe,
 )
@@ -853,89 +852,16 @@ def test__fix_dtypes__mixed_numeric_dtypes_are_still_cast() -> None:
     assert np.isnan(frame["a"].to_numpy()[2])
 
 
-# --- ownership of the identity path's output -------------------------------------
+# --- the frozen shortcut, end to end --------------------------------------------
 #
-# The identity path hands its array straight to the caller, who writes into it, so it
-# has to own it. How many copies that takes depends on the frame's block layout,
-# which is what these two pin.
-
-
-def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
-    """A float frame held as one block per column, as a recast frame is left."""
-    frame = pd.DataFrame(values)
-    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
-    return frame
-
-
-def test__owned_float64_values__assembles_a_multi_block_frame_in_one_buffer() -> None:
-    """A frame of many blocks is assembled directly, never routed through `to_numpy`.
-
-    Asserted through the frame rather than the result, because what the result looks
-    like depends on the pandas: `to_numpy` consolidates the frame in place before
-    pandas 3, so a run that went through it would cost a second full-size buffer and
-    leave the frame holding one block instead of many.
-    """
-    values = np.random.default_rng(0).standard_normal((8, 5))
-    frame = _fragmented_float_frame(values)
-    assert not _is_single_float_block(frame)
-
-    out = _owned_float64_values(frame)
-
-    np.testing.assert_array_equal(out, values)
-    assert out.flags.writeable
-    assert out.flags.f_contiguous
-    assert not np.shares_memory(out, values)
-    # Still one block per column: nothing consolidated it on the way.
-    assert not _is_single_float_block(frame)
-    # And the buffer is the caller's alone -- writing into it cannot reach the frame.
-    assert not any(
-        np.shares_memory(out, frame.iloc[:, position].to_numpy(copy=False))
-        for position in range(frame.shape[1])
-    )
-
-
-def test__owned_float64_values__copies_a_single_block_frame() -> None:
-    """A single-block frame is handed out as a view of the array it was built from."""
-    values = np.random.default_rng(0).standard_normal((8, 5))
-    frame = pd.DataFrame(values, copy=False)
-    assert _is_single_float_block(frame)
-    assert np.shares_memory(frame.to_numpy(dtype=np.float64, copy=False), values)
-
-    out = _owned_float64_values(frame)
-
-    np.testing.assert_array_equal(out, values)
-    assert out.flags.writeable
-    assert out.flags.f_contiguous
-    # Writing into the result must not reach the caller's array. Under copy-on-write
-    # the view is read-only, but on pandas 2 it is writeable and aliases `values`.
-    assert not np.shares_memory(out, values)
-    out[0, 0] = 12345.0
-    assert values[0, 0] != 12345.0
-
-
-# --- the frozen shortcut's preconditions -----------------------------------------
-#
-# At predict time the encoding step is skipped when a fitted encoder selected no
-# columns. Skipping `transform` skips its checks too, so the shortcut is only taken
-# for a frame `transform` would have handled the same way.
+# At predict time the encoding step is a cast whenever the fitted encoder selected no
+# columns. Skipping `transform` skips its checks too, so the shortcut is only taken for
+# a frame `transform` would have handled the same way -- see
+# `EfficientColumnTransformer._changes_no_value`, which decides it.
 
 
 def _float_frame(**columns: list[float]) -> pd.DataFrame:
     return pd.DataFrame({name: np.array(values) for name, values in columns.items()})
-
-
-def test__encoding_is_identity__an_unfitted_encoder_is_not_an_empty_selection() -> None:
-    """An encoder that never selected anything because it was never fitted.
-
-    It has no selection to read, which must not be mistaken for having selected no
-    columns -- that would hand the frame back unencoded instead of failing.
-    """
-    with pytest.raises(AttributeError):
-        clean_module._encoding_is_identity(
-            _float_frame(a=[1.0, 2.0], b=[3.0, 4.0]),
-            get_ordinal_encoder(),
-            fit_encoder=False,
-        )
 
 
 def test__process_text_na_dataframe__frozen_shortcut_rejects_a_narrower_frame() -> None:
@@ -972,11 +898,14 @@ def test__process_text_na_dataframe__frozen_shortcut_taken_when_lined_up() -> No
     encoder.fit(frame)
 
     with mock.patch.object(
-        clean_module, "_owned_float64_values", wraps=clean_module._owned_float64_values
+        EfficientColumnTransformer,
+        "_assemble",
+        autospec=True,
+        side_effect=EfficientColumnTransformer._assemble,
     ) as shortcut:
         out = process_text_na_dataframe(frame, ord_encoder=encoder)
 
-    assert shortcut.call_count == 1
+    assert shortcut.call_count == 1, "went through ColumnTransformer.transform"
     np.testing.assert_array_equal(out, frame.to_numpy())
 
 
@@ -1126,6 +1055,13 @@ def test__cast_columns__a_shared_block_is_never_assigned_into() -> None:
 
     assert list(out.dtypes[1::2].map(str)) == ["category"] * 3
     assert list(out.dtypes[0::2].map(str)) == ["object"] * 3
+
+
+def _fragmented_float_frame(values: np.ndarray) -> pd.DataFrame:
+    """A float frame held as one block per column, as a recast frame is left."""
+    frame = pd.DataFrame(values)
+    frame[frame.columns] = frame[frame.columns].astype(values.dtype)
+    return frame
 
 
 def test__cast_columns__a_block_per_column_frame_keeps_its_own_columns() -> None:
