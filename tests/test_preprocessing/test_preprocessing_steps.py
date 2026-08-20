@@ -5,11 +5,14 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from functools import partial
+from typing import TYPE_CHECKING
 from typing_extensions import override
+from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn.base
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import (
     FunctionTransformer,
@@ -30,11 +33,16 @@ from tabpfn.preprocessing.steps import (
     ReshapeFeatureDistributionsStep,
 )
 from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    EfficientColumnTransformer,
     OrderPreservingColumnTransformer,
+    get_ordinal_encoder,
 )
 from tabpfn.preprocessing.steps.remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
+
+if TYPE_CHECKING:
+    from tabpfn.classifier import XType, YType
 
 
 def _get_schema(num_columns: int) -> FeatureSchema:
@@ -395,3 +403,260 @@ def test__pipeline__num_added_features():
     # This is a minor effect that we ignore for now. In the future,
     # we will make sure that the pipeline never actually sees constant features.
     assert pipeline.num_added_features(100, _get_schema(num_columns=10)) == 1
+
+
+# ---------------------------------------------------------------------------
+# EfficientColumnTransformer against the ColumnTransformer it stands in for
+# ---------------------------------------------------------------------------
+#
+# The class exists only to reach `ColumnTransformer`'s result with fewer full-size
+# arrays, so sklearn is the oracle throughout: every case below compares against a
+# plain `ColumnTransformer` over the same transformers, and says whether the assembly
+# was taken or fallen back from -- a fallback that stops being a fallback is a silent
+# behaviour change, and an assembly that quietly stops being one is a silent
+# regression.
+
+
+def _reference(
+    transformer: EfficientColumnTransformer, X: XType, y: YType = None
+) -> np.ndarray:
+    """What a stock `ColumnTransformer` over the same transformers produces."""
+    plain = ColumnTransformer(
+        list(transformer.transformers),
+        remainder=transformer.remainder,
+        sparse_threshold=transformer.sparse_threshold,
+    )
+    return plain.fit_transform(X, y)
+
+
+@pytest.fixture
+def assemblies(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, ...]]:
+    """Records the shape of every array the assembly writes into."""
+    written: list[tuple[int, ...]] = []
+    assemble = EfficientColumnTransformer._assemble
+
+    def recording(self: EfficientColumnTransformer, *args: object) -> np.ndarray:
+        out = assemble(self, *args)
+        written.append(out.shape)
+        return out
+
+    monkeypatch.setattr(EfficientColumnTransformer, "_assemble", recording)
+    return written
+
+
+def _mixed_frame() -> pd.DataFrame:
+    """Numeric and string columns, alternating, all passthrough columns float64."""
+    return pd.DataFrame(
+        {
+            "n0": np.arange(6, dtype="float64"),
+            "s0": pd.Series(list("abcabc"), dtype="string"),
+            "n1": np.arange(6, dtype="float64") * 2,
+            "s1": pd.Series(list("xyzxyz"), dtype="string"),
+        }
+    )
+
+
+def test__efficient_column_transformer__assembles_the_column_transformer_layout(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """Codes first, then the columns the encoder left, in input order."""
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [1])], remainder="passthrough"
+    )
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == [(6, 3)]
+    np.testing.assert_array_equal(out, _reference(transformer, X))
+
+
+def test__efficient_column_transformer__assembles_the_preserved_layout(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """Every column at its own position, which is what the reference has to be gathered
+    back into.
+    """
+    X = _mixed_frame()
+    transformer = get_ordinal_encoder()
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == [(6, 4)]
+    # The reference is the stacked layout: encoded columns first, then the rest.
+    reference = _reference(transformer, X)
+    np.testing.assert_array_equal(out[:, [1, 3]], reference[:, [0, 1]])
+    np.testing.assert_array_equal(out[:, [0, 2]], reference[:, [2, 3]])
+
+
+@pytest.mark.parametrize(
+    ("transformers", "kwargs", "why"),
+    [
+        pytest.param(
+            [("onehot", OneHotEncoder(sparse_output=False), [1])],
+            {},
+            "an expanding transformer has no column to write each output into",
+            id="expanding-transformer",
+        ),
+        pytest.param(
+            [("a", OrdinalEncoder(), [0]), ("b", OrdinalEncoder(), [1])],
+            {},
+            "two transformers can each claim a column",
+            id="two-transformers",
+        ),
+        pytest.param(
+            [("encoder", OrdinalEncoder(), [1])],
+            {"remainder": "drop"},
+            "a dropped remainder does not cover the output",
+            id="dropping-remainder",
+        ),
+        pytest.param(
+            [("encoder", OrdinalEncoder(), slice(1, 2))],
+            {"remainder": "passthrough"},
+            "a slice selection is not a list of column keys",
+            id="slice-selection",
+        ),
+    ],
+)
+def test__efficient_column_transformer__falls_back_and_still_matches_sklearn(
+    transformers: list[tuple],
+    kwargs: dict,
+    why: str,
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A shape the assembly cannot place has to come out of sklearn unchanged."""
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    transformer = EfficientColumnTransformer(transformers, **kwargs)
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == [], why
+    np.testing.assert_array_equal(out, _reference(transformer, X))
+
+
+def test__efficient_column_transformer__a_y_falls_back(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """The one-row fit has nothing to line a full-length `y` up with, so decline it."""
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3)])
+    y = np.arange(6.0)
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [1])], remainder="passthrough"
+    )
+
+    out = transformer.fit_transform(X, y)
+
+    assert assemblies == []
+    np.testing.assert_array_equal(out, _reference(transformer, X, y))
+
+
+def test__order_preserving_column_transformer__declines_an_object_passthrough(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A frame the assembly cannot write column by column still goes through sklearn.
+
+    `object` is not in the encoder's dtype selection, so it reaches the output through
+    the passthrough; writing it into a float64 array is not the conversion sklearn's own
+    path would have done.
+    """
+    frame = _mixed_frame().assign(o=np.arange(6).astype(object))
+    transformer = get_ordinal_encoder()
+
+    out = transformer.fit_transform(frame)
+
+    assert assemblies == []
+    assert out.shape == frame.shape
+
+
+def test__efficient_column_transformer__declines_duplicate_column_labels() -> None:
+    """Each column is placed by key, so a duplicated one makes its place ambiguous.
+
+    Asserted on the check rather than end to end: sklearn's own column selector refuses
+    such a frame first, and this is what keeps the assembly from being the thing that
+    has to.
+    """
+    frame = _mixed_frame()
+    transformer = get_ordinal_encoder()
+    transformer.fit(frame)
+
+    doubled = frame.iloc[:, [0, 1, 2, 3, 0]]
+    assert not transformer._can_assemble(
+        doubled, doubled.iloc[:1], transformer.selected_columns()
+    )
+
+
+def test__efficient_column_transformer__fit_builds_no_full_size_output() -> None:
+    """`fit` learns everything `ColumnTransformer.fit` does without transforming.
+
+    `ColumnTransformer.fit` is implemented as `fit_transform`, so it pays for a
+    full-size result and throws it away. This asserts the state is identical anyway --
+    it is kept on the estimator and drives `transform` -- and that nothing wider than
+    the one bookkeeping row was ever stacked.
+    """
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [1])], remainder="passthrough"
+    )
+    stacked: list[int] = []
+    hstack = ColumnTransformer._hstack
+
+    def recording(self: ColumnTransformer, Xs: list, **kwargs: object) -> np.ndarray:
+        stacked.append(max(len(x) for x in Xs))
+        return hstack(self, Xs, **kwargs)
+
+    with mock.patch.object(ColumnTransformer, "_hstack", recording):
+        transformer.fit(X)
+
+    assert stacked == [1], "a full-size result was stacked and discarded"
+
+    reference = ColumnTransformer(
+        list(transformer.transformers), remainder=transformer.remainder
+    ).fit(X)
+    assert transformer.n_features_in_ == reference.n_features_in_
+    assert transformer.output_indices_ == reference.output_indices_
+    for learned, wanted in zip(
+        transformer.named_transformers_["encoder"].categories_,
+        reference.named_transformers_["encoder"].categories_,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(learned, wanted)
+
+
+def test__efficient_column_transformer__transform_keeps_sklearns_validation() -> None:
+    """`transform` is sklearn's, so what it refuses at predict time stays refused."""
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [1])], remainder="passthrough"
+    )
+    transformer.fit_transform(X)
+
+    np.testing.assert_array_equal(transformer.transform(X), _reference(transformer, X))
+    with pytest.raises(ValueError, match="features"):
+        transformer.transform(X[:, :2])
+
+
+def test__efficient_column_transformer__clones_like_a_column_transformer() -> None:
+    """No parameter may be hidden from `get_params`, or sklearn's `clone` drops it.
+
+    Which is the reason the class declares no `__init__` of its own: sklearn reads the
+    parameter names off that signature, and one taking `**kwargs` reports only what it
+    names -- everything else is silently lost on a clone.
+    """
+    transformers = [("encoder", OrdinalEncoder(), [1])]
+    transformer = EfficientColumnTransformer(
+        transformers,
+        remainder="passthrough",
+        sparse_threshold=0.0,
+        verbose_feature_names_out=False,
+    )
+
+    clone = sklearn.base.clone(transformer)
+
+    assert (
+        transformer.get_params(deep=False).keys()
+        == ColumnTransformer(transformers).get_params(deep=False).keys()
+    )
+    assert clone.remainder == "passthrough"
+    assert clone.sparse_threshold == 0.0
+    assert clone.verbose_feature_names_out is False
+    assert clone.preserves_column_order is transformer.preserves_column_order
