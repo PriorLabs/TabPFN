@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import pytest
 
@@ -15,6 +17,9 @@ from tabpfn.preprocessing.datamodel import (
 )
 from tabpfn.preprocessing.pipeline_interface import PreprocessingPipeline
 from tabpfn.preprocessing.steps import EncodeCategoricalFeaturesStep
+from tabpfn.preprocessing.steps.encode_categorical_features_step import (
+    _encode_into_preallocated,
+)
 
 
 def _make_feature_schema(n_features: int, cat_indices: list[int]) -> FeatureSchema:
@@ -547,3 +552,132 @@ class TestCarryOverGpuTransformMarks:
 
         marked = result.feature_schema.get_indices_marked_for_gpu_quantile_transform()
         assert marked == []
+
+
+# ---------------------------------------------------------------------------
+# The preallocated assembly against the ColumnTransformer it replaces
+# ---------------------------------------------------------------------------
+#
+# `_encode_into_preallocated` exists only to reach `ColumnTransformer`'s result with
+# fewer full-size arrays, so sklearn is the oracle: these compare against a
+# ColumnTransformer fitted the ordinary way and fail on any drift from it.
+
+
+def _ordinal_case(
+    dtype: Any,
+    cat_indices: list[int],
+    *,
+    with_nan: bool,
+    n_samples: int = 60,
+    n_features: int = 5,
+) -> np.ndarray:
+    """A table whose `cat_indices` columns are low-cardinality."""
+    rng = np.random.default_rng(0)
+    X = rng.random((n_samples, n_features))
+    for index in cat_indices:
+        X[:, index] = rng.integers(0, 4, size=n_samples).astype(float)
+    if with_nan:
+        X[0, cat_indices[0]] = np.nan
+        X[5, (cat_indices[0] + 1) % n_features] = np.nan
+    return X.astype(dtype)
+
+
+@pytest.mark.parametrize(
+    ("dtype", "cat_indices", "with_nan"),
+    [
+        pytest.param(np.float64, [0, 1], False, id="leading-categoricals"),
+        pytest.param(np.float64, [1, 3], False, id="scattered-categoricals"),
+        pytest.param(np.float64, [0, 1, 2, 3, 4], False, id="every-column-categorical"),
+        pytest.param(np.float64, [2], False, id="one-categorical"),
+        pytest.param(np.float32, [1, 3], False, id="float32-promoted-by-hstack"),
+        pytest.param(object, [1, 3], False, id="object-dtype"),
+        pytest.param(np.float64, [1, 3], True, id="missing-values"),
+        # Corner cases for the output layout: a single encoded column, and a single
+        # passthrough column, each make their block Fortran-compatible and so flip the
+        # order `hstack` picks.
+        pytest.param(np.float64, [0], False, id="one-categorical-leading"),
+        pytest.param(np.float64, [0, 1, 2, 3], False, id="one-passthrough"),
+    ],
+)
+def test__encode_into_preallocated__matches_column_transformer(
+    dtype: Any,
+    cat_indices: list[int],
+    with_nan: bool,
+) -> None:
+    """The assembly must not drift from the ColumnTransformer it stands in for.
+
+    Values, dtype and memory layout are all checked. The layout is not cosmetic: the
+    sklearn SVD that can run downstream of this step converges to a different basis on
+    a C- than on a Fortran-contiguous input, so a layout drift would quietly rotate
+    those features.
+    """
+    X = _ordinal_case(dtype, cat_indices, with_nan=with_nan)
+
+    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
+    reference_ct, _ = step._get_transformer(X, cat_indices)
+    reference = reference_ct.fit_transform(X)
+
+    ct, ct_cat_features = step._get_transformer(X, cat_indices)
+    # What the step does: the column bookkeeping from one row, the codes from all.
+    ct.fit(X[:1])
+    codes = ct.named_transformers_["ordinal_encoder"].fit_transform(
+        X[:, ct_cat_features]
+    )
+    assembled = _encode_into_preallocated(X, codes, ct_cat_features)
+
+    assert assembled.shape == reference.shape
+    assert assembled.dtype == reference.dtype
+    assert np.isfortran(assembled) == np.isfortran(reference)
+    np.testing.assert_array_equal(
+        np.asarray(assembled, dtype=np.float64),
+        np.asarray(reference, dtype=np.float64),
+    )
+
+
+def test__encode_categorical__ordinal__step_output_matches_column_transformer() -> None:
+    """End to end: the step's array is the one a plain ColumnTransformer would build.
+
+    Covers the fit path as a whole, including the one-row fit the assembly relies on,
+    which the helper-level test above takes as given.
+    """
+    cat_indices = [1, 3]
+    X = _ordinal_case(np.float64, cat_indices, with_nan=True)
+    schema = _make_feature_schema(X.shape[1], cat_indices)
+
+    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
+    result = step.fit_transform(X.copy(), schema)
+
+    reference_ct, _ = EncodeCategoricalFeaturesStep(
+        "ordinal", random_state=0
+    )._get_transformer(X, cat_indices)
+    reference = reference_ct.fit_transform(X)
+
+    np.testing.assert_array_equal(result.X, reference)
+    assert np.isfortran(result.X) == np.isfortran(reference)
+
+
+def test__encode_categorical__ordinal__one_row_fit_learns_every_category() -> None:
+    """Fitting the transformer on one row must not cost the encoder its categories.
+
+    The assembly fits the ColumnTransformer on a single row -- `fit` is implemented as
+    `fit_transform`, so fitting on everything would run the pass being replaced -- and
+    then fits the inner encoder on all rows. If that second fit were dropped, unseen
+    values would silently encode as NaN.
+    """
+    cat_indices = [1, 3]
+    X = _ordinal_case(np.float64, cat_indices, with_nan=False)
+    schema = _make_feature_schema(X.shape[1], cat_indices)
+
+    step = EncodeCategoricalFeaturesStep("ordinal", random_state=0)
+    step.fit_transform(X.copy(), schema)
+
+    reference_ct, _ = EncodeCategoricalFeaturesStep(
+        "ordinal", random_state=0
+    )._get_transformer(X, cat_indices)
+    reference_ct.fit(X)
+
+    fitted = step.categorical_transformer_.named_transformers_["ordinal_encoder"]
+    expected = reference_ct.named_transformers_["ordinal_encoder"]
+    assert len(fitted.categories_) == len(expected.categories_)
+    for learned, wanted in zip(fitted.categories_, expected.categories_, strict=True):
+        np.testing.assert_array_equal(learned, wanted)
