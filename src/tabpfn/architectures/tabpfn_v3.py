@@ -327,31 +327,48 @@ class BatchedTabPFNV3Cache:
                 stack then *replaces* the per-member storage instead of
                 duplicating it, which is what makes it affordable to hold both
                 (the per-member caches stay live because stages 0-2 and the
-                sequential fallback still read them). Only safe because caches
-                are read-only after fit, so pass it from the build and leave it
-                False anywhere the caller's caches must not be touched.
+                sequential fallback still read them). It also bounds the peak
+                while stacking to one layer at a time, so the build barely
+                moves the peak of the predict that triggers it. Only safe
+                because caches are read-only after fit, so pass it from the
+                build and leave it False anywhere the caller's caches must not
+                be touched.
         """
-        kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {
-            layer_idx: stack_kv_entries([c.kv[layer_idx] for c in caches])
-            for layer_idx in caches[0].kv
-        }
-        # Regression caches no decoder keys (no many-class decoder).
-        decoder_keys = (
-            None
-            if caches[0].decoder_keys is None
-            else torch.cat([c.decoder_keys for c in caches], dim=0)
-        )
-
-        if alias_sources:
-            for i, cache in enumerate(caches):
-                for layer_idx, stacked in kv.items():
+        # Stack and alias one layer at a time. Aliasing a layer drops the last
+        # reference to its per-member tensors, so they are freed before the
+        # next layer is stacked and only one layer is ever duplicated -- doing
+        # every layer first and aliasing at the end would transiently double
+        # the whole cache.
+        kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
+        for layer_idx in list(caches[0].kv):
+            stacked = stack_kv_entries([c.kv[layer_idx] for c in caches])
+            kv[layer_idx] = stacked
+            if alias_sources:
+                for i, cache in enumerate(caches):
                     entry = cache.kv[layer_idx]
                     # Scales stay per-member scalars; only the big K/V payload
                     # is rebound, so dequantizing a slice is unchanged.
                     entry.key = stacked.key[i : i + 1]
                     entry.value = stacked.value[i : i + 1]
-                if decoder_keys is not None:
+
+        # Regression caches no decoder keys (no many-class decoder).
+        decoder_keys = None
+        if caches[0].decoder_keys is not None:
+            if alias_sources:
+                # Same idea, one member at a time: fill a buffer slice, then
+                # hand the source that slice so its own tensor is freed now.
+                first = caches[0].decoder_keys
+                decoder_keys = torch.empty(
+                    (len(caches), *first.shape[1:]),
+                    dtype=first.dtype,
+                    device=first.device,
+                )
+                for i, cache in enumerate(caches):
+                    assert cache.decoder_keys is not None
+                    decoder_keys[i : i + 1].copy_(cache.decoder_keys)
                     cache.decoder_keys = decoder_keys[i : i + 1]
+            else:
+                decoder_keys = torch.cat([c.decoder_keys for c in caches], dim=0)
 
         return BatchedTabPFNV3Cache(
             kv=kv,
