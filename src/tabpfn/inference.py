@@ -1248,7 +1248,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             return torch.cat(outputs)
 
         concat_keys = {"standard", "test_embeddings"}
-        shared_keys = {"train_embeddings"}  # replicated across chunk
+        # Not emitted by the v3 cached path, but v2 still replicates it per chunk.
+        shared_keys = {"train_embeddings"}
         unexpected = outputs[0].keys() - concat_keys - shared_keys
         if unexpected:
             raise RuntimeError(
