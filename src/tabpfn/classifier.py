@@ -1267,11 +1267,28 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         assert isinstance(tuning_config_resolved, ClassifierTuningConfig)
 
         if self.eval_metric_ is ClassifierEvalMetrics.ROC_AUC:
+            if tuning_config_resolved.tune_decision_thresholds:
+                raise ValueError(
+                    "eval_metric='roc_auc' does not support "
+                    "tune_decision_thresholds=True, because the threshold search "
+                    "does not optimize ROC AUC. It scores thresholded 0/1 "
+                    "predictions, and the ROC AUC of a single operating point is "
+                    "(TPR + TNR) / 2, i.e. balanced accuracy -- so this produced "
+                    "thresholds identical to eval_metric='balanced_accuracy'. "
+                    "Decision thresholds cannot improve ROC AUC in any case: it "
+                    "scores the ranking of the predicted probabilities, and for "
+                    "binary targets the reweighting applied at predict time is a "
+                    "monotone transform of the positive-class probability, so the "
+                    "ranking is provably unchanged. Pass "
+                    "eval_metric='balanced_accuracy' to keep the previous "
+                    "behaviour, or tune_decision_thresholds=False to disable "
+                    "threshold tuning."
+                )
             warnings.warn(
                 f"You specified '{self.eval_metric_}' as the eval metric with "
-                "threshold tuning or temperature calibration enabled. "
-                "ROC AUC is independent of these tunings and they will not "
-                "improve this metric. Consider disabling them.",
+                "temperature calibration enabled. Temperature calibration "
+                "optimizes log loss regardless of eval_metric, so it is not "
+                "targeting ROC AUC. Consider disabling it.",
                 UserWarning,
                 stacklevel=2,
             )
