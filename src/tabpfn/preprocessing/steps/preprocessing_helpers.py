@@ -369,8 +369,10 @@ class EfficientColumnTransformer(ColumnTransformer):
             # Nothing was transformed, so the output is the whole input converted, in
             # input order -- which both layouts agree on when the selection is empty.
             # One call for all of it where that is the cheaper way to reach the same
-            # single allocation: measured at 50,000 x 2,000, going column by column
-            # instead costs 46% more wall time.
+            # single allocation. What it saves is per-column overhead, so it grows with
+            # the column count: measured against the loop below, interleaved so that
+            # neither order is favoured, nothing at 200,000 x 300, 12% of the wall time
+            # at 50,000 x 2,000 and 26% at 20,000 x 5,000.
             values = (
                 X.to_numpy(dtype=dtype, copy=False)
                 if isinstance(X, pd.DataFrame)
