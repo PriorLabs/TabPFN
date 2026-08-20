@@ -188,6 +188,11 @@ class TabPFNV3Config(ArchitectureConfig):
                     f"<= the number of train KV heads ({effective_kv})"
                 )
 
+    @property
+    def is_classification(self) -> bool:
+        """Whether this config describes a classifier."""
+        return self.max_num_classes >= 2
+
 
 # ---------------------------------------------------------------------------
 # TabPFN v3 KV cache
@@ -360,9 +365,8 @@ def get_cache_size(
         total_bytes += model_config.nlayers * 2 * kv_scale_dtype.itemsize
 
     # 2. Many-class decoder keys, (N_train, H_dec * D_dec). Classification only:
-    # regression has no many-class decoder, so its cache omits this term. This
-    # mirrors how the architecture picks its task type from the config.
-    if model_config.max_num_classes >= 2:
+    # regression has no many-class decoder, so its cache omits this term.
+    if model_config.is_classification:
         decoder_key_width = (
             model_config.decoder_num_heads * model_config.decoder_head_dim
         )
@@ -2482,7 +2486,7 @@ def get_architecture(
     # cache_trainset_representation is accepted for interface compatibility but
     # is a no-op: v3 uses explicit KV cache passing via forward() parameters
     # (kv_cache / return_kv_cache) instead of model-internal caching.
-    task_type = "multiclass" if config.max_num_classes >= 2 else "regression"
+    task_type = "multiclass" if config.is_classification else "regression"
     n_out = config.max_num_classes if task_type == "multiclass" else config.num_buckets
     return TabPFNV3(
         config=config,
