@@ -184,6 +184,9 @@ class InferenceConfig:
     it. The preprocessors should be passed as a tuple/list and are then (repeatedly)
     used by the estimators in the ensembles.
 
+    The preprocessor is applied to the target variable in its original units, and
+    its output is standardized afterwards, since that is the scale TabPFN expects.
+
     By default, we use no preprocessing and a power transformation (if we have
     more than one estimator).
 

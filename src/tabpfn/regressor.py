@@ -89,6 +89,7 @@ from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.preprocessing.target_transform import wrap_target_transform
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -854,6 +855,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         Handle the preprocessing of the input (X and y). We also return the
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
+
+        Also sets ``y_train_mean_``/``y_train_std_``, the statistics of the
+        z-normalisation every caller applies to the target before the ensemble
+        preprocessing. They are needed here already because the target
+        transforms are composed with that z-normalisation, see
+        :func:`wrap_target_transform`.
         """
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
@@ -887,6 +894,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
 
+        self.y_train_mean_, self.y_train_std_ = _target_znorm_statistics(y)
+
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
         possible_target_transforms = get_all_reshape_feature_distribution_preprocessors(
@@ -897,11 +906,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         for (
             y_target_preprocessor
         ) in self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
-            if y_target_preprocessor is not None:
-                preprocessor = possible_target_transforms[y_target_preprocessor]
-            else:
-                preprocessor = None
-            target_preprocessors.append(preprocessor)
+            # Nothing to transform, so the target stays z-normalised. `"none"`
+            # is the identity transform and therefore equivalent to no
+            # transform at all; composing it would only add floating-point
+            # noise to the target.
+            if y_target_preprocessor in (None, "none"):
+                target_preprocessors.append(None)
+                continue
+            # The target reaching the transform is z-normalised, so the
+            # transform is composed with the inverse of that normalisation and
+            # a re-standardisation, to make it act on the target in its
+            # original units.
+            target_preprocessors.append(
+                wrap_target_transform(
+                    possible_target_transforms[y_target_preprocessor],
+                    mean=self.y_train_mean_,
+                    std=self.y_train_std_,
+                )
+            )
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -1185,10 +1207,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # tuning regressor derives its own mean/std from its own training split.
         self._maybe_calibrate_ensemble_temperature(X=X, y=y)
 
-        mean, std = np.mean(y), np.std(y)
-        # TODO: y_train_std_ and y_train_mean_ don't seem to be used anywhere else.
-        self.y_train_std_ = std.item() + 1e-20
-        self.y_train_mean_ = mean.item()
+        # `y_train_mean_`/`y_train_std_` were set by
+        # `_initialize_dataset_preprocessing`, which needs them to compose the
+        # target transforms with this z-normalisation.
         y = (y - self.y_train_mean_) / self.y_train_std_
         self._rebuild_raw_space_bardist()
 
@@ -2139,6 +2160,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             self.znorm_space_bardist_.to(self.devices_[0])
         if hasattr(self, "raw_space_bardist_"):
             self.raw_space_bardist_.to(self.devices_[0])
+
+
+def _target_znorm_statistics(y: np.ndarray) -> tuple[float, float]:
+    """Return the mean and standard deviation used to z-normalise the target.
+
+    The standard deviation carries a small epsilon so that a (near-)constant
+    target cannot cause a division by zero. A truly constant target is caught
+    by `fit` and never reaches the model.
+    """
+    return float(np.mean(y)), float(np.std(y)) + 1e-20
 
 
 def _logits_to_output(

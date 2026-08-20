@@ -1365,6 +1365,104 @@ def test__predict_batched__uses_fitted_target_transforms() -> None:
         np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), atol=1e-4)
 
 
+def _mk_skewed_reg_dataset(
+    seed: int, n: int = 200, f: int = 5
+) -> tuple[np.ndarray, np.ndarray]:
+    """A strictly positive, right-skewed target -- the log-transform case."""
+    r = np.random.RandomState(seed)
+    X = r.randn(n, f)
+    y = np.exp(1.5 + X @ np.array([1.0, -0.5, 0.3, 0.0, 0.2]) + 0.3 * r.randn(n))
+    return X, y
+
+
+def test__fit__target_transform__applied_to_the_unnormalized_target() -> None:
+    """A target transform must see the target in its original units.
+
+    The estimator z-normalises the target before the ensemble preprocessing, so
+    a transform such as ``1_plus_log`` would otherwise be applied to
+    standardized values, where it means something entirely different (and is
+    undefined below -1).
+    """
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("1_plus_log",)},
+    )
+    reg.fit(X, y)
+
+    expected = np.log1p(y)
+    expected = (expected - expected.mean()) / expected.std()
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    np.testing.assert_allclose(member_y, expected, atol=1e-8)
+
+
+def test__fit__no_target_transform__leaves_the_target_znormalized() -> None:
+    """Without a target transform the model still sees the z-normalised target."""
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)},
+    )
+    reg.fit(X, y)
+
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    np.testing.assert_allclose(member_y, (y - y.mean()) / y.std(), atol=1e-8)
+
+
+def test__fit__none_target_transform__is_treated_as_no_transform() -> None:
+    """The ``"none"`` preset is the identity, so it must not be composed.
+
+    Composing it would leave the target unchanged but for floating-point noise
+    from the round trip through the z-normalisation, needlessly perturbing the
+    predictions of every config that uses it.
+    """
+    X, y = _mk_skewed_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": ("none",)},
+    )
+    reg.fit(X, y)
+
+    member = reg.executor_.ensemble_members[0]
+    assert member.config.target_transform is None
+    np.testing.assert_allclose(
+        np.asarray(member.y_train), (y - y.mean()) / y.std(), atol=1e-8
+    )
+
+
+@pytest.mark.parametrize("transform", ["1_plus_log", "log", "safepower"])
+def test__predict__target_transform__predictions_are_finite_and_accurate(
+    transform: str,
+) -> None:
+    """Transforming a skewed target must yield usable predictions.
+
+    Guards the whole round trip: the transform is fitted on the unnormalized
+    target, while the model's borders are mapped back through it into the
+    z-normalised space the ensemble is aggregated in.
+    """
+    X, y = _mk_skewed_reg_dataset(0)
+    X_train, X_test, y_train, y_test = X[:150], X[150:], y[:150], y[150:]
+    reg = TabPFNRegressor(
+        n_estimators=2,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (transform,)},
+    )
+    reg.fit(X_train, y_train)
+    pred = reg.predict(X_test)
+
+    assert np.isfinite(pred).all()
+    assert r2_score(y_test, pred) > 0.7
+
+
 @pytest.mark.parametrize("device", devices)
 def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.

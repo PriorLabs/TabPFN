@@ -176,7 +176,16 @@ class ClassifierEnsembleConfig(EnsembleConfig):
 
 @dataclass
 class RegressorEnsembleConfig(EnsembleConfig):
-    """Configuration for a regression ensemble member."""
+    """Configuration for a regression ensemble member.
+
+    Attributes:
+        target_transform: Transform mapping the z-normalised target to the
+            target this member is fitted on, and, through
+            ``inverse_transform``, the model's bar-distribution borders back to
+            the z-normalised space. `None` leaves the target z-normalised. See
+            `tabpfn.preprocessing.target_transform` for how the transforms are
+            composed so that they act on the target in its original units.
+    """
 
     target_transform: TransformerMixin | Pipeline | None
 

@@ -18,6 +18,9 @@ from sklearn.model_selection import StratifiedKFold
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
+from tabpfn.preprocessing.target_transform import (
+    rebind_target_transform_statistics,
+)
 from tabpfn.utils import infer_random_state, pad_tensors
 
 if TYPE_CHECKING:
@@ -429,6 +432,14 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 + train_mean  # Inverse normalization back to raw space
             ).float()
             y_train = y_train_standardized
+            # The configs were built for the statistics of the whole dataset,
+            # but every split standardizes with its own; the target transforms
+            # undo that standardization internally and so have to follow.
+            rebind_target_transform_statistics(
+                [c.target_transform for c in conf],
+                mean=float(train_mean),
+                std=float(train_std),
+            )
         else:
             y_train = y_train_raw
 

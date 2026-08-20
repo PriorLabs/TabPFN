@@ -95,7 +95,11 @@ def _transform_labels_one(
 
     Args:
         config: Ensemble config.
-        y_train: The unprocessed labels.
+        y_train: The labels as the estimator handed them over: encoded class
+            indices for classification, and the z-normalised target for
+            regression. Note that the regression target transforms undo that
+            z-normalisation internally, so that they act on the target in its
+            original units (see `tabpfn.preprocessing.target_transform`).
 
     Return: The processed labels.
     """
