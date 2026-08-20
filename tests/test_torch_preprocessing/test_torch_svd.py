@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pytest
 import torch
@@ -573,6 +575,50 @@ class TestTorchVsSklearnAddSVDFeaturesStep:
             err_msg=f"SVD features differ for {svd_name} with "
             f"n_rows={n_rows}, n_features={n_features}, "
             f"inject_non_finite={inject_non_finite}",
+        )
+
+    @pytest.mark.parametrize("svd_name", ["svd", "svd_quarter_components"])
+    def test__torch_vs_sklearn__extra_random_components_match(
+        self, svd_name: str
+    ) -> None:
+        """Both paths must select the same extra components for the same seed.
+
+        The indices come from the shared ``select_svd_component_indices``, so an
+        ensemble member gets the same recipe whichever path runs it.
+        """
+        n_rows, n_features, n_train = 200, 40, 150
+        rng = np.random.default_rng(42)
+        x_np = rng.standard_normal((n_rows, n_features)).astype(np.float32)
+
+        schema = FeatureSchema(
+            features=[
+                Feature(name=f"f{i}", modality=FeatureModality.NUMERICAL)
+                for i in range(n_features)
+            ]
+        )
+        sk_step = SklearnAddSVDFeaturesStep(
+            global_transformer_name=svd_name,
+            random_state=42,
+            extra_random_component_fraction=0.5,
+        )
+        sk_step._fit(x_np[:n_train], schema)
+        _, sk_features, _ = sk_step._transform(x_np)
+
+        torch_step = TorchAddSVDFeaturesStep(
+            svd_name, random_state=42, extra_random_component_fraction=0.5
+        )
+        result = torch_step.fit_transform(
+            torch.from_numpy(x_np).unsqueeze(1),
+            column_indices=list(range(n_features)),
+            num_train_rows=n_train,
+        )
+        torch_features = result.added_columns.squeeze(1).numpy()
+
+        n_top = get_svd_n_components(svd_name, n_train, n_features)
+        assert sk_features.shape[1] == n_top + math.ceil(0.5 * n_top)
+        assert sk_features.shape == torch_features.shape
+        np.testing.assert_allclose(
+            np.abs(torch_features), np.abs(sk_features), atol=5e-4, rtol=5e-4
         )
 
 

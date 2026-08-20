@@ -1715,3 +1715,138 @@ def test__crossing__binary_crosses_with_the_model_index_too() -> None:
         for config in configs
     }
     assert len(recipes) == 8
+
+
+# --- extra random SVD components across the ensemble ------------------------
+
+
+def _svd_steps(ensemble_preprocessor: TabPFNEnsemblePreprocessor) -> list:
+    from tabpfn.preprocessing.steps import AddSVDFeaturesStep  # noqa: PLC0415
+
+    return [
+        step
+        for pipeline in ensemble_preprocessor.pipelines
+        for step, _ in pipeline.steps
+        if isinstance(step, AddSVDFeaturesStep)
+    ]
+
+
+def _svd_ensemble_preprocessor(
+    *, n_train: int, n_features: int, fraction: float
+) -> TabPFNEnsemblePreprocessor:
+    configs = generate_classification_ensemble_configs(
+        num_estimators=4,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                global_transformer_name="svd",
+                # Generous budget, so the SVD columns are simply appended rather
+                # than displacing input features.
+                max_features_per_estimator=500,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+    return TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=0,
+        n_preprocessing_jobs=1,
+        svd_extra_random_component_fraction=fraction,
+    )
+
+
+def test__svd_extra_random_components__each_member_draws_its_own() -> None:
+    """The extra components are what give the SVD features ensemble diversity."""
+    rng = np.random.default_rng(0)
+    n_train, n_features = 400, 40
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    preprocessor = _svd_ensemble_preprocessor(
+        n_train=n_train, n_features=n_features, fraction=0.5
+    )
+    preprocessor.fit_transform_ensemble_members(X_train=X_train, y_train=y_train)
+
+    selections = {
+        tuple(step.component_indices_.tolist()) for step in _svd_steps(preprocessor)
+    }
+    assert len(_svd_steps(preprocessor)) == 4
+    assert len(selections) == 4, "every member should draw a different tail"
+
+
+def test__svd_extra_random_components__off_by_default() -> None:
+    """Without the option no member draws extra components."""
+    rng = np.random.default_rng(0)
+    n_train, n_features = 400, 40
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    plain = _svd_ensemble_preprocessor(
+        n_train=n_train, n_features=n_features, fraction=0.0
+    )
+    extra = _svd_ensemble_preprocessor(
+        n_train=n_train, n_features=n_features, fraction=0.5
+    )
+    plain_members = plain.fit_transform_ensemble_members(
+        X_train=X_train, y_train=y_train
+    )
+    extra_members = extra.fit_transform_ensemble_members(
+        X_train=X_train, y_train=y_train
+    )
+
+    assert all(step.component_indices_ is None for step in _svd_steps(plain))
+    # k = min(400//10+1, 40//2) = 20, so 10 more columns per member.
+    for plain_member, extra_member in zip(plain_members, extra_members, strict=True):
+        assert extra_member.X_train.shape[1] == plain_member.X_train.shape[1] + 10
+
+
+def test__svd_extra_random_components__respect_the_feature_budget() -> None:
+    """The extra columns are counted against max_features_per_estimator."""
+    rng = np.random.default_rng(0)
+    n_train, n_features, max_features = 400, 60, 40
+    X_train = rng.standard_normal((n_train, n_features))
+    y_train = rng.integers(0, 2, n_train)
+
+    configs = generate_classification_ensemble_configs(
+        num_estimators=4,
+        add_fingerprint_feature=False,
+        polynomial_features="no",
+        feature_shift_decoder=None,
+        preprocessor_configs=[
+            PreprocessorConfig(
+                "none",
+                categorical_name="numeric",
+                global_transformer_name="svd",
+                max_features_per_estimator=max_features,
+            ),
+        ],
+        class_shift_method=None,
+        n_classes=2,
+        random_state=0,
+        num_models=1,
+        outlier_removal_std=None,
+    )
+    preprocessor = TabPFNEnsemblePreprocessor(
+        configs=configs,
+        n_samples=n_train,
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=0,
+        n_preprocessing_jobs=1,
+        svd_extra_random_component_fraction=0.5,
+    )
+    members = preprocessor.fit_transform_ensemble_members(
+        X_train=X_train, y_train=y_train
+    )
+
+    for member in members:
+        assert member.X_train.shape[1] <= max_features

@@ -181,6 +181,26 @@ class InferenceConfig:
           subsampling is required (importance scoring is more accurate on larger
           datasets), otherwise falls back to "balanced".
     """
+    SVD_EXTRA_RANDOM_COMPONENT_FRACTION: float = 0.0
+    """How many extra SVD features to append, as a fraction of the number the
+    preprocessor already adds. `0.0` (the default) keeps today's behaviour.
+
+    A preprocessor config with a `global_transformer_name` appends the top-k SVD
+    components of the (scaled) data as extra features, where k follows the TabPFN
+    convention (see `get_svd_n_components`). Those top components are the same for
+    every ensemble member, so the SVD features carry no ensemble diversity.
+
+    When this is positive, the step decomposes the full spectrum instead and appends
+    the top-k as before plus `ceil(fraction * k)` components drawn uniformly at
+    random from below the top-k, redrawn per ensemble member. `0.5` therefore adds
+    half as many features again, each member seeing different low-variance
+    directions of the same data.
+
+    Note that this costs real time: the full spectrum is far more expensive to
+    decompose than the top-k, most on wide tables. It also reaches into the tail of
+    the spectrum, where components of a rank-deficient table are close to arbitrary.
+    """
+
     FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT: int = 50
     """The number of leading features that are always included when using the
     'constant_and_balanced' feature subsampling method. Only used when

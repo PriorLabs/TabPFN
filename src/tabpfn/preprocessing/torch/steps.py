@@ -14,7 +14,12 @@ from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.steps.add_fingerprint_features_step import (
     AddFingerprintFeaturesStep,
 )
-from tabpfn.preprocessing.steps.add_svd_features_step import get_svd_n_components
+from tabpfn.preprocessing.steps.add_svd_features_step import (
+    get_svd_component_pool_size,
+    get_svd_n_components,
+    get_svd_n_extra_random_components,
+    select_svd_component_indices,
+)
 from tabpfn.preprocessing.torch.pipeline_interface import (
     TorchPreprocessingStep,
     TorchPreprocessingStepResult,
@@ -371,6 +376,7 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         self,
         global_transformer_name: Literal["svd", "svd_quarter_components"] = "svd",
         random_state: int | np.random.Generator | None = None,
+        extra_random_component_fraction: float = 0.0,
     ) -> None:
         """Initialize the SVD features step.
 
@@ -380,10 +386,16 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
                 :func:`get_svd_n_components`, matching the CPU pipeline.
             random_state: Seeds the SVD's random projection, as in the CPU
                 :class:`AddSVDFeaturesStep`.
+            extra_random_component_fraction: When positive, decompose the full
+                spectrum and append this fraction of the top-k count as
+                components drawn at random from below the top-k. Mirrors the CPU
+                :class:`AddSVDFeaturesStep`, down to which indices are drawn for
+                a given seed.
         """
         super().__init__()
         self.global_transformer_name = global_transformer_name
         self.random_state = random_state
+        self.extra_random_component_fraction = extra_random_component_fraction
         self._scaler = TorchSafeStandardScaler()
         self._svd: TorchTruncatedSVD | None = None
 
@@ -409,15 +421,22 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
         if num_features < 2:
             return {"is_no_op": torch.tensor(data=True)}
 
-        effective_n_components = get_svd_n_components(
+        n_top_components = get_svd_n_components(
             self.global_transformer_name,
             n_samples=num_train_rows,
             n_features=num_features,
         )
+        pool_size = get_svd_component_pool_size(num_train_rows, num_features)
+        n_extra_random = get_svd_n_extra_random_components(
+            n_top_components, pool_size, self.extra_random_component_fraction
+        )
+        effective_n_components = n_top_components + n_extra_random
 
         static_seed, _ = infer_random_state(self.random_state)
         self._svd = TorchTruncatedSVD(
-            n_components=effective_n_components,
+            # The extra components come from anywhere below the top-k, so the
+            # whole spectrum has to be decomposed to draw from.
+            n_components=pool_size if n_extra_random > 0 else n_top_components,
             random_state=static_seed,
         )
 
@@ -429,6 +448,24 @@ class TorchAddSVDFeaturesStep(TorchPreprocessingStep):
 
         x_scaled = self._scaler.transform(x_flat, scaler_cache)
         svd_cache = self._svd.fit(x_scaled)
+
+        if n_extra_random > 0:
+            # Keep the selected rows of V^T only: transform is a projection onto
+            # them, so this is what makes the step emit exactly those components.
+            indices = torch.as_tensor(
+                select_svd_component_indices(
+                    n_top_components, n_extra_random, pool_size, static_seed
+                ),
+                device=svd_cache["components"].device,
+            )
+            svd_cache = {
+                "components": svd_cache["components"][indices],
+                "singular_values": svd_cache["singular_values"][indices],
+            }
+            self._svd = TorchTruncatedSVD(
+                n_components=effective_n_components,
+                random_state=static_seed,
+            )
 
         return {
             "scaler_std": scaler_cache["std"],

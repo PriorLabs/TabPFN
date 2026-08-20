@@ -11,7 +11,10 @@ from tabpfn.preprocessing import PreprocessingPipeline
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.add_svd_features_step import (
     AddSVDFeaturesStep,
+    _pin_layout,
+    get_svd_component_pool_size,
     get_svd_features_transformer,
+    get_svd_n_extra_random_components,
 )
 
 
@@ -242,3 +245,168 @@ def test__get_svd_features_transformer__invalid_name_raises() -> None:
             n_samples=100,
             n_features=10,
         )
+
+
+# --- extra random components (SVD_EXTRA_RANDOM_COMPONENT_FRACTION) -----------
+
+
+@pytest.mark.parametrize(
+    ("n_top", "pool_size", "fraction", "expected"),
+    [
+        (10, 40, 0.0, 0),  # off
+        (10, 40, 0.5, 5),  # half again
+        (10, 40, 1.0, 10),  # twice as many
+        (10, 40, 0.25, 3),  # rounds up: ceil(2.5)
+        (1, 40, 0.5, 1),  # any positive fraction adds at least one
+        (10, 12, 0.5, 2),  # clamped: only 2 components left below the top-k
+        (10, 10, 0.5, 0),  # nothing below the top-k to draw from
+    ],
+)
+def test__get_svd_n_extra_random_components__counts(
+    n_top: int, pool_size: int, fraction: float, expected: int
+) -> None:
+    assert get_svd_n_extra_random_components(n_top, pool_size, fraction) == expected
+
+
+def test__extra_random_components__adds_half_as_many_features_again() -> None:
+    """0.5 appends ceil(k/2) more components, and the count is predicted upfront."""
+    data = _get_test_data(n_samples=500, n_features=40)
+    schema = _get_schema(num_columns=40)
+    # k = min(500//10+1, 40//2) = min(51, 20) = 20
+    n_top = 20
+
+    plain = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
+    extra = AddSVDFeaturesStep(
+        global_transformer_name="svd",
+        random_state=42,
+        extra_random_component_fraction=0.5,
+    )
+
+    plain_added = plain.fit_transform(data, schema).X_added
+    extra_added = extra.fit_transform(data, schema).X_added
+
+    assert plain_added is not None
+    assert extra_added is not None
+    assert plain_added.shape[1] == n_top
+    assert extra_added.shape[1] == n_top + n_top // 2
+    # The budget calculation must agree with what the step actually appends.
+    assert extra.num_added_features(500, schema) == extra_added.shape[1]
+
+
+def test__extra_random_components__off_by_default_and_fits_only_top_k() -> None:
+    """Default must be the cheap path: only the top-k are decomposed."""
+    data = _get_test_data(n_samples=500, n_features=40)
+    schema = _get_schema(num_columns=40)
+
+    step = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
+    step.fit_transform(data, schema)
+
+    assert step.component_indices_ is None
+    assert step.transformer_.steps[1][1].n_components == 20
+
+
+def test__extra_random_components__keeps_the_top_k_and_appends_below_them() -> None:
+    """The top-k block is untouched; the extras come from deeper in the spectrum."""
+    data = _get_test_data(n_samples=500, n_features=40)
+    schema = _get_schema(num_columns=40)
+    n_top = 20
+
+    plain = AddSVDFeaturesStep(global_transformer_name="svd", random_state=42)
+    extra = AddSVDFeaturesStep(
+        global_transformer_name="svd",
+        random_state=42,
+        extra_random_component_fraction=0.5,
+    )
+    plain_added = plain.fit_transform(data, schema).X_added
+    extra_added = extra.fit_transform(data, schema).X_added
+
+    assert plain_added is not None
+    assert extra_added is not None
+    # Only close, not identical: arpack is iterative, so asking it for the whole
+    # spectrum instead of the top-k perturbs the top-k it converges to slightly.
+    np.testing.assert_allclose(
+        extra_added[:, :n_top], plain_added, rtol=1e-3, atol=1e-4
+    )
+
+    indices = extra.component_indices_
+    assert indices is not None
+    np.testing.assert_array_equal(indices[:n_top], np.arange(n_top))
+    assert (indices[n_top:] >= n_top).all()
+    assert indices[n_top:].max() < min(500, 40) - 1 + 1  # inside the pool
+    assert len(set(indices.tolist())) == len(indices)  # drawn without replacement
+
+
+def test__extra_random_components__match_a_full_spectrum_reference() -> None:
+    """The appended columns are the selected components, exactly."""
+    data = _get_test_data(n_samples=300, n_features=30)
+    schema = _get_schema(num_columns=30)
+
+    step = AddSVDFeaturesStep(
+        global_transformer_name="svd",
+        random_state=7,
+        extra_random_component_fraction=0.5,
+    )
+    added = step.fit_transform(data, schema).X_added
+    assert added is not None
+    assert step.component_indices_ is not None
+
+    reference = get_svd_features_transformer(
+        "svd", 300, 30, random_state=7, n_components=min(300, 30) - 1
+    )
+    reference.fit(_pin_layout(data))
+    expected = reference.transform(_pin_layout(data))[:, step.component_indices_]
+
+    np.testing.assert_allclose(added, expected, rtol=1e-6, atol=1e-6)
+
+
+def test__extra_random_components__differ_per_seed() -> None:
+    """Each ensemble member draws its own tail components; that is the point."""
+    data = _get_test_data(n_samples=500, n_features=40)
+    schema = _get_schema(num_columns=40)
+
+    def indices_for(seed: int) -> list[int]:
+        step = AddSVDFeaturesStep(
+            global_transformer_name="svd",
+            random_state=seed,
+            extra_random_component_fraction=0.5,
+        )
+        step.fit_transform(data, schema)
+        assert step.component_indices_ is not None
+        return step.component_indices_.tolist()
+
+    assert indices_for(1) != indices_for(2)
+    assert indices_for(1) == indices_for(1)  # reproducible for a given seed
+
+
+def test__extra_random_components__no_pool_below_top_k_is_a_noop() -> None:
+    """When the top-k already exhaust the spectrum there is nothing to add."""
+    # n_samples=6 -> pool = min(6, 6) - 1 = 5; k = min(6//10+1, 6//2) = 1.
+    # Tiny table: verify the step still fits and never asks for more than the pool.
+    data = _get_test_data(n_samples=6, n_features=6)
+    schema = _get_schema(num_columns=6)
+
+    step = AddSVDFeaturesStep(
+        global_transformer_name="svd",
+        random_state=42,
+        extra_random_component_fraction=0.5,
+    )
+    added = step.fit_transform(data, schema).X_added
+    assert added is not None
+    assert added.shape[1] == step.num_added_features(6, schema)
+    assert added.shape[1] <= get_svd_component_pool_size(6, 6)
+
+
+def test__extra_random_components__single_feature_still_a_noop() -> None:
+    """The fewer-than-two-features guard wins over the extra components."""
+    data = np.array([[1.0], [2.0], [3.0], [4.0]], dtype=np.float32)
+    schema = _get_schema(num_columns=1)
+
+    step = AddSVDFeaturesStep(
+        global_transformer_name="svd",
+        random_state=42,
+        extra_random_component_fraction=0.5,
+    )
+    result = step.fit_transform(data, schema)
+
+    assert result.X_added is None
+    assert step.num_added_features(4, schema) == 0

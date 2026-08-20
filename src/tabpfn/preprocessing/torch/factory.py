@@ -42,6 +42,7 @@ def create_gpu_preprocessing_pipeline(
     feature_schema: FeatureSchema | None = None,
     n_train_samples: int | None = None,
     random_state: int | np.random.Generator | None = None,
+    svd_extra_random_component_fraction: float = 0.0,
 ) -> TorchPreprocessingPipeline | None:
     """Create a GPU preprocessing pipeline based on configuration.
 
@@ -55,6 +56,9 @@ def create_gpu_preprocessing_pipeline(
             Used to read ``scheduled_gpu_transform`` column annotations.
         n_train_samples: Number of training samples (after subsampling).
         random_state: Random state for the SVD and shuffle steps.
+        svd_extra_random_component_fraction: Fraction of extra SVD components,
+            drawn at random from below the top-k, that the SVD step appends. See
+            ``TorchAddSVDFeaturesStep``.
     """
     steps: list[tuple[TorchPreprocessingStep, set[FeatureModality] | None]] = []
     pconfig = config.preprocess_config
@@ -111,6 +115,7 @@ def create_gpu_preprocessing_pipeline(
                     TorchAddSVDFeaturesStep(
                         global_transformer_name=pconfig.global_transformer_name,
                         random_state=random_state,
+                        extra_random_component_fraction=svd_extra_random_component_fraction,
                     ),
                     None,
                 )

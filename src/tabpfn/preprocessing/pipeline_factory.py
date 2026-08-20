@@ -51,6 +51,7 @@ def create_preprocessing_pipeline(
     *,
     random_state: int | np.random.Generator | None,
     enable_gpu_preprocessing: bool = False,
+    svd_extra_random_component_fraction: float = 0.0,
 ) -> PreprocessingPipeline:
     """Convert the ensemble configuration to a preprocessing pipeline.
 
@@ -60,6 +61,9 @@ def create_preprocessing_pipeline(
         enable_gpu_preprocessing: When True, the quantile transform (if GPU-
             eligible), SVD, and shuffle steps are omitted from the CPU pipeline
             because they will run on GPU instead.
+        svd_extra_random_component_fraction: Fraction of extra SVD components,
+            drawn at random from below the top-k, that the SVD step appends. See
+            ``AddSVDFeaturesStep``.
     """
     steps: list[PreprocessingStep | StepWithModalities] = []
 
@@ -123,6 +127,7 @@ def create_preprocessing_pipeline(
                     AddSVDFeaturesStep(
                         global_transformer_name=pconfig.global_transformer_name,  # type: ignore
                         random_state=random_state,
+                        extra_random_component_fraction=svd_extra_random_component_fraction,
                     )
                 )
 

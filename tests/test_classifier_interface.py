@@ -1626,3 +1626,63 @@ def test__predict_proba_batched__does_not_mutate_estimator() -> None:
     fitted.predict_proba_batched(X_list, y_list, X_tests)
     after = fitted.predict_proba(a_x[:5])
     np.testing.assert_array_equal(before, after)
+
+
+@pytest.mark.parametrize("enable_gpu_preprocessing", [False, True])
+def test__svd_extra_random_component_fraction__reaches_the_svd_step(
+    *, enable_gpu_preprocessing: bool
+) -> None:
+    """The inference config option must change the fitted members' SVD features.
+
+    Runs both preprocessing paths: the SVD step lives in the CPU pipeline, or in
+    the torch pipeline when ``ENABLE_GPU_PREPROCESSING`` is on (which is the
+    default for the v3 checkpoints).
+    """
+    from tabpfn.preprocessing.steps import AddSVDFeaturesStep  # noqa: PLC0415
+    from tabpfn.preprocessing.torch.steps import (  # noqa: PLC0415
+        TorchAddSVDFeaturesStep,
+    )
+
+    step_cls = (
+        TorchAddSVDFeaturesStep if enable_gpu_preprocessing else AddSVDFeaturesStep
+    )
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((60, 20))
+    y = (X[:, :3].sum(axis=1) > 0).astype(int)
+
+    def fit_and_collect(fraction: float) -> tuple[np.ndarray, list]:
+        classifier = TabPFNClassifier(
+            n_estimators=4,
+            random_state=0,
+            device="cpu",
+            inference_config={
+                "SVD_EXTRA_RANDOM_COMPONENT_FRACTION": fraction,
+                "ENABLE_GPU_PREPROCESSING": enable_gpu_preprocessing,
+            },
+        )
+        classifier.fit(X, y)
+        probabilities = classifier.predict_proba(X)
+        members = classifier.ensemble_preprocessor_.fit_transform_ensemble_members(
+            X_train=X, y_train=y
+        )
+        preprocessors = (
+            [member.gpu_preprocessor for member in members]
+            if enable_gpu_preprocessing
+            else [member.cpu_preprocessor for member in members]
+        )
+        steps = [
+            step
+            for preprocessor in preprocessors
+            if preprocessor is not None
+            for step, _ in preprocessor.steps
+            if isinstance(step, step_cls)
+        ]
+        return probabilities, steps
+
+    plain_probabilities, plain_steps = fit_and_collect(0.0)
+    extra_probabilities, extra_steps = fit_and_collect(0.5)
+
+    assert plain_steps, "checkpoint has no SVD preprocessor config to exercise"
+    assert all(step.extra_random_component_fraction == 0.0 for step in plain_steps)
+    assert all(step.extra_random_component_fraction == 0.5 for step in extra_steps)
+    assert not np.allclose(plain_probabilities, extra_probabilities)

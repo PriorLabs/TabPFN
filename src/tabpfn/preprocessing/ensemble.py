@@ -103,6 +103,7 @@ class TabPFNEnsemblePreprocessor:
         X_train: np.ndarray | None = None,
         y_train: np.ndarray | None = None,
         task_type: Literal["classifier", "regressor"] = "classifier",
+        svd_extra_random_component_fraction: float = 0.0,
     ) -> None:
         """Init.
 
@@ -138,12 +139,17 @@ class TabPFNEnsemblePreprocessor:
             task_type: ``"classifier"`` or ``"regressor"``, controls whether
                 ExtraTreesClassifier or ExtraTreesRegressor is used.
                 Only used when feature_subsampling_method is "feature_importance".
+            svd_extra_random_component_fraction: When positive, the SVD feature
+                step decomposes the full spectrum and appends this fraction of
+                the top-k count as components drawn at random from below the
+                top-k, independently per estimator. Zero keeps the top-k only.
         """
         super().__init__()
         self.configs = configs
         self.feature_schema = feature_schema
         self.n_preprocessing_jobs = n_preprocessing_jobs
         self.keep_fitted_cache = keep_fitted_cache
+        self.svd_extra_random_component_fraction = svd_extra_random_component_fraction
 
         self.random_state = random_state
         self.enable_gpu_preprocessing = enable_gpu_preprocessing
@@ -165,6 +171,7 @@ class TabPFNEnsemblePreprocessor:
                 config,
                 random_state=int(seed),
                 enable_gpu_preprocessing=enable_gpu_preprocessing,
+                svd_extra_random_component_fraction=svd_extra_random_component_fraction,
             )
             for config, seed in zip(self.configs, self.pipeline_seeds, strict=True)
         ]
@@ -305,6 +312,7 @@ class TabPFNEnsemblePreprocessor:
                     feature_schema=feature_schema_preprocessed,
                     n_train_samples=X_train_preprocessed.shape[0],
                     random_state=int(self.pipeline_seeds[config_index]),
+                    svd_extra_random_component_fraction=self.svd_extra_random_component_fraction,
                 )
             else:
                 gpu_preprocessor = gpu_preprocessors[config_index]  # type: ignore

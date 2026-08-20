@@ -763,6 +763,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             constant_feature_count=self.inference_config_.FEATURE_SUBSAMPLING_CONSTANT_FEATURE_COUNT,
             subsample_samples=self.inference_config_.SUBSAMPLE_SAMPLES,
             importance_top_k_count=self.inference_config_.FEATURE_SUBSAMPLING_IMPORTANCE_TOP_K_COUNT,
+            svd_extra_random_component_fraction=self.inference_config_.SVD_EXTRA_RANDOM_COMPONENT_FRACTION,
             X_train=X,
             y_train=y,
             task_type=self.estimator_type,
