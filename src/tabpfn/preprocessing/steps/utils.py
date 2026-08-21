@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from typing_extensions import override
 
 import numpy as np
@@ -14,6 +14,35 @@ from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
+
+
+def is_identity_transformer(transformer: Any) -> bool:
+    """Whether `transformer` hands back what it is given, untouched.
+
+    Used to decide that a transform need not be run at all -- so it answers only for the
+    cases where that is provable, and declines everything else.
+
+    `"passthrough"` says so outright. A `FunctionTransformer` qualifies when it has no
+    `func` *and* does not validate: `validate=True` is not nothing, it sends the input
+    through `check_array`, which coerces the dtype and refuses a NaN that would
+    otherwise pass. Its remaining arguments cannot reach the values -- `kw_args` only
+    applies to a `func`, `check_inverse` is skipped without one, `accept_sparse` only
+    matters under `validate`, and `inverse_func` and `feature_names_out` are not on the
+    forward path.
+
+    The type is compared exactly rather than with `isinstance` because of what this
+    decides. A subclass may override `transform` and do something else entirely with
+    `func` still unset, and no inspection here would catch it. Refusing a harmless
+    subclass costs whichever fallback the caller keeps for the general case; accepting
+    an unfaithful one costs the result.
+    """
+    if isinstance(transformer, str):
+        return transformer == "passthrough"
+    return (
+        type(transformer) is FunctionTransformer
+        and transformer.func is None
+        and not transformer.validate
+    )
 
 
 def make_scaler_safe(name: str, scaler: TransformerMixin) -> Pipeline:

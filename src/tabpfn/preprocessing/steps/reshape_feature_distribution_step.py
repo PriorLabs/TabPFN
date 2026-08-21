@@ -41,7 +41,10 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
-from tabpfn.preprocessing.steps.utils import wrap_with_safe_standard_scaler
+from tabpfn.preprocessing.steps.utils import (
+    is_identity_transformer,
+    wrap_with_safe_standard_scaler,
+)
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -376,12 +379,7 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # the registry maps to the identity `FunctionTransformer`. Then the only thing
         # the ColumnTransformer still does to the data is move columns, and it pays two
         # full-size arrays to do it: one for the blocks, one for the hstack.
-        passes_values_through = (
-            # FunctionTransformer(func=None, validate=False) is the identity function
-            isinstance(_transformer, FunctionTransformer)
-            and _transformer.func is None
-            and not _transformer.validate
-        )
+        passes_values_through = is_identity_transformer(_transformer)
         source_order = [column.source_ix for column in layout]
         self.data_is_unchanged_ = passes_values_through and source_order == all_feats_ix
         # Every input column used exactly once, only in a different place: one gather

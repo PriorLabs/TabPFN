@@ -41,6 +41,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
 from tabpfn.preprocessing.steps.remove_constant_features_step import (
     RemoveConstantFeaturesStep,
 )
+from tabpfn.preprocessing.steps.utils import is_identity_transformer
 
 if TYPE_CHECKING:
     from tabpfn.classifier import XType, YType
@@ -772,3 +773,68 @@ def test__efficient_column_transformer__a_validating_remainder_is_not_a_passthro
     with pytest.raises(ValueError, match="NaN"):
         transformer.fit_transform(X)
     assert assemblies == []
+
+
+# --- the shared identity predicate ------------------------------------------------
+#
+# Two steps decide from it that a transform need not run: the assembly skips a
+# remainder it vouches for, and the reshape step drops its ColumnTransformer for a
+# gather. So it has to answer for the cases where that is provable and decline the rest.
+
+
+class _SneakyFunctionTransformer(FunctionTransformer):
+    """A subclass that transforms without a `func`, which no attribute would reveal."""
+
+    @override
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        return X * 2
+
+
+@pytest.mark.parametrize(
+    ("transformer", "identity", "why"),
+    [
+        pytest.param("passthrough", True, "says so outright", id="passthrough"),
+        pytest.param("drop", False, "drops its columns", id="drop"),
+        pytest.param(FunctionTransformer(), True, "no func, no validation", id="bare"),
+        pytest.param(
+            FunctionTransformer(validate=True),
+            False,
+            "check_array coerces the dtype and refuses a NaN",
+            id="validating",
+        ),
+        pytest.param(
+            FunctionTransformer(func=np.sqrt), False, "has a func", id="with-func"
+        ),
+        pytest.param(
+            FunctionTransformer(func=None, inverse_func=np.sqrt),
+            True,
+            "an inverse is not on the forward path",
+            id="with-inverse-only",
+        ),
+        pytest.param(
+            _SneakyFunctionTransformer(),
+            False,
+            "a subclass may override transform with func still unset",
+            id="subclass",
+        ),
+        pytest.param(OrdinalEncoder(), False, "encodes its columns", id="encoder"),
+    ],
+)
+def test__is_identity_transformer(
+    transformer: object, identity: bool, why: str
+) -> None:
+    """Only what provably hands its input back counts as the identity."""
+    assert is_identity_transformer(transformer) is identity, why
+
+
+def test__is_identity_transformer__is_what_both_callers_use() -> None:
+    """The two steps that skip work on it must not drift back to their own copies."""
+    encoder = get_ordinal_encoder()
+    assert is_identity_transformer(encoder.remainder)
+
+    with mock.patch(
+        "tabpfn.preprocessing.steps.preprocessing_helpers.is_identity_transformer",
+        return_value=False,
+    ):
+        # Declining the remainder has to cost the assembly, not go unnoticed.
+        assert not encoder._may_assemble(_mixed_frame(), {})
