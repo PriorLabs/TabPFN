@@ -465,13 +465,25 @@ def transform_borders_one(
     borders: np.ndarray,
     target_transform: TransformerMixin | Pipeline,
     *,
+    znorm_mean: float,
+    znorm_std: float,
     repair_nan_borders_after_transform: bool,
 ) -> tuple[npt.NDArray[np.bool_] | None, bool, np.ndarray]:
     """Transforms the borders used for the bar distribution for regression.
 
+    `target_transform.inverse_transform` returns the borders in the original
+    units of the target, which are then mapped into the z-normalised frame the
+    ensemble is aggregated in. The sanity limits below are applied in that
+    frame, where they mean "this many standard deviations of the target": in
+    the original units they would reject every border of any target whose
+    magnitude happens to exceed them.
+
     Args:
         borders: The borders to transform.
         target_transform: The target transformer to use.
+        znorm_mean: Mean of the training target, defining the frame the borders
+            are returned in.
+        znorm_std: Standard deviation of the training target.
         repair_nan_borders_after_transform:
             Whether to repair any borders that are NaN after the transformation.
 
@@ -482,7 +494,15 @@ def transform_borders_one(
         descending_borders: Whether the borders are descending after transformation
         borders_t: The transformed borders themselves.
     """
-    borders_t = target_transform.inverse_transform(borders.reshape(-1, 1)).squeeze()  # type: ignore
+    # In float64: mapping out of the member's standardization and back into the
+    # shared frame is a round trip whose two halves nearly cancel, and in
+    # float32 that cancellation costs about six digits of the borders. The
+    # result is narrowed back to the dtype of the borders that came in, so the
+    # aggregation and the decode keep the precision they are used to.
+    borders_t = target_transform.inverse_transform(  # type: ignore
+        borders.reshape(-1, 1).astype(np.float64)
+    ).squeeze()
+    borders_t = ((borders_t - znorm_mean) / znorm_std).astype(borders.dtype)
 
     logit_cancel_mask: npt.NDArray[np.bool_] | None = None
     if repair_nan_borders_after_transform:
