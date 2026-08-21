@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -213,3 +215,29 @@ def test__classifier_fit_predict__text_n_components__sets_the_feature_count() ->
 
     assert classifier.n_features_in_ == 4
     assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)
+
+
+def test__fit_transform__use_dates_false__warns_naming_the_date_columns() -> None:
+    """Turning dates off must say so, or the column is only reported as free text."""
+    frame = pd.DataFrame({"signed_on": _date_strings()})
+
+    with pytest.warns(UserWarning, match="`use_dates` is off") as record:
+        InputTypeConverter(use_dates=False).fit_transform(frame)
+    assert "'signed_on'" in str(record[0].message)
+
+
+def test__fit_transform__use_dates_true__does_not_warn_about_dates() -> None:
+    frame = pd.DataFrame({"signed_on": _date_strings()})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        InputTypeConverter().fit_transform(frame)
+    assert not [w for w in caught if "use_dates" in str(w.message)]
+
+
+def test__fit_transform__use_text_false__does_not_warn_about_encoding() -> None:
+    """The off switch must not claim the column was encoded."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        InputTypeConverter(use_text=False).fit_transform(_text_frame(n_unique=100))
+    assert not [w for w in caught if "encoded as text" in str(w.message)]

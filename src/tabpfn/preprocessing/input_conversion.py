@@ -25,8 +25,18 @@ DEFAULT_TEXT_CARDINALITY_THRESHOLD = 30
 #: Number of features a text column is encoded into. skrub's default.
 DEFAULT_TEXT_N_COMPONENTS = 30
 
-#: Cap on how many column names the text warning lists.
-_MAX_TEXT_COLUMNS_IN_WARNING = 10
+#: Cap on how many column names a warning lists, so a wide frame does not produce
+#: an unreadable multi-kilobyte message.
+_MAX_COLUMNS_IN_WARNING = 10
+
+
+def _format_names(columns: list[str]) -> str:
+    """Render column names for a warning, capped so the message stays readable."""
+    shown = columns[:_MAX_COLUMNS_IN_WARNING]
+    names = ", ".join(repr(name) for name in shown)
+    if len(columns) > len(shown):
+        names += f" (and {len(columns) - len(shown)} more)"
+    return names
 
 
 def make_datetime_encoder() -> DatetimeEncoder:
@@ -136,7 +146,7 @@ class InputTypeConverter:
             cardinality_threshold=self.text_cardinality_threshold,
         )
         out = self.vectorizer_.fit_transform(X)
-        self._warn_about_encoded_text()
+        self._warn_about_columns()
         return self._restore_dates(out, X)
 
     def transform(self, X: XType) -> XType:
@@ -212,22 +222,53 @@ class InputTypeConverter:
             out[col] = X[col]
         return out
 
+    def _columns_of_kind(self, kind: str) -> list[str]:
+        """Names of the input columns the vectorizer sorted into `kind`."""
+        if self.vectorizer_ is None:
+            return []
+        return [
+            str(column)
+            for column, column_kind in self.vectorizer_.column_to_kind_.items()
+            if column_kind == kind
+        ]
+
+    def _warn_about_columns(self) -> None:
+        """Report what was read as text, and what was read as a date but left."""
+        self._warn_about_encoded_text()
+        self._warn_about_unused_dates()
+
+    def _warn_about_unused_dates(self) -> None:
+        """Say which columns hold dates that `use_dates` told us to leave alone.
+
+        Without this the column is reported by the free-text warning downstream,
+        which suggests remedies that make no sense for a date.
+        """
+        if self.use_dates:
+            return
+        date_columns = self._columns_of_kind("datetime")
+        if not date_columns:
+            return
+        warnings.warn(
+            f"These columns hold dates, and `use_dates` is off, so they are left as "
+            f"they arrived: {_format_names(date_columns)}.\n"
+            "A column already of a datetime dtype cannot be represented further "
+            "down the pipeline and will raise; one holding date strings is treated "
+            "as a high-cardinality category, which discards the ordering a date "
+            "has. Set `use_dates=True` to expand them into calendar features "
+            "instead.",
+            UserWarning,
+            stacklevel=2,
+        )
+
     def _warn_about_encoded_text(self) -> None:
         """Say which columns were read as text, since it is easy to get wrong."""
-        if self.vectorizer_ is None or not self.use_text:
+        if not self.use_text:
             return
-        text_columns = [
-            str(column)
-            for column, kind in self.vectorizer_.column_to_kind_.items()
-            if kind == "high_cardinality"
-        ]
+        text_columns = self._columns_of_kind("high_cardinality")
         if not text_columns:
             return
 
-        shown = text_columns[:_MAX_TEXT_COLUMNS_IN_WARNING]
-        names = ", ".join(repr(name) for name in shown)
-        if len(text_columns) > len(shown):
-            names += f" (and {len(text_columns) - len(shown)} more)"
+        names = _format_names(text_columns)
         warnings.warn(
             f"These columns hold more than {self.text_cardinality_threshold} distinct "
             f"values and were encoded as text, into "
