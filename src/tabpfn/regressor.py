@@ -1023,7 +1023,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         target_preprocessors: list[Pipeline] = [
             make_target_transform(
                 None
-                if y_target_preprocessor is None
+                if y_target_preprocessor in (None, "none")
                 else possible_target_transforms[y_target_preprocessor]
             )
             for y_target_preprocessor in (

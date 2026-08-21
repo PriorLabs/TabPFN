@@ -49,7 +49,7 @@ class StandardizeTarget(TransformerMixin, BaseEstimator):
 
 
 def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
-    """Standardize raw targets, then apply the optional preset.
+    """Apply the optional preset to raw targets, then standardize.
 
     The inverse returns values in the target's original units.
     """
@@ -57,9 +57,9 @@ def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
         return Pipeline(steps=[(STANDARDIZE_STEP, StandardizeTarget())])
     return Pipeline(
         steps=[
-            # The preset reshapes the standardized target.
-            (STANDARDIZE_STEP, StandardizeTarget()),
+            # Reshape the raw target before standardizing it for the model.
             (TARGET_TRANSFORM_STEP, transform),
+            (STANDARDIZE_STEP, StandardizeTarget()),
         ],
     )
 
