@@ -252,11 +252,11 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _fit_column_bookkeeping(self, X: XType) -> XType:
         """Fit everything but the values, and return the one-row result that took.
 
-        `ColumnTransformer.fit` is implemented as `fit_transform`, so fitting on
-        the whole input would run the very transform this class replaces. Called on the
-        parent because `self.fit` would land back here.
+        `ColumnTransformer.fit` is implemented as `fit_transform`, so fitting on the
+        whole input would run the very transform this class replaces. Taken up the chain
+        rather than through `self.fit`, which would land back in the override above.
         """
-        return ColumnTransformer.fit_transform(self, _head(X, 1), None)
+        return super().fit_transform(_head(X, 1), None)
 
     def _named_selection(self) -> tuple[str | None, list[Any] | None]:
         """The named transformer's name and the columns it holds, in its own order.
