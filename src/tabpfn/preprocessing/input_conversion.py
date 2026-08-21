@@ -15,11 +15,15 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 #: Number of distinct values above which a string column is treated as text rather
-#: than as a category. Matches skrub's own default.
-DEFAULT_TEXT_CARDINALITY_THRESHOLD = 40
+#: than as a category. Set to the same value as
+#: `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, so that by default a string column is
+#: either a category or text with nothing in between: raising it above that value
+#: leaves the columns in the gap being ordinal-encoded as high-cardinality
+#: categoricals instead.
+DEFAULT_TEXT_CARDINALITY_THRESHOLD = 30
 
-#: Number of columns a text column is encoded into. skrub's default.
-TEXT_N_COMPONENTS = 30
+#: Number of features a text column is encoded into. skrub's default.
+DEFAULT_TEXT_N_COMPONENTS = 30
 
 #: Cap on how many column names the text warning lists.
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
@@ -45,18 +49,21 @@ def make_datetime_encoder() -> DatetimeEncoder:
     )
 
 
-def make_text_encoder() -> Any:
+def make_text_encoder(n_components: int) -> Any:
     """Build the encoder that turns a text column into numeric features.
+
+    Args:
+        n_components: Number of features to encode each text column into.
 
     Returns:
         An encoder applying tf-idf over character n-grams followed by a truncated
-        SVD, producing :data:`TEXT_N_COMPONENTS` columns.
+        SVD, producing `n_components` columns.
     """
     from skrub import StringEncoder  # noqa: PLC0415
 
     # Seeded independently of the estimator: giving a column its type is a property
     # of the data, so it should not move when the ensemble seed does.
-    return StringEncoder(n_components=TEXT_N_COMPONENTS, random_state=0)
+    return StringEncoder(n_components=n_components, random_state=0)
 
 
 class InputTypeConverter:
@@ -78,6 +85,7 @@ class InputTypeConverter:
             they are left as strings and reach the estimator's ordinal encoder.
         text_cardinality_threshold: Number of distinct values above which a string
             column is treated as text rather than as a category.
+        text_n_components: Number of features each text column is encoded into.
 
     Attributes:
         vectorizer_: The fitted vectorizer, or None when the converter was fitted
@@ -90,10 +98,12 @@ class InputTypeConverter:
         use_dates: bool = True,
         use_text: bool = True,
         text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
+        text_n_components: int = DEFAULT_TEXT_N_COMPONENTS,
     ) -> None:
         self.use_dates = use_dates
         self.use_text = use_text
         self.text_cardinality_threshold = text_cardinality_threshold
+        self.text_n_components = text_n_components
         self.vectorizer_: TableVectorizer | None = None
 
     def fit_transform(self, X: XType) -> XType:
@@ -118,7 +128,9 @@ class InputTypeConverter:
         # `modality_detection._detect_feature_modality`.
         self.vectorizer_ = TableVectorizer(
             low_cardinality="passthrough",
-            high_cardinality=make_text_encoder() if self.use_text else "passthrough",
+            high_cardinality=make_text_encoder(self.text_n_components)
+            if self.use_text
+            else "passthrough",
             numeric="passthrough",
             datetime=make_datetime_encoder() if self.use_dates else "passthrough",
             cardinality_threshold=self.text_cardinality_threshold,
@@ -219,7 +231,7 @@ class InputTypeConverter:
         warnings.warn(
             f"These columns hold more than {self.text_cardinality_threshold} distinct "
             f"values and were encoded as text, into "
-            f"{TEXT_N_COMPONENTS} numeric features each: {names}.\n"
+            f"{self.text_n_components} numeric features each: {names}.\n"
             "If such a column is a category rather than text, raise "
             "`text_cardinality_threshold` above its number of distinct values, or "
             "pass its index in `categorical_features_indices`.\n"

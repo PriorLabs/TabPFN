@@ -85,6 +85,7 @@ from tabpfn.preprocessing.ensemble import (
 )
 from tabpfn.preprocessing.input_conversion import (
     DEFAULT_TEXT_CARDINALITY_THRESHOLD,
+    DEFAULT_TEXT_N_COMPONENTS,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
@@ -220,6 +221,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         use_dates: bool = True,
         use_text: bool = True,
         text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
+        text_n_components: int = DEFAULT_TEXT_N_COMPONENTS,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
@@ -314,6 +316,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Number of distinct values above which a string column is read as
                 text rather than as a category. Only consulted when `use_text` is
                 True.
+
+            text_n_components:
+                Number of numeric features each text column is encoded into. Every
+                text column costs this many features, so a table with many of them
+                can reach `MAX_NUMBER_OF_FEATURES`. Only consulted when `use_text`
+                is True.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -539,6 +547,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.use_dates = use_dates
         self.use_text = use_text
         self.text_cardinality_threshold = text_cardinality_threshold
+        self.text_n_components = text_n_components
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
         self.average_before_softmax = average_before_softmax

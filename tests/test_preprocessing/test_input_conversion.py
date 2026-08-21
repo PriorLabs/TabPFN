@@ -10,7 +10,7 @@ import pytest
 
 from tabpfn import TabPFNClassifier
 from tabpfn.preprocessing.input_conversion import (
-    TEXT_N_COMPONENTS,
+    DEFAULT_TEXT_N_COMPONENTS,
     InputTypeConverter,
 )
 
@@ -120,7 +120,7 @@ def test__fit_transform__text_column__is_encoded_into_numeric_features() -> None
     frame = _text_frame(n_unique=100)
     out = InputTypeConverter().fit_transform(frame)
 
-    assert out.shape[1] == TEXT_N_COMPONENTS
+    assert out.shape[1] == DEFAULT_TEXT_N_COMPONENTS
     assert all(pd.api.types.is_numeric_dtype(dtype) for dtype in out.dtypes)
 
 
@@ -137,10 +137,10 @@ def test__fit_transform__text_cardinality_threshold__decides_what_is_text() -> N
     frame = _text_frame(n_unique=35)
 
     below = InputTypeConverter(text_cardinality_threshold=40).fit_transform(frame)
-    above = InputTypeConverter(text_cardinality_threshold=30).fit_transform(frame)
+    above = InputTypeConverter(text_cardinality_threshold=20).fit_transform(frame)
 
     assert below.shape == frame.shape
-    assert above.shape[1] == TEXT_N_COMPONENTS
+    assert above.shape[1] == DEFAULT_TEXT_N_COMPONENTS
 
 
 def test__fit_transform__text_column__warns_naming_the_column() -> None:
@@ -190,6 +190,26 @@ def test__classifier_fit_predict__text_column__round_trips(use_text: bool) -> No
     )
     classifier.fit(frame, y)
 
-    expected = TEXT_N_COMPONENTS + 1 if use_text else 2
+    expected = DEFAULT_TEXT_N_COMPONENTS + 1 if use_text else 2
     assert classifier.n_features_in_ == expected
+    assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)
+
+
+def test__fit_transform__text_n_components__sets_the_width() -> None:
+    frame = _text_frame(n_unique=100)
+    out = InputTypeConverter(text_n_components=5).fit_transform(frame)
+
+    assert out.shape[1] == 5
+
+
+def test__classifier_fit_predict__text_n_components__sets_the_feature_count() -> None:
+    frame = _text_frame(n_unique=100)
+    y = np.arange(N_ROWS) % 2
+
+    classifier = TabPFNClassifier(
+        device="cpu", n_estimators=1, random_state=0, text_n_components=4
+    )
+    classifier.fit(frame, y)
+
+    assert classifier.n_features_in_ == 4
     assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)

@@ -201,6 +201,7 @@ def ensure_compatible_fit_inputs_sklearn(
             use_dates=estimator.use_dates,
             use_text=estimator.use_text,
             text_cardinality_threshold=estimator.text_cardinality_threshold,
+            text_n_components=estimator.text_n_components,
         )
         X = input_converter.fit_transform(X)
     else:
