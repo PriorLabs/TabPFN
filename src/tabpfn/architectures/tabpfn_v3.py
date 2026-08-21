@@ -354,21 +354,26 @@ class BatchedTabPFNV3Cache:
         # Regression caches no decoder keys (no many-class decoder).
         decoder_keys = None
         if caches[0].decoder_keys is not None:
+            # Allocated head-major and exposed as (B, N, H, D), matching what
+            # project_keys produces -- a plain empty/cat here would re-materialise
+            # the stack row-major and hand the decoder back its big SDPA copy.
+            first = caches[0].decoder_keys
+            n, h, d = first.shape[1:]
             if alias_sources:
-                # Same idea, one member at a time: fill a buffer slice, then
-                # hand the source that slice so its own tensor is freed now.
-                first = caches[0].decoder_keys
+                # Same idea as the layers, one member at a time: fill a buffer
+                # slice, then hand the source that slice so its own tensor is
+                # freed now.
                 decoder_keys = torch.empty(
-                    (len(caches), *first.shape[1:]),
-                    dtype=first.dtype,
-                    device=first.device,
-                )
+                    (len(caches), h, n, d), dtype=first.dtype, device=first.device
+                ).permute(0, 2, 1, 3)
                 for i, cache in enumerate(caches):
                     assert cache.decoder_keys is not None
                     decoder_keys[i : i + 1].copy_(cache.decoder_keys)
                     cache.decoder_keys = decoder_keys[i : i + 1]
             else:
-                decoder_keys = torch.cat([c.decoder_keys for c in caches], dim=0)
+                decoder_keys = torch.cat(
+                    [c.decoder_keys.permute(0, 2, 1, 3) for c in caches], dim=0
+                ).permute(0, 2, 1, 3)
 
         return BatchedTabPFNV3Cache(
             kv=kv,
@@ -636,10 +641,15 @@ class ManyClassDecoder(nn.Module):
         self.softmax_scaling_layer = softmax_scaling_layer
 
     def project_keys(self, train_embeddings: torch.Tensor) -> torch.Tensor:
-        """Project train embeddings to per-head keys: (B,N,E)->(B,N,H,D)."""
+        """Project train embeddings to per-head keys: (B,N,E)->(B,N,H,D).
+
+        The result has the architecture's usual ``(B, N, H, D)`` shape but is
+        laid out in memory as ``(B, H, N, D)`` -- see
+        :func:`_permuted_head_layout` for why that matters.
+        """
         k_BNE = self.k_projection(train_embeddings)
         h, d = self.num_heads, self.head_dim
-        return k_BNE.view(*k_BNE.shape[:2], h, d).contiguous()
+        return _permuted_head_layout(k_BNE.view(*k_BNE.shape[:2], h, d))
 
     def _project_q(
         self,
@@ -678,12 +688,15 @@ class ManyClassDecoder(nn.Module):
 
         if highest_target is None:
             highest_target = int(targets.max())
+        # Built head-major, to match the layout project_keys uses: the pad in
+        # _chunked_class_attention then keeps it, and SDPA's permute stays free.
         one_hot_targets_BNHT = (
             F.one_hot(targets.long(), num_classes=highest_target + 1)
             .to(dtype=q_BMHD.dtype)
-            .unsqueeze(2)
-            .expand(-1, -1, self.num_heads, -1)
+            .unsqueeze(1)
+            .expand(-1, self.num_heads, -1, -1)
             .contiguous()
+            .permute(0, 2, 1, 3)
         )
         test_output_BMHT = _chunked_class_attention(
             q_BMHD,
@@ -725,6 +738,27 @@ class ManyClassDecoder(nn.Module):
         return torch.softmax(scores_BHMN, dim=-1).mean(dim=1)  # over heads -> (B, M, N)
 
 
+def _permuted_head_layout(t_BNHD: torch.Tensor) -> torch.Tensor:
+    """Return ``t_BNHD`` unchanged in shape but laid out as ``(B, H, N, D)``.
+
+    ``_torch_sdpa`` takes ``(B, S, H, D)`` -- flash attention's native layout,
+    which is why the caches use it -- and permutes to the ``(B, H, S, D)`` that
+    ``torch.nn.functional.scaled_dot_product_attention`` wants, then calls
+    ``.contiguous()``. On a normally-laid-out tensor that permute is
+    non-contiguous, so the ``.contiguous()`` copies the whole thing.
+
+    Storing the *memory* in ``(B, H, N, D)`` order while keeping the
+    ``(B, N, H, D)`` shape makes that permute land back on contiguous storage,
+    so the copy becomes a no-op. For the many-class decoder, whose keys and
+    values span every training row, that copy is the single largest allocation
+    on the cached-predict path.
+
+    Cheap to undo and safe to skip: anything that needs true ``(B, N, H, D)``
+    contiguity can still call ``.contiguous()`` and get it.
+    """
+    return t_BNHD.permute(0, 2, 1, 3).contiguous().permute(0, 2, 1, 3)
+
+
 def _chunked_class_attention(
     q_BSHD: torch.Tensor,
     k_BJHD: torch.Tensor,
@@ -751,30 +785,34 @@ def _chunked_class_attention(
     T = v_BJHT.shape[-1]
     num_chunks = math.ceil(T / D)
 
-    # Pad V to a multiple of D along the class axis
+    # Pad V to a multiple of D along the class axis. Padded head-major so a
+    # head-major V (see _permuted_head_layout) keeps its layout -- padding the
+    # (B, J, H, T) view directly would silently re-materialise it row-major.
     pad = num_chunks * D - T
     if pad > 0:
-        v_BJHT = F.pad(v_BJHT, (0, pad))
+        v_BJHT = F.pad(v_BJHT.permute(0, 2, 1, 3), (0, pad)).permute(0, 2, 1, 3)
 
     # Fold chunk index into batch dimension
     J = v_BJHT.shape[1]
+    # No .contiguous() here: reshape already copies when it must, and SDPA
+    # takes strided inputs. Forcing (B, J, H, D) contiguity would undo the
+    # head-major layout of K/V and cost a full copy of each -- the largest
+    # allocation on this path. With num_chunks == 1 (any T <= D, so every
+    # ordinary class count) all three stay views.
     v_folded = (
         v_BJHT.reshape(B, J, H, num_chunks, D)
         .permute(0, 3, 1, 2, 4)
         .reshape(B * num_chunks, J, H, D)
-        .contiguous()
     )
     q_folded = (
         q_BSHD.unsqueeze(1)
         .expand(-1, num_chunks, -1, -1, -1)
         .reshape(B * num_chunks, S, H, D)
-        .contiguous()
     )
     k_folded = (
         k_BJHD.unsqueeze(1)
         .expand(-1, num_chunks, -1, -1, -1)
         .reshape(B * num_chunks, J, H, D)
-        .contiguous()
     )
 
     # Single flash-attention call across all chunks

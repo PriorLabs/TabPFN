@@ -1134,3 +1134,39 @@ def test__stack_kv_entries__dense_entries_stay_dense() -> None:
     torch.testing.assert_close(
         stacked.key, torch.cat([e.key for e in entries], dim=0), rtol=0, atol=0
     )
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__decoder_keys__cached_head_major_so_sdpa_permute_is_free(device: str) -> None:
+    """Cached decoder keys must be laid out for SDPA, not for their own shape.
+
+    ``_torch_sdpa`` permutes ``(B, N, H, D)`` to ``(B, H, N, D)`` and calls
+    ``.contiguous()``. Storing the memory head-major makes that permute land on
+    contiguous storage, so the copy -- the largest allocation on the cached
+    predict path, since the keys span every training row -- becomes a no-op.
+    Assert the layout directly, because nothing about the shape reveals it.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    n_estimators = 4
+    model, X_test, predict = _fit_cached_ensemble(
+        "classifier", device, 48, 5, n_estimators=n_estimators
+    )
+    engine = model.executor_
+
+    for cache in engine.kv_caches:
+        keys = cache.decoder_keys
+        assert keys is not None
+        assert keys.ndim == 4
+        # Shape stays the architecture's convention...
+        assert not keys.is_contiguous()
+        # ...while the memory is head-major, so SDPA's permute is free.
+        assert keys.permute(0, 2, 1, 3).is_contiguous()
+
+    # The batched stack must not quietly re-materialise it row-major.
+    predict(model, X_test)
+    (_idxs, batched_cache), *_ = engine._batched_caches.values()
+    stacked = batched_cache.decoder_keys
+    assert stacked is not None
+    assert stacked.permute(0, 2, 1, 3).is_contiguous()
