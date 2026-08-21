@@ -385,6 +385,7 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V3, ModelSource.get_classifier_v3(), "classifier"),
         (ModelVersion.V3, ModelSource.get_regressor_v3(), "regressor"),
     ]:
+        first_download_exception: Exception | None = None
         for ckpt_name in model_source.filenames:
             path = to / ckpt_name
             if path.exists():
@@ -399,7 +400,16 @@ def download_all_models(to: Path) -> None:
                 model_name=ckpt_name,
             )
             if result != "ok":
-                logger.warning(f"Errors downloading model {model_version}: {result}")
+                for error in result:
+                    logger.error(f"Error downloading model {model_version}: {error}")
+                if first_download_exception is None:
+                    first_download_exception = result[0]
+
+        # We don't immediately raise the exception so we attempt to download every
+        # model, even if some fail.
+        if first_download_exception is not None:
+            msg = "One or more models failed to download"
+            raise RuntimeError(msg) from first_download_exception
 
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
