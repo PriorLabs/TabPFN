@@ -375,6 +375,7 @@ def _try_direct_downloads(
 def download_all_models(to: Path) -> None:
     """Download all available classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
+    first_download_exception: Exception | None = None
     for model_version, model_source, model_type in [
         (ModelVersion.V2, ModelSource.get_classifier_v2(), "classifier"),
         (ModelVersion.V2, ModelSource.get_regressor_v2(), "regressor"),
@@ -385,7 +386,6 @@ def download_all_models(to: Path) -> None:
         (ModelVersion.V3, ModelSource.get_classifier_v3(), "classifier"),
         (ModelVersion.V3, ModelSource.get_regressor_v3(), "regressor"),
     ]:
-        first_download_exception: Exception | None = None
         for ckpt_name in model_source.filenames:
             path = to / ckpt_name
             if path.exists():
@@ -405,11 +405,11 @@ def download_all_models(to: Path) -> None:
                 if first_download_exception is None:
                     first_download_exception = result[0]
 
-        # We don't immediately raise the exception so we attempt to download every
-        # model, even if some fail.
-        if first_download_exception is not None:
-            msg = "One or more models failed to download"
-            raise RuntimeError(msg) from first_download_exception
+    # We don't immediately raise the exception so we attempt to download every
+    # model, even if some fail.
+    if first_download_exception is not None:
+        msg = "One or more models failed to download"
+        raise RuntimeError(msg) from first_download_exception
 
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
