@@ -89,6 +89,10 @@ from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.preprocessing.target_transform import (
+    StandardizeTarget,
+    make_target_transform,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -893,15 +897,18 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             num_examples=y.shape[0],  # Use length of validated y
             random_state=random_state,  # Use the provided rng
         )
-        target_preprocessors: list[TransformerMixin | Pipeline | None] = []
-        for (
-            y_target_preprocessor
-        ) in self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS:
-            if y_target_preprocessor is not None:
-                preprocessor = possible_target_transforms[y_target_preprocessor]
-            else:
-                preprocessor = None
-            target_preprocessors.append(preprocessor)
+        # Every member standardizes the target itself, so the members are handed
+        # the target in its original units and no statistic of it is needed here.
+        target_preprocessors: list[TransformerMixin | Pipeline | None] = [
+            make_target_transform(
+                None
+                if y_target_preprocessor is None
+                else possible_target_transforms[y_target_preprocessor]
+            )
+            for y_target_preprocessor in (
+                self.inference_config_.REGRESSION_Y_PREPROCESS_TRANSFORMS
+            )
+        ]
 
         preprocessor_configs = self.inference_config_.PREPROCESS_TRANSFORMS
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -1185,11 +1192,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # tuning regressor derives its own mean/std from its own training split.
         self._maybe_calibrate_ensemble_temperature(X=X, y=y)
 
-        mean, std = np.mean(y), np.std(y)
-        # TODO: y_train_std_ and y_train_mean_ don't seem to be used anywhere else.
-        self.y_train_std_ = std.item() + 1e-20
-        self.y_train_mean_ = mean.item()
-        y = (y - self.y_train_mean_) / self.y_train_std_
+        # The frame the ensemble is aggregated in and `raw_space_bardist_`
+        # decodes from. The target itself is handed to the preprocessing in its
+        # original units; every member standardizes it with its own statistics.
+        self.y_train_mean_ = float(np.mean(y))
+        self.y_train_std_ = float(np.std(y)) + StandardizeTarget.EPSILON
         self._rebuild_raw_space_bardist()
 
         self._build_ensemble_preprocessor_and_executor(
@@ -1689,6 +1696,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         items: list[RegressorBatch] = []
         fused_index: list[int] = []
         raw_space_bardists: list[FullSupportBarDistribution] = []
+        # Per dataset, like `raw_space_bardists`: the frame its members' target
+        # pipelines were fitted in, needed to map their borders back.
+        znorm_frames: list[tuple[float, float]] = []
         znorm_borders: torch.Tensor | None = None
 
         for idx, (X, y, X_test) in enumerate(
@@ -1706,6 +1716,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Rebuilt fresh on every fit, so each dataset keeps its own object.
             raw_space_bardists.append(worker.raw_space_bardist_)
+            znorm_frames.append((worker.y_train_mean_, worker.y_train_std_))
             # Fixed by the checkpoint, so identical across datasets.
             if znorm_borders is None:
                 znorm_borders = worker.znorm_space_bardist_.borders.clone()
@@ -1795,11 +1806,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 batch.X_query, autocast=worker.use_autocast_, task_type="regression"
             ):
                 for fused_pos in range(len(fused_index)):
+                    znorm_mean, znorm_std = znorm_frames[fused_pos]
                     contribution = worker._translate_batched_logits(
                         output=output[:, fused_pos, :],
                         config=configs_for_est[fused_pos],
                         znorm_borders=znorm_borders,
                         std_borders=std_borders,
+                        znorm_mean=znorm_mean,
+                        znorm_std=znorm_std,
                     )
                     previous = accumulated[fused_pos]
                     accumulated[fused_pos] = (
@@ -1830,11 +1844,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         config: RegressorEnsembleConfig,
         znorm_borders: torch.Tensor,
         std_borders: np.ndarray,
+        znorm_mean: float,
+        znorm_std: float,
     ) -> torch.Tensor:
         """Map one estimator's output for one dataset onto the shared borders.
 
         Same border translation as :meth:`predict`, for a single
-        (estimator, dataset) pair of the fused forward.
+        (estimator, dataset) pair of the fused forward. `znorm_mean` and
+        `znorm_std` belong to this dataset, not to `self`: the worker is refitted
+        per dataset, so its own attributes only ever hold the last one's.
         """
         out_d = output.float()
         if self.softmax_temperature != 1:
@@ -1846,6 +1864,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             logit_cancel_mask, descending_borders, borders_t = transform_borders_one(
                 std_borders,
                 target_transform=config.target_transform,
+                znorm_mean=znorm_mean,
+                znorm_std=znorm_std,
                 repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
             )
             if descending_borders:
@@ -1978,6 +1998,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 # the transformation done to the borders for a given output is dependant
                 # upon the target_transform of the config.
                 if config_for_ensemble.target_transform is None:
+                    # No target pipeline: the target was handed to the model
+                    # already in the frame of the checkpoint's borders, as the
+                    # differentiable-input path does.
                     borders_t = std_borders.copy()
                     logit_cancel_mask = None
                     descending_borders = False
@@ -1986,6 +2009,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                         transform_borders_one(
                             std_borders,
                             target_transform=config_for_ensemble.target_transform,
+                            znorm_mean=self.y_train_mean_,
+                            znorm_std=self.y_train_std_,
                             repair_nan_borders_after_transform=self.inference_config_.FIX_NAN_BORDERS_AFTER_TARGET_TRANSFORM,
                         )
                     )

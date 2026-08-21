@@ -66,6 +66,10 @@ class RegressorBatch:
         znorm_space_bardist: Bar distribution in z-normalized target space.
         X_query_raw: Original unprocessed test features.
         y_query_raw: Original unprocessed test targets.
+        y_train_mean: Mean of this split's training target, defining the frame
+            the two bar distributions relate by. The regressor needs it to map
+            an estimator's borders back out of its target pipeline.
+        y_train_std: Standard deviation of this split's training target.
     """
 
     X_context: list[torch.Tensor]
@@ -79,6 +83,8 @@ class RegressorBatch:
     znorm_space_bardist: FullSupportBarDistribution
     X_query_raw: torch.Tensor
     y_query_raw: torch.Tensor
+    y_train_mean: float = 0.0
+    y_train_std: float = 1.0
 
 
 @dataclass
@@ -423,12 +429,13 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 train_std = eps
 
             y_test_standardized = (y_test_raw - train_mean) / train_std
-            y_train_standardized = (y_train_raw - train_mean) / train_std
             raw_space_bardist_ = FullSupportBarDistribution(
                 znorm_space_bardist_.borders * train_std
                 + train_mean  # Inverse normalization back to raw space
             ).float()
-            y_train = y_train_standardized
+            # The members standardize the target themselves, each with the
+            # statistics of the split it is fitted on.
+            y_train = y_train_raw
         else:
             y_train = y_train_raw
 
@@ -498,6 +505,8 @@ class DatasetCollectionWithPreprocessing(torch.utils.data.Dataset):
                 znorm_space_bardist=znorm_space_bardist_,
                 X_query_raw=x_test_raw,
                 y_query_raw=y_test_raw,
+                y_train_mean=float(train_mean),
+                y_train_std=float(train_std),
             )
 
         return ClassifierBatch(
@@ -664,6 +673,10 @@ def meta_dataset_collator(
         znorm_space_bardist=first_item.znorm_space_bardist,
         X_query_raw=_collate_tensor_field(batch, "X_query_raw", padding_val),
         y_query_raw=_collate_tensor_field(batch, "y_query_raw", padding_val),
+        # Taken from the first item, like the bar distributions above and for
+        # the same reason: they belong together as one frame.
+        y_train_mean=first_item.y_train_mean,
+        y_train_std=first_item.y_train_std,
     )
 
 
