@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -37,6 +37,7 @@ def detect_feature_modalities(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    already_reported_columns: Collection[str] = (),
 ) -> FeatureSchema:
     """Infer the features modalities from the given data, based on heuristics
     and user-provided indices for categorical features.
@@ -61,6 +62,9 @@ def detect_feature_modalities(
         min_unique_for_numerical:
             The minimum number of unique values for a
             feature to be considered numerical.
+        already_reported_columns: Names of columns input type conversion has
+            already warned about, so the free-text warning does not report the
+            same column a second time under a different diagnosis.
 
     Returns:
         A dictionary with the feature modalities as keys and the column as
@@ -85,6 +89,7 @@ def detect_feature_modalities(
     _warn_if_text_features(
         feature_schema,
         declared_categorical_indices=provided_categorical_indices,
+        already_reported_columns=already_reported_columns,
     )
     return feature_schema
 
@@ -93,6 +98,7 @@ def _warn_if_text_features(
     feature_schema: FeatureSchema,
     *,
     declared_categorical_indices: Sequence[int] | None = None,
+    already_reported_columns: Collection[str] = (),
 ) -> None:
     """Warn when input columns look like free text rather than categoricals.
 
@@ -117,12 +123,19 @@ def _warn_if_text_features(
             column categorical states that the user already knows it holds
             non-numeric values and intends them as categories, so warning about it
             would be noise.
+        already_reported_columns: Names input type conversion already warned about.
+            A date column it was told to leave alone reaches here as a
+            high-cardinality string, and reporting it as free text would offer
+            remedies that do not apply to a date.
     """
     declared = set(declared_categorical_indices or ())
+    reported = set(already_reported_columns)
     text_names = [
-        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
+        name
         for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT and index not in declared
+        if feature.modality is FeatureModality.TEXT
+        and index not in declared
+        and (name := feature.name.removeprefix(INPUT_FEATURE_PREFIX)) not in reported
     ]
     if not text_names:
         return

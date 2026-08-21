@@ -241,3 +241,54 @@ def test__fit_transform__use_text_false__does_not_warn_about_encoding() -> None:
         warnings.simplefilter("always")
         InputTypeConverter(use_text=False).fit_transform(_text_frame(n_unique=100))
     assert not [w for w in caught if "encoded as text" in str(w.message)]
+
+
+def test__fit_transform__reported_columns__names_what_it_warned_about() -> None:
+    frame = pd.DataFrame(
+        {"signed_on": _date_strings(), "notes": [f"text {i}" for i in range(N_ROWS)]}
+    )
+    converter = InputTypeConverter(use_dates=False)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        converter.fit_transform(frame)
+
+    assert set(converter.reported_columns_) == {"signed_on", "notes"}
+
+
+def test__classifier_fit__dates_left_alone__are_not_also_called_free_text() -> None:
+    """One column, one diagnosis: a date is not reported as text as well."""
+    frame = pd.DataFrame({"signed_on": _date_strings()})
+    y = np.arange(N_ROWS) % 2
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        TabPFNClassifier(
+            device="cpu", n_estimators=1, random_state=0, use_dates=False
+        ).fit(frame, y)
+
+    assert [w for w in caught if "`use_dates` is off" in str(w.message)]
+    assert not [w for w in caught if "look like free text" in str(w.message)]
+
+
+def test__classifier_fit__text_left_alone__is_still_called_free_text() -> None:
+    """The blacklist must not swallow the columns nothing else reported."""
+    frame = pd.DataFrame(
+        {"signed_on": _date_strings(), "notes": [f"text {i}" for i in range(N_ROWS)]}
+    )
+    y = np.arange(N_ROWS) % 2
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        TabPFNClassifier(
+            device="cpu",
+            n_estimators=1,
+            random_state=0,
+            use_dates=False,
+            use_text=False,
+        ).fit(frame, y)
+
+    text_warnings = [w for w in caught if "look like free text" in str(w.message)]
+    assert len(text_warnings) == 1
+    message = str(text_warnings[0].message)
+    assert "'notes'" in message
+    assert "'signed_on'" not in message

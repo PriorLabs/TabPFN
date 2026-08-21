@@ -115,6 +115,7 @@ class InputTypeConverter:
         self.text_cardinality_threshold = text_cardinality_threshold
         self.text_n_components = text_n_components
         self.vectorizer_: TableVectorizer | None = None
+        self.reported_columns_: list[str] = []
 
     def fit_transform(self, X: XType) -> XType:
         """Decide the conversions on `X` and apply them.
@@ -233,7 +234,13 @@ class InputTypeConverter:
         ]
 
     def _warn_about_columns(self) -> None:
-        """Report what was read as text, and what was read as a date but left."""
+        """Report what was read as text, and what was read as a date but left.
+
+        Names every column it reports in `reported_columns_`, so that the
+        free-text warning further down does not say the same thing again about a
+        column already accounted for here.
+        """
+        self.reported_columns_ = []
         self._warn_about_encoded_text()
         self._warn_about_unused_dates()
 
@@ -248,6 +255,7 @@ class InputTypeConverter:
         date_columns = self._columns_of_kind("datetime")
         if not date_columns:
             return
+        self.reported_columns_.extend(date_columns)
         warnings.warn(
             f"These columns hold dates, and `use_dates` is off, so they are left as "
             f"they arrived: {_format_names(date_columns)}.\n"
@@ -267,6 +275,7 @@ class InputTypeConverter:
         text_columns = self._columns_of_kind("high_cardinality")
         if not text_columns:
             return
+        self.reported_columns_.extend(text_columns)
 
         names = _format_names(text_columns)
         warnings.warn(

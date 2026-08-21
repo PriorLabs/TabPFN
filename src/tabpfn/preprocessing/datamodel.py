@@ -94,6 +94,14 @@ class FeatureModality(str, Enum):
     instance, a numerical dtype could represent numerical features
     or categorical features, while a string could represent categorical
     or text features.
+
+    There is deliberately no ``DATETIME`` member. Dates are detected and expanded
+    into calendar features before modality detection runs (see
+    :class:`~tabpfn.preprocessing.input_conversion.InputTypeConverter`), so what
+    arrives here is the year, the seconds since epoch and the cyclical parts, all
+    of which are numerical and need the numerical transforms. A date that was not
+    expanded, because ``use_dates`` is off, cannot be represented by any step in
+    the pipeline, so a member for it would describe data nothing can consume.
     """
 
     NUMERICAL = "numerical"
