@@ -292,3 +292,27 @@ def test__classifier_fit__text_left_alone__is_still_called_free_text() -> None:
     message = str(text_warnings[0].message)
     assert "'notes'" in message
     assert "'signed_on'" not in message
+
+
+def test__fit_transform__all_null_column__is_kept() -> None:
+    """Skrub drops all-null columns by default; the constant modality handles them."""
+    frame = pd.DataFrame({"empty": [None] * N_ROWS, "n": np.arange(float(N_ROWS))})
+    out = InputTypeConverter().fit_transform(frame)
+
+    assert list(out.columns) == ["empty", "n"]
+
+
+def test__fit_transform__text_n_components__is_an_upper_bound() -> None:
+    """A column with little variety yields fewer features than asked for."""
+    frame = pd.DataFrame({"t": [f"aa{i}" for i in range(N_ROWS)]})
+    out = InputTypeConverter(text_n_components=N_ROWS * 2).fit_transform(frame)
+
+    assert 0 < out.shape[1] <= N_ROWS * 2
+
+
+def test__fit_transform__flags_off__still_reads_numeric_strings_as_numbers() -> None:
+    """Neither flag turns off type inference, only the date and text handling."""
+    frame = pd.DataFrame({"amount": [f"{i}.5" for i in range(N_ROWS)]})
+    out = InputTypeConverter(use_dates=False, use_text=False).fit_transform(frame)
+
+    assert pd.api.types.is_numeric_dtype(out["amount"].dtype)

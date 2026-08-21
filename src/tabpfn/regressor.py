@@ -349,10 +349,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 True.
 
             text_n_components:
-                Number of numeric features each text column is encoded into. Every
-                text column costs this many features, so a table with many of them
-                can reach `MAX_NUMBER_OF_FEATURES`. Only consulted when `use_text`
-                is True.
+                Number of numeric features each text column is encoded into, as
+                an upper bound: a column with little variety yields fewer. Every
+                text column costs up to this many features, so a table with many
+                of them can reach `MAX_NUMBER_OF_FEATURES`. Only consulted when
+                `use_text` is True.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the

@@ -96,6 +96,7 @@ class InputTypeConverter:
         text_cardinality_threshold: Number of distinct values above which a string
             column is treated as text rather than as a category.
         text_n_components: Number of features each text column is encoded into.
+            An upper bound: a column with little variety yields fewer.
 
     Attributes:
         vectorizer_: The fitted vectorizer, or None when the converter was fitted
@@ -145,6 +146,10 @@ class InputTypeConverter:
             numeric="passthrough",
             datetime=make_datetime_encoder() if self.use_dates else "passthrough",
             cardinality_threshold=self.text_cardinality_threshold,
+            # Keep all-null columns, which skrub drops by default. Dropping them
+            # here would change the column count before `n_features_in_` is
+            # recorded, and `FeatureModality.CONSTANT` already accounts for them.
+            drop_null_fraction=None,
         )
         out = self.vectorizer_.fit_transform(X)
         self._warn_about_columns()
