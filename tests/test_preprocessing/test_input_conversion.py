@@ -9,7 +9,10 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier
-from tabpfn.preprocessing.input_conversion import InputTypeConverter
+from tabpfn.preprocessing.input_conversion import (
+    TEXT_N_COMPONENTS,
+    InputTypeConverter,
+)
 
 N_ROWS = 120
 
@@ -104,4 +107,89 @@ def test__classifier_fit_predict__expanded_dates__feature_counts_agree() -> None
 
     assert classifier.n_features_in_ > frame.shape[1]
     assert classifier.n_features_in_ == len(classifier.feature_names_in_)
+    assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)
+
+
+def _text_frame(n_unique: int, n: int = N_ROWS) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"notes": [f"free text number {i % n_unique}" for i in range(n)]}
+    )
+
+
+def test__fit_transform__text_column__is_encoded_into_numeric_features() -> None:
+    frame = _text_frame(n_unique=100)
+    out = InputTypeConverter().fit_transform(frame)
+
+    assert out.shape[1] == TEXT_N_COMPONENTS
+    assert all(pd.api.types.is_numeric_dtype(dtype) for dtype in out.dtypes)
+
+
+def test__fit_transform__use_text_false__leaves_text_as_strings() -> None:
+    frame = _text_frame(n_unique=100)
+    out = InputTypeConverter(use_text=False).fit_transform(frame)
+
+    assert out.shape == frame.shape
+    assert out["notes"].tolist() == frame["notes"].tolist()
+
+
+def test__fit_transform__text_cardinality_threshold__decides_what_is_text() -> None:
+    """Below the threshold a string column is a category, above it it is text."""
+    frame = _text_frame(n_unique=35)
+
+    below = InputTypeConverter(text_cardinality_threshold=40).fit_transform(frame)
+    above = InputTypeConverter(text_cardinality_threshold=30).fit_transform(frame)
+
+    assert below.shape == frame.shape
+    assert above.shape[1] == TEXT_N_COMPONENTS
+
+
+def test__fit_transform__text_column__warns_naming_the_column() -> None:
+    with pytest.warns(UserWarning, match="encoded as text") as record:
+        InputTypeConverter().fit_transform(_text_frame(n_unique=100))
+    assert "'notes'" in str(record[0].message)
+
+
+def test__fit_transform__use_dates_false__leaves_date_strings_alone() -> None:
+    """Turning dates off must not leave a dtype the pipeline cannot represent."""
+    frame = pd.DataFrame({"signed_on": _date_strings()})
+    out = InputTypeConverter(use_dates=False).fit_transform(frame)
+
+    assert out.shape == frame.shape
+    assert out["signed_on"].tolist() == frame["signed_on"].tolist()
+
+
+def test__fit_transform__use_dates_false__leaves_datetime_columns_alone() -> None:
+    frame = pd.DataFrame({"signed_on": pd.to_datetime(_date_strings())})
+    out = InputTypeConverter(use_dates=False).fit_transform(frame)
+
+    assert out.shape == frame.shape
+    assert pd.api.types.is_datetime64_any_dtype(out["signed_on"].dtype)
+
+
+def test__transform__array_after_frame_fit__is_still_converted() -> None:
+    """Fitting on a named frame and predicting with a bare array is supported."""
+    frame = pd.DataFrame(
+        {"notes": [f"free text {i}" for i in range(N_ROWS)], "n": range(N_ROWS)}
+    )
+    converter = InputTypeConverter()
+    fitted = converter.fit_transform(frame)
+
+    out = converter.transform(frame.to_numpy())
+    assert list(out.columns) == list(fitted.columns)
+
+
+@pytest.mark.parametrize("use_text", [True, False])
+def test__classifier_fit_predict__text_column__round_trips(use_text: bool) -> None:
+    frame = pd.DataFrame(
+        {"notes": [f"note {i}" for i in range(N_ROWS)], "n": np.arange(float(N_ROWS))}
+    )
+    y = np.arange(N_ROWS) % 2
+
+    classifier = TabPFNClassifier(
+        device="cpu", n_estimators=1, random_state=0, use_text=use_text
+    )
+    classifier.fit(frame, y)
+
+    expected = TEXT_N_COMPONENTS + 1 if use_text else 2
+    assert classifier.n_features_in_ == expected
     assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)

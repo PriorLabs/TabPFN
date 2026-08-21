@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import warnings
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -12,6 +13,16 @@ if TYPE_CHECKING:
     from skrub import DatetimeEncoder, TableVectorizer
 
     from tabpfn.constants import XType
+
+#: Number of distinct values above which a string column is treated as text rather
+#: than as a category. Matches skrub's own default.
+DEFAULT_TEXT_CARDINALITY_THRESHOLD = 40
+
+#: Number of columns a text column is encoded into. skrub's default.
+TEXT_N_COMPONENTS = 30
+
+#: Cap on how many column names the text warning lists.
+_MAX_TEXT_COLUMNS_IN_WARNING = 10
 
 
 def make_datetime_encoder() -> DatetimeEncoder:
@@ -34,22 +45,55 @@ def make_datetime_encoder() -> DatetimeEncoder:
     )
 
 
+def make_text_encoder() -> Any:
+    """Build the encoder that turns a text column into numeric features.
+
+    Returns:
+        An encoder applying tf-idf over character n-grams followed by a truncated
+        SVD, producing :data:`TEXT_N_COMPONENTS` columns.
+    """
+    from skrub import StringEncoder  # noqa: PLC0415
+
+    # Seeded independently of the estimator: giving a column its type is a property
+    # of the data, so it should not move when the ensemble seed does.
+    return StringEncoder(n_components=TEXT_N_COMPONENTS, random_state=0)
+
+
 class InputTypeConverter:
     """Give each column the type its contents imply, deciding on train.
 
-    Categorical and numeric columns are passed through, so the estimator keeps its
-    own categorical detection and encoding. Datetime columns, which the rest of the
-    pipeline cannot represent, are expanded into numeric calendar features.
+    Numeric columns and low-cardinality strings are passed through, so the
+    estimator keeps its own categorical detection and encoding. Datetime columns,
+    which the rest of the pipeline cannot represent, are expanded into numeric
+    calendar features. Text columns are encoded into numeric features.
 
     Input that is not a dataframe is returned untouched, which leaves plain arrays,
     lists and tensors on their existing path.
+
+    Args:
+        use_dates: Whether to expand datetime columns into calendar features. When
+            False, date columns are left exactly as they arrived, and a datetime
+            column reaches a pipeline that cannot represent it.
+        use_text: Whether to encode text columns into numeric features. When False,
+            they are left as strings and reach the estimator's ordinal encoder.
+        text_cardinality_threshold: Number of distinct values above which a string
+            column is treated as text rather than as a category.
 
     Attributes:
         vectorizer_: The fitted vectorizer, or None when the converter was fitted
             on something other than a dataframe.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        use_dates: bool = True,
+        use_text: bool = True,
+        text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
+    ) -> None:
+        self.use_dates = use_dates
+        self.use_text = use_text
+        self.text_cardinality_threshold = text_cardinality_threshold
         self.vectorizer_: TableVectorizer | None = None
 
     def fit_transform(self, X: XType) -> XType:
@@ -65,18 +109,23 @@ class InputTypeConverter:
             return X
         from skrub import TableVectorizer  # noqa: PLC0415
 
-        # Passing both cardinality branches through leaves every string column
-        # exactly as it arrived, so skrub's own `cardinality_threshold` has no
-        # effect here and is left unset. Whether a string column is a category or
-        # text stays with `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` downstream. Handing
-        # that split to skrub instead would be a way to drop one of the two.
+        # Categoricals are deliberately left to this package: `low_cardinality`
+        # passes through untouched rather than being encoded here, so
+        # `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` and the ordinal encoder keep
+        # deciding what a category is and how it is represented. That leaves two
+        # cardinality thresholds in the codebase, this one and that one, and
+        # coupling them may well be the right move; see the matching note in
+        # `modality_detection._detect_feature_modality`.
         self.vectorizer_ = TableVectorizer(
             low_cardinality="passthrough",
-            high_cardinality="passthrough",
+            high_cardinality=make_text_encoder() if self.use_text else "passthrough",
             numeric="passthrough",
-            datetime=make_datetime_encoder(),
+            datetime=make_datetime_encoder() if self.use_dates else "passthrough",
+            cardinality_threshold=self.text_cardinality_threshold,
         )
-        return self.vectorizer_.fit_transform(X)
+        out = self.vectorizer_.fit_transform(X)
+        self._warn_about_encoded_text()
+        return self._restore_dates(out, X)
 
     def transform(self, X: XType) -> XType:
         """Apply the conversions decided at fit.
@@ -87,6 +136,97 @@ class InputTypeConverter:
         Returns:
             The converted frame, or `X` unchanged when there is nothing to apply.
         """
-        if self.vectorizer_ is None or not isinstance(X, pd.DataFrame):
+        if self.vectorizer_ is None:
             return X
-        return self.vectorizer_.transform(X)
+        frame = self._as_fitted_frame(X)
+        if frame is None:
+            return X
+        return self._restore_dates(self.vectorizer_.transform(frame), frame)
+
+    def _as_fitted_frame(self, X: XType) -> pd.DataFrame | None:
+        """Present `X` as a frame the fitted vectorizer can transform.
+
+        Fitting on a named frame and predicting with a bare array is a supported
+        combination, so an array of the width seen at fit is given the fit-time
+        column names rather than being left unconverted, which would disagree with
+        `n_features_in_` once a column has been expanded.
+
+        Args:
+            X: The input to present as a frame.
+
+        Returns:
+            A frame with the fit-time columns, or None when `X` cannot be one, in
+            which case validation reports the mismatch.
+        """
+        if isinstance(X, pd.DataFrame):
+            return X
+        names = list(self.vectorizer_.feature_names_in_)  # type: ignore[union-attr]
+        try:
+            frame = pd.DataFrame(X, copy=False)
+        except (TypeError, ValueError):
+            return None
+        if frame.shape[1] != len(names):
+            return None
+        frame.columns = names
+        return frame
+
+    def _restore_dates(self, out: pd.DataFrame, X: pd.DataFrame) -> pd.DataFrame:
+        """Put date columns back as they arrived when `use_dates` is False.
+
+        Parsing a date is part of inferring types and happens whether or not the
+        result is wanted, so with `use_dates` off the parsed column is written back
+        from the input. Without this, a column of date strings would arrive as a
+        dtype the rest of the pipeline cannot represent, which is worse than the
+        string it started as.
+
+        Args:
+            out: The converted frame.
+            X: The frame the conversion was applied to.
+
+        Returns:
+            `out`, with any date column replaced by its original values.
+        """
+        if self.use_dates:
+            return out
+        restored = [
+            col
+            for col in out.columns
+            if col in X.columns and pd.api.types.is_datetime64_any_dtype(out[col])
+        ]
+        if not restored:
+            return out
+        out = out.copy()
+        for col in restored:
+            out[col] = X[col]
+        return out
+
+    def _warn_about_encoded_text(self) -> None:
+        """Say which columns were read as text, since it is easy to get wrong."""
+        if self.vectorizer_ is None or not self.use_text:
+            return
+        text_columns = [
+            str(column)
+            for column, kind in self.vectorizer_.column_to_kind_.items()
+            if kind == "high_cardinality"
+        ]
+        if not text_columns:
+            return
+
+        shown = text_columns[:_MAX_TEXT_COLUMNS_IN_WARNING]
+        names = ", ".join(repr(name) for name in shown)
+        if len(text_columns) > len(shown):
+            names += f" (and {len(text_columns) - len(shown)} more)"
+        warnings.warn(
+            f"These columns hold more than {self.text_cardinality_threshold} distinct "
+            f"values and were encoded as text, into "
+            f"{TEXT_N_COMPONENTS} numeric features each: {names}.\n"
+            "If such a column is a category rather than text, raise "
+            "`text_cardinality_threshold` above its number of distinct values, or "
+            "pass its index in `categorical_features_indices`.\n"
+            "This encoding is character-level and carries no meaning of the words. "
+            "For text where the meaning matters, consider the tabpfn-client API, "
+            "which embeds text natively: "
+            "https://github.com/PriorLabs/tabpfn-client",
+            UserWarning,
+            stacklevel=2,
+        )

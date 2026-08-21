@@ -97,10 +97,14 @@ def _warn_if_text_features(
     """Warn when input columns look like free text rather than categoricals.
 
     High-cardinality string columns are labelled `FeatureModality.TEXT` by
-    `detect_feature_modalities`, but this package has no text handling: they are swept
-    into the same `OrdinalEncoder` as real categoricals, which selects columns by dtype
-    (see `get_ordinal_encoder`). That turns near-unique text into near-unique integer
-    codes, i.e. noise rather than signal, without any error to hint at it.
+    `detect_feature_modalities` and are then swept into the same `OrdinalEncoder` as
+    real categoricals, which selects columns by dtype (see `get_ordinal_encoder`).
+    That turns near-unique text into near-unique integer codes, i.e. noise rather
+    than signal, without any error to hint at it.
+
+    A column only reaches here as TEXT if input type conversion did not encode it as
+    text first, either because `use_text` is off or because it has fewer distinct
+    values than `text_cardinality_threshold`.
 
     Called by `detect_feature_modalities` while the schema still carries the TEXT
     labels, i.e. before the first preprocessing step that rebuilds it, since
@@ -132,10 +136,9 @@ def _warn_if_text_features(
         f"These columns look like free text and are being ordinal-encoded as "
         f"high-cardinality categoricals, which usually adds noise rather than "
         f"signal: {column_names_to_print}.\n"
-        "If such a column holds numbers stored as strings, convert it to a numeric "
-        "dtype. If it holds genuine text, this package has no text handling -- "
-        "consider the tabpfn-client API, which embeds text natively: "
-        "https://github.com/PriorLabs/tabpfn-client \n"
+        "If such a column holds genuine text, lower `text_cardinality_threshold` "
+        "below its number of distinct values so that it is encoded as text instead, "
+        "or set `use_text=True` if it is off.\n"
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
@@ -193,6 +196,12 @@ def _detect_feature_modality(
     if pd.api.types.is_string_dtype(s.dtype) or isinstance(
         s.dtype, pd.CategoricalDtype
     ):
+        # This is the second cardinality threshold a string column meets: input
+        # type conversion already used its own to decide whether to encode the
+        # column as text (see `input_conversion.InputTypeConverter`), and columns
+        # it passed through arrive here. The two are set independently, so a
+        # column can be a category to one and text to the other; coupling them
+        # may well be the right move.
         if n_unique <= max_unique_for_category:
             return FeatureModality.CATEGORICAL
         return FeatureModality.TEXT

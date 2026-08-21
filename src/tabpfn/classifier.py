@@ -83,6 +83,9 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
+from tabpfn.preprocessing.input_conversion import (
+    DEFAULT_TEXT_CARDINALITY_THRESHOLD,
+)
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.utils import (
@@ -214,6 +217,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
+        use_dates: bool = True,
+        use_text: bool = True,
+        text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
         softmax_temperature: float = 0.9,
         balance_probabilities: bool = False,
         average_before_softmax: bool = False,
@@ -289,6 +295,25 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                     model and the `.fit()`, consider setting the
                     `.categorical_features_indices` attribute after the model was
                     initialized and before `.fit()`.
+
+            use_dates:
+                Whether to expand datetime columns into numeric calendar features:
+                the year, the day of year, the seconds since epoch and cyclical
+                month, day and weekday pairs, plus the time of day when the column
+                carries one. Columns of date strings are parsed first. Set to False
+                to leave date columns exactly as they arrived, in which case a
+                datetime column reaches a pipeline that cannot represent it.
+
+            use_text:
+                Whether to encode columns read as text into numeric features, using
+                tf-idf over character n-grams followed by a truncated SVD. Set to
+                False to leave them as strings, which sends them to the ordinal
+                encoder as high-cardinality categories.
+
+            text_cardinality_threshold:
+                Number of distinct values above which a string column is read as
+                text rather than as a category. Only consulted when `use_text` is
+                True.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -511,6 +536,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.n_estimators = n_estimators
         self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
+        self.use_dates = use_dates
+        self.use_text = use_text
+        self.text_cardinality_threshold = text_cardinality_threshold
         self.softmax_temperature = softmax_temperature
         self.balance_probabilities = balance_probabilities
         self.average_before_softmax = average_before_softmax

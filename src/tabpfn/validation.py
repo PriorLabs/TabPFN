@@ -197,7 +197,11 @@ def ensure_compatible_fit_inputs_sklearn(
     # where `n_features_in_` and `feature_names_in_` are recorded. Predict converts
     # first too, so both describe the converted frame at both ends.
     if input_converter is None:
-        input_converter = InputTypeConverter()
+        input_converter = InputTypeConverter(
+            use_dates=estimator.use_dates,
+            use_text=estimator.use_text,
+            text_cardinality_threshold=estimator.text_cardinality_threshold,
+        )
         X = input_converter.fit_transform(X)
     else:
         X = input_converter.transform(X)

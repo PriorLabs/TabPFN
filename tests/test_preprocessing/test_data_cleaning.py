@@ -597,10 +597,11 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     categories and raise a ``TypeError`` (``'<' not supported between 'float' and
     'str'`` / ``ufunc 'isnan' not supported``).
 
-    Input type conversion casts the column back to string before the encoder sees it,
-    so its values arrive as unseen categories instead of crashing. The values no longer
-    reach the fit/predict drift check as a mismatch, so no warning is raised on this
-    path; the numpy-array path below still warns.
+    The column has more distinct values than `text_cardinality_threshold`, so input
+    type conversion encodes it as text and the ordinal encoder never sees it. The
+    predict-time floats are stringified and scored against the vocabulary fitted on
+    train, which shares nothing with them, so nothing reaches the fit/predict drift
+    check as a mismatch and no warning is raised.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -627,9 +628,9 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
-    # None of the numeric values can match a fit category, so all are unseen.
-    converted = clf.input_converter_.transform(X_pred)
-    assert not set(converted["code"]) & set(X_fit["code"])
+    # The column was encoded as text, so it reaches the model as numeric features
+    # rather than as a category the frozen encoder has to recognise.
+    assert "code" not in clf.input_converter_.transform(X_pred).columns
 
 
 def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
@@ -639,6 +640,9 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
     ``fix_dtypes`` wraps them into an integer-column DataFrame, so the frozen encoder's
     columns are integer positions and match a numpy-array predict input. This guards
     against a ``KeyError`` when aligning predict-time dtypes against the fit categories.
+
+    The array is given the fit-time column names before conversion, so it survives the
+    text column having been expanded into several features.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -661,8 +665,7 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
     clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
     clf.fit(X_fit, y)
 
-    with pytest.warns(UserWarning, match="differs.*from fit time"):
-        proba = clf.predict_proba(X_pred)
+    proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
 
