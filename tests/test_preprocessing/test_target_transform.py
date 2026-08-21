@@ -75,22 +75,49 @@ def test__make_target_transform__without_a_transform_only_standardizes() -> None
 
 
 @pytest.mark.parametrize("name", TRANSFORM_NAMES)
-def test__make_target_transform__transform_sees_the_standardized_target(
+def test__make_target_transform__transform_sees_the_unnormalized_target(
     name: str,
 ) -> None:
-    """The preset still reshapes the standardized target.
-
-    This is what RES-2639 goes on to change; pinning it here keeps the move of
-    the standardization to a separate, reviewable step.
+    """The preset reshapes the target in its own units, and only then is it
+    standardized -- the point of RES-2639.
     """
     y = _target()
     transform = _get_transform(name, len(y))
 
     got = make_target_transform(transform).fit_transform(y.reshape(-1, 1)).astype(float)
 
-    standardized = (y - np.mean(y)) / (np.std(y) + StandardizeTarget.EPSILON)
-    expected = _get_transform(name, len(y)).fit_transform(standardized.reshape(-1, 1))
-    np.testing.assert_allclose(got, np.asarray(expected, dtype=float), rtol=1e-12)
+    reshaped = np.asarray(
+        _get_transform(name, len(y)).fit_transform(y.reshape(-1, 1)), dtype=float
+    )
+    expected = (reshaped - reshaped.mean()) / (
+        reshaped.std() + StandardizeTarget.EPSILON
+    )
+    np.testing.assert_allclose(got, expected, rtol=1e-10)
+
+
+def test__make_target_transform__log_of_the_target_is_defined() -> None:
+    """The bug the ticket is about: `log1p` of a z-score is mostly NaN.
+
+    Roughly half of a z-normalized target is negative, and `log1p` is undefined
+    below -1, so the model used to be fitted on imputed or non-finite targets.
+    """
+    rng = np.random.default_rng(0)
+    y = rng.normal(100.0, 10.0, size=500)  # symmetric, strictly positive
+
+    standardized = (y - np.mean(y)) / np.std(y)
+    assert not np.isfinite(np.log1p(standardized)).all()
+
+    got = (
+        make_target_transform(_get_transform("1_plus_log", len(y)))
+        .fit_transform(y.reshape(-1, 1))
+        .ravel()
+    )
+
+    assert np.isfinite(got).all()
+    expected = np.log1p(y)
+    np.testing.assert_allclose(
+        got, (expected - expected.mean()) / expected.std(), rtol=1e-10
+    )
 
 
 @pytest.mark.parametrize("name", TRANSFORM_NAMES)

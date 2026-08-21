@@ -899,10 +899,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         # Every member standardizes the target itself, so the members are handed
         # the target in its original units and no statistic of it is needed here.
+        # `"none"` is the identity, so it is resolved to no transform at all
+        # rather than to a preset that only costs a pass over the target.
         target_preprocessors: list[TransformerMixin | Pipeline | None] = [
             make_target_transform(
                 None
-                if y_target_preprocessor is None
+                if y_target_preprocessor in (None, "none")
                 else possible_target_transforms[y_target_preprocessor]
             )
             for y_target_preprocessor in (

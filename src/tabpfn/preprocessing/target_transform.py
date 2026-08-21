@@ -90,10 +90,12 @@ def make_target_transform(transform: Transformer | Pipeline | None) -> Pipeline:
         return Pipeline(steps=[(STANDARDIZE_STEP, StandardizeTarget())])
     return Pipeline(
         steps=[
-            # The preset reshapes the standardized target, as it always has;
-            # the ordering of these two steps is what RES-2639 changes.
-            (STANDARDIZE_STEP, StandardizeTarget()),
+            # The preset reshapes the target in its own units, and only then is
+            # the result standardized. Reshaping a standardized target instead
+            # means something else entirely: `1_plus_log` was `log1p` of a
+            # z-score, undefined wherever that dropped below -1.
             (TARGET_TRANSFORM_STEP, transform),
+            (STANDARDIZE_STEP, StandardizeTarget()),
         ],
     )
 
