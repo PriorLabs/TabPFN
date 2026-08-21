@@ -1249,11 +1249,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
             built[key] = (
                 idxs,
-                # alias_sources: the stack takes over the per-member storage
-                # rather than duplicating it.
-                model.build_batched_cache(
-                    member_caches, targets=targets, alias_sources=True
-                ),
+                # Takes over the per-member storage rather than duplicating it.
+                model.build_batched_cache(member_caches, targets=targets),
             )
 
         self._batched_caches = built

@@ -301,9 +301,14 @@ class BatchedTabPFNV3Cache:
         caches: list[TabPFNV3Cache],
         *,
         targets: torch.Tensor | None = None,
-        alias_sources: bool = False,
     ) -> BatchedTabPFNV3Cache:
         """Stack per-member ``TabPFNV3Cache`` objects along the batch dim.
+
+        **Consumes** ``caches``: each source is repointed at its slice of the
+        stack, so the stack replaces the per-member storage rather than
+        duplicating it. The sources stay usable -- and must, since stages 0-2
+        and the sequential fallback still read them -- but they no longer own
+        their tensors. Only sound because caches are read-only after fit.
 
         Requires every member to share ``N_train`` and the same ICL layer
         indices (true when row subsampling is off). Dtype and quantization
@@ -312,24 +317,18 @@ class BatchedTabPFNV3Cache:
         Args:
             caches: The per-member caches, each with batch dim 1.
             targets: Stacked train class indices, or None for regression.
-            alias_sources: Repoint each source at its slice of the stack, so
-                the stack replaces the per-member storage rather than
-                duplicating it -- the members stay live for stages 0-2 and the
-                sequential fallback. Only safe because caches are read-only
-                after fit.
         """
-        # One layer at a time: aliasing frees that layer's per-member tensors
+        # One layer at a time: repointing frees that layer's per-member tensors
         # before the next is stacked, so only one layer is ever duplicated.
         kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
         for layer_idx in list(caches[0].kv):
             stacked = stack_kv_entries([c.kv[layer_idx] for c in caches])
             kv[layer_idx] = stacked
-            if alias_sources:
-                for i, cache in enumerate(caches):
-                    # Scales stay per-member scalars; only K/V is rebound.
-                    entry = cache.kv[layer_idx]
-                    entry.key = stacked.key[i : i + 1]
-                    entry.value = stacked.value[i : i + 1]
+            for i, cache in enumerate(caches):
+                # Scales stay per-member scalars; only K/V is rebound.
+                entry = cache.kv[layer_idx]
+                entry.key = stacked.key[i : i + 1]
+                entry.value = stacked.value[i : i + 1]
 
         # None for regression. Allocated head-major to match project_keys; a
         # plain empty/cat would re-materialise it row-major (see
@@ -338,18 +337,13 @@ class BatchedTabPFNV3Cache:
         if caches[0].decoder_keys is not None:
             first = caches[0].decoder_keys
             n, h, d = first.shape[1:]
-            if alias_sources:
-                decoder_keys = torch.empty(
-                    (len(caches), h, n, d), dtype=first.dtype, device=first.device
-                ).permute(0, 2, 1, 3)
-                for i, cache in enumerate(caches):
-                    assert cache.decoder_keys is not None
-                    decoder_keys[i : i + 1].copy_(cache.decoder_keys)
-                    cache.decoder_keys = decoder_keys[i : i + 1]
-            else:
-                decoder_keys = torch.cat(
-                    [c.decoder_keys.permute(0, 2, 1, 3) for c in caches], dim=0
-                ).permute(0, 2, 1, 3)
+            decoder_keys = torch.empty(
+                (len(caches), h, n, d), dtype=first.dtype, device=first.device
+            ).permute(0, 2, 1, 3)
+            for i, cache in enumerate(caches):
+                assert cache.decoder_keys is not None
+                decoder_keys[i : i + 1].copy_(cache.decoder_keys)
+                cache.decoder_keys = decoder_keys[i : i + 1]
 
         return BatchedTabPFNV3Cache(
             kv=kv,
@@ -2158,7 +2152,7 @@ class TabPFNV3(Architecture):
         ys: list[torch.Tensor],
         caches: list[TabPFNV3Cache],
         *,
-        batched_cache: BatchedTabPFNV3Cache | None = None,
+        batched_cache: BatchedTabPFNV3Cache,
         performance_options: PerformanceOptions | None = None,
     ) -> torch.Tensor:
         """Batched cached predict across ensemble members sharing this model.
@@ -2178,8 +2172,7 @@ class TabPFNV3(Architecture):
                 All must share ``N_train`` (i.e. no row subsampling). Used for
                 the per-member stages 0-2 (scaler stats, inducing hidden).
             batched_cache: Pre-stacked cache for the ICL stage and decoder
-                (see :class:`BatchedTabPFNV3Cache`); stacked on the fly when
-                ``None``.
+                (see :class:`BatchedTabPFNV3Cache`).
             performance_options: Forwarded to each stage; defaults when None.
 
         Returns:
@@ -2207,24 +2200,6 @@ class TabPFNV3(Architecture):
             test_embs.append(x_BRiClE.flatten(-2))  # (1, N_test, D)
 
         x_BRiD = torch.cat(test_embs, dim=0)  # (B, N_test, D)
-
-        # The engine normally passes a pre-built stack, so this is the
-        # fallback path only.
-        if batched_cache is None:
-            targets = None
-            if self.task_type == "multiclass":
-                assert caches[0].decoder_keys is not None
-                num_train = caches[0].decoder_keys.shape[1]
-                targets = torch.stack(
-                    [
-                        (y["main"] if isinstance(y, dict) else y).reshape(-1)[
-                            :num_train
-                        ]
-                        for y in ys
-                    ],
-                    dim=0,
-                )
-            batched_cache = BatchedTabPFNV3Cache.stack(caches, targets=targets)
 
         # Stage 3: ICL, batched over members.
         for layer_idx, block in enumerate(self.icl_blocks):
@@ -2260,16 +2235,14 @@ class TabPFNV3(Architecture):
         caches: list[TabPFNV3Cache],
         *,
         targets: torch.Tensor | None = None,
-        alias_sources: bool = False,
     ) -> BatchedTabPFNV3Cache:
         """Stack per-member caches into a reusable batched cache.
 
-        Reaches :meth:`BatchedTabPFNV3Cache.stack` through the architecture, so
-        the cache class need not be imported directly.
+        Consumes ``caches``, as :meth:`BatchedTabPFNV3Cache.stack` does.
+        Reaching it through the architecture keeps the cache class out of the
+        caller's imports.
         """
-        return BatchedTabPFNV3Cache.stack(
-            caches, targets=targets, alias_sources=alias_sources
-        )
+        return BatchedTabPFNV3Cache.stack(caches, targets=targets)
 
     @override
     def get_default_performance_options(self) -> PerformanceOptions:
