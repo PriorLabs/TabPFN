@@ -1066,30 +1066,31 @@ def test__batched_estimators__stack_shares_per_member_storage(device: str) -> No
     (idxs, batched_cache), *rest = engine._batched_caches.values()
     assert not rest, "expected a single group for one model and one train size"
 
+    def assert_is_slice(
+        member_t: torch.Tensor, stacked_t: torch.Tensor, pos: int
+    ) -> None:
+        """The member tensor must *be* the stack's row `pos`, not a copy of it.
+
+        Compared by address, shape and stride: identical storage at an identical
+        offset already implies identical values, so comparing the values would
+        only add a float comparison over non-contiguous views for nothing.
+        """
+        expected = stacked_t[pos : pos + 1]
+        assert member_t.data_ptr() == expected.data_ptr()
+        assert member_t.shape == expected.shape
+        assert member_t.stride() == expected.stride()
+
+    assert batched_cache.decoder_keys is not None
     for batch_pos, member_idx in enumerate(idxs):
         member = engine.kv_caches[member_idx]
         for layer_idx, stacked in batched_cache.kv.items():
             entry = member.kv[layer_idx]
-            assert (
-                entry.key.untyped_storage().data_ptr()
-                == stacked.key.untyped_storage().data_ptr()
-            )
-            # ... and the member's slice must still dequantize to its own values.
-            torch.testing.assert_close(
-                entry.key, stacked.key[batch_pos : batch_pos + 1]
-            )
+            assert_is_slice(entry.key, stacked.key, batch_pos)
+            assert_is_slice(entry.value, stacked.value, batch_pos)
 
         # The decoder keys are the other big train-derived tensor, aliased too.
         assert member.decoder_keys is not None
-        assert batched_cache.decoder_keys is not None
-        assert (
-            member.decoder_keys.untyped_storage().data_ptr()
-            == batched_cache.decoder_keys.untyped_storage().data_ptr()
-        )
-        torch.testing.assert_close(
-            member.decoder_keys,
-            batched_cache.decoder_keys[batch_pos : batch_pos + 1],
-        )
+        assert_is_slice(member.decoder_keys, batched_cache.decoder_keys, batch_pos)
 
 
 def test__stack_kv_entries__preserves_quantization_with_broadcast_scales() -> None:
