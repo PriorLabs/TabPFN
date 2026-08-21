@@ -922,7 +922,12 @@ def test__resolve_kv_cache_precision__warns_when_unsupported() -> None:
 
 
 def _fit_cached_ensemble(
-    estimator: str, device: str, n_train: int, n_test: int, n_estimators: int = 4
+    estimator: str,
+    device: str,
+    n_train: int,
+    n_test: int,
+    n_estimators: int = 4,
+    **estimator_kwargs: Any,
 ) -> tuple[Any, np.ndarray, Callable[[Any, np.ndarray], np.ndarray]]:
     """Fit a float64 `fit_with_cache` estimator; return (model, X_test, predict)."""
     if estimator == "classifier":
@@ -939,6 +944,7 @@ def _fit_cached_ensemble(
             device=device,
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
+            **estimator_kwargs,
         )
 
         def predict(m, x) -> np.ndarray:
@@ -953,6 +959,7 @@ def _fit_cached_ensemble(
             device=device,
             inference_precision=torch.float64,
             fit_mode="fit_with_cache",
+            **estimator_kwargs,
         )
 
         def predict(m, x) -> np.ndarray:
@@ -1170,3 +1177,29 @@ def test__decoder_keys__cached_head_major_so_sdpa_permute_is_free(device: str) -
     stacked = batched_cache.decoder_keys
     assert stacked is not None
     assert stacked.permute(0, 2, 1, 3).is_contiguous()
+
+
+@pytest.mark.parametrize("device", get_pytest_devices())
+def test__batched_estimators__off_when_cache_is_staged_on_cpu(device: str) -> None:
+    """`keep_cache_on_device=False` must keep the batched stack from existing.
+
+    That flag asks for the KV cache not to occupy the device, while the batched
+    stack has to live there, so the two cannot both be honoured. Ungated, the
+    stack would sit on the device for the engine's lifetime while the per-member
+    caches also stayed on the host -- more memory than either path alone, and
+    the opposite of what was asked for.
+    """
+    if torch.device(device).type == "mps":
+        pytest.skip("float64 inference is not supported on MPS")
+
+    model, X_test, predict = _fit_cached_ensemble(
+        "classifier", device, 48, 9, keep_cache_on_device=False
+    )
+    engine = model.executor_
+    assert engine.keep_cache_on_device is False
+    assert not engine._can_batch_estimators(only_return_standard_out=True, n_test=1)
+
+    predict(model, X_test)
+    assert engine._batched_caches is None, "no stack should have been built"
+    for cache in engine.kv_caches:
+        assert cache.kv[0].key.device.type == "cpu"

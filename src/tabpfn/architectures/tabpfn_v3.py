@@ -269,7 +269,6 @@ class BatchedTabPFNV3Cache:
     """Train-derived cache for a group of ensemble members, stacked once.
 
     Depends only on the training data, so one stack serves every ``predict``.
-    Used by :meth:`TabPFNV3.forward_cached_ensemble`.
 
     Attributes:
         kv: Per ICL-layer stacked K/V, ``(B, N_train, num_kv_heads, head_dim)``,
@@ -2265,9 +2264,8 @@ class TabPFNV3(Architecture):
     ) -> BatchedTabPFNV3Cache:
         """Stack per-member caches into a reusable batched cache.
 
-        Thin wrapper over :meth:`BatchedTabPFNV3Cache.stack` so callers (the
-        inference engine) can build the train-derived stack once without
-        importing the cache class directly.
+        Reaches :meth:`BatchedTabPFNV3Cache.stack` through the architecture, so
+        the cache class need not be imported directly.
         """
         return BatchedTabPFNV3Cache.stack(
             caches, targets=targets, alias_sources=alias_sources

@@ -1180,6 +1180,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             and self.batch_estimators
             and self._batched_caches != {}  # {} == this architecture cannot batch
             and len(self.get_devices()) == 1  # else parallel_execute is faster
+            # The stack has to live on the device, which is the opposite of what
+            # keep_cache_on_device=False is asking for.
+            and self.keep_cache_on_device
         ):
             return False
 
@@ -1209,9 +1212,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     def _build_batched_caches(self, device: torch.device) -> None:
         """Stack the ICL K/V, decoder keys and targets for each estimator group.
 
-        Go through :meth:`_ensure_batched_caches` so this runs once. Leaves an
-        empty mapping when the architecture has no ``build_batched_cache``, so
-        predict falls back to sequential and does not retry.
+        Leaves an empty mapping when the architecture has no
+        ``build_batched_cache``, which turns the batched path off for good
+        rather than retrying every predict.
         """
         dtype = self.force_inference_dtype or torch.float32
         groups = self._estimator_groups()
