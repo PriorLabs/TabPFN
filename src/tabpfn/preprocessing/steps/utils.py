@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from typing_extensions import override
 
 import numpy as np
@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from sklearn.base import TransformerMixin
 
 
-def is_identity_transformer(transformer: Any) -> bool:
+def is_identity_transformer(transformer: str | TransformerMixin) -> bool:
     """Whether `transformer` hands back what it is given, untouched.
 
     Used to decide that a transform need not be run at all -- so it answers only for the
