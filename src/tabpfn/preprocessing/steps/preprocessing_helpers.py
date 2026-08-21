@@ -87,12 +87,25 @@ def _converts_in_one_call(X: XType) -> bool:
 def _hands_columns_through(remainder: Any) -> bool:
     """Whether `remainder` returns the columns it is handed, untouched.
 
-    `"passthrough"` says so outright. A `FunctionTransformer` with no `func` is
-    the identity too, and is what `get_ordinal_encoder` configures.
+    `"passthrough"` says so outright. A `FunctionTransformer` does when it has no `func`
+    *and* does not validate -- which is how `get_ordinal_encoder` configures it.
+    `validate=True` is not nothing: it sends the columns through `check_array`, which
+    coerces the dtype and refuses a NaN that the assembly would carry through, so a
+    remainder asking for it is one whose work cannot be skipped.
+
+    The type is compared exactly rather than with `isinstance` because of what this
+    decides -- that a transform need not run at all. A subclass may override `transform`
+    and do something else entirely with `func` still unset, which no inspection here
+    would catch. Refusing a harmless subclass costs a fallback; accepting an unfaithful
+    one costs the result.
     """
     if isinstance(remainder, str):
         return remainder == "passthrough"
-    return type(remainder) is FunctionTransformer and remainder.func is None
+    return (
+        type(remainder) is FunctionTransformer
+        and remainder.func is None
+        and not remainder.validate
+    )
 
 
 class EfficientColumnTransformer(ColumnTransformer):

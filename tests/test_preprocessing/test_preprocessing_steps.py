@@ -751,3 +751,24 @@ def test__efficient_column_transformer__an_unfitted_transform_is_not_an_identity
     """
     with pytest.raises(NotFittedError):
         get_ordinal_encoder().transform(_mixed_frame())
+
+
+def test__efficient_column_transformer__a_validating_remainder_is_not_a_passthrough(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """`validate=True` gives the remainder real work, so it cannot be assembled around.
+
+    It sends the columns it is handed through `check_array`, which coerces their dtype
+    and refuses a NaN. A table sklearn would reject therefore has to keep being
+    rejected, rather than quietly assembled past the check.
+    """
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    X[0, 2] = np.nan
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), [1])],
+        remainder=FunctionTransformer(validate=True),
+    )
+
+    with pytest.raises(ValueError, match="NaN"):
+        transformer.fit_transform(X)
+    assert assemblies == []
