@@ -927,13 +927,11 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 ``"auto"``); ``"int8"`` quantizes to save memory; ``"fp8"``
                 stores 8-bit floats instead; ``"auto"`` keeps the computed
                 dtype.
-            batch_estimators: If True (default), fuse all ensemble members that
-                share a model and train-row count into a single batched forward
-                at predict time (ICL transformer + decoder run once over the
-                stacked batch). Requires the architecture to expose
-                ``forward_cached_ensemble``; otherwise falls back to the
-                sequential per-estimator path. Set False to force the
-                sequential path (e.g. for benchmarking).
+            batch_estimators: If True (default), fuse ensemble members sharing
+                a model and train-row count into one batched forward at predict.
+                Needs the architecture to expose ``forward_cached_ensemble``;
+                otherwise the sequential per-estimator path is used. Set False
+                to force sequential (e.g. for benchmarking).
         """
         super().__init__(
             model_caches=[_PerDeviceModelCache(model) for model in models],
@@ -1006,11 +1004,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             self.kv_caches = [cache for cache, _device in built_caches]
         self._speed_metrics["fit_model_forward_seconds"] = timed_caches.elapsed_seconds
 
-        # The stacked batched cache is built on first predict, not here -- see
-        # ``_ensure_batched_caches``. It is train-derived, so one build serves
-        # every predict, but fit must not pay for a feature only predict uses.
-        # Grouped by (model_index, N_train); ``None`` until built, ``{}`` when
-        # the architecture does not support it.
+        # Built on first predict, not here: fit must not pay for a
+        # predict-only feature (see _ensure_batched_caches). Keyed by
+        # (model_index, N_train); None until built, {} when unsupported.
         self._batched_caches: dict[tuple[int, int], tuple[list[int], object]] | None = (
             None
         )
@@ -1178,37 +1174,17 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
     def _can_batch_estimators(
         self, *, only_return_standard_out: bool, n_test: int
     ) -> bool:
-        """Whether the batched predict path can be used for this call.
-
-        Answered without building anything, so the caller can decide before
-        paying for the stack. ``self._batched_caches == {}`` records an
-        architecture that turned out not to support batching, so a failed build
-        is not retried on every predict.
-
-        Restricted to a single device: the batched forward runs on one device,
-        so with several the sequential path is faster — it spreads members
-        across all of them via :func:`parallel_execute`.
-
-        Also bounded by ``settings.tabpfn.max_batched_test_rows``, the row
-        budget the sequential path already chunks against. Batching multiplies
-        the rows in one forward by the group size, so the budget applies to
-        ``group_size * n_test``: it keeps the batched forward's activation
-        footprint at par with one sequential chunk, and it is also where the
-        speedup runs out (measured on an RTX PRO 6000, ~2.6x at 64 test rows,
-        1.3x at 4096, nothing left by 32768). ``max_batched_test_rows = 0``
-        disables chunking, and disables this bound with it.
-
-        Note the batched path does not chunk, so without this the largest
-        group would set the footprint with nothing to cap it.
-        """
+        """Whether the batched predict path applies, without building the stack."""
         if not (
             only_return_standard_out
             and self.batch_estimators
-            and self._batched_caches != {}
-            and len(self.get_devices()) == 1
+            and self._batched_caches != {}  # {} == this architecture cannot batch
+            and len(self.get_devices()) == 1  # else parallel_execute is faster
         ):
             return False
 
+        # Batching multiplies the rows in one forward and this path does not
+        # chunk, so the sequential path's row budget applies to the product.
         max_rows = settings.tabpfn.max_batched_test_rows
         if max_rows <= 0:
             return True
@@ -1216,11 +1192,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         return largest_group * n_test <= max_rows
 
     def _estimator_groups(self) -> dict[tuple[int, int], list[int]]:
-        """Ensemble members grouped into the sets that can share a forward.
+        """Members grouped by what can share a forward: same model, same N_train.
 
-        Members in a group share a model and a train-row count, so their caches
-        stack along the batch dim. Derived from the members alone, so it is
-        available before the stack is built.
+        Derived from the members alone, so it works before the stack is built.
         """
         groups: dict[tuple[int, int], list[int]] = {}
         for i, em in enumerate(self.ensemble_members):
@@ -1228,32 +1202,16 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         return groups
 
     def _ensure_batched_caches(self, device: torch.device) -> None:
-        """Build the stacked caches on first use, and only then.
-
-        The stack is train-derived, so this happens once and every later
-        predict reuses it -- but it is built here, on the first predict that
-        wants it, rather than at fit, which must not pay for a predict-only
-        feature.
-        """
+        """Build the stacked caches on first predict, never at fit."""
         if self._batched_caches is None:
             self._build_batched_caches(device)
 
     def _build_batched_caches(self, device: torch.device) -> None:
-        """Build the per-group pre-stacked batched caches.
+        """Stack the ICL K/V, decoder keys and targets for each estimator group.
 
-        Groups members by ``(model_index, N_train)`` — members in a group share
-        the model and train-row count, so their per-member caches stack along
-        the batch dim. For each group the stacked ICL K/V, decoder keys and
-        (for classification) decoder targets are built via
-        ``model.build_batched_cache`` and stored in ``self._batched_caches``,
-        keyed by group with the member indices in that group.
-
-        Call through :meth:`_ensure_batched_caches` so this runs once, on the
-        first predict that needs it. ``alias_sources`` hands the per-member
-        storage over to the stack, so the result costs roughly nothing beyond
-        the caches that already existed. Leaves ``self._batched_caches`` an
-        empty mapping for architectures without ``build_batched_cache``
-        support, so predict falls back to sequential and does not retry.
+        Go through :meth:`_ensure_batched_caches` so this runs once. Leaves an
+        empty mapping when the architecture has no ``build_batched_cache``, so
+        predict falls back to sequential and does not retry.
         """
         dtype = self.force_inference_dtype or torch.float32
         groups = self._estimator_groups()
@@ -1288,9 +1246,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
             built[key] = (
                 idxs,
-                # alias_sources: the stack takes over the per-member K/V
-                # storage rather than duplicating it, so holding both costs
-                # (almost) nothing on top of the sequential path.
+                # alias_sources: the stack takes over the per-member storage
+                # rather than duplicating it.
                 model.build_batched_cache(
                     member_caches, targets=targets, alias_sources=True
                 ),
@@ -1306,13 +1263,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         save_peak_mem: bool,
         device: torch.device,
     ) -> Iterator[tuple[torch.Tensor, EnsembleConfig]]:
-        """Predict by fusing ensemble members into batched forward passes.
+        """Predict with one forward per estimator group, in member order.
 
-        Consumes the pre-stacked per-group caches built once by
-        ``_build_batched_caches`` (train-derived). The only per-predict work is
-        preprocessing the test rows per member; the ICL transformer and decoder
-        then run once per group over the stacked batch. Outputs are yielded in
-        ``self.ensemble_members`` order.
+        Only the test-row preprocessing stays per member.
         """
         assert self._batched_caches is not None
         dtype = self.force_inference_dtype or torch.float32
@@ -1343,8 +1296,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                     X_test_tensor = X_test_tensor.type(self.force_inference_dtype)
                     y_train = y_train.type(self.force_inference_dtype)
 
-                # Per-member cache still needed for stages 0-2 (scaler stats /
-                # inducing hidden); kept on device across calls when configured.
+                # Still needed for stages 0-2 (scaler stats, inducing hidden).
                 cache_on_device = self.kv_caches[i].to(device)
                 if self.keep_cache_on_device:
                     self.kv_caches[i] = cache_on_device
@@ -1361,10 +1313,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 else None,
             )
 
-            # Sync before/after so forward_time is the real forward compute:
-            # the pre-sync flushes queued test preprocessing/upload so it is not
-            # attributed here, the post-sync waits for the forward kernels
-            # (which are otherwise async). Negligible overhead.
+            # Sync either side so forward_time is real compute: the first
+            # flushes queued preprocessing out of the measurement, the second
+            # waits for the otherwise-async forward kernels.
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             forward_start = time.perf_counter()
@@ -1523,9 +1474,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
 
         # Attach CPU copies of KV caches for portable serialization.
         state_copy.kv_caches = [cache.to("cpu") for cache in saved_kv_caches]
-        # Batched caches are derived, device-resident, and rebuilt from the
-        # per-member caches — don't pickle them. A reloaded engine rebuilds on
-        # its first predict (see _ensure_batched_caches).
+        # Derived and device-resident, so not pickled; a reloaded engine
+        # rebuilds on its first predict.
         state_copy._batched_caches = None
         return state_copy
 
@@ -1539,11 +1489,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         if self.keep_cache_on_device and getattr(self, "kv_caches", None):
             self.kv_caches = [cache.to(devices[0]) for cache in self.kv_caches]
 
-        # The batched-cache stash is device-resident, so drop it: leaving it in
-        # place would pin memory on the device we just left. The next predict
-        # rebuilds it for the new device (see _ensure_batched_caches). Guarded
-        # by getattr because .to() runs once during __init__ before the
-        # attribute exists.
+        # Device-resident, so drop it rather than pin memory on the device we
+        # just left; the next predict rebuilds it. getattr because .to() runs
+        # once during __init__ before the attribute exists.
         if getattr(self, "_batched_caches", None) is not None:
             self._batched_caches = None
 

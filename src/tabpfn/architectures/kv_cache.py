@@ -170,21 +170,16 @@ class QuantizedKVCacheEntry:
 def stack_kv_entries(
     entries: Sequence[KVCacheEntry | QuantizedKVCacheEntry],
 ) -> KVCacheEntry | QuantizedKVCacheEntry:
-    """Stack per-estimator cache entries along the batch dim into one entry.
+    """Stack per-estimator ``(1, N, num_kv_heads, head_dim)`` entries on dim 0.
 
-    Each input entry holds one estimator's K/V of shape
-    ``(1, N_train, num_kv_heads, head_dim)``; the keys/values are concatenated
-    along dim 0 to give a single ``(B, N_train, num_kv_heads, head_dim)`` entry.
-
-    Quantization is preserved. Per-tensor scales differ per estimator, so they
-    are stacked into shape ``(B, 1, 1, 1)`` -- ``_dequantize_tensor`` multiplies
-    by the scale, so that broadcasts over the batch dim and reproduces each
-    estimator's own scale exactly. Keeping the stack quantized matters: the
-    attention wrapper dequantizes one layer at a time, so a dequantized stack
-    would hold every layer at full precision for the cache's whole lifetime.
+    Quantization is preserved, because the attention wrapper dequantizes one
+    layer at a time and a dequantized stack would instead hold every layer at
+    full precision for the cache's whole lifetime. Per-estimator scales are
+    stacked to ``(B, 1, 1, 1)``, which ``_dequantize_tensor`` broadcasts over
+    the batch, reproducing each estimator's own scale exactly.
 
     Requires every entry to share ``N_train``, ``num_kv_heads``, ``head_dim``
-    and quantization state (true across estimators when row subsampling is off).
+    and quantization state (true when row subsampling is off).
     """
     if isinstance(entries[0], QuantizedKVCacheEntry):
         assert all(isinstance(e, QuantizedKVCacheEntry) for e in entries), (

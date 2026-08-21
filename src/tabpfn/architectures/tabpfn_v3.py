@@ -268,22 +268,15 @@ class TabPFNV3Cache(KVCache):
 class BatchedTabPFNV3Cache:
     """Train-derived cache for a group of ensemble members, stacked once.
 
-    Everything here depends only on the training data (never on the test
-    batch), so it can be built once after ``fit`` and reused across every
-    ``predict`` call — avoiding a per-predict concat of the per-member caches.
+    Depends only on the training data, so one stack serves every ``predict``.
     Used by :meth:`TabPFNV3.forward_cached_ensemble`.
 
     Attributes:
-        kv: Per ICL-layer stacked K/V, each shape
-            ``(B, N_train, num_kv_heads, head_dim)``, kept in the same
-            quantization state as the per-member caches it came from (see
-            :func:`stack_kv_entries`).
-        decoder_keys: Stacked many-class decoder keys
-            ``(B, N_train, H_dec, D_dec)`` in the members' own dtype — the
-            decoder matches them to the query dtype itself. ``None`` for
-            regression, which has no many-class decoder.
-        targets: Stacked train class indices ``(B, N_train)`` for the
-            multiclass decoder, or ``None`` for regression.
+        kv: Per ICL-layer stacked K/V, ``(B, N_train, num_kv_heads, head_dim)``,
+            still quantized if the sources were (see :func:`stack_kv_entries`).
+        decoder_keys: Stacked decoder keys ``(B, N_train, H_dec, D_dec)``, or
+            ``None`` for regression.
+        targets: Stacked train class indices ``(B, N_train)``, or ``None``.
         highest_target: ``max(targets)``, read off the GPU once here so the
             decoder's one-hot width costs no per-predict synchronisation.
     """
@@ -313,56 +306,40 @@ class BatchedTabPFNV3Cache:
     ) -> BatchedTabPFNV3Cache:
         """Stack per-member ``TabPFNV3Cache`` objects along the batch dim.
 
-        Requires every member to share ``N_train`` and the same set of ICL
-        layer indices (true when row subsampling is off).
-
-        Everything keeps the dtype and quantization state it had per member, so
-        the stack costs the same bytes as the caches it was built from.
+        Requires every member to share ``N_train`` and the same ICL layer
+        indices (true when row subsampling is off). Dtype and quantization
+        carry over, so the stack costs what the sources did.
 
         Args:
             caches: The per-member caches, each with batch dim 1.
             targets: Stacked train class indices, or None for regression.
-            alias_sources: When True, repoint each source cache's K/V and
-                decoder keys at the matching slice of the stacked tensors. The
-                stack then *replaces* the per-member storage instead of
-                duplicating it, which is what makes it affordable to hold both
-                (the per-member caches stay live because stages 0-2 and the
-                sequential fallback still read them). It also bounds the peak
-                while stacking to one layer at a time, so the build barely
-                moves the peak of the predict that triggers it. Only safe
-                because caches are read-only after fit, so pass it from the
-                build and leave it False anywhere the caller's caches must not
-                be touched.
+            alias_sources: Repoint each source at its slice of the stack, so
+                the stack replaces the per-member storage rather than
+                duplicating it -- the members stay live for stages 0-2 and the
+                sequential fallback. Only safe because caches are read-only
+                after fit.
         """
-        # Stack and alias one layer at a time. Aliasing a layer drops the last
-        # reference to its per-member tensors, so they are freed before the
-        # next layer is stacked and only one layer is ever duplicated -- doing
-        # every layer first and aliasing at the end would transiently double
-        # the whole cache.
+        # One layer at a time: aliasing frees that layer's per-member tensors
+        # before the next is stacked, so only one layer is ever duplicated.
         kv: dict[int, KVCacheEntry | QuantizedKVCacheEntry] = {}
         for layer_idx in list(caches[0].kv):
             stacked = stack_kv_entries([c.kv[layer_idx] for c in caches])
             kv[layer_idx] = stacked
             if alias_sources:
                 for i, cache in enumerate(caches):
+                    # Scales stay per-member scalars; only K/V is rebound.
                     entry = cache.kv[layer_idx]
-                    # Scales stay per-member scalars; only the big K/V payload
-                    # is rebound, so dequantizing a slice is unchanged.
                     entry.key = stacked.key[i : i + 1]
                     entry.value = stacked.value[i : i + 1]
 
-        # Regression caches no decoder keys (no many-class decoder).
+        # None for regression. Allocated head-major to match project_keys; a
+        # plain empty/cat would re-materialise it row-major (see
+        # _permuted_head_layout).
         decoder_keys = None
         if caches[0].decoder_keys is not None:
-            # Allocated head-major and exposed as (B, N, H, D), matching what
-            # project_keys produces -- a plain empty/cat here would re-materialise
-            # the stack row-major and hand the decoder back its big SDPA copy.
             first = caches[0].decoder_keys
             n, h, d = first.shape[1:]
             if alias_sources:
-                # Same idea as the layers, one member at a time: fill a buffer
-                # slice, then hand the source that slice so its own tensor is
-                # freed now.
                 decoder_keys = torch.empty(
                     (len(caches), h, n, d), dtype=first.dtype, device=first.device
                 ).permute(0, 2, 1, 3)
@@ -643,9 +620,8 @@ class ManyClassDecoder(nn.Module):
     def project_keys(self, train_embeddings: torch.Tensor) -> torch.Tensor:
         """Project train embeddings to per-head keys: (B,N,E)->(B,N,H,D).
 
-        The result has the architecture's usual ``(B, N, H, D)`` shape but is
-        laid out in memory as ``(B, H, N, D)`` -- see
-        :func:`_permuted_head_layout` for why that matters.
+        Laid out in memory as ``(B, H, N, D)``; see
+        :func:`_permuted_head_layout`.
         """
         k_BNE = self.k_projection(train_embeddings)
         h, d = self.num_heads, self.head_dim
@@ -688,8 +664,7 @@ class ManyClassDecoder(nn.Module):
 
         if highest_target is None:
             highest_target = int(targets.max())
-        # Built head-major, to match the layout project_keys uses: the pad in
-        # _chunked_class_attention then keeps it, and SDPA's permute stays free.
+        # Head-major, matching project_keys, so SDPA's permute stays free.
         one_hot_targets_BNHT = (
             F.one_hot(targets.long(), num_classes=highest_target + 1)
             .to(dtype=q_BMHD.dtype)
@@ -741,20 +716,11 @@ class ManyClassDecoder(nn.Module):
 def _permuted_head_layout(t_BNHD: torch.Tensor) -> torch.Tensor:
     """Return ``t_BNHD`` unchanged in shape but laid out as ``(B, H, N, D)``.
 
-    ``_torch_sdpa`` takes ``(B, S, H, D)`` -- flash attention's native layout,
-    which is why the caches use it -- and permutes to the ``(B, H, S, D)`` that
-    ``torch.nn.functional.scaled_dot_product_attention`` wants, then calls
-    ``.contiguous()``. On a normally-laid-out tensor that permute is
-    non-contiguous, so the ``.contiguous()`` copies the whole thing.
-
-    Storing the *memory* in ``(B, H, N, D)`` order while keeping the
-    ``(B, N, H, D)`` shape makes that permute land back on contiguous storage,
-    so the copy becomes a no-op. For the many-class decoder, whose keys and
-    values span every training row, that copy is the single largest allocation
-    on the cached-predict path.
-
-    Cheap to undo and safe to skip: anything that needs true ``(B, N, H, D)``
-    contiguity can still call ``.contiguous()`` and get it.
+    ``_torch_sdpa`` permutes ``(B, S, H, D)`` to ``(B, H, S, D)`` and calls
+    ``.contiguous()``, which on row-major storage copies the whole tensor. This
+    layout makes that permute land back on contiguous storage, so the copy is a
+    no-op -- worth it for the decoder, whose K/V span every training row.
+    Anything needing true ``(B, N, H, D)`` contiguity can still ask for it.
     """
     return t_BNHD.permute(0, 2, 1, 3).contiguous().permute(0, 2, 1, 3)
 
@@ -785,20 +751,17 @@ def _chunked_class_attention(
     T = v_BJHT.shape[-1]
     num_chunks = math.ceil(T / D)
 
-    # Pad V to a multiple of D along the class axis. Padded head-major so a
-    # head-major V (see _permuted_head_layout) keeps its layout -- padding the
-    # (B, J, H, T) view directly would silently re-materialise it row-major.
+    # Pad V to a multiple of D along the class axis, head-major so a
+    # head-major V keeps its layout (see _permuted_head_layout).
     pad = num_chunks * D - T
     if pad > 0:
         v_BJHT = F.pad(v_BJHT.permute(0, 2, 1, 3), (0, pad)).permute(0, 2, 1, 3)
 
     # Fold chunk index into batch dimension
     J = v_BJHT.shape[1]
-    # No .contiguous() here: reshape already copies when it must, and SDPA
-    # takes strided inputs. Forcing (B, J, H, D) contiguity would undo the
-    # head-major layout of K/V and cost a full copy of each -- the largest
-    # allocation on this path. With num_chunks == 1 (any T <= D, so every
-    # ordinary class count) all three stay views.
+    # No .contiguous(): reshape copies when it must and SDPA takes strided
+    # inputs, whereas forcing (B, J, H, D) contiguity would undo the head-major
+    # layout and copy K and V in full. At num_chunks == 1 these stay views.
     v_folded = (
         v_BJHT.reshape(B, J, H, num_chunks, D)
         .permute(0, 3, 1, 2, 4)
@@ -2205,11 +2168,9 @@ class TabPFNV3(Architecture):
         ``x_is_test_only=True`` and stacking the standard outputs, but the ICL
         transformer and the decoder run **once** over the whole batch.
 
-        Stages 0-2 (preprocessing, feature/distribution embedding, column
-        aggregation) still run per member in a Python loop, because members
-        may have different feature counts. Their outputs are uniform
-        ``(1, N_test, D)`` regardless, so from the ICL stage onwards everything
-        stacks along the batch dim.
+        Stages 0-2 still run per member, because feature counts may differ;
+        their output is a uniform ``(1, N_test, D)``, so from the ICL stage
+        onwards everything stacks along the batch dim.
 
         Args:
             xs: Per-member test-only inputs, each shape ``(N_test, 1, C_i)``.
@@ -2217,13 +2178,10 @@ class TabPFNV3(Architecture):
             caches: Per-member pre-built KV caches (one ``B=1`` cache each).
                 All must share ``N_train`` (i.e. no row subsampling). Used for
                 the per-member stages 0-2 (scaler stats, inducing hidden).
-            batched_cache: Pre-stacked train-derived cache for the ICL stage
-                and decoder (see :class:`BatchedTabPFNV3Cache`). Built once and
-                reused across predicts. When ``None`` it is stacked on the fly
-                from ``caches``/``ys`` (kept for backward compatibility and
-                testing).
-            performance_options: Forwarded to each stage; defaults applied when
-                None.
+            batched_cache: Pre-stacked cache for the ICL stage and decoder
+                (see :class:`BatchedTabPFNV3Cache`); stacked on the fly when
+                ``None``.
+            performance_options: Forwarded to each stage; defaults when None.
 
         Returns:
             Stacked standard output of shape ``(N_test, B, ...)`` where
@@ -2232,7 +2190,7 @@ class TabPFNV3(Architecture):
         if performance_options is None:
             performance_options = self.get_default_performance_options()
 
-        # --- Stages 0-2 per member (feature counts may differ) ---
+        # Stages 0-2, per member (feature counts may differ).
         test_embs: list[torch.Tensor] = []
         for x, y, cache in zip(xs, ys, caches, strict=True):
             x_member = x["main"] if isinstance(x, dict) else x
@@ -2251,9 +2209,8 @@ class TabPFNV3(Architecture):
 
         x_BRiD = torch.cat(test_embs, dim=0)  # (B, N_test, D)
 
-        # Stack the train-derived cache on the fly if not provided (the engine
-        # normally passes a pre-built one so this cost is paid once, not per
-        # predict).
+        # The engine normally passes a pre-built stack, so this is the
+        # fallback path only.
         if batched_cache is None:
             targets = None
             if self.task_type == "multiclass":
@@ -2270,7 +2227,7 @@ class TabPFNV3(Architecture):
                 )
             batched_cache = BatchedTabPFNV3Cache.stack(caches, targets=targets)
 
-        # --- Stage 3: ICL, batched over members via the pre-stacked cache ---
+        # Stage 3: ICL, batched over members.
         for layer_idx, block in enumerate(self.icl_blocks):
             x_BRiD, _ = block(
                 x_BRiD,
@@ -2280,14 +2237,12 @@ class TabPFNV3(Architecture):
             )
         x_BRiD = self.output_norm(x_BRiD)
 
-        # --- Decoder, batched ---
         test_emb = x_BRiD
 
         if self.task_type == "multiclass":
             assert batched_cache.targets is not None
             assert batched_cache.decoder_keys is not None
-            # Keys arrive already projected (cached at fit) and in the cache's
-            # own dtype -- the decoder matches them to the queries itself.
+            # Keys arrive already projected; the decoder matches their dtype.
             test_out: torch.Tensor = self.many_class_decoder(
                 batched_cache.decoder_keys,
                 test_emb,
