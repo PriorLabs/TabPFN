@@ -218,8 +218,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        use_dates: bool = True,
-        use_text: bool = True,
+        use_dates: bool = False,
+        use_text: bool = False,
         text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
         text_n_components: int = DEFAULT_TEXT_N_COMPONENTS,
         softmax_temperature: float = 0.9,
@@ -302,16 +302,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 Whether to expand datetime columns into numeric calendar features:
                 the year, the day of year, the seconds since epoch and cyclical
                 month, day and weekday pairs, plus the time of day when the column
-                carries one. Columns of date strings are parsed first. Set to False to
-                leave a column of date strings exactly as it arrived. A column
-                already of a datetime dtype has no string form to go back to and is
-                stringified instead, since nothing downstream can represent a raw
-                datetime dtype.
+                carries one. Columns of date strings are parsed first. Off by
+                default, which leaves a column of date strings exactly as it
+                arrived. A column already of a datetime dtype has no string form
+                to go back to and is stringified instead either way, since nothing
+                downstream can represent a raw datetime dtype.
 
             use_text:
                 Whether to encode columns read as text into numeric features, using
-                tf-idf over character n-grams followed by a truncated SVD. Set to
-                False to leave them as strings, which sends them to the ordinal
+                tf-idf over character n-grams followed by a truncated SVD. Off by
+                default, which leaves them as strings, sending them to the ordinal
                 encoder as high-cardinality categories.
 
             text_cardinality_threshold:

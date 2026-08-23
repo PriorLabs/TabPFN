@@ -25,7 +25,7 @@ def _date_strings(n: int = N_ROWS) -> list[str]:
 
 def test__fit_transform__datetime_column__expands_into_numeric_features() -> None:
     frame = pd.DataFrame({"signed_on": pd.to_datetime(_date_strings())})
-    out = InputTypeConverter().fit_transform(frame)
+    out = InputTypeConverter(use_dates=True).fit_transform(frame)
 
     assert out.shape[1] > 1
     assert all(pd.api.types.is_numeric_dtype(dtype) for dtype in out.dtypes)
@@ -34,10 +34,16 @@ def test__fit_transform__datetime_column__expands_into_numeric_features() -> Non
 
 def test__fit_transform__date_strings__are_parsed_then_expanded() -> None:
     frame = pd.DataFrame({"signed_on": _date_strings()})
-    out = InputTypeConverter().fit_transform(frame)
+    out = InputTypeConverter(use_dates=True).fit_transform(frame)
 
     assert out.shape[1] > 1
     assert all(pd.api.types.is_numeric_dtype(dtype) for dtype in out.dtypes)
+
+
+def test__init__use_dates_and_use_text__default_to_off() -> None:
+    converter = InputTypeConverter()
+    assert converter.use_dates is False
+    assert converter.use_text is False
 
 
 def test__fit_transform__numeric_strings__become_numeric() -> None:
@@ -104,7 +110,9 @@ def test__classifier_fit_predict__expanded_dates__feature_counts_agree() -> None
     )
     y = np.arange(N_ROWS) % 2
 
-    classifier = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    classifier = TabPFNClassifier(
+        device="cpu", n_estimators=1, random_state=0, use_dates=True
+    )
     classifier.fit(frame, y)
 
     assert classifier.n_features_in_ > frame.shape[1]
@@ -120,7 +128,7 @@ def _text_frame(n_unique: int, n: int = N_ROWS) -> pd.DataFrame:
 
 def test__fit_transform__text_column__is_encoded_into_numeric_features() -> None:
     frame = _text_frame(n_unique=100)
-    out = InputTypeConverter().fit_transform(frame)
+    out = InputTypeConverter(use_text=True).fit_transform(frame)
 
     assert out.shape[1] == DEFAULT_TEXT_N_COMPONENTS
     assert all(pd.api.types.is_numeric_dtype(dtype) for dtype in out.dtypes)
@@ -138,8 +146,12 @@ def test__fit_transform__text_cardinality_threshold__decides_what_is_text() -> N
     """Below the threshold a string column is a category, above it it is text."""
     frame = _text_frame(n_unique=35)
 
-    below = InputTypeConverter(text_cardinality_threshold=40).fit_transform(frame)
-    above = InputTypeConverter(text_cardinality_threshold=20).fit_transform(frame)
+    below = InputTypeConverter(
+        use_text=True, text_cardinality_threshold=40
+    ).fit_transform(frame)
+    above = InputTypeConverter(
+        use_text=True, text_cardinality_threshold=20
+    ).fit_transform(frame)
 
     assert below.shape == frame.shape
     assert above.shape[1] == DEFAULT_TEXT_N_COMPONENTS
@@ -147,7 +159,7 @@ def test__fit_transform__text_cardinality_threshold__decides_what_is_text() -> N
 
 def test__fit_transform__text_column__warns_naming_the_column() -> None:
     with pytest.warns(UserWarning, match="encoded as text") as record:
-        InputTypeConverter().fit_transform(_text_frame(n_unique=100))
+        InputTypeConverter(use_text=True).fit_transform(_text_frame(n_unique=100))
     assert "'notes'" in str(record[0].message)
 
 
@@ -209,7 +221,7 @@ def test__classifier_fit_predict__text_column__round_trips(use_text: bool) -> No
 
 def test__fit_transform__text_n_components__sets_the_width() -> None:
     frame = _text_frame(n_unique=100)
-    out = InputTypeConverter(text_n_components=5).fit_transform(frame)
+    out = InputTypeConverter(use_text=True, text_n_components=5).fit_transform(frame)
 
     assert out.shape[1] == 5
 
@@ -219,7 +231,11 @@ def test__classifier_fit_predict__text_n_components__sets_the_feature_count() ->
     y = np.arange(N_ROWS) % 2
 
     classifier = TabPFNClassifier(
-        device="cpu", n_estimators=1, random_state=0, text_n_components=4
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        use_text=True,
+        text_n_components=4,
     )
     classifier.fit(frame, y)
 
@@ -241,7 +257,7 @@ def test__fit_transform__use_dates_true__does_not_warn_about_dates() -> None:
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        InputTypeConverter().fit_transform(frame)
+        InputTypeConverter(use_dates=True).fit_transform(frame)
     assert not [w for w in caught if "use_dates" in str(w.message)]
 
 
@@ -257,7 +273,7 @@ def test__fit_transform__reported_columns__names_what_it_warned_about() -> None:
     frame = pd.DataFrame(
         {"signed_on": _date_strings(), "notes": [f"text {i}" for i in range(N_ROWS)]}
     )
-    converter = InputTypeConverter(use_dates=False)
+    converter = InputTypeConverter(use_dates=False, use_text=True)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         converter.fit_transform(frame)
@@ -315,7 +331,9 @@ def test__fit_transform__all_null_column__is_kept() -> None:
 def test__fit_transform__text_n_components__is_an_upper_bound() -> None:
     """A column with little variety yields fewer features than asked for."""
     frame = pd.DataFrame({"t": [f"aa{i}" for i in range(N_ROWS)]})
-    out = InputTypeConverter(text_n_components=N_ROWS * 2).fit_transform(frame)
+    out = InputTypeConverter(use_text=True, text_n_components=N_ROWS * 2).fit_transform(
+        frame
+    )
 
     assert 0 < out.shape[1] <= N_ROWS * 2
 

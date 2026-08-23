@@ -80,21 +80,23 @@ class InputTypeConverter:
     """Give each column the type its contents imply, deciding on train.
 
     Numeric columns and low-cardinality strings are passed through, so the
-    estimator keeps its own categorical detection and encoding. Datetime columns,
-    which the rest of the pipeline cannot represent, are expanded into numeric
-    calendar features. Text columns are encoded into numeric features.
+    estimator keeps its own categorical detection and encoding. A column of
+    numbers stored as strings is parsed into numbers regardless of the flags
+    below. Datetime and text columns are left alone unless `use_dates` or
+    `use_text` turns their handling on.
 
     Input that is not a dataframe is returned untouched, which leaves plain arrays,
     lists and tensors on their existing path.
 
     Args:
-        use_dates: Whether to expand datetime columns into calendar features. When
-            False, a column of date strings is left exactly as it arrived. A
-            column already of a datetime dtype has no string form to go back to
-            and is stringified instead, since nothing downstream can represent a
-            raw datetime dtype.
-        use_text: Whether to encode text columns into numeric features. When False,
-            they are left as strings and reach the estimator's ordinal encoder.
+        use_dates: Whether to expand datetime columns into calendar features. Off
+            by default, which leaves a column of date strings exactly as it
+            arrived. A column already of a datetime dtype has no string form to
+            go back to and is stringified instead either way, since nothing
+            downstream can represent a raw datetime dtype.
+        use_text: Whether to encode text columns into numeric features. Off by
+            default, which leaves them as strings and sends them to the
+            estimator's ordinal encoder.
         text_cardinality_threshold: Number of distinct values above which a string
             column is treated as text rather than as a category.
         text_n_components: Number of features each text column is encoded into.
@@ -108,8 +110,8 @@ class InputTypeConverter:
     def __init__(
         self,
         *,
-        use_dates: bool = True,
-        use_text: bool = True,
+        use_dates: bool = False,
+        use_text: bool = False,
         text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
         text_n_components: int = DEFAULT_TEXT_N_COMPONENTS,
     ) -> None:
