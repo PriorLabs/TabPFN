@@ -333,9 +333,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 Whether to expand datetime columns into numeric calendar features:
                 the year, the day of year, the seconds since epoch and cyclical
                 month, day and weekday pairs, plus the time of day when the column
-                carries one. Columns of date strings are parsed first. Set to False
-                to leave date columns exactly as they arrived, in which case a
-                datetime column reaches a pipeline that cannot represent it.
+                carries one. Columns of date strings are parsed first. Set to False to
+                leave a column of date strings exactly as it arrived. A column
+                already of a datetime dtype has no string form to go back to and is
+                stringified instead, since nothing downstream can represent a raw
+                datetime dtype.
 
             use_text:
                 Whether to encode columns read as text into numeric features, using

@@ -89,8 +89,10 @@ class InputTypeConverter:
 
     Args:
         use_dates: Whether to expand datetime columns into calendar features. When
-            False, date columns are left exactly as they arrived, and a datetime
-            column reaches a pipeline that cannot represent it.
+            False, a column of date strings is left exactly as it arrived. A
+            column already of a datetime dtype has no string form to go back to
+            and is stringified instead, since nothing downstream can represent a
+            raw datetime dtype.
         use_text: Whether to encode text columns into numeric features. When False,
             they are left as strings and reach the estimator's ordinal encoder.
         text_cardinality_threshold: Number of distinct values above which a string
@@ -203,16 +205,22 @@ class InputTypeConverter:
 
         Parsing a date is part of inferring types and happens whether or not the
         result is wanted, so with `use_dates` off the parsed column is written back
-        from the input. Without this, a column of date strings would arrive as a
-        dtype the rest of the pipeline cannot represent, which is worse than the
-        string it started as.
+        from the input. A column of date strings is restored as-is: a string is
+        already something the rest of the pipeline can represent. A column that
+        arrived already typed as a datetime has no string form to go back to, and
+        leaving it as a native datetime dtype is worse than the string it started
+        as: nothing downstream can represent it, and it raises. Such a column is
+        instead stringified, which is the closest available equivalent to leaving
+        it untouched. `strftime` turns a missing timestamp into `NaN` rather than
+        the string `"NaT"`, so missingness survives the conversion.
 
         Args:
             out: The converted frame.
             X: The frame the conversion was applied to.
 
         Returns:
-            `out`, with any date column replaced by its original values.
+            `out`, with any date column replaced by its original values, or by a
+            string form of them when there was no original string to restore.
         """
         if self.use_dates:
             return out
@@ -225,7 +233,11 @@ class InputTypeConverter:
             return out
         out = out.copy()
         for col in restored:
-            out[col] = X[col]
+            original = X[col]
+            if pd.api.types.is_datetime64_any_dtype(original.dtype):
+                out[col] = original.dt.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                out[col] = original
         return out
 
     def _columns_of_kind(self, kind: str) -> list[str]:

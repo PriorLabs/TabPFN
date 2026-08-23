@@ -160,12 +160,22 @@ def test__fit_transform__use_dates_false__leaves_date_strings_alone() -> None:
     assert out["signed_on"].tolist() == frame["signed_on"].tolist()
 
 
-def test__fit_transform__use_dates_false__leaves_datetime_columns_alone() -> None:
-    frame = pd.DataFrame({"signed_on": pd.to_datetime(_date_strings())})
+def test__fit_transform__use_dates_false__stringifies_native_datetime_columns() -> None:
+    """A native datetime column has no string form to restore, unlike a date string.
+
+    Leaving it as a datetime dtype is not an option: nothing downstream can
+    represent one, whatever `use_dates` is, so it is stringified instead. Missing
+    timestamps must survive as missing, not as the literal string "NaT".
+    """
+    values = pd.to_datetime(_date_strings())
+    values = values.where(np.arange(N_ROWS) % 10 != 0)  # sprinkle in NaT
+    frame = pd.DataFrame({"signed_on": values})
     out = InputTypeConverter(use_dates=False).fit_transform(frame)
 
     assert out.shape == frame.shape
-    assert pd.api.types.is_datetime64_any_dtype(out["signed_on"].dtype)
+    assert not pd.api.types.is_datetime64_any_dtype(out["signed_on"].dtype)
+    assert out["signed_on"].isna().sum() == values.isna().sum()
+    assert "NaT" not in out["signed_on"].dropna().tolist()
 
 
 def test__transform__array_after_frame_fit__is_still_converted() -> None:
@@ -316,3 +326,79 @@ def test__fit_transform__flags_off__still_reads_numeric_strings_as_numbers() -> 
     out = InputTypeConverter(use_dates=False, use_text=False).fit_transform(frame)
 
     assert pd.api.types.is_numeric_dtype(out["amount"].dtype)
+
+
+def _kitchen_sink_frame(n: int = N_ROWS) -> pd.DataFrame:
+    """One frame carrying every column shape the converter has to handle at once.
+
+    In particular a column already of a native datetime dtype, with some missing
+    values, alongside a column of date strings, so the two are not confused with
+    each other.
+    """
+    rng = np.random.default_rng(0)
+    native_dates = pd.to_datetime(_date_strings(n))
+    native_dates = native_dates.where(np.arange(n) % 17 != 0)  # sprinkle in NaT
+    return pd.DataFrame(
+        {
+            "native_datetime": native_dates,
+            "date_as_string": _date_strings(n),
+            "numeric_as_string": [f"{i}.5" for i in range(n)],
+            "real_number": rng.normal(size=n),
+            "flag": rng.integers(0, 2, size=n).astype(bool),
+            "low_card_category": [f"c{i % 5}" for i in range(n)],
+            "free_text": [f"note number {i}, a fairly long sentence" for i in range(n)],
+            "all_null": pd.Series([None] * n, dtype="object"),
+        }
+    )
+
+
+@pytest.mark.parametrize("use_text", [True, False])
+@pytest.mark.parametrize("use_dates", [True, False])
+def test__fit_transform__many_column_types_together__never_raises(
+    *,
+    use_dates: bool,
+    use_text: bool,
+) -> None:
+    """Every flag combination must survive a frame with every column shape at once.
+
+    In particular, the converter must never hand back a column of a datetime
+    dtype: nothing downstream of it can represent one, whatever `use_dates` is.
+    """
+    frame = _kitchen_sink_frame()
+    converter = InputTypeConverter(use_dates=use_dates, use_text=use_text)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = converter.fit_transform(frame)
+        transformed = converter.transform(frame)
+
+    assert list(out.columns) == list(transformed.columns)
+    assert not any(pd.api.types.is_datetime64_any_dtype(dtype) for dtype in out.dtypes)
+
+
+@pytest.mark.parametrize("use_text", [True, False])
+@pytest.mark.parametrize("use_dates", [True, False])
+def test__classifier_fit_predict__many_column_types_together__never_raises(
+    *,
+    use_dates: bool,
+    use_text: bool,
+) -> None:
+    """The full estimator must fit and predict for every flag combination at once."""
+    frame = _kitchen_sink_frame()
+    y = np.arange(N_ROWS) % 2
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        classifier = TabPFNClassifier(
+            device="cpu",
+            n_estimators=1,
+            random_state=0,
+            use_dates=use_dates,
+            use_text=use_text,
+        )
+        classifier.fit(frame, y)
+        proba = classifier.predict_proba(frame.iloc[:5])
+
+    assert proba.shape == (5, 2)
+    assert np.isfinite(proba).all()
+    assert classifier.n_features_in_ == len(classifier.feature_names_in_)
