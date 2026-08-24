@@ -189,7 +189,7 @@ def initialize_tabpfn_model(
                     # The classifier's bar distribution is not used
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                    which="classifier",
+                    estimator_type="classifier",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
@@ -202,7 +202,7 @@ def initialize_tabpfn_model(
                     # The regressor's bar distribution is required
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                    which="regressor",
+                    estimator_type="regressor",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )

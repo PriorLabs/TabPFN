@@ -186,7 +186,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
     )
@@ -249,7 +249,7 @@ def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2.5",
         download_if_not_exists=False,
     )
@@ -293,7 +293,7 @@ def test__load_v2_5_regression_ckpt__returns_v2_5_preprocessing(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="regressor",
+        estimator_type="regressor",
         version="v2.5",
         download_if_not_exists=False,
     )
@@ -355,7 +355,7 @@ def test__load_v3_classification_ckpt__returns_inference_config_from_checkpoint(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
     )
@@ -383,7 +383,7 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
             cache_trainset_representation=False,
-            which="regressor",
+            estimator_type="regressor",
             version="v3",
             download_if_not_exists=False,
         )
@@ -396,7 +396,7 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
 def test__load_multitask_ckpt__criterion_follows_the_requested_task(
     tmp_path: Path,
 ) -> None:
-    """`which`, not `max_num_classes`, decides the criterion.
+    """`estimator_type`, not `max_num_classes`, decides the criterion.
 
     A multitask checkpoint carries both heads, so its `max_num_classes` is set for
     the classification head and says nothing about whether the caller wants
@@ -412,12 +412,12 @@ def test__load_multitask_ckpt__criterion_follows_the_requested_task(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    def load(which: Literal["regressor", "classifier"]) -> object:
+    def load(estimator_type: Literal["regressor", "classifier"]) -> object:
         _, criterion, _, _ = model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
-            check_bar_distribution_criterion=which == "regressor",
+            check_bar_distribution_criterion=estimator_type == "regressor",
             cache_trainset_representation=False,
-            which=which,
+            estimator_type=estimator_type,
             version="v3",
             download_if_not_exists=False,
         )
@@ -448,7 +448,7 @@ def test__load_classification_only_ckpt__as_regressor__raises(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
             cache_trainset_representation=False,
-            which="regressor",
+            estimator_type="regressor",
             version="v2.5",
             download_if_not_exists=False,
         )
@@ -492,7 +492,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
         model_path=[checkpoint_1_path, checkpoint_2_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
     )
@@ -549,7 +549,7 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
             model_path=[checkpoint_1_path, checkpoint_2_path],
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            which="classifier",
+            estimator_type="classifier",
             version="v2",
             download_if_not_exists=False,
         )
@@ -611,7 +611,7 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
             model_path=shared_checkpoint_path,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            which="classifier",
+            estimator_type="classifier",
             version="v2",
             download_if_not_exists=True,
         )

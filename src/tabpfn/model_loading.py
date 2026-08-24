@@ -588,7 +588,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
-    which: Literal["classifier"],
+    estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -605,7 +605,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
-    which: Literal["regressor"],
+    estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -620,7 +620,7 @@ def load_model_criterion_config(
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
-    which: Literal["regressor", "classifier"],
+    estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -643,7 +643,7 @@ def load_model_criterion_config(
             for models trained for regression.
         cache_trainset_representation:
             Whether the model should know to cache the trainset representation.
-        which: Whether the model is a regressor or classifier.
+        estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
 
@@ -652,12 +652,15 @@ def load_model_criterion_config(
         config
     """
     model_version = ModelVersion(version)
-    (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
-        resolve_model_path(
-            model_path=model_path,
-            which=which,
-            version=model_version.value,
-        )
+    (
+        resolved_model_paths,
+        resolved_model_dirs,
+        resolved_model_names,
+        estimator_type,
+    ) = resolve_model_path(
+        model_path=model_path,
+        which=estimator_type,
+        version=model_version.value,
     )
 
     for folder in resolved_model_dirs:
@@ -680,12 +683,12 @@ def load_model_criterion_config(
             res = download_model(
                 path,
                 version=model_version,
-                which=cast("Literal['classifier', 'regressor']", which),
+                which=cast("Literal['classifier', 'regressor']", estimator_type),
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
                 if _version_has_direct_download_option(model_version):
-                    repo_type = "clf" if which == "classifier" else "reg"
+                    repo_type = "clf" if estimator_type == "classifier" else "reg"
                     raise RuntimeError(
                         f"Failed to download model to {path}!\n\n"
                         f"For offline usage, please download the model manually from:\n"
@@ -696,7 +699,7 @@ def load_model_criterion_config(
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
-            estimator_type=which,
+            estimator_type=estimator_type,
             cache_trainset_representation=cache_trainset_representation,
         )
         if check_bar_distribution_criterion and not isinstance(
