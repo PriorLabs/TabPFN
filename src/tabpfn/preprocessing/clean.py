@@ -47,19 +47,6 @@ _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
 
 _FLOAT64 = np.dtype(np.float64)
 
-# `infer_dtype` categories that, by definition, contain no `str` value.
-_NEVER_A_STRING_INFERRED_DTYPES = frozenset(
-    {
-        "integer",
-        "floating",
-        "decimal",
-        "boolean",
-        "complex",
-        "empty",
-        "mixed-integer-float",
-    }
-)
-
 
 def _cast_columns_share_a_block(
     X: pd.DataFrame,
@@ -330,16 +317,25 @@ def _may_hold_a_string(s: pd.Series) -> bool:
     """Whether `s` could hold a `str` value.
 
     The overflow bug only triggers while parsing a string, so a column pandas'
-    own type inference reports as one of `_NEVER_A_STRING_INFERRED_DTYPES` cannot
-    hit it and can skip straight to the fast, vectorized `pandas.to_numeric`. A
-    dtype `pandas.api.types.is_numeric_dtype` already recognizes (``float64``,
-    nullable ``boolean``, ...) is never a string either, cheaply, without needing
+    own type inference reports as one of the categories below cannot hit it and
+    can skip straight to the fast, vectorized `pandas.to_numeric`. A dtype
+    `pandas.api.types.is_numeric_dtype` already recognizes (``float64``, nullable
+    ``boolean``, ...) is never a string either, cheaply, without needing
     `infer_dtype`'s per-value inspection; `object`, `category` and the various
     string dtypes (`str`, `StringDtype`, ...) all still fall through to it.
     """
     if pd.api.types.is_numeric_dtype(s.dtype):
         return False
-    return infer_dtype(s, skipna=True) not in _NEVER_A_STRING_INFERRED_DTYPES
+    inferred_dtypes_without_strings = {
+        "integer",
+        "floating",
+        "decimal",
+        "boolean",
+        "complex",
+        "empty",
+        "mixed-integer-float",
+    }
+    return infer_dtype(s, skipna=True) not in inferred_dtypes_without_strings
 
 
 def _to_numeric_or_nan_below_pandas_3(s: pd.Series) -> pd.Series:

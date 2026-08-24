@@ -776,10 +776,10 @@ def test__pandas_floor_declared_by_tabpfn__is_discoverable() -> None:
     reason=(
         "pandas.to_numeric segfaults on some strings below pandas 3.0 "
         "(https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in "
-        "pandas 3.0). Once this passes: delete _to_numeric_or_nan_below_pandas_3, "
-        "_may_hold_a_string and _NEVER_A_STRING_INFERRED_DTYPES, reduce "
-        "to_numeric_or_nan to `pandas.to_numeric(s, errors='coerce')`, and delete "
-        "this marker. PANDAS_BELOW_3 itself stays: other call sites still use it."
+        "pandas 3.0). Once this passes: delete _to_numeric_or_nan_below_pandas_3 "
+        "and _may_hold_a_string, reduce to_numeric_or_nan to "
+        "`pandas.to_numeric(s, errors='coerce')`, and delete this marker. "
+        "PANDAS_BELOW_3 itself stays: other call sites still use it."
     ),
 )
 def test__numeric_workaround__pandas_floor__no_longer_needs_the_workaround() -> None:
