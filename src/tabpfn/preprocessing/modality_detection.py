@@ -110,8 +110,8 @@ def _warn_if_text_features(
     than signal, without any error to hint at it.
 
     A column only reaches here as TEXT if input type conversion did not encode it as
-    text first, either because `use_text` is off or because it has fewer distinct
-    values than `text_cardinality_threshold`.
+    text first, either because `USE_TEXT` is off or because it has fewer distinct
+    values than `MIN_CARDINALITY_FOR_TEXT` (both `InferenceConfig` fields).
 
     Called by `detect_feature_modalities` while the schema still carries the TEXT
     labels, i.e. before the first preprocessing step that rebuilds it, since
@@ -150,9 +150,10 @@ def _warn_if_text_features(
         f"These columns look like free text and are being ordinal-encoded as "
         f"high-cardinality categoricals, which usually adds noise rather than "
         f"signal: {column_names_to_print}.\n"
-        "If such a column holds genuine text, lower `text_cardinality_threshold` "
-        "below its number of distinct values so that it is encoded as text instead, "
-        "or set `use_text=True` if it is off.\n"
+        "If such a column holds genuine text, lower "
+        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` below its number of '
+        "distinct values so that it is encoded as text instead, or set "
+        '`inference_config={"USE_TEXT": True}` if it is off.\n'
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,

@@ -472,8 +472,8 @@ class TestWarnIfTextFeatures:
         assert "'review'" in message
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
-        assert "text_cardinality_threshold" in message
-        assert "use_text" in message
+        assert "MIN_CARDINALITY_FOR_TEXT" in message
+        assert "USE_TEXT" in message
         assert "categorical_features_indices" in message
 
     def test__declared_categorical_indices__are_not_reported(self) -> None:
@@ -636,8 +636,8 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
     blaming this file's `fit` call (the stacklevel), declaring the column in
     `categorical_features_indices` silences it, and `predict` stays quiet.
 
-    Runs with `use_text=False`, since that is when a text column still reaches
-    detection as TEXT rather than being encoded before it gets there.
+    Runs with `USE_TEXT` off (the default), since that is when a text column still
+    reaches detection as TEXT rather than being encoded before it gets there.
     """
     n = 120
     rng = np.random.default_rng(seed=42)
@@ -653,7 +653,7 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         else rng.normal(size=n)
     )
 
-    model = estimator_cls(n_estimators=1, device="cpu", use_text=False)
+    model = estimator_cls(n_estimators=1, device="cpu")
     with pytest.warns(UserWarning, match="look like free text") as record:
         model.fit(X, y)
     assert "'review'" in str(record[0].message)
@@ -669,7 +669,7 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
     assert not [w for w in caught if "look like free text" in str(w.message)]
 
     model = estimator_cls(
-        n_estimators=1, device="cpu", use_text=False, categorical_features_indices=[1]
+        n_estimators=1, device="cpu", categorical_features_indices=[1]
     )
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")

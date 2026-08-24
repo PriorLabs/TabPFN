@@ -85,10 +85,6 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.input_conversion import (
-    DEFAULT_TEXT_CARDINALITY_THRESHOLD,
-    DEFAULT_TEXT_N_COMPONENTS,
-)
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
@@ -250,10 +246,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        use_dates: bool = False,
-        use_text: bool = False,
-        text_cardinality_threshold: int = DEFAULT_TEXT_CARDINALITY_THRESHOLD,
-        text_n_components: int = DEFAULT_TEXT_N_COMPONENTS,
         softmax_temperature: float = 0.9,
         average_before_softmax: bool = False,
         model_path: str
@@ -328,34 +320,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     model and the `.fit()`, consider setting the
                     `.categorical_features_indices` attribute after the model was
                     initialized and before `.fit()`.
-
-            use_dates:
-                Whether to expand datetime columns into numeric calendar features:
-                the year, the day of year, the seconds since epoch and cyclical
-                month, day and weekday pairs, plus the time of day when the column
-                carries one. Columns of date strings are parsed first. Off by
-                default, which leaves a column of date strings exactly as it
-                arrived. A column already of a datetime dtype has no string form
-                to go back to and is stringified instead either way, since nothing
-                downstream can represent a raw datetime dtype.
-
-            use_text:
-                Whether to encode columns read as text into numeric features, using
-                tf-idf over character n-grams followed by a truncated SVD. Off by
-                default, which leaves them as strings, sending them to the ordinal
-                encoder as high-cardinality categories.
-
-            text_cardinality_threshold:
-                Number of distinct values above which a string column is read as
-                text rather than as a category. Only consulted when `use_text` is
-                True.
-
-            text_n_components:
-                Number of numeric features each text column is encoded into, as
-                an upper bound: a column with little variety yields fewer. Every
-                text column costs up to this many features, so a table with many
-                of them can reach `MAX_NUMBER_OF_FEATURES`. Only consulted when
-                `use_text` is True.
 
             softmax_temperature:
                 The temperature for the softmax function. This is used to control the
@@ -535,7 +499,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             inference_config:
                 For advanced users, additional advanced arguments that adjust the
-                behavior of the model interface.
+                behavior of the model interface, including whether to expand
+                datetime columns and encode text columns (`USE_DATES`, `USE_TEXT`
+                and related fields).
                 See [tabpfn.inference_config.InferenceConfig][] for details and options.
 
                 - If `None`, the default InferenceConfig is used.
@@ -567,10 +533,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.n_estimators = n_estimators
         self.auto_scale_n_estimators = auto_scale_n_estimators
         self.categorical_features_indices = categorical_features_indices
-        self.use_dates = use_dates
-        self.use_text = use_text
-        self.text_cardinality_threshold = text_cardinality_threshold
-        self.text_n_components = text_n_components
         self.softmax_temperature = softmax_temperature
         self.average_before_softmax = average_before_softmax
         self.model_path = model_path

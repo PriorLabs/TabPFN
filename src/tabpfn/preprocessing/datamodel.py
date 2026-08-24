@@ -100,7 +100,7 @@ class FeatureModality(str, Enum):
     :class:`~tabpfn.preprocessing.input_conversion.InputTypeConverter`), so what
     arrives here is the year, the seconds since epoch and the cyclical parts, all
     of which are numerical and need the numerical transforms. A date that was not
-    expanded, because ``use_dates`` is off, cannot be represented by any step in
+    expanded, because ``USE_DATES`` is off, cannot be represented by any step in
     the pipeline, so a member for it would describe data nothing can consume.
     """
 

@@ -68,6 +68,28 @@ class InferenceConfig:
     """The minimum number of samples in the data to run our infer which features might
     be categorical."""
 
+    USE_DATES: bool = False
+    """Whether to expand datetime columns into numeric calendar features: the year,
+    the day of year, the seconds since epoch and cyclical month, day and weekday
+    pairs, plus the time of day when the column carries one. Columns of date strings
+    are parsed first. Off by default, which leaves a column of date strings exactly
+    as it arrived. A column already of a datetime dtype has no string form to go
+    back to and is stringified instead either way, since nothing downstream can
+    represent a raw datetime dtype."""
+    USE_TEXT: bool = False
+    """Whether to encode columns read as text into numeric features, using tf-idf
+    over character n-grams followed by a truncated SVD. Off by default, which leaves
+    them as strings, sending them to the ordinal encoder as high-cardinality
+    categories."""
+    MIN_CARDINALITY_FOR_TEXT: int = 30
+    """Number of distinct values above which a string column is read as text rather
+    than as a category. Only consulted when `USE_TEXT` is True."""
+    TEXT_N_COMPONENTS: int = 30
+    """Number of numeric features each text column is encoded into, as an upper
+    bound: a column with little variety yields fewer. Every text column costs up to
+    this many features, so a table with many of them can reach
+    `MAX_NUMBER_OF_FEATURES`. Only consulted when `USE_TEXT` is True."""
+
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
         - If None, no outliers are removed.

@@ -111,7 +111,10 @@ def test__classifier_fit_predict__expanded_dates__feature_counts_agree() -> None
     y = np.arange(N_ROWS) % 2
 
     classifier = TabPFNClassifier(
-        device="cpu", n_estimators=1, random_state=0, use_dates=True
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_DATES": True},
     )
     classifier.fit(frame, y)
 
@@ -210,7 +213,10 @@ def test__classifier_fit_predict__text_column__round_trips(use_text: bool) -> No
     y = np.arange(N_ROWS) % 2
 
     classifier = TabPFNClassifier(
-        device="cpu", n_estimators=1, random_state=0, use_text=use_text
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_TEXT": use_text},
     )
     classifier.fit(frame, y)
 
@@ -234,8 +240,7 @@ def test__classifier_fit_predict__text_n_components__sets_the_feature_count() ->
         device="cpu",
         n_estimators=1,
         random_state=0,
-        use_text=True,
-        text_n_components=4,
+        inference_config={"USE_TEXT": True, "TEXT_N_COMPONENTS": 4},
     )
     classifier.fit(frame, y)
 
@@ -288,9 +293,7 @@ def test__classifier_fit__dates_left_alone__are_not_also_called_free_text() -> N
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        TabPFNClassifier(
-            device="cpu", n_estimators=1, random_state=0, use_dates=False
-        ).fit(frame, y)
+        TabPFNClassifier(device="cpu", n_estimators=1, random_state=0).fit(frame, y)
 
     assert [w for w in caught if "`use_dates` is off" in str(w.message)]
     assert not [w for w in caught if "look like free text" in str(w.message)]
@@ -305,13 +308,7 @@ def test__classifier_fit__text_left_alone__is_still_called_free_text() -> None:
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        TabPFNClassifier(
-            device="cpu",
-            n_estimators=1,
-            random_state=0,
-            use_dates=False,
-            use_text=False,
-        ).fit(frame, y)
+        TabPFNClassifier(device="cpu", n_estimators=1, random_state=0).fit(frame, y)
 
     text_warnings = [w for w in caught if "look like free text" in str(w.message)]
     assert len(text_warnings) == 1
@@ -411,8 +408,7 @@ def test__classifier_fit_predict__many_column_types_together__never_raises(
             device="cpu",
             n_estimators=1,
             random_state=0,
-            use_dates=use_dates,
-            use_text=use_text,
+            inference_config={"USE_DATES": use_dates, "USE_TEXT": use_text},
         )
         classifier.fit(frame, y)
         proba = classifier.predict_proba(frame.iloc[:5])

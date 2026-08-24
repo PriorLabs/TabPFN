@@ -197,11 +197,12 @@ def ensure_compatible_fit_inputs_sklearn(
     # where `n_features_in_` and `feature_names_in_` are recorded. Predict converts
     # first too, so both describe the converted frame at both ends.
     if input_converter is None:
+        inference_config = estimator.get_inference_config()
         input_converter = InputTypeConverter(
-            use_dates=estimator.use_dates,
-            use_text=estimator.use_text,
-            text_cardinality_threshold=estimator.text_cardinality_threshold,
-            text_n_components=estimator.text_n_components,
+            use_dates=inference_config.USE_DATES,
+            use_text=inference_config.USE_TEXT,
+            text_cardinality_threshold=inference_config.MIN_CARDINALITY_FOR_TEXT,
+            text_n_components=inference_config.TEXT_N_COMPONENTS,
         )
         X = input_converter.fit_transform(X)
     else:

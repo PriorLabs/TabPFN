@@ -600,12 +600,12 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     categories and raise a ``TypeError`` (``'<' not supported between 'float' and
     'str'`` / ``ufunc 'isnan' not supported``).
 
-    With `use_text=True` and more distinct values than `text_cardinality_threshold`,
+    With `USE_TEXT` on and more distinct values than `MIN_CARDINALITY_FOR_TEXT`,
     input type conversion encodes the column as text and the ordinal encoder never
     sees it. The predict-time floats are stringified and scored against the
     vocabulary fitted on train, which shares nothing with them, so nothing reaches
     the fit/predict drift check as a mismatch and no warning is raised. With
-    `use_text` off (the default), the column instead reaches the ordinal encoder,
+    `USE_TEXT` off (the default), the column instead reaches the ordinal encoder,
     which is `test__process_text_na_dataframe__numeric_against_string_fit_categories`
     below.
     """
@@ -628,7 +628,12 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
         }
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0, use_text=True)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_TEXT": True},
+    )
     clf.fit(X_fit, y)
 
     proba = clf.predict_proba(X_pred)

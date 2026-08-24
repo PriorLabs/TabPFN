@@ -281,8 +281,8 @@ class InputTypeConverter:
             "A column already of a datetime dtype cannot be represented further "
             "down the pipeline and will raise; one holding date strings is treated "
             "as a high-cardinality category, which discards the ordering a date "
-            "has. Set `use_dates=True` to expand them into calendar features "
-            "instead.",
+            'has. Set `inference_config={"USE_DATES": True}` to expand them into '
+            "calendar features instead.",
             UserWarning,
             stacklevel=2,
         )
@@ -302,8 +302,9 @@ class InputTypeConverter:
             f"values and were encoded as text, into "
             f"{self.text_n_components} numeric features each: {names}.\n"
             "If such a column is a category rather than text, raise "
-            "`text_cardinality_threshold` above its number of distinct values, or "
-            "pass its index in `categorical_features_indices`.\n"
+            '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number '
+            "of distinct values, or pass its index in `categorical_features_indices`."
+            "\n"
             "This encoding is character-level and carries no meaning of the words. "
             "For text where the meaning matters, consider the tabpfn-client API, "
             "which embeds text natively: "
