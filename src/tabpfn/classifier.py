@@ -878,6 +878,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             forced_inference_dtype_=self.forced_inference_dtype_,
             memory_saving_mode=self.memory_saving_mode,
             use_autocast_=self.use_autocast_,
+            task_type="multiclass",
             inference_mode=True,
             keep_cache_on_device=self.keep_cache_on_device,
             kv_cache_precision=self.kv_cache_precision,

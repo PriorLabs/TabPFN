@@ -288,6 +288,7 @@ def create_inference_engine(  # noqa: PLR0913
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
+    task_type: str,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
@@ -310,6 +311,9 @@ def create_inference_engine(  # noqa: PLR0913
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
         use_autocast_: Whether we use torch.autocast for inference.
+        task_type: The task type, e.g. "multiclass" or "regression". Only used
+            for ``fit_mode="fit_with_cache"``, where the cache is built during
+            initialization and is task-specific.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
         keep_cache_on_device: Only relevant for ``fit_mode="fit_with_cache"``.
@@ -358,6 +362,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
+            task_type=task_type,
             keep_cache_on_device=keep_cache_on_device,
             kv_cache_precision=kv_cache_precision,
         )
