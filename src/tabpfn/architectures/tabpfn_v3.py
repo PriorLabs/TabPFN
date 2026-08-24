@@ -1826,9 +1826,6 @@ class TabPFNV3(Architecture):
         kv_cache: TabPFNV3Cache | None = None,
         return_kv_cache: bool = False,
         x_is_test_only: bool = False,
-        # TODO: test_targets_MB needed because model_loading has a condition
-        # on its presence. Clean this up.
-        test_targets_MB: torch.Tensor | None = None,
     ) -> (
         torch.Tensor
         | dict[str, torch.Tensor]
@@ -1844,7 +1841,6 @@ class TabPFNV3(Architecture):
         dataset and this flag is ignored.
         """
         del task_type
-        del test_targets_MB
         del categorical_inds
         if isinstance(x, dict):
             x = x["main"]
