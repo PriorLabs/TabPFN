@@ -4,12 +4,14 @@
 
 from __future__ import annotations
 
+from importlib.metadata import requires
 from unittest import mock
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
+from packaging.requirements import Requirement
 from packaging.version import Version
 from sklearn.preprocessing import OrdinalEncoder
 
@@ -695,9 +697,7 @@ def test__pandas_lt3_workaround__poison_values__parses_safely() -> None:
 
 def test__to_numeric_or_nan__pandas_3__dispatches_to_plain_to_numeric() -> None:
     with (
-        mock.patch.object(
-            clean_module, "_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG", new=False
-        ),
+        mock.patch.object(clean_module, "PANDAS_BELOW_3", new=False),
         mock.patch.object(
             clean_module,
             "_to_numeric_or_nan_below_pandas_3",
@@ -712,9 +712,7 @@ def test__to_numeric_or_nan__pandas_3__dispatches_to_plain_to_numeric() -> None:
 
 def test__to_numeric_or_nan__below_pandas_3__dispatches_to_workaround() -> None:
     with (
-        mock.patch.object(
-            clean_module, "_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG", new=True
-        ),
+        mock.patch.object(clean_module, "PANDAS_BELOW_3", new=True),
         mock.patch.object(
             clean_module,
             "_to_numeric_or_nan_below_pandas_3",
@@ -727,25 +725,72 @@ def test__to_numeric_or_nan__below_pandas_3__dispatches_to_workaround() -> None:
     assert out.tolist() == [1.5, 3.0]
 
 
+def test__to_numeric_or_nan__numeric_object_column__skips_the_workaround() -> None:
+    """`_may_hold_a_string` should rule out a column with no `str` values at all.
+
+    A column of numbers boxed in an `object` array is exactly the case
+    `pandas.to_numeric` handles safely even below pandas 3.0: the overflow bug is
+    only in its string parser, so this never needed the slow, per-value workaround.
+    """
+    with (
+        mock.patch.object(clean_module, "PANDAS_BELOW_3", new=True),
+        mock.patch.object(
+            clean_module,
+            "_to_numeric_or_nan_below_pandas_3",
+            wraps=clean_module._to_numeric_or_nan_below_pandas_3,
+        ) as workaround,
+    ):
+        out = to_numeric_or_nan(pd.Series([1, 2.5, None], dtype=object))
+
+    assert workaround.call_count == 0
+    assert out.tolist()[:2] == [1.0, 2.5]
+    assert pd.isna(out.iloc[2])
+
+
+def _pandas_floor_declared_by_tabpfn() -> Version:
+    """The minimum pandas version `tabpfn`'s own package metadata declares."""
+    for requirement_string in requires("tabpfn") or ():
+        requirement = Requirement(requirement_string)
+        if requirement.name.lower() != "pandas" or requirement.marker is not None:
+            continue
+        floors = [
+            spec.version for spec in requirement.specifier if spec.operator == ">="
+        ]
+        if floors:
+            return Version(floors[0])
+    pytest.fail("tabpfn declares no unconditional pandas>=... requirement")
+
+
+def test__pandas_floor_declared_by_tabpfn__is_discoverable() -> None:
+    """A guard for `_pandas_floor_declared_by_tabpfn` itself, independent of its value.
+
+    Keeps a change to how the pandas dependency is declared from silently defeating
+    the `xfail`-marked tripwire below: that test only checks the floor's *value*, so
+    if the lookup itself started raising instead, its failure would just read as
+    another expected xfail rather than surfacing.
+    """
+    assert isinstance(_pandas_floor_declared_by_tabpfn(), Version)
+
+
 @pytest.mark.xfail(
     reason=(
         "pandas.to_numeric segfaults on some strings below pandas 3.0 "
         "(https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in "
-        "pandas 3.0). Once this passes: delete _to_numeric_or_nan_below_pandas_3 "
-        "and _PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG, reduce to_numeric_or_nan to "
-        "`pandas.to_numeric(s, errors='coerce')`, raise the pyproject.toml floor "
-        "to pandas>=3, and delete this marker."
+        "pandas 3.0). Once this passes: delete _to_numeric_or_nan_below_pandas_3, "
+        "_may_hold_a_string and _NEVER_A_STRING_INFERRED_DTYPES, reduce "
+        "to_numeric_or_nan to `pandas.to_numeric(s, errors='coerce')`, and delete "
+        "this marker. PANDAS_BELOW_3 itself stays: other call sites still use it."
     ),
 )
-def test__numeric_workaround__pandas_version__no_longer_needs_the_workaround() -> None:
+def test__numeric_workaround__pandas_floor__no_longer_needs_the_workaround() -> None:
     """A forcing function so the pandas < 3 workaround does not outlive its cause.
 
-    `xfail_strict = true` (pyproject.toml) turns an unexpected pass into a hard
-    failure: once the installed pandas actually reaches 3.0, this assertion stops
-    failing, which flips this from a quiet, expected xfail into a build break that
-    says exactly what to remove.
+    Checks the floor `tabpfn` declares, not whatever pandas happens to be
+    installed: `xfail_strict = true` (pyproject.toml) must turn into a hard
+    failure only once someone deliberately raises that floor to pandas 3, not
+    whenever a dependency resolver picks a newer pandas on its own.
     """
-    assert Version(pd.__version__) >= Version("3.0.0")
+    assert _pandas_floor_declared_by_tabpfn() >= Version("3.0.0")
 
 
 def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> None:
