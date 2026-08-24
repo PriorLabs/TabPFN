@@ -314,19 +314,16 @@ def to_numeric_or_nan(s: pd.Series) -> pd.Series:
 
 
 def _may_hold_a_string(s: pd.Series) -> bool:
-    """Whether `s` could hold a `str` value.
+    """Whether `s` could hold a `str` (the only thing the overflow bug can hit).
 
-    The overflow bug only triggers while parsing a string, so a column pandas'
-    own type inference reports as one of the categories below cannot hit it and
-    can skip straight to the fast, vectorized `pandas.to_numeric`. A dtype
-    `pandas.api.types.is_numeric_dtype` already recognizes (``float64``, nullable
-    ``boolean``, ...) is never a string either, cheaply, without needing
-    `infer_dtype`'s per-value inspection; `object`, `category` and the various
-    string dtypes (`str`, `StringDtype`, ...) all still fall through to it.
+    `s.dtype.kind` alone answers this for a native numeric dtype, but not for
+    `object` (also the kind of `category`/`string`/pandas 3's default `str`
+    dtype): a column of numbers boxed in an `object` array has the same kind as
+    one holding actual text, so that case falls through to `infer_dtype`.
     """
-    if pd.api.types.is_numeric_dtype(s.dtype):
+    if s.dtype.kind in NUMERIC_DTYPE_KINDS:
         return False
-    inferred_dtypes_without_strings = {
+    return infer_dtype(s, skipna=True) not in {
         "integer",
         "floating",
         "decimal",
@@ -335,7 +332,6 @@ def _may_hold_a_string(s: pd.Series) -> bool:
         "empty",
         "mixed-integer-float",
     }
-    return infer_dtype(s, skipna=True) not in inferred_dtypes_without_strings
 
 
 def _to_numeric_or_nan_below_pandas_3(s: pd.Series) -> pd.Series:
