@@ -23,6 +23,7 @@ from tabpfn.preprocessing.clean import (
     _owned_float64_values,
     fix_dtypes,
     process_text_na_dataframe,
+    to_numeric_or_nan,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
@@ -659,6 +660,33 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
         proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
+
+
+def test__to_numeric_or_nan__mixed_column__matches_to_numeric_semantics() -> None:
+    s = pd.Series(["1.5", "not a number", None, "3"])
+    out = to_numeric_or_nan(s)
+
+    assert out.dtype == np.float64
+    assert out.tolist()[0] == pytest.approx(1.5)
+    assert pd.isna(out.iloc[1])
+    assert pd.isna(out.iloc[2])
+    assert out.tolist()[3] == pytest.approx(3.0)
+
+
+def test__to_numeric_or_nan__crash_prone_values__parses_instead_of_crashing() -> None:
+    """These values used to crash `pandas.to_numeric` outright on some versions.
+
+    `"8e2569614270"` is valid (if extreme) scientific notation and parses to `inf`,
+    same as it would without the bug; the hash-like string around it is not a
+    number at all and becomes `NaN`. Surviving the call is itself the regression
+    check: a crash cannot be caught with `pytest.raises`.
+    """
+    s = pd.Series(["8e2569614270", "8e2569614270f3d8b9e7038efac9f116", "1e2147483648"])
+    out = to_numeric_or_nan(s)
+
+    assert out.tolist()[0] == float("inf")
+    assert pd.isna(out.iloc[1])
+    assert out.tolist()[2] == float("inf")
 
 
 def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> None:

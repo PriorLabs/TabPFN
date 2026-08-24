@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
+from tabpfn.preprocessing.clean import to_numeric_or_nan
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -204,7 +205,7 @@ def _detect_feature_modality(
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.is_numeric_dtype(s.dtype):
         return True
-    coerced = pd.to_numeric(s, errors="coerce")
+    coerced = to_numeric_or_nan(s)
     is_numeric_or_missing = coerced.notna() | s.isna()
     return bool(is_numeric_or_missing.all())
 

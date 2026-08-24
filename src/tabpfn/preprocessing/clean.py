@@ -298,6 +298,34 @@ def _is_single_float_block(X: pd.DataFrame) -> bool:
     return len(blocks) == 1 and blocks[0].values.dtype.kind == "f"  # noqa: PD011
 
 
+def to_numeric_or_nan(s: pd.Series) -> pd.Series:
+    """`pandas.to_numeric(s, errors="coerce")`, without the risk of it segfaulting.
+
+    On some pandas/numpy versions, `to_numeric`'s scientific-notation parser has a
+    signed 32-bit integer overflow for a string whose exponent falls in
+    `[2**31, 2**32)`, e.g. `"8e2569614270"`; that crashes the interpreter outright,
+    which cannot be caught with `try`/`except`. Parsing goes through the built-in
+    `float` instead, one value at a time, which does not share the bug.
+
+    Args:
+        s: The values to parse. Already-numeric values pass through unchanged.
+
+    Returns:
+        A float64 series the same length as `s`, `NaN` wherever a value is missing
+        or does not parse as a number.
+    """
+    return s.map(_parse_float_or_nan).astype("float64")
+
+
+def _parse_float_or_nan(value: object) -> float:
+    if pd.isna(value):
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _align_columns_to_fitted_dtypes(
     X: pd.DataFrame, ord_encoder: OrderPreservingColumnTransformer
 ) -> pd.DataFrame:
@@ -311,8 +339,8 @@ def _align_columns_to_fitted_dtypes(
       sklearn's ``_check_unknown`` takes its numeric branch and compares float values
       against the string ``categories_``, raising a ``TypeError``.
     * numeric at fit, string at predict -> the column is cast to numeric via
-      ``pd.to_numeric(..., errors="coerce")``. Numeric-looking strings match their fit
-      category; non-numeric strings become ``NaN`` (treated as missing).
+      `to_numeric_or_nan`. Numeric-looking strings match their fit category;
+      non-numeric strings become ``NaN`` (treated as missing).
 
     Either way, values that do not match a fit category map to the encoder's unknown
     code. A dtype change between fit and predict usually signals an inconsistent feature
@@ -346,7 +374,7 @@ def _align_columns_to_fitted_dtypes(
     if to_string:
         X[to_string] = X[to_string].astype("string")
     for col in to_numeric:
-        X[col] = pd.to_numeric(X[col].astype("object"), errors="coerce")
+        X[col] = to_numeric_or_nan(X[col].astype("object"))
     return X
 
 
