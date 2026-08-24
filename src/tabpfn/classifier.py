@@ -94,6 +94,7 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
+    remap_categorical_indices,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -719,6 +720,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
+        original_X = X
         # Data validation and cleaning
         (
             X,
@@ -742,7 +744,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            provided_categorical_indices=remap_categorical_indices(
+                original_X=original_X,
+                categorical_indices=self.categorical_features_indices,
+                converted_feature_names=feature_names,
+            ),
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,

@@ -31,7 +31,7 @@ from tabpfn.preprocessing.clean import (
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.validation import ensure_compatible_fit_inputs, remap_categorical_indices
 
 
 @pytest.fixture
@@ -1366,3 +1366,56 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     out = fix_dtypes(frame, cat_indices=None)
 
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
+
+
+def test__remap_categorical_indices__pushed_back_by_expansion__follows_by_name() -> (
+    None
+):
+    """A categorical column after an expanding one is found at its new position."""
+    original_X = pd.DataFrame({"date_col": ["x"], "cat_col": ["a"]})
+    converted_names = np.array(["date_col_year", "date_col_total_seconds", "cat_col"])
+
+    result = remap_categorical_indices(
+        original_X=original_X,
+        categorical_indices=[1],
+        converted_feature_names=converted_names,
+    )
+
+    assert result == [2]
+
+
+def test__remap_categorical_indices__declared_column_itself_expanded__is_dropped() -> (
+    None
+):
+    """A categorical index on a column that no longer exists is dropped, not guessed."""
+    original_X = pd.DataFrame({"date_col": ["x"], "other": ["a"]})
+    converted_names = np.array(["date_col_year", "date_col_total_seconds", "other"])
+
+    result = remap_categorical_indices(
+        original_X=original_X,
+        categorical_indices=[0],
+        converted_feature_names=converted_names,
+    )
+
+    assert result == []
+
+
+def test__remap_categorical_indices__non_dataframe_input__unchanged() -> None:
+    """Nothing shifts for array input, since `InputTypeConverter` never touches it."""
+    result = remap_categorical_indices(
+        original_X=np.zeros((3, 2)),
+        categorical_indices=[1],
+        converted_feature_names=np.array(["f0", "f1"]),
+    )
+
+    assert result == [1]
+
+
+def test__remap_categorical_indices__no_indices_declared__returns_none() -> None:
+    result = remap_categorical_indices(
+        original_X=pd.DataFrame({"a": [1]}),
+        categorical_indices=None,
+        converted_feature_names=np.array(["a"]),
+    )
+
+    assert result is None

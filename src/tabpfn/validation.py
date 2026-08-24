@@ -101,6 +101,47 @@ def ensure_compatible_fit_inputs(
     return X, y, feature_names_in, n_features_in, original_y_name, input_converter
 
 
+def remap_categorical_indices(
+    original_X: XType,
+    categorical_indices: Sequence[int] | None,
+    converted_feature_names: npt.NDArray[Any] | None,
+) -> Sequence[int] | None:
+    """Translate user-declared categorical indices to their post-conversion position.
+
+    `categorical_features_indices` is defined against the frame the caller passed
+    to `fit()`, but `InputTypeConverter` can grow that frame before this is ever
+    consulted (a date expanding into calendar features, a text column into its
+    encoded dimensions), which shifts every column after the one that grew. A
+    column that is not itself expanded keeps its exact name through the
+    conversion, so its new position is found by name; a column that IS expanded
+    no longer exists as one column, and its index is dropped rather than kept
+    pointing at whatever unrelated column now sits at that position. There is no
+    guarantee a declared-categorical column survives as one column: only that,
+    when it does, it is still correctly attributed after conversion.
+
+    Args:
+        original_X: The input as the caller passed it, before conversion.
+        categorical_indices: The user-declared indices, against `original_X`.
+        converted_feature_names: The feature names after conversion, i.e. what
+            `categorical_indices` must be translated to index into.
+
+    Returns:
+        The translated indices, or `categorical_indices` unchanged when `original_X`
+        is not a dataframe (nothing shifts) or there is nothing to translate.
+    """
+    if (
+        not categorical_indices
+        or not isinstance(original_X, pd.DataFrame)
+        or converted_feature_names is None
+    ):
+        return categorical_indices
+    original_names = [original_X.columns[i] for i in categorical_indices]
+    new_index_by_name = {name: i for i, name in enumerate(converted_feature_names)}
+    return [
+        new_index_by_name[name] for name in original_names if name in new_index_by_name
+    ]
+
+
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,

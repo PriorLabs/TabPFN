@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.input_conversion import (
     DEFAULT_TEXT_N_COMPONENTS,
     InputTypeConverter,
@@ -120,6 +121,57 @@ def test__classifier_fit_predict__expanded_dates__feature_counts_agree() -> None
 
     assert classifier.n_features_in_ > frame.shape[1]
     assert classifier.n_features_in_ == len(classifier.feature_names_in_)
+    assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)
+
+
+def test__classifier_fit__categorical_index_after_date_expands__still_attributed() -> (
+    None
+):
+    """`categorical_features_indices` survives a date expanding ahead of it.
+
+    `code` has 20 distinct values: below `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`
+    (so declaring it categorical takes effect) but at or above
+    `MIN_UNIQUE_FOR_NUMERICAL_FEATURES` (so it is not auto-detected as one on
+    its own). Only a correctly remapped index makes this pass.
+    """
+    frame = pd.DataFrame({"when": _date_strings(), "code": np.arange(N_ROWS) % 20})
+    y = np.arange(N_ROWS) % 2
+
+    classifier = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_DATES": True},
+        categorical_features_indices=[1],
+    )
+    classifier.fit(frame, y)
+
+    code_feature = next(
+        f
+        for f in classifier.inferred_feature_schema_.features
+        if f.name == "input_code"
+    )
+    assert code_feature.modality == FeatureModality.CATEGORICAL
+
+
+def test__classifier_fit__categorical_index_on_expanding_column__does_not_raise() -> (
+    None
+):
+    """A declared index on the column that itself expands is dropped, not misapplied."""
+    frame = pd.DataFrame(
+        {"when": _date_strings(), "value": np.arange(float(N_ROWS))},
+    )
+    y = np.arange(N_ROWS) % 2
+
+    classifier = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_DATES": True},
+        categorical_features_indices=[0],
+    )
+    classifier.fit(frame, y)
+
     assert classifier.predict_proba(frame.iloc[:5]).shape == (5, 2)
 
 
