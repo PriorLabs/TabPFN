@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 from packaging.version import Version
+from pandas.api.types import infer_dtype
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
@@ -39,12 +40,10 @@ FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
-PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
+PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
-_ASTYPE_KEEPS_UNCAST_COLUMNS = (
-    {"copy": False} if Version(pd.__version__) < Version("3.0.0") else {}
-)
+_ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
 
 _FLOAT64 = np.dtype(np.float64)
 
@@ -298,16 +297,6 @@ def _is_single_float_block(X: pd.DataFrame) -> bool:
     return len(blocks) == 1 and blocks[0].values.dtype.kind == "f"  # noqa: PD011
 
 
-#: https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0:
-#: on pandas < 3, `to_numeric`'s scientific-notation parser has a signed 32-bit
-#: integer overflow for a string whose exponent falls in `[2**31, 2**32)`, e.g.
-#: `"8e2569614270"`, which crashes the interpreter outright rather than raising.
-#: Delete `_to_numeric_or_nan_below_pandas_3` and this flag once the floor in
-#: `pyproject.toml` reaches pandas 3, and `to_numeric_or_nan` with it: at that point
-#: it is exactly `pandas.to_numeric(s, errors="coerce")`.
-_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG = Version(pd.__version__) < Version("3.0.0")
-
-
 def to_numeric_or_nan(s: pd.Series) -> pd.Series:
     """`pandas.to_numeric(s, errors="coerce")`, without the risk of it segfaulting.
 
@@ -318,18 +307,39 @@ def to_numeric_or_nan(s: pd.Series) -> pd.Series:
         A float64 series the same length as `s`, `NaN` wherever a value is missing
         or does not parse as a number.
     """
-    if _PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG:
+    # https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0.
+    if PANDAS_BELOW_3 and _may_hold_a_string(s):
         return _to_numeric_or_nan_below_pandas_3(s)
     return pd.to_numeric(s, errors="coerce")
+
+
+def _may_hold_a_string(s: pd.Series) -> bool:
+    """Whether `s` could hold a `str` (the only thing the overflow bug can hit).
+
+    `s.dtype.kind` alone answers this for a native numeric dtype, but not for
+    `object` (also the kind of `category`/`string`/pandas 3's default `str`
+    dtype): a column of numbers boxed in an `object` array has the same kind as
+    one holding actual text, so that case falls through to `infer_dtype`.
+    """
+    if s.dtype.kind in NUMERIC_DTYPE_KINDS:
+        return False
+    return infer_dtype(s, skipna=True) not in {
+        "integer",
+        "floating",
+        "decimal",
+        "boolean",
+        "complex",
+        "empty",
+        "mixed-integer-float",
+    }
 
 
 def _to_numeric_or_nan_below_pandas_3(s: pd.Series) -> pd.Series:
     """The pandas < 3 workaround: parse one value at a time with the built-in `float`.
 
-    The built-in does not share `to_numeric`'s overflow bug (see
-    `_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG`), at the cost of no longer being
-    vectorized. TabPFN's own row limits keep a column short enough that this is not
-    a real cost.
+    The built-in does not share `to_numeric`'s overflow bug, at the cost of no
+    longer being vectorized; `_may_hold_a_string` limits this to columns that
+    could actually trigger it.
     """
     return s.map(_parse_float_or_nan).astype("float64")
 
@@ -502,10 +512,7 @@ def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return _inf_masks_mixed(X)
 
 
-if PANDAS_FASTER_THAN_MIXED_PATH:
-    inf_masks_dataframe = _inf_masks_pandas_only
-else:
-    inf_masks_dataframe = _inf_masks_dataframe
+inf_masks_dataframe = _inf_masks_pandas_only if PANDAS_BELOW_3 else _inf_masks_dataframe
 
 
 def _encoding_is_identity(
