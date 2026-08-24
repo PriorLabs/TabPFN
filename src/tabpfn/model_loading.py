@@ -696,7 +696,7 @@ def load_model_criterion_config(
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
-            which=which,
+            estimator_type=which,
             cache_trainset_representation=cache_trainset_representation,
         )
         if check_bar_distribution_criterion and not isinstance(
@@ -818,7 +818,7 @@ def resolve_model_path(
 def get_loss_criterion(
     config: ArchitectureConfig,
     *,
-    which: Literal["regressor", "classifier"],
+    estimator_type: Literal["regressor", "classifier"],
     regression_borders: torch.Tensor | None = None,
 ) -> nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution:
     """Create: for classification, a loss function. For regression, a BarDistribution.
@@ -827,20 +827,20 @@ def get_loss_criterion(
     simplicity. The BarDistribution serves the dual purpose of loss function
     and output distribution, thus is required even during inference.
 
-    The task cannot be read off `config`: a multitask checkpoint carries both a
-    classification and a regression head, so `max_num_classes` says which classes
-    the classification head supports, not which task the caller wants. Hence
-    `which`.
+    The task cannot be read off `config`: a checkpoint that carries both a
+    classification and a regression head has `max_num_classes` set for the
+    classification head, which says nothing about the task the caller wants. Hence
+    `estimator_type`.
 
     Args:
         config: The architecture config of the checkpoint.
-        which: The task the estimator is being built for.
+        estimator_type: The task the estimator is being built for.
         regression_borders: Bucket borders for the regression bar distribution.
-            Required when `which="regressor"`, since the distribution is the model's
-            output and has to use the borders it was trained with -- see
+            Required when `estimator_type="regressor"`, since the distribution is
+            the model's output and has to use the borders it was trained with -- see
             `_resolve_regression_borders`.
     """
-    if which == "classifier":
+    if estimator_type == "classifier":
         # NOTE: We don't seem to have any of these
         if config.max_num_classes == 2:
             return nn.BCEWithLogitsLoss(reduction="none")
@@ -852,7 +852,9 @@ def get_loss_criterion(
         )
 
     if regression_borders is None:
-        raise ValueError("regression_borders is required when which='regressor'.")
+        raise ValueError(
+            "regression_borders is required when estimator_type='regressor'."
+        )
     return FullSupportBarDistribution(regression_borders, ignore_nan_targets=True)
 
 
@@ -922,7 +924,7 @@ def clear_built_model_cache() -> None:
 def load_model(
     *,
     path: Path,
-    which: Literal["regressor", "classifier"],
+    estimator_type: Literal["regressor", "classifier"],
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
@@ -941,8 +943,8 @@ def load_model(
 
     Args:
         path: Path to the checkpoint
-        which: The task the estimator is being built for. A multitask checkpoint
-            backs either task, so this selects the criterion.
+        estimator_type: The task the estimator is being built for. A checkpoint
+            with both heads backs either task, so this selects the criterion.
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
     """
@@ -950,9 +952,9 @@ def load_model(
     identity = Checkpoint(resolved).identity()
 
     use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
-    # `which` belongs in the key: the criterion differs per task, so a multitask
+    # `estimator_type` belongs in the key: the criterion differs per task, so a
     # checkpoint built for one task must not be served for the other.
-    key = (resolved, identity, which)
+    key = (resolved, identity, estimator_type)
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
             cached = _BUILT_MODEL_CACHE.get(key)
@@ -963,7 +965,7 @@ def load_model(
     result = _build_model(
         resolved,
         identity,
-        which=which,
+        estimator_type=estimator_type,
         cache_trainset_representation=cache_trainset_representation,
     )
 
@@ -981,7 +983,7 @@ def _build_model(
     resolved: str,
     identity: tuple[int, int],
     *,
-    which: Literal["regressor", "classifier"],
+    estimator_type: Literal["regressor", "classifier"],
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
@@ -1025,12 +1027,12 @@ def _build_model(
     # borders rather than the ones the architecture initialised itself with.
     loss_criterion = get_loss_criterion(
         model_config,
-        which=which,
+        estimator_type=estimator_type,
         regression_borders=(
             _resolve_regression_borders(
                 model=model, criterion_state=criterion_state, path=Path(resolved)
             )
-            if which == "regressor"
+            if estimator_type == "regressor"
             else None
         ),
     )

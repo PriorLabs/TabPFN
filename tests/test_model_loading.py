@@ -52,7 +52,7 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_v2_architecture(
     torch.save(checkpoint, checkpoint_path)
 
     loaded_model, _, loaded_config, _ = model_loading.load_model(
-        path=checkpoint_path, which="classifier"
+        path=checkpoint_path, estimator_type="classifier"
     )
     assert isinstance(loaded_model, tabpfn_v2.TabPFNV2)
     assert isinstance(loaded_config, tabpfn_v2.TabPFNV2Config)
@@ -141,7 +141,7 @@ def test__load_model__architecture_name_in_checkpoint__loads_specified_architect
     torch.save(checkpoint, checkpoint_path)
 
     loaded_model, _, loaded_config, _ = model_loading.load_model(
-        path=checkpoint_path, which="classifier"
+        path=checkpoint_path, estimator_type="classifier"
     )
     assert isinstance(loaded_model, DummyArchitecture)
     assert isinstance(loaded_config, FakeConfig)
