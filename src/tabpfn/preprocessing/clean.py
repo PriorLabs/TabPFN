@@ -298,14 +298,18 @@ def _is_single_float_block(X: pd.DataFrame) -> bool:
     return len(blocks) == 1 and blocks[0].values.dtype.kind == "f"  # noqa: PD011
 
 
+#: https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0:
+#: on pandas < 3, `to_numeric`'s scientific-notation parser has a signed 32-bit
+#: integer overflow for a string whose exponent falls in `[2**31, 2**32)`, e.g.
+#: `"8e2569614270"`, which crashes the interpreter outright rather than raising.
+#: Delete `_to_numeric_or_nan_below_pandas_3` and this flag once the floor in
+#: `pyproject.toml` reaches pandas 3, and `to_numeric_or_nan` with it: at that point
+#: it is exactly `pandas.to_numeric(s, errors="coerce")`.
+_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG = Version(pd.__version__) < Version("3.0.0")
+
+
 def to_numeric_or_nan(s: pd.Series) -> pd.Series:
     """`pandas.to_numeric(s, errors="coerce")`, without the risk of it segfaulting.
-
-    On some pandas/numpy versions, `to_numeric`'s scientific-notation parser has a
-    signed 32-bit integer overflow for a string whose exponent falls in
-    `[2**31, 2**32)`, e.g. `"8e2569614270"`; that crashes the interpreter outright,
-    which cannot be caught with `try`/`except`. Parsing goes through the built-in
-    `float` instead, one value at a time, which does not share the bug.
 
     Args:
         s: The values to parse. Already-numeric values pass through unchanged.
@@ -313,6 +317,19 @@ def to_numeric_or_nan(s: pd.Series) -> pd.Series:
     Returns:
         A float64 series the same length as `s`, `NaN` wherever a value is missing
         or does not parse as a number.
+    """
+    if _PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG:
+        return _to_numeric_or_nan_below_pandas_3(s)
+    return pd.to_numeric(s, errors="coerce")
+
+
+def _to_numeric_or_nan_below_pandas_3(s: pd.Series) -> pd.Series:
+    """The pandas < 3 workaround: parse one value at a time with the built-in `float`.
+
+    The built-in does not share `to_numeric`'s overflow bug (see
+    `_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG`), at the cost of no longer being
+    vectorized. TabPFN's own row limits keep a column short enough that this is not
+    a real cost.
     """
     return s.map(_parse_float_or_nan).astype("float64")
 

@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from packaging.version import Version
 from sklearn.preprocessing import OrdinalEncoder
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
@@ -21,6 +22,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     _owned_float64_values,
+    _to_numeric_or_nan_below_pandas_3,
     fix_dtypes,
     process_text_na_dataframe,
     to_numeric_or_nan,
@@ -662,9 +664,10 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
     assert np.isfinite(proba).all()
 
 
-def test__to_numeric_or_nan__mixed_column__matches_to_numeric_semantics() -> None:
+def test__pandas_lt3_workaround__mixed_column__matches_to_numeric_semantics() -> None:
+    """Exercises the pandas < 3 workaround directly, regardless of what is installed."""
     s = pd.Series(["1.5", "not a number", None, "3"])
-    out = to_numeric_or_nan(s)
+    out = _to_numeric_or_nan_below_pandas_3(s)
 
     assert out.dtype == np.float64
     assert out.tolist()[0] == pytest.approx(1.5)
@@ -673,20 +676,76 @@ def test__to_numeric_or_nan__mixed_column__matches_to_numeric_semantics() -> Non
     assert out.tolist()[3] == pytest.approx(3.0)
 
 
-def test__to_numeric_or_nan__crash_prone_values__parses_instead_of_crashing() -> None:
-    """These values used to crash `pandas.to_numeric` outright on some versions.
+def test__pandas_lt3_workaround__poison_values__parses_safely() -> None:
+    """These values crash `pandas.to_numeric` outright on pandas < 3.
 
     `"8e2569614270"` is valid (if extreme) scientific notation and parses to `inf`,
-    same as it would without the bug; the hash-like string around it is not a
-    number at all and becomes `NaN`. Surviving the call is itself the regression
-    check: a crash cannot be caught with `pytest.raises`.
+    same as `pandas.to_numeric` would produce without the bug; the hash-like string
+    around it is not a number at all and becomes `NaN`. Exercises the workaround
+    directly, regardless of what pandas is installed: on pandas < 3 this is also
+    what `pandas.to_numeric` itself would do if it did not crash first.
     """
     s = pd.Series(["8e2569614270", "8e2569614270f3d8b9e7038efac9f116", "1e2147483648"])
-    out = to_numeric_or_nan(s)
+    out = _to_numeric_or_nan_below_pandas_3(s)
 
     assert out.tolist()[0] == float("inf")
     assert pd.isna(out.iloc[1])
     assert out.tolist()[2] == float("inf")
+
+
+def test__to_numeric_or_nan__pandas_3__dispatches_to_plain_to_numeric() -> None:
+    with (
+        mock.patch.object(
+            clean_module, "_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG", new=False
+        ),
+        mock.patch.object(
+            clean_module,
+            "_to_numeric_or_nan_below_pandas_3",
+            wraps=clean_module._to_numeric_or_nan_below_pandas_3,
+        ) as workaround,
+    ):
+        out = to_numeric_or_nan(pd.Series(["1.5", "3"]))
+
+    assert workaround.call_count == 0
+    assert out.tolist() == [1.5, 3.0]
+
+
+def test__to_numeric_or_nan__below_pandas_3__dispatches_to_workaround() -> None:
+    with (
+        mock.patch.object(
+            clean_module, "_PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG", new=True
+        ),
+        mock.patch.object(
+            clean_module,
+            "_to_numeric_or_nan_below_pandas_3",
+            wraps=clean_module._to_numeric_or_nan_below_pandas_3,
+        ) as workaround,
+    ):
+        out = to_numeric_or_nan(pd.Series(["1.5", "3"]))
+
+    assert workaround.call_count == 1
+    assert out.tolist() == [1.5, 3.0]
+
+
+@pytest.mark.xfail(
+    reason=(
+        "pandas.to_numeric segfaults on some strings below pandas 3.0 "
+        "(https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in "
+        "pandas 3.0). Once this passes: delete _to_numeric_or_nan_below_pandas_3 "
+        "and _PANDAS_TO_NUMERIC_HAS_OVERFLOW_BUG, reduce to_numeric_or_nan to "
+        "`pandas.to_numeric(s, errors='coerce')`, raise the pyproject.toml floor "
+        "to pandas>=3, and delete this marker."
+    ),
+)
+def test__numeric_workaround__pandas_version__no_longer_needs_the_workaround() -> None:
+    """A forcing function so the pandas < 3 workaround does not outlive its cause.
+
+    `xfail_strict = true` (pyproject.toml) turns an unexpected pass into a hard
+    failure: once the installed pandas actually reaches 3.0, this assertion stops
+    failing, which flips this from a quiet, expected xfail into a build break that
+    says exactly what to remove.
+    """
+    assert Version(pd.__version__) >= Version("3.0.0")
 
 
 def test__process_text_na_dataframe__numeric_against_string_fit_categories() -> None:
