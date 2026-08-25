@@ -88,14 +88,20 @@ _PANDAS_AGREES_ON: list[tuple[Any, bool]] = [
     (True, True),
     (np.int64(7), True),
     (np.float64(1.5), True),
+    # Pandas reads `bytes`, so these are numbers ...
     (b"1", True),
+    (b"1.5", True),
+    (np.bytes_(b"1"), True),
+    (b"x", False),
+    # ... but it reads no other buffer, though the built-in `float` reads them all.
+    (bytearray(b"1"), False),
+    (memoryview(b"1"), False),
     # A cell holding a container. `pd.isna` answers element-wise for these, so the
     # missingness check has to tolerate them instead of raising.
     ([1, 2], False),
     ({"a": "b"}, False),
     ((1, 2), False),
     (np.array([1, 2]), False),
-    (b"x", False),
 ]
 
 #: Values the parity test below cannot use. The first three crash `pandas.to_numeric`

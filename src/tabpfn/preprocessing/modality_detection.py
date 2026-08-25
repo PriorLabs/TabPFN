@@ -224,9 +224,10 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
         # Not a number, so only a missing value still counts. `is_scalar` guards
         # `pd.isna`, which answers element-wise for a list or an array cell.
         return bool(pd.api.types.is_scalar(value) and pd.isna(value))
-    # Anything else `float` accepted is already a number, not a spelling of one.
+    # Anything else `float` accepted is already a number, not a spelling of one,
+    # except a buffer: `float` reads any of them, pandas only `bytes`.
     if not isinstance(value, str):
-        return True
+        return not isinstance(value, (bytearray, memoryview))
     # Non-ASCII digits and spaces, e.g. "٣" and "\xa0 5".
     if not value.isascii():
         return False
