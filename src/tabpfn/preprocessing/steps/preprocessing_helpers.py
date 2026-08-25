@@ -270,26 +270,30 @@ class EfficientColumnTransformer(ColumnTransformer):
             return None
         # fit_transform rather than a fit and then a transform: one pass over one slice
         # of the selected columns, where a second pass would hold that slice throughout
-        codes = self.named_transformers_[name].fit_transform(
+        transformed = self.named_transformers_[name].fit_transform(
             _column_subset(X, selected)
         )
         # What `_hstack` does with a sparse block whose density beat `sparse_threshold`,
         # and what a `set_output` on the transformer itself would otherwise leave here.
-        return np.asarray(codes.toarray() if sparse.issparse(codes) else codes)
+        return np.asarray(
+            transformed.toarray() if sparse.issparse(transformed) else transformed
+        )
 
     def _assemble(self, X: XType, name: str | None, selected: list[Any]) -> np.ndarray:
-        """Write the transformer's block and every other column to its final place.
+        """Write the transformed columns and all the others to their final place.
 
         The array returned is one nothing else has ever referenced, which is what lets a
         caller write into what it gets back.
         """
         destination, passthrough = self._output_positions(X, name, selected)
         # computed here rather than handed in, so it can be dropped once written
-        codes = self._transformed_block(X, name, selected)
-        dtype = self._assembled_dtype(X, codes, passthrough)
-        order = self._assembled_order(X, codes, passthrough)
+        transformed = self._transformed_block(X, name, selected)
+        dtype = self._assembled_dtype(X, transformed, passthrough)
+        order = self._assembled_order(X, transformed, passthrough)
 
-        if codes is None and (not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)):
+        if transformed is None and (
+            not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)
+        ):
             # Nothing was transformed, so the output is the whole input converted, in
             # input order -- which both layouts agree on when the selection is empty.
             # Copied because `to_numpy` can hand back a view of a block the frame
@@ -302,11 +306,11 @@ class EfficientColumnTransformer(ColumnTransformer):
             return np.array(values, dtype=dtype, order=order, copy=True)
 
         out = np.empty(X.shape, dtype=dtype, order=order)
-        if codes is not None:
-            out[:, destination] = codes
-            # `np.empty` takes memory only as it is written to, so dropping the block
-            # here keeps the peak at one full-size array rather than one plus a block
-            del codes
+        if transformed is not None:
+            out[:, destination] = transformed
+            # `np.empty` takes memory only as it is written to, so dropping this here
+            # keeps the peak at one full-size array rather than one plus a block
+            del transformed
         # Per column, so the passthrough half never needs a full-width temporary of its
         # own, and the frame's own blocks are left alone -- `to_numpy` would rearrange
         # them in place before pandas 3, and hand back a view of what it just built.
@@ -317,12 +321,12 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _output_positions(
         self, X: XType, name: str | None, selected: list[Any]
     ) -> tuple[Any, list[tuple[int, int]]]:
-        """Where the block, and the columns the transformer left, land in the output.
+        """Where the transformed columns, and all the others, land in the output.
 
         Returns:
-            destination: Where the transformer's block goes, in the order it holds its
-                columns -- a `slice` of the output, or the list of positions to scatter
-                them over. Selects nothing when nothing was selected.
+            destination: Where the transformed columns go, in the order the transformer
+                holds them -- a `slice` of the output, or the list of positions to
+                scatter them over. Selects nothing when nothing was selected.
             passthrough: One `(output position, input position)` pair for every column
                 the transformer did not take, in input order.
         """
@@ -332,35 +336,41 @@ class EfficientColumnTransformer(ColumnTransformer):
             index for column, index in positions.items() if column not in taken
         ]
         if self.preserves_column_order:
-            # every column stays where it came from, so the block is scattered back
-            # over the positions it was taken from
+            # every column stays where it came from, so the transformed ones are
+            # scattered back over the positions they were taken from
             return (
                 [positions[column] for column in selected],
                 [(index, index) for index in remainder],
             )
         # `ColumnTransformer`'s layout, read off the fit's own `output_indices_`: the
-        # block takes its slice, and the columns it did not take follow in input order
+        # transformed columns take their slice, and the rest follow in input order
         destination = slice(0, 0) if name is None else self.output_indices_[name]
         start = self.output_indices_["remainder"].start
         return destination, list(enumerate(remainder, start=start))
 
     def _assembled_dtype(
-        self, X: XType, codes: np.ndarray | None, passthrough: list[tuple[int, int]]
+        self,
+        X: XType,
+        transformed: np.ndarray | None,
+        passthrough: list[tuple[int, int]],
     ) -> np.dtype:
         """The dtype `ColumnTransformer` would have stacked its way to."""
         # a frame weighs in as float64, which `_can_assemble` has established every one
         # of its passthrough columns already is
         input_dtype = _FLOAT64 if isinstance(X, pd.DataFrame) else X.dtype
-        if codes is None:
+        if transformed is None:
             return input_dtype
         if not passthrough:
             # every column was transformed, so nothing else weighs in
-            return codes.dtype
+            return transformed.dtype
         # `np.concatenate` promotes across the blocks it stacks
-        return np.result_type(codes.dtype, input_dtype)
+        return np.result_type(transformed.dtype, input_dtype)
 
     def _assembled_order(
-        self, X: XType, codes: np.ndarray | None, passthrough: list[tuple[int, int]]
+        self,
+        X: XType,
+        transformed: np.ndarray | None,
+        passthrough: list[tuple[int, int]],
     ) -> Literal["C", "F"]:
         """The memory layout `ColumnTransformer` would have arrived at.
 
@@ -371,7 +381,7 @@ class EfficientColumnTransformer(ColumnTransformer):
             # what the reorder in `_in_input_order` leaves, for any output wider than
             # the single column where the two layouts coincide
             return "F"
-        blocks = [] if codes is None else [codes]
+        blocks = [] if transformed is None else [transformed]
         if passthrough:
             sources = [source for _, source in passthrough]
             # read off two rows rather than the full-size block this exists not to
