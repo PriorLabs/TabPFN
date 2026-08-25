@@ -68,14 +68,6 @@ def to_numpy_may_alias(X: pd.DataFrame) -> bool:
     return blocks is None or len(blocks) <= 1
 
 
-def _converts_in_one_call(X: XType) -> bool:
-    """Whether `X` can hand out every column at once for a single allocation."""
-    # a frame only when `to_numpy` hands back a block it already holds: otherwise it
-    # builds one, and before pandas 3 rearranges the frame in place to do so, which
-    # costs a second full-size buffer on top
-    return not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)
-
-
 class EfficientColumnTransformer(ColumnTransformer):
     """A `ColumnTransformer` that assembles its output into one preallocated array.
 
@@ -297,7 +289,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         dtype = self._assembled_dtype(X, codes, passthrough)
         order = self._assembled_order(X, codes, passthrough)
 
-        if codes is None and _converts_in_one_call(X):
+        if codes is None and (not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)):
             # Nothing was transformed, so the output is the whole input converted, in
             # input order -- which both layouts agree on when the selection is empty.
             # One call for all of it saves the per-column overhead of the loop below,
