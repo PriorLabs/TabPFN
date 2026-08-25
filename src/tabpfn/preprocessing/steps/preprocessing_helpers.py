@@ -147,7 +147,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         """Fit and transform, writing each column straight to its final place."""
         original_columns = _input_columns(X)
         if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
-            return self._in_input_order(
+            return self._maybe_in_input_order(
                 super().fit_transform(X, y, **params), original_columns
             )
 
@@ -158,7 +158,7 @@ class EfficientColumnTransformer(ColumnTransformer):
             # the fallback learns them again from scratch, so doing it first would be a
             # wasted pass over the data. Only the one-row fit is lost, which costs no
             # pass at all.
-            return self._in_input_order(
+            return self._maybe_in_input_order(
                 super().fit_transform(X, y, **params), original_columns
             )
 
@@ -175,7 +175,9 @@ class EfficientColumnTransformer(ColumnTransformer):
         if self._changes_no_value(X, params):
             return self._assemble(X, None, [])
         original_columns = _input_columns(X)
-        return self._in_input_order(super().transform(X, **params), original_columns)
+        return self._maybe_in_input_order(
+            super().transform(X, **params), original_columns
+        )
 
     def selected_columns(self) -> list[Any]:
         """The columns the named transformer holds, in the order it holds them.
@@ -454,13 +456,15 @@ class EfficientColumnTransformer(ColumnTransformer):
             blocks.append(np.asarray(_columns_at(_head(X, 2), sources)))
         return "F" if all(block.flags.f_contiguous for block in blocks) else "C"
 
-    def _in_input_order(self, Xt: XType, original_columns: pd.Index | range) -> XType:
+    def _maybe_in_input_order(
+        self, Xt: XType, original_columns: pd.Index | range
+    ) -> XType:
         """`Xt` with the input's column order restored, if this class preserves it."""
         if not self.preserves_column_order:
             return Xt
-        return self._preserve_order(X=Xt, original_columns=original_columns)
+        return self._in_input_order(X=Xt, original_columns=original_columns)
 
-    def _preserve_order(
+    def _in_input_order(
         self, X: XType, original_columns: list | range | pd.Index
     ) -> XType:
         check_is_fitted(self)
