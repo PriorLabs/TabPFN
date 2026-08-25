@@ -291,21 +291,25 @@ class EfficientColumnTransformer(ColumnTransformer):
         )
 
     def _can_place_columns(self, X: XType, selected: list[Any]) -> bool:
-        """Whether `X`'s columns can be written out of it one at a time.
+        """Whether `X`'s columns can be written verbatim into the output.
 
-        Always, for an array. A frame carries two conditions. Every column the
-        transformer does *not* take has to be plain float64 already, so writing it into
-        the float64 output is a copy and not a conversion that could differ from the one
-        `ColumnTransformer` would have done -- notably an `object` column, which a dtype
-        selector skips and the stacking path carries through as objects until the
-        caller's closing cast. And the column keys have to be unique, since each column
-        is placed by key.
+        Args:
+            X (XType): Input.
+            selected (list[Any]): Columns to be processed by the transformer.
+
+        Returns:
+            bool
         """
         if not isinstance(X, pd.DataFrame):
+            # arrays are always ok
             return True
         if X.columns.has_duplicates:
+            # can't assign columns by key if multiple share the same key
             return False
         taken = set(selected)
+        # columns the transformer does *not* take need to already be float64,
+        # otherwise an assignment into the output would be a conversion that could
+        # differ from the one ColumnTransformer would have done
         return all(
             dtype == _FLOAT64
             for column, dtype in zip(X.columns, X.dtypes, strict=True)
