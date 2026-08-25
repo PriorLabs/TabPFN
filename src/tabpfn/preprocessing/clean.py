@@ -310,9 +310,10 @@ def to_numeric_or_nan(s: pd.Series) -> pd.Series:
     # https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0.
     if PANDAS_BELOW_3 and _may_hold_a_string(s):
         return _to_numeric_or_nan_below_pandas_3(s)
+    coerced = pd.to_numeric(s, errors="coerce")
     # `pd.to_numeric` narrows to int64 when nothing needs NaN; forced to float64 so
     # this always matches the workaround above, regardless of installed pandas.
-    return pd.to_numeric(s, errors="coerce").astype("float64", **_ASTYPE_NO_COPY_KWARGS)
+    return coerced.astype("float64", **_ASTYPE_NO_COPY_KWARGS)
 
 
 def _may_hold_a_string(s: pd.Series) -> bool:
