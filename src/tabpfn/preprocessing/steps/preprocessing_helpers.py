@@ -475,16 +475,19 @@ class EfficientColumnTransformer(ColumnTransformer):
                 and len(col_subset) < X.shape[-1]
                 and name != "remainder"
             ):
-                col_subset_list = list(col_subset)
-                col_subset_set = set(col_subset)
-                # Map original columns to indices in the transformed array
-                transformed_columns = col_subset_list + [
-                    c for c in original_columns if c not in col_subset_set
-                ]
-                transformed_col2idx = {
-                    c: idx for idx, c in enumerate(transformed_columns)
-                }
-                indices = [transformed_col2idx[c] for c in original_columns]
+                # Where each input column landed: the transformer's block first, in the
+                # order it selected, then the columns it left, in input order. So one
+                # lookup over the selection answers it -- what the selection does not
+                # hold follows in the order it is read here, which is the order those
+                # columns were handed through in.
+                rank = {column: index for index, column in enumerate(col_subset)}
+                next_index = len(col_subset)
+                indices = []
+                for column in original_columns:
+                    index = rank.get(column)
+                    if index is None:
+                        index, next_index = next_index, next_index + 1
+                    indices.append(index)
                 # restore the column order from before the transfomer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
         return X
