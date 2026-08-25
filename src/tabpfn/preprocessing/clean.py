@@ -39,12 +39,10 @@ FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
-PANDAS_FASTER_THAN_MIXED_PATH = Version(pd.__version__) < Version("3.0.0")
+PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
-_ASTYPE_KEEPS_UNCAST_COLUMNS = (
-    {"copy": False} if Version(pd.__version__) < Version("3.0.0") else {}
-)
+_ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
 
 _FLOAT64 = np.dtype(np.float64)
 
@@ -457,10 +455,7 @@ def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return _inf_masks_mixed(X)
 
 
-if PANDAS_FASTER_THAN_MIXED_PATH:
-    inf_masks_dataframe = _inf_masks_pandas_only
-else:
-    inf_masks_dataframe = _inf_masks_dataframe
+inf_masks_dataframe = _inf_masks_pandas_only if PANDAS_BELOW_3 else _inf_masks_dataframe
 
 
 def _encoding_is_identity(

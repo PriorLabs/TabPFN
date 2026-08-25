@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.clean import PANDAS_FASTER_THAN_MIXED_PATH
+from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -206,50 +206,35 @@ def _detect_feature_modality(
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if pd.api.types.is_numeric_dtype(s.dtype):
         return True
-    if PANDAS_FASTER_THAN_MIXED_PATH:  # i.e. pandas < 3.0
-        # `pd.to_numeric`'s scientific-notation parser overflows a signed 32-bit int
-        # there and segfaults on a string whose exponent lands in [2**31, 2**32),
-        # e.g. "8e2569614270" (pandas#63650, fixed in 3.0). A segfault cannot be
-        # caught, so the column is read one value at a time instead. Delete this
-        # branch and `_is_numeric_or_missing` once the pandas floor reaches 3.0.
-        return all(_is_numeric_or_missing(value) for value in s)
+    if PANDAS_BELOW_3:
+        return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
     coerced = pd.to_numeric(s, errors="coerce")
     is_numeric_or_missing = coerced.notna() | s.isna()
     return bool(is_numeric_or_missing.all())
 
 
-def _is_numeric_or_missing(value: object) -> bool:
-    """Whether one cell is missing, or reads as a number, without using pandas.
-
-    Reproduces what `pd.to_numeric(..., errors="coerce")` answers on the pandas
-    versions this runs on, for one value at a time. The built-in `float` is close
-    enough to pandas' parser to do the reading, but accepts three spellings it does
-    not, so those are rejected up front.
-
-    Args:
-        value: A single cell of a column that is not already a numeric dtype.
-
-    Returns:
-        True if the value is missing, or reads as a number.
-    """
-    if pd.api.types.is_scalar(value) and pd.isna(value):
-        return True
+def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
+    # Below pandas 3.0, `pd.to_numeric` segfaults on a string whose scientific-notation
+    # exponent lands in [2**31, 2**32), e.g. "8e2569614270" (pandas#63650). A segfault
+    # cannot be caught, so such a value must never reach it. Not vectorized, but not
+    # slower for this: `pd.to_numeric` also walks an object column value by value, and
+    # builds a result array we would throw away. Delete once the pandas floor is 3.0.
     try:
         parsed = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return False
+        # `is_scalar` first: `pd.isna` answers element-wise for a list or array cell.
+        return bool(pd.api.types.is_scalar(value) and pd.isna(value))
     if not isinstance(value, str):
         return True
-    text = value.strip().lower()
-    return (
-        # Tested before stripping, which itself removes non-ASCII whitespace.
-        value.isascii()  # non-ASCII digits and spaces, e.g. "٣" and "\xa0 5"
-        and "_" not in text  # PEP 515 digit separators, e.g. "1_000"
-        and text.lstrip("+-") != "nan"  # the literal "nan"
-        # A finite literal too large for a float64, e.g. "1e400". Pandas 3 reads it
-        # as infinite, but the parser this stands in for overflows to NaN instead.
-        and not (math.isinf(parsed) and "inf" not in text)
-    )
+    # Four spellings `float` accepts and pandas' parser does not.
+    if not value.isascii():
+        return False  # non-ASCII digits and spaces, e.g. "٣", "\xa0 5"
+    if "_" in value:
+        return False  # PEP 515 digit separators, e.g. "1_000"
+    if math.isnan(parsed):
+        return False  # the literal "nan"
+    # "1e400": finite, but too large for a float64. Only a literal infinity counts.
+    return not (math.isinf(parsed) and "inf" not in value.lower())
 
 
 def _detect_numeric_as_categorical(

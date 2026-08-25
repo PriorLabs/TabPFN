@@ -22,7 +22,7 @@ from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
-    _is_numeric_or_missing,
+    _is_numeric_or_missing_for_old_pandas,
     _warn_if_text_features,
     detect_feature_modalities,
 )
@@ -247,7 +247,7 @@ def test__numerical_but_stored_as_string():
         ([1, 2], False),
     ],
 )
-def test__is_numeric_or_missing__matches_pandas_parser(
+def test__is_numeric_or_missing_for_old_pandas__matches_pandas_parser(
     value: object, is_numeric: bool
 ) -> None:
     """Reading values one at a time must agree with `pandas.to_numeric`.
@@ -256,7 +256,7 @@ def test__is_numeric_or_missing__matches_pandas_parser(
     pandas 3.0, so it has to accept exactly the same spellings pandas would; the
     built-in `float` is close but not identical, and these pin the difference.
     """
-    assert _is_numeric_or_missing(value) is is_numeric
+    assert _is_numeric_or_missing_for_old_pandas(value) is is_numeric
 
 
 def test__categorical_series():
