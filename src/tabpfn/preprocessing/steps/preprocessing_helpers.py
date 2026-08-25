@@ -476,11 +476,15 @@ class EfficientColumnTransformer(ColumnTransformer):
                 and name != "remainder"
             ):
                 col_subset_list = list(col_subset)
+                col_subset_set = set(col_subset)
                 # Map original columns to indices in the transformed array
                 transformed_columns = col_subset_list + [
-                    c for c in original_columns if c not in col_subset_list
+                    c for c in original_columns if c not in col_subset_set
                 ]
-                indices = [transformed_columns.index(c) for c in original_columns]
+                transformed_col2idx = {
+                    c: idx for idx, c in enumerate(transformed_columns)
+                }
+                indices = [transformed_col2idx[c] for c in original_columns]
                 # restore the column order from before the transfomer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
         return X
