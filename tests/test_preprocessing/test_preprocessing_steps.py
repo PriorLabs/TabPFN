@@ -504,6 +504,34 @@ def test__order_preserving_column_transformer__already_in_input_order(
     assert out is stacked[-1]
 
 
+def test__order_preserving_column_transformer__skipped_gather_keeps_layout() -> None:
+    """Skipping a gather that changes no position must not change the layout either.
+
+    `_assembled_order` treats the contiguity of what leaves here as load-bearing -- the
+    SVD downstream settles on a different basis per layout -- and the gather leaves a
+    Fortran-contiguous array whatever it was handed. So must skipping it.
+    """
+    rows = 64
+    # The encoded columns lead, so `ColumnTransformer`'s own order is already the
+    # input's and there is nothing for the gather to move. The object column is what
+    # keeps this off the assembly path *and* what makes the stack row-major, so the two
+    # layouts differ here where they would otherwise coincide.
+    X = pd.DataFrame(
+        {
+            "a": pd.Series(["x", "y"] * (rows // 2), dtype="string"),
+            "b": pd.Series(["p", "q"] * (rows // 2), dtype="string"),
+            "c": np.arange(rows, dtype=object),
+            "d": np.arange(rows, dtype=float),
+        }
+    )
+    transformer = get_ordinal_encoder()
+
+    out = transformer.fit_transform(X)
+
+    assert out.flags.f_contiguous
+    np.testing.assert_array_equal(out, transformer.transform(X))
+
+
 def test__pipeline__num_added_features():
     """Test that the pipeline returns the correct number of added features."""
     pipeline = PreprocessingPipeline(

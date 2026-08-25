@@ -412,8 +412,13 @@ class EfficientColumnTransformer(ColumnTransformer):
                 # column wasn't input to the transformer
                 index, next_index = next_index, next_index + 1
             indices.append(index)
-        # nothing moved, and the gather below is a full-size copy
-        if all(index == position for position, index in enumerate(indices)):
+        # Nothing moved, and the gather below is a full-size copy -- but only skipped
+        # where it would also leave the layout alone, since it hands back a
+        # Fortran-contiguous array whatever it was given and `_assembled_order` says
+        # what reads that. A frame has no such layout to keep.
+        if all(index == position for position, index in enumerate(indices)) and (
+            not isinstance(X, np.ndarray) or X.flags.f_contiguous
+        ):
             return X
         # restore the column order from before the transformer has been applied
         return X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
