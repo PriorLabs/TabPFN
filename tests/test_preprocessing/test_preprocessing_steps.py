@@ -364,6 +364,48 @@ def test__order_preserving_column_transformer():
     np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
 
 
+@pytest.mark.parametrize("columns", [slice(0, 2), "b", 1, ("a", "b")])
+def test__order_preserving_column_transformer__selection_not_a_list_of_keys(
+    columns: object,
+) -> None:
+    """A selection that cannot be placed one column at a time is refused up front."""
+    with pytest.raises(AssertionError, match="only supports selecting columns by a"):
+        OrderPreservingColumnTransformer(
+            transformers=[("encoder", OrdinalEncoder(), columns)]
+        )
+
+
+def test__order_preserving_column_transformer__callable_selects_a_slice() -> None:
+    """What the constructor cannot see, the reorder says outright rather than crash."""
+    X = pd.DataFrame({"a": ["x", "y"], "b": [1, 2]})
+    transformer = OrderPreservingColumnTransformer(
+        transformers=[("encoder", OrdinalEncoder(), lambda _: slice(0, 1))],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+
+    with pytest.raises(TypeError, match="other than a list of keys"):
+        transformer.fit_transform(X)
+
+
+def test__order_preserving_column_transformer__permuted_full_selection() -> None:
+    """Every column selected, in another order, is still restored to the input's."""
+    X = pd.DataFrame({"a": ["x", "y", "z"], "b": ["q", "p", "r"], "c": ["v", "v", "u"]})
+    transformer = OrderPreservingColumnTransformer(
+        # The whole input, in an order of its own: `ColumnTransformer` returns one block
+        # holding every column, so the gather that undoes it covers all of them.
+        transformers=[("encoder", OrdinalEncoder(), ["c", "a", "b"])],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+    encoded = [[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [2.0, 2.0, 0.0]]
+
+    np.testing.assert_array_equal(transformer.fit_transform(X), encoded)
+    # `transform` leaves the values to sklearn, so it reaches the reorder by its own
+    # route -- the assembly above never builds the shuffled order to begin with.
+    np.testing.assert_array_equal(transformer.transform(X), encoded)
+
+
 def test__order_preserving_column_transformer__already_in_input_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

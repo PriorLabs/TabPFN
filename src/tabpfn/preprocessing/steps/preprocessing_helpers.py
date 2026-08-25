@@ -467,31 +467,36 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _in_input_order(
         self, X: XType, original_columns: list | range | pd.Index
     ) -> XType:
+        """`X` with the columns back where the input had them.
+
+        Every column is somewhere in `ColumnTransformer`'s two blocks: at its rank in
+        the selection, or, unselected, at the next place after that block.
+        """
         check_is_fitted(self)
         assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
-        for name, _, col_subset in reversed(self.transformers_):
-            if (
-                len(col_subset) > 0
-                and len(col_subset) < X.shape[-1]
-                and name != "remainder"
-            ):
-                # where each processed  column landed in X
-                rank = {column: index for index, column in enumerate(col_subset)}
-                # next free index to use for untransformed columns
-                next_index = len(col_subset)
-                # indices[i] is the column index in X corresponding to input column i
-                indices = []
-                for column in original_columns:
-                    index = rank.get(column)
-                    if index is None:
-                        # column wasn't input to the transformer
-                        index, next_index = next_index, next_index + 1
-                    indices.append(index)
-                if all(index == position for position, index in enumerate(indices)):
-                    continue
-                # restore the column order from before the transformer has been applied
-                X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
-        return X
+        name, selected = self._named_selection()
+        if selected is None:
+            raise TypeError(
+                f"The {name!r} transformer selects its columns by something other than "
+                "a list of keys, which cannot be placed back in the input's order."
+            )
+        # where each processed column landed in X
+        rank = {column: index for index, column in enumerate(selected)}
+        # next free index to use for untransformed columns
+        next_index = len(selected)
+        # indices[i] is the column index in X corresponding to input column i
+        indices = []
+        for column in original_columns:
+            index = rank.get(column)
+            if index is None:
+                # column wasn't input to the transformer
+                index, next_index = next_index, next_index + 1
+            indices.append(index)
+        # nothing moved, and the gather below is a full-size copy
+        if all(index == position for position, index in enumerate(indices)):
+            return X
+        # restore the column order from before the transformer has been applied
+        return X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
 
 
 class OrderPreservingColumnTransformer(EfficientColumnTransformer):
@@ -505,11 +510,7 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
             tuple[
                 str,
                 BaseEstimator,
-                str
-                | int
-                | slice
-                | Iterable[str | int]
-                | Callable[[Any], Iterable[str | int]],
+                Iterable[str | int] | Callable[[Any], Iterable[str | int]],
             ]
         ],
         **kwargs: Any,
@@ -537,6 +538,17 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
 
         assert len([t for name, _, t in transformers if name != "remainder"]) <= 1, (
             "OrderPreservingColumnTransformer only supports up to one transformer."
+        )
+
+        # Restoring the input order places one column at a time, by key
+        assert all(
+            callable(columns) or isinstance(columns, (list, np.ndarray, pd.Index))
+            for name, _, columns in transformers
+            if name != "remainder"
+        ), (
+            "OrderPreservingColumnTransformer only supports selecting columns by a "
+            "list of keys, or a callable returning one -- not by a slice or a single "
+            "label."
         )
 
 
