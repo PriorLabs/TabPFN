@@ -283,6 +283,39 @@ def release_free_memory() -> None:
         return
 
 
+def pin_allocator_thresholds() -> bool:
+    """Stop glibc deciding per run which allocations come back to the OS.
+
+    Its mmap threshold is not a constant: freeing an mmapped chunk raises it to that
+    chunk's size, up to 32 MB, after which same-sized allocations are served from the
+    heap instead -- and the heap only shrinks from the top, so they stay resident. The
+    ordinal encoder allocates one such buffer per column, so whether the threshold was
+    raised before it ran decides ~0.5 GB of the peak.
+
+    Which is not decided by the code under test. On `lowest`/`half-string` the cell came
+    out as two clean states, 2.81 GB and 3.27 GB, and a gate comparing one against the
+    other reported ±16%; the branch that drew the raised threshold more often was the
+    one being measured, so the gate failed on an allocation order rather than on any
+    memory it held. Pinned, six runs across both sides of that comparison all measured
+    2.803 GB.
+
+    Returns whether it took, which the environment block records: a run without it is
+    not comparable to one with it.
+    """
+    # -3 is `M_MMAP_THRESHOLD`, and setting it is also what tells glibc to stop
+    # adjusting it. 128 KB is its own documented default, so this pins rather than
+    # retunes.
+    try:
+        return ctypes.CDLL("libc.so.6").mallopt(-3, 128 * 1024) == 1
+    except (OSError, AttributeError):
+        return False
+
+
+# At import, which is before either harness has built anything: the threshold has to be
+# pinned before the first large free moves it, and both scripts come through here.
+_ALLOCATOR_PINNED = pin_allocator_thresholds()
+
+
 class RssSampler:
     """Background thread recording (time, RSS) so peaks between calls are caught.
 
@@ -1569,6 +1602,7 @@ def describe_environment() -> dict[str, Any]:
         "torch_version": torch.__version__,
         "torch_num_threads": torch.get_num_threads(),
         "host_memory_available_gb": round(meminfo_gb("MemAvailable"), 1),
+        "allocator_pinned": _ALLOCATOR_PINNED,
         # Which tabpfn actually got imported. Deliberately outside the drift check
         # below -- under `--reference` the two sides *must* differ here -- but
         # recorded so `verify_packages_differed` can prove they did.
@@ -1586,6 +1620,7 @@ def environment_drift(recorded: dict[str, Any]) -> list[str]:
         "pandas_version",
         "torch_version",
         "torch_num_threads",
+        "allocator_pinned",
     )
     return [
         f"{field}: {recorded.get(field)!r} when recorded, {current[field]!r} now"
