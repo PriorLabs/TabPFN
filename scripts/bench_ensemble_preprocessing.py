@@ -132,6 +132,7 @@ from bench_clean_data import (
     generate_input,
     prepare_reference_worktree,
     regression,
+    release_free_memory,
     resolve_reference,
     resolve_shape,
     run_child,
@@ -476,6 +477,7 @@ def measure_memory(
     same peak without growing RSS at all -- which would read as a phantom improvement.
     """
     gc.collect()
+    release_free_memory()
     reset_device_activity()
     sampler = RssSampler(interval_s)
     rss_in = current_rss_bytes()

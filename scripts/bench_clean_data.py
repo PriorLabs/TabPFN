@@ -91,6 +91,7 @@ The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair eithe
 from __future__ import annotations
 
 import argparse
+import ctypes
 import dataclasses
 import gc
 import hashlib
@@ -260,6 +261,26 @@ def _pick_rss_reader() -> Callable[[], int]:
 
 
 current_rss_bytes = _pick_rss_reader()
+
+
+def release_free_memory() -> None:
+    """Hand the allocator's free arenas back to the OS, so RSS reads as what is live.
+
+    `gc.collect()` frees the objects; whether glibc then returns their pages is its own
+    decision, and not a repeatable one. Measured on the `half-string` cell, one process
+    in six entered the call ~0.6 GB above the others and so recorded a transient 5%
+    lower -- landing on whichever side of a comparison happened to draw it, which reads
+    as a 5% regression or improvement that no code change produced. Trimming first makes
+    the entry reading the live floor in every process: the same six runs then agreed to
+    0.05%.
+
+    A no-op wherever `malloc_trim` is not there to call, which costs only the noise it
+    would have removed.
+    """
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except (OSError, AttributeError):
+        return
 
 
 class RssSampler:
@@ -498,6 +519,7 @@ def measure_memory(
     phantom improvement.
     """
     gc.collect()
+    release_free_memory()
     sampler = RssSampler(interval_s)
     rss_in = current_rss_bytes()
     sampler.start()
