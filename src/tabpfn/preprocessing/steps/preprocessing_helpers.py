@@ -475,24 +475,18 @@ class EfficientColumnTransformer(ColumnTransformer):
                 and len(col_subset) < X.shape[-1]
                 and name != "remainder"
             ):
-                # Where each input column landed: the transformer's block first, in the
-                # order it selected, then the columns it left, in input order. So one
-                # lookup over the selection answers it -- what the selection does not
-                # hold follows in the order it is read here, which is the order those
-                # columns were handed through in.
+                # where each processed  column landed in X
                 rank = {column: index for index, column in enumerate(col_subset)}
+                # next free index to use for untransformed columns
                 next_index = len(col_subset)
+                # indices[i] is the column index in X corresponding to input column i
                 indices = []
                 for column in original_columns:
                     index = rank.get(column)
                     if index is None:
+                        # column wasn't input to the transformer
                         index, next_index = next_index, next_index + 1
                     indices.append(index)
-                # The gather below is a full-size copy, and the one order it need not
-                # restore is the one already there: a stack whose transformed block
-                # holds the columns it came from is handed back as `ColumnTransformer`
-                # built it. Still an array of this call's own -- `_hstack` concatenates
-                # the blocks it stacks -- so a caller may write into it either way.
                 if all(index == position for position, index in enumerate(indices)):
                     continue
                 # restore the column order from before the transfomer has been applied
