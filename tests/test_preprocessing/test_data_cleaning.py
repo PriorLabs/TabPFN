@@ -76,14 +76,16 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
+        X, y, feature_names, n_features, original_y_name, _ = (
+            ensure_compatible_fit_inputs(
+                X,
+                y,
+                estimator=classifier,
+                max_num_samples=10_000,
+                max_num_features=500,
+                ignore_pretraining_limits=False,
+                devices=cpu_devices,
+            )
         )
 
         assert X.shape == (3, 2)
@@ -99,7 +101,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
         y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
+        _, _, feature_names, _, _, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -118,7 +120,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
+        _, _, _, _, original_y_name, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -595,8 +597,14 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     categories and raise a ``TypeError`` (``'<' not supported between 'float' and
     'str'`` / ``ufunc 'isnan' not supported``).
 
-    The fit/predict dtype drift now coerces the column to string and warns, treating its
-    values as unseen categories instead of crashing.
+    With `USE_TEXT` on and more distinct values than `MIN_CARDINALITY_FOR_TEXT`,
+    input type conversion encodes the column as text and the ordinal encoder never
+    sees it. The predict-time floats are stringified and scored against the
+    vocabulary fitted on train, which shares nothing with them, so nothing reaches
+    the fit/predict drift check as a mismatch and no warning is raised. With
+    `USE_TEXT` off (the default), the column instead reaches the ordinal encoder,
+    which is `test__process_text_na_dataframe__numeric_against_string_fit_categories`
+    below.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -617,13 +625,20 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
         }
     )
 
-    clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
+    clf = TabPFNClassifier(
+        device="cpu",
+        n_estimators=1,
+        random_state=0,
+        inference_config={"USE_TEXT": True},
+    )
     clf.fit(X_fit, y)
 
-    with pytest.warns(UserWarning, match="differs.*from fit time"):
-        proba = clf.predict_proba(X_pred)
+    proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
+    # The column was encoded as text, so it reaches the model as numeric features
+    # rather than as a category the frozen encoder has to recognise.
+    assert "code" not in clf.input_converter_.transform(X_pred).columns
 
 
 def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
@@ -633,6 +648,9 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
     ``fix_dtypes`` wraps them into an integer-column DataFrame, so the frozen encoder's
     columns are integer positions and match a numpy-array predict input. This guards
     against a ``KeyError`` when aligning predict-time dtypes against the fit categories.
+
+    The array is given the fit-time column names before conversion, so it survives the
+    text column having been expanded into several features.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -655,8 +673,7 @@ def test__classifier_predict__numpy_array_against_string_fit_categories() -> Non
     clf = TabPFNClassifier(device="cpu", n_estimators=1, random_state=0)
     clf.fit(X_fit, y)
 
-    with pytest.warns(UserWarning, match="differs.*from fit time"):
-        proba = clf.predict_proba(X_pred)
+    proba = clf.predict_proba(X_pred)
     assert proba.shape == (n, 2)
     assert np.isfinite(proba).all()
 
