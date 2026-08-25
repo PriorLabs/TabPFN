@@ -292,10 +292,8 @@ class EfficientColumnTransformer(ColumnTransformer):
         if codes is None and (not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)):
             # Nothing was transformed, so the output is the whole input converted, in
             # input order -- which both layouts agree on when the selection is empty.
-            # One call for all of it saves the per-column overhead of the loop below,
-            # which grows with the column count: nothing at 300 columns, 12% of the wall
-            # time at 2,000 and 26% at 5,000. Copied because `to_numpy` can hand back a
-            # view of a block the frame itself still holds.
+            # Copied because `to_numpy` can hand back a view of a block the frame
+            # itself still holds.
             values = (
                 X.to_numpy(dtype=dtype, copy=False)
                 if isinstance(X, pd.DataFrame)
