@@ -489,7 +489,7 @@ class EfficientColumnTransformer(ColumnTransformer):
                     indices.append(index)
                 if all(index == position for position, index in enumerate(indices)):
                     continue
-                # restore the column order from before the transfomer has been applied
+                # restore the column order from before the transformer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
         return X
 
