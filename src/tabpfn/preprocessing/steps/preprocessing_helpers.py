@@ -59,84 +59,62 @@ def _column_values(X: XType, position: int) -> np.ndarray:
 def to_numpy_may_alias(X: pd.DataFrame) -> bool:
     """Whether `X.to_numpy()` can hand back a view of the frame's own buffer.
 
-    A single-block frame is handed out as that block: read-only under copy-on-write,
-    writeable and aliasing whatever the frame was built from without it (pandas < 3),
-    which for a numeric ndarray input is the caller's own array. Anything wider has to
-    be materialised into a new array first, so what comes back is private.
-
-    Defensively `True` when the block internals are unavailable, so an unrecognised
-    layout is copied rather than handed out.
+    `True` when the frame's layout cannot be read, so that an unknown one is copied.
     """
+    # a single-block frame is handed out as that block -- writeable and pointing at
+    # whatever the frame was built from before pandas 3, which for a numeric array
+    # input is the caller's own. Anything wider is built fresh, so it is private.
     blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
     return blocks is None or len(blocks) <= 1
 
 
 def _converts_in_one_call(X: XType) -> bool:
-    """Whether `X` can hand out every column at once more cheaply than one at a time.
-
-    An array can, trivially. A frame only when `to_numpy` would hand back a block it
-    already holds, so that copying it is the single allocation -- not when it would
-    have to materialise one, and above all not when it would consolidate the frame in
-    place to do so, which is what pandas before 3 does and what costs a second
-    full-size buffer on top.
-    """
+    """Whether `X` can hand out every column at once for a single allocation."""
+    # a frame only when `to_numpy` hands back a block it already holds: otherwise it
+    # builds one, and before pandas 3 rearranges the frame in place to do so, which
+    # costs a second full-size buffer on top
     return not isinstance(X, pd.DataFrame) or to_numpy_may_alias(X)
 
 
 class EfficientColumnTransformer(ColumnTransformer):
     """A `ColumnTransformer` that assembles its output into one preallocated array.
 
-    `ColumnTransformer` reaches its result through three full-size arrays: one per
-    transformer, a second from stacking them, and (when preserving column order)
-    a third from the gather that reorders. A wide input reaches its RAM peak twice
-    inside that, once in the stack and once in the gather, which is why removing either
-    one alone changes nothing. This class writes every column straight to its final
-    place instead, so only the output and the named transformer's own block are ever
-    held at once.
+    Saves the two extra full-size arrays its parent reaches a result through -- the
+    stack and, when preserving column order, the reorder -- by writing every column
+    straight to its final place. `fit` goes further and builds no output at all.
 
-    That is only possible for the narrow shape this codebase needs: at most one named
-    transformer, one-to-one, over a subset of the columns, plus a remainder that hands
-    the rest through untouched. Anything else -- a transformer that expands its columns
-    or is fed a `y`, a sparse result, a `set_output` asking for a frame, a frame whose
-    passthrough columns are not already float64 -- falls back to `ColumnTransformer`,
-    so this stays a drop-in replacement for it.
+    Only the narrow shape this codebase needs can be assembled: at most one named
+    transformer, one-to-one, over a subset of the columns, plus
+    a remainder that hands the rest through untouched. Anything else falls back to
+    `ColumnTransformer`, so this stays a drop-in replacement for it.
 
-    `fit` goes one further and builds no output at all, where `ColumnTransformer.fit`
-    -- implemented as `fit_transform` -- pays for a full-size result and discards it.
-
-    `transform` stays on sklearn, which validates the input against the one seen at fit
-    -- column count, names, order -- where the assembly makes no such check. The one
-    exception is the input for which those checks are settled in advance and the fitted
-    transformer provably changes nothing: there the step is a cast, and the cast is
-    assembled.
+    `transform` is left to `ColumnTransformer` for its checks against the input seen at
+    fit, except where those are settled in advance and there is provably nothing to do.
     """
 
     # Whether the output keeps the input's column order rather than
-    # `ColumnTransformer`'s `[transformed, remainder]` one. A class attribute
-    # rather than a constructor parameter, so sklearn's parameter introspection --
-    # and with it `clone` and `get_params` -- stays exactly its parent's.
+    # `ColumnTransformer`'s `[transformed, remainder]` one. A class attribute rather
+    # than a constructor parameter, so sklearn's `clone` and `get_params` stay exactly
+    # its parent's.
     preserves_column_order: ClassVar[bool] = False
 
     @override
     def fit(self, X: XType, y: YType = None, **params: Any) -> Self:
         """Fit without building the transformed array `ColumnTransformer.fit` builds.
 
-        All the fitted state consists of is the column bookkeeping and the named
-        transformer. The bookkeeping comes from one row -- widths and output positions
-        do not depend on the row count for a one-to-one transformer -- and the
-        transformer then learns from every row, in one pass, with no full-size result
-        stacked or discarded on the way.
-
-        Decided on the same conditions as the assembly, so that the state left here is
-        either sklearn's own or one those conditions vouch for.
+        Decided on the same conditions as the assembly, so the state left here is either
+        sklearn's own or one those conditions vouch for.
         """
         if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
             return super().fit(X, y, **params)
+        # widths and output positions do not depend on the row count here, so one row
+        # settles all of the bookkeeping
         probe = self._fit_column_bookkeeping(X)
         name, selected = self._named_selection()
         if not self._can_assemble(X, probe, selected):
             return super().fit(X, y, **params)
         if selected:
+            # the values are all that is left to learn, in one pass, nothing stacked
             self.named_transformers_[name].fit(_column_subset(X, selected))
         return self
 
@@ -153,9 +131,8 @@ class EfficientColumnTransformer(ColumnTransformer):
         name, selected = self._named_selection()
         if not self._can_assemble(X, probe, selected):
             # Bail before the named transformer has learned anything from the values:
-            # the fallback learns them again from scratch, so doing it first would be a
-            # wasted pass over the data. Only the one-row fit is lost, which costs no
-            # pass at all.
+            # the fallback learns them again anyway, so a pass over the data here would
+            # be wasted. Only the one-row fit is lost, which costs no pass at all.
             return self._maybe_in_input_order(
                 super().fit_transform(X, y, **params), original_columns
             )
@@ -167,8 +144,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         """Left to `ColumnTransformer`, unless it provably cannot change a value.
 
         Its checks against the input seen at fit -- width, names, order -- are why it is
-        left there at all: the assembly makes none of them. So the one case taken here
-        is the one where they are settled in advance, by `_changes_no_value`.
+        left there at all: the assembly makes none of them.
         """
         if self._changes_no_value(X, params):
             return self._assemble(X, None, [])
@@ -180,53 +156,38 @@ class EfficientColumnTransformer(ColumnTransformer):
     def selected_columns(self) -> list[Any]:
         """The columns the named transformer holds, in the order it holds them.
 
-        Empty when it selected nothing, when only a remainder is configured, or when
-        the selection is not a list of column keys at all.
+        Empty when it holds none, when only a remainder is configured, or when the
+        selection is not a list of column keys at all.
         """
         _, selected = self._named_selection()
         return selected or []
 
     def _may_assemble(self, X: XType, params: dict[str, Any]) -> bool:
-        """Whether an output of this shape could be written into one array at all.
-
-        Routed metadata is declined outright: nothing with the shape assembled here has
-        any use for it. So is an input that is neither an array nor a frame -- a sparse
-        one would be densified by the array written into here, which is not what
-        `ColumnTransformer` hands back -- and a `set_output` asking for a frame, which
-        this returns none of.
-        """
+        """Whether an output of this shape could be written into one array at all."""
+        # Routed metadata is declined outright: nothing assembled here has any use for
+        # it. So is an input that is neither an array nor a frame -- a sparse one would
+        # come back dense, which is not what `ColumnTransformer` hands back.
         if params or not isinstance(X, (np.ndarray, pd.DataFrame)):
             return False
         output_config = getattr(self, "_sklearn_output_config", {}).get(
             "transform", get_config()["transform_output"]
         )
+        # a `set_output` asking for a frame gets none from here
         return is_identity_transformer(self.remainder) and output_config == "default"
 
     @property
     def _is_one_to_one(self) -> bool:
-        """Whether at most one transformer is configured, and it maps column to column.
-
-        Read off the specification rather than a fitted state, so that a transformer
-        this rejects never sees the one-row fit below -- which for one that cannot be
-        fitted on a single row, a quantile transform say, is the difference between a
-        fallback and a crash.
-        """
+        """Whether at most one transformer is configured, and it is one-to-one."""
+        # read off the specification rather than a fitted state, so a transformer this
+        # rejects never sees the one-row fit below -- which for one that needs many
+        # rows, a quantile transform say, would crash instead of falling back
         named = [t for name, t, _ in self.transformers if name != "remainder"]
         return len(named) <= 1 and all(
             isinstance(transformer, OneToOneFeatureMixin) for transformer in named
         )
 
     def _changes_no_value(self, X: XType, params: dict[str, Any]) -> bool:
-        """Whether transforming `X` provably leaves every value where it was.
-
-        Three things have to hold. The fitted transformer must have selected nothing, so
-        the step is its passthrough remainder and there is no code to compute. `X` must
-        be one the columns can be written out of. And it must line up with the input
-        seen at fit -- same width, same names in the same order -- because sklearn lines
-        a reordered frame back up with the fit-time order where the assembly would keep
-        the input's own, and because skipping `transform` skips the checks that would
-        have caught a frame not lining up at all.
-        """
+        """Whether transforming `X` provably leaves every value where it was."""
         if not hasattr(self, "transformers_"):
             # Unfitted. `transform` is the one that should say so.
             return False
@@ -241,6 +202,9 @@ class EfficientColumnTransformer(ColumnTransformer):
             or not self._can_place_columns(X, [])
         ):
             return False
+        # The names too, in order: sklearn lines a reordered frame back up with the
+        # fit-time order where the assembly would keep the input's own, and skipping
+        # `transform` skips the check that would reject a frame not lining up at all.
         names = getattr(self, "feature_names_in_", None)
         return (
             names is None
@@ -250,20 +214,18 @@ class EfficientColumnTransformer(ColumnTransformer):
         )
 
     def _fit_column_bookkeeping(self, X: XType) -> XType:
-        """Fit everything but the values, and return the one-row result that took.
-
-        `ColumnTransformer.fit` is implemented as `fit_transform`, so fitting on the
-        whole input would run the very transform this class replaces. Taken up the chain
-        rather than through `self.fit`, which would land back in the override above.
-        """
+        """Fit everything but the values, and return the one-row result that took."""
+        # Up the chain, not through `self.fit`: `ColumnTransformer.fit` is implemented
+        # as `fit_transform`, so fitting on the whole input would run the very transform
+        # this class replaces, and `self.fit` would land back in the override above.
         return super().fit_transform(_head(X, 1), None)
 
     def _named_selection(self) -> tuple[str | None, list[Any] | None]:
         """The named transformer's name and the columns it holds, in its own order.
 
         `None` for the columns when the selection is not a list of keys -- a `slice`
-        or a bare label -- which cannot be placed one column at a time. Both entries are
-        empty when only a remainder is configured.
+        or a bare label -- which cannot be placed one column at a time. Both entries
+        are empty when only a remainder is configured.
         """
         for name, _, columns in self.transformers_:
             if name == "remainder":
@@ -275,30 +237,19 @@ class EfficientColumnTransformer(ColumnTransformer):
         return None, []
 
     def _can_assemble(self, X: XType, probe: XType, selected: list[Any] | None) -> bool:
-        """Whether the layout just fitted is one that can be written column by column.
-
-        The one-row `probe` is the fit's own answer on the output's width, so
-        one-to-oneness is checked rather than taken on the mixin's word: every input
-        column has to reach exactly one output column, or the array the assembly
-        allocates is the wrong shape and the bookkeeping around it is wrong too.
-        """
+        """Whether the layout just fitted can be written out column by column."""
         return (
             selected is not None
             and not self.sparse_output_
+            # the one-row `probe` is the fit's own answer on the output's width: every
+            # input column has to reach exactly one output column, or the array
+            # allocated below is the wrong shape and the bookkeeping around it wrong too
             and probe.shape[1] == X.shape[1]
             and self._can_place_columns(X, selected)
         )
 
     def _can_place_columns(self, X: XType, selected: list[Any]) -> bool:
-        """Whether `X`'s columns can be written verbatim into the output.
-
-        Args:
-            X (XType): Input.
-            selected (list[Any]): Columns to be processed by the transformer.
-
-        Returns:
-            bool
-        """
+        """Whether `X`'s columns can be written verbatim into the output."""
         if not isinstance(X, pd.DataFrame):
             # arrays are always ok
             return True
@@ -322,13 +273,11 @@ class EfficientColumnTransformer(ColumnTransformer):
 
         `None` when there is nothing selected, without touching the transformer -- which
         is the only case `transform` reaches this through, so nothing is fitted there.
-
-        `fit_transform` rather than a fit and then a transform: it is one pass over one
-        slice of the selected columns, where a second pass would have to hold that slice
-        for the whole of it.
         """
         if not selected:
             return None
+        # fit_transform rather than a fit and then a transform: one pass over one slice
+        # of the selected columns, where a second pass would hold that slice throughout
         codes = self.named_transformers_[name].fit_transform(
             _column_subset(X, selected)
         )
@@ -340,22 +289,10 @@ class EfficientColumnTransformer(ColumnTransformer):
         """Write the transformer's block and every other column to its final place.
 
         The array returned is one nothing else has ever referenced, which is what lets a
-        caller write into what it gets back. Notably it is never `to_numpy`'s result as
-        it stands: pandas 3 materialises a many-block frame into a private array, which
-        could be taken as it is, but earlier versions consolidate the frame *in place*
-        first and return a view of the block they just built -- taking that would write
-        through into the frame, and copying it costs a second full-size buffer on top of
-        the consolidation. Going column by column costs one buffer on every version, and
-        leaves the frame's own blocks alone.
-
-        The transformer's block is computed here rather than handed in so that it can be
-        dropped the moment it is written. `np.empty` faults a page in only when it is
-        written to, so the output appears in RSS as its columns are filled: a caller
-        still holding the block while the passthrough half fills the rest would have the
-        whole output *and* the block resident at once, which the block dying first
-        avoids.
+        caller write into what it gets back.
         """
         destination, passthrough = self._output_positions(X, name, selected)
+        # computed here rather than handed in, so it can be dropped once written
         codes = self._transformed_block(X, name, selected)
         dtype = self._assembled_dtype(X, codes, passthrough)
         order = self._assembled_order(X, codes, passthrough)
@@ -363,11 +300,10 @@ class EfficientColumnTransformer(ColumnTransformer):
         if codes is None and _converts_in_one_call(X):
             # Nothing was transformed, so the output is the whole input converted, in
             # input order -- which both layouts agree on when the selection is empty.
-            # One call for all of it where that is the cheaper way to reach the same
-            # single allocation. What it saves is per-column overhead, so it grows with
-            # the column count: measured against the loop below, interleaved so that
-            # neither order is favoured, nothing at 200,000 x 300, 12% of the wall time
-            # at 50,000 x 2,000 and 26% at 20,000 x 5,000.
+            # One call for all of it saves the per-column overhead of the loop below,
+            # which grows with the column count: nothing at 300 columns, 12% of the wall
+            # time at 2,000 and 26% at 5,000. Copied because `to_numpy` can hand back a
+            # view of a block the frame itself still holds.
             values = (
                 X.to_numpy(dtype=dtype, copy=False)
                 if isinstance(X, pd.DataFrame)
@@ -378,9 +314,12 @@ class EfficientColumnTransformer(ColumnTransformer):
         out = np.empty(X.shape, dtype=dtype, order=order)
         if codes is not None:
             out[:, destination] = codes
+            # `np.empty` takes memory only as it is written to, so dropping the block
+            # here keeps the peak at one full-size array rather than one plus a block
             del codes
         # Per column, so the passthrough half never needs a full-width temporary of its
-        # own; each write is a copy out of the container's own buffer.
+        # own, and the frame's own blocks are left alone -- `to_numpy` would rearrange
+        # them in place before pandas 3, and hand back a view of what it just built.
         for position, source in passthrough:
             out[:, position] = _column_values(X, source)
         return out
@@ -388,13 +327,14 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _output_positions(
         self, X: XType, name: str | None, selected: list[Any]
     ) -> tuple[Any, list[tuple[int, int]]]:
-        """Where the transformer's block, and each column it left, land in the output.
+        """Where the block, and the columns the transformer left, land in the output.
 
-        Two layouts. Preserving the input order, every column stays where it came from,
-        so the block is scattered back over the positions it was taken from. Otherwise
-        it is `ColumnTransformer`'s, read off the fit's own `output_indices_`: the
-        block takes its slice, and the columns the transformer did not take follow in
-        input order.
+        Returns:
+            destination: Where the transformer's block goes, in the order it holds its
+                columns -- a `slice` of the output, or the list of positions to scatter
+                them over. Selects nothing when nothing was selected.
+            passthrough: One `(output position, input position)` pair for every column
+                the transformer did not take, in input order.
         """
         positions = {column: index for index, column in enumerate(_input_columns(X))}
         taken = set(selected)
@@ -402,10 +342,14 @@ class EfficientColumnTransformer(ColumnTransformer):
             index for column, index in positions.items() if column not in taken
         ]
         if self.preserves_column_order:
+            # every column stays where it came from, so the block is scattered back
+            # over the positions it was taken from
             return (
                 [positions[column] for column in selected],
                 [(index, index) for index in remainder],
             )
+        # `ColumnTransformer`'s layout, read off the fit's own `output_indices_`: the
+        # block takes its slice, and the columns it did not take follow in input order
         destination = slice(0, 0) if name is None else self.output_indices_[name]
         start = self.output_indices_["remainder"].start
         return destination, list(enumerate(remainder, start=start))
@@ -413,19 +357,16 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _assembled_dtype(
         self, X: XType, codes: np.ndarray | None, passthrough: list[tuple[int, int]]
     ) -> np.dtype:
-        """The dtype `ColumnTransformer` would have stacked its way to.
-
-        `np.concatenate` promotes across the blocks it stacks, so the columns handed
-        through only weigh in when there are any: an input whose every column is
-        transformed comes out as the transformer's own dtype. A frame weighs in as
-        float64, which `_can_assemble` has established every one of its passthrough
-        columns already is.
-        """
+        """The dtype `ColumnTransformer` would have stacked its way to."""
+        # a frame weighs in as float64, which `_can_assemble` has established every one
+        # of its passthrough columns already is
         input_dtype = _FLOAT64 if isinstance(X, pd.DataFrame) else X.dtype
         if codes is None:
             return input_dtype
         if not passthrough:
+            # every column was transformed, so nothing else weighs in
             return codes.dtype
+        # `np.concatenate` promotes across the blocks it stacks
         return np.result_type(codes.dtype, input_dtype)
 
     def _assembled_order(
@@ -433,24 +374,20 @@ class EfficientColumnTransformer(ColumnTransformer):
     ) -> Literal["C", "F"]:
         """The memory layout `ColumnTransformer` would have arrived at.
 
-        Not cosmetic: the sklearn SVD that can run downstream of these steps converges
-        to a different basis on a C- than on a Fortran-contiguous input, so a drift here
-        would quietly rotate those features.
-
-        Preserving the input order, the layout is the one the gather in
-        `_preserve_order` produced, which numpy makes column-major for any output
-        wider than the single column where the two orders coincide. Otherwise it is
-        `np.concatenate`'s: Fortran only when every block it stacks already is, and
-        row-major otherwise -- so the blocks decide. The passthrough block's layout is
-        read off a two-row slice rather than the full-size block this exists not to
-        build; column selection gives the same answer at either height.
+        Not cosmetic: the sklearn SVD that can run downstream of these steps settles on
+        a different answer per layout, so a drift here would quietly rotate features.
         """
         if self.preserves_column_order:
+            # what the reorder in `_in_input_order` leaves, for any output wider than
+            # the single column where the two layouts coincide
             return "F"
         blocks = [] if codes is None else [codes]
         if passthrough:
             sources = [source for _, source in passthrough]
+            # read off two rows rather than the full-size block this exists not to
+            # build; selecting columns gives the same layout at either height
             blocks.append(np.asarray(_columns_at(_head(X, 2), sources)))
+        # `np.concatenate`'s answer: column-major only when every block it stacks is
         return "F" if all(block.flags.f_contiguous for block in blocks) else "C"
 
     def _maybe_in_input_order(
@@ -464,11 +401,7 @@ class EfficientColumnTransformer(ColumnTransformer):
     def _in_input_order(
         self, X: XType, original_columns: list | range | pd.Index
     ) -> XType:
-        """`X` with the columns back where the input had them.
-
-        Every column is somewhere in `ColumnTransformer`'s two blocks: at its rank in
-        the selection, or, unselected, at the next place after that block.
-        """
+        """`X` with the columns back where the input had them."""
         check_is_fitted(self)
         assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
         name, selected = self._named_selection()
@@ -477,9 +410,9 @@ class EfficientColumnTransformer(ColumnTransformer):
                 f"The {name!r} transformer selects its columns by something other than "
                 "a list of keys, which cannot be placed back in the input's order."
             )
-        # where each processed column landed in X
+        # Every column is somewhere in `ColumnTransformer`'s two blocks: at its rank in
+        # the selection, or, unselected, at the next place after that block.
         rank = {column: index for index, column in enumerate(selected)}
-        # next free index to use for untransformed columns
         next_index = len(selected)
         # indices[i] is the column index in X corresponding to input column i
         indices = []
@@ -510,12 +443,12 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
     def _validate_transformers(self) -> None:
         """What restoring the input order needs of the transformers, checked at fit.
 
-        Where `__init__` used to assert it. `set_params` writes `transformers` straight
-        onto the estimator, so a contract checked at construction is one every sklearn
-        caller that tunes a parameter steps around without seeing it -- and each of
-        these, unchecked, has the reorder returning columns in the wrong order rather
-        than failing.
+        Each of these, unchecked, has the reorder returning columns in the wrong order
+        rather than failing.
         """
+        # At fit rather than in `__init__`: `set_params` writes `transformers` straight
+        # onto the estimator, so a contract checked at construction is one every sklearn
+        # caller that tunes a parameter steps around without seeing it.
         super()._validate_transformers()
         named = [
             (name, transformer, columns)
