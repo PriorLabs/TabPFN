@@ -581,6 +581,24 @@ class TestDetectFeatureModalitiesWarnsOnText:
 
         assert "'mostly_numeric'" in str(record[0].message)
 
+    def test__column_with_a_crash_prone_token__does_not_crash(self) -> None:
+        """A value that used to segfault `pandas.to_numeric` must not crash the fit.
+
+        `"8e2569614270f3d8b9e7038efac9f116"` is a hash-like string whose leading
+        digits read as scientific notation with an exponent in `[2**31, 2**32)`,
+        which crashes `pandas.to_numeric` outright on some pandas/numpy versions.
+        A crash cannot be caught with `pytest.raises`, so surviving this call at all
+        is the assertion; the column is otherwise unremarkable free text.
+        """
+        values = [f"id_{i}" for i in range(200)]
+        values[7] = "8e2569614270f3d8b9e7038efac9f116"
+        X = pd.DataFrame({"num": self._numeric_column(), "ids": values})
+
+        with pytest.warns(UserWarning, match="look like free text") as record:
+            self._detect(X)
+
+        assert "'ids'" in str(record[0].message)
+
     def test__declared_categorical_columns__do_not_warn(self) -> None:
         """Declaring a column categorical states intent, so it must stay quiet.
 
