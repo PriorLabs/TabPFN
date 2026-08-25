@@ -398,6 +398,26 @@ def test__order_preserving_column_transformer__selection_not_a_list_of_keys(
         transformer.fit(X)
 
 
+@pytest.mark.parametrize("remainder", ["drop", OneHotEncoder()])
+def test__order_preserving_column_transformer__remainder_that_drops_columns(
+    remainder: object,
+) -> None:
+    """A column the remainder never hands back has nowhere to go in the input's order.
+
+    'drop' is `ColumnTransformer`'s default, so this is the shape reached by leaving
+    the parameter off entirely.
+    """
+    X = pd.DataFrame({"a": [1.0, 2.0], "b": ["p", "q"]})
+    transformer = OrderPreservingColumnTransformer(
+        transformers=[("encoder", OrdinalEncoder(), ["b"])],
+        remainder=remainder,
+        sparse_threshold=0.0,
+    )
+
+    with pytest.raises(ValueError, match="a remainder that hands every column"):
+        transformer.fit_transform(X)
+
+
 @pytest.mark.parametrize(
     "transformers",
     [

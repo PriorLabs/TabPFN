@@ -467,6 +467,29 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
                     f"or a single label, as {name!r} selects by {columns!r}."
                 )
 
+    @override
+    def _validate_remainder(self, X: XType) -> None:
+        """The remainder has to hand back every column it holds, checked at fit.
+
+        The reorder puts each input column back where it came from, so one that never
+        reached the output has no place to go: the gather runs off the end of the
+        result, or -- where the two orders happen to coincide -- silently returns a
+        narrower array as though it were in input order.
+        """
+        super()._validate_remainder(X)
+        # One-to-one for the same reason the named transformer is, plus the identity
+        # `FunctionTransformer` this codebase passes, which is not one.
+        if not (
+            is_identity_transformer(self.remainder)
+            or isinstance(self.remainder, OneToOneFeatureMixin)
+        ):
+            raise ValueError(
+                "OrderPreservingColumnTransformer only supports a remainder that hands "
+                "every column it holds back, and "
+                f"{self.remainder!r} does not. Note that `ColumnTransformer`'s default "
+                "is 'drop': pass `remainder=FunctionTransformer()` to keep them."
+            )
+
 
 def get_ordinal_encoder(
     *,
