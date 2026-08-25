@@ -189,7 +189,7 @@ def initialize_tabpfn_model(
                     # The classifier's bar distribution is not used
                     check_bar_distribution_criterion=False,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                    which="classifier",
+                    estimator_type="classifier",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
@@ -202,7 +202,7 @@ def initialize_tabpfn_model(
                     # The regressor's bar distribution is required
                     check_bar_distribution_criterion=True,
                     cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                    which="regressor",
+                    estimator_type="regressor",
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                 )
@@ -288,6 +288,7 @@ def create_inference_engine(  # noqa: PLR0913
     forced_inference_dtype_: torch.dtype | None,
     memory_saving_mode: MemorySavingMode,
     use_autocast_: bool,
+    task_type: str,
     inference_mode: bool = True,
     keep_cache_on_device: bool = True,
     kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
@@ -310,6 +311,9 @@ def create_inference_engine(  # noqa: PLR0913
         forced_inference_dtype_: If not None, the forced dtype for inference.
         memory_saving_mode: GPU/CPU memory saving settings.
         use_autocast_: Whether we use torch.autocast for inference.
+        task_type: The task type, e.g. "multiclass" or "regression". Only used
+            for ``fit_mode="fit_with_cache"``, where the cache is built during
+            initialization and is task-specific.
         inference_mode: Whether to use torch.inference_mode (set False if
             backprop is needed)
         keep_cache_on_device: Only relevant for ``fit_mode="fit_with_cache"``.
@@ -358,6 +362,7 @@ def create_inference_engine(  # noqa: PLR0913
             force_inference_dtype=forced_inference_dtype_,
             save_peak_mem=memory_saving_mode,
             autocast=use_autocast_,
+            task_type=task_type,
             keep_cache_on_device=keep_cache_on_device,
             kv_cache_precision=kv_cache_precision,
         )
@@ -458,6 +463,13 @@ def get_embeddings(
         data_source : {"train", "test"}, default="test"
             Select the transformer output to return. Use ``"train"`` to obtain
             embeddings from the training tokens and ``"test"`` for the test tokens.
+            ``"train"`` requires a fit mode that keeps the training rows around;
+            it is not available with ``fit_mode="fit_with_cache"``, whose predict
+            pass never runs the training rows through the transformer.
+
+    Raises:
+        TabPFNValidationError: If ``data_source="train"`` and the model was
+            fitted with ``fit_mode="fit_with_cache"``.
 
     Returns:
         np.ndarray
@@ -471,6 +483,19 @@ def get_embeddings(
                 emb_concat = emb.reshape(emb.shape[1], -1)
     """
     check_is_fitted(model)
+
+    if data_source == "train" and isinstance(
+        model.executor_, InferenceEngineExplicitKVCache
+    ):
+        # The cached predict pass only ever sees the test rows: the cache holds
+        # the ICL key/value pairs and the projected decoder keys, not the train
+        # embeddings themselves, so there is nothing to return here.
+        raise TabPFNValidationError(
+            'get_embeddings(..., data_source="train") is not supported with '
+            'fit_mode="fit_with_cache", because the cached predict pass does not '
+            "run the training rows through the transformer. Refit the model with "
+            'fit_mode="fit_preprocessors" to obtain training embeddings.'
+        )
 
     data_map = {"train": "train_embeddings", "test": "test_embeddings"}
 

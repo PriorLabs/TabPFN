@@ -15,7 +15,7 @@ from unittest.mock import patch
 import pytest
 import torch
 from pydantic.dataclasses import dataclass
-from torch import Tensor
+from torch import Tensor, nn
 
 from tabpfn import model_loading
 from tabpfn.architectures import ARCHITECTURES, tabpfn_v2, tabpfn_v3
@@ -51,7 +51,9 @@ def test__load_model__no_architecture_name_in_checkpoint__loads_v2_architecture(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
+    loaded_model, _, loaded_config, _ = model_loading.load_model(
+        path=checkpoint_path, estimator_type="classifier"
+    )
     assert isinstance(loaded_model, tabpfn_v2.TabPFNV2)
     assert isinstance(loaded_config, tabpfn_v2.TabPFNV2Config)
 
@@ -138,7 +140,9 @@ def test__load_model__architecture_name_in_checkpoint__loads_specified_architect
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    loaded_model, _, loaded_config, _ = model_loading.load_model(path=checkpoint_path)
+    loaded_model, _, loaded_config, _ = model_loading.load_model(
+        path=checkpoint_path, estimator_type="classifier"
+    )
     assert isinstance(loaded_model, DummyArchitecture)
     assert isinstance(loaded_config, FakeConfig)
 
@@ -182,7 +186,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
     )
@@ -245,7 +249,7 @@ def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2.5",
         download_if_not_exists=False,
     )
@@ -289,7 +293,7 @@ def test__load_v2_5_regression_ckpt__returns_v2_5_preprocessing(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="regressor",
         version="v2.5",
         download_if_not_exists=False,
     )
@@ -351,7 +355,7 @@ def test__load_v3_classification_ckpt__returns_inference_config_from_checkpoint(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v3",
         download_if_not_exists=False,
     )
@@ -379,7 +383,7 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
             cache_trainset_representation=False,
-            which="regressor",
+            estimator_type="regressor",
             version="v3",
             download_if_not_exists=False,
         )
@@ -387,6 +391,67 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
 
     assert isinstance(criterion, FullSupportBarDistribution)
     assert loaded_inference_config == inference_config
+
+
+def test__load_multitask_ckpt__criterion_follows_the_requested_task(
+    tmp_path: Path,
+) -> None:
+    """`estimator_type`, not `max_num_classes`, decides the criterion.
+
+    A multitask checkpoint carries both heads, so its `max_num_classes` is set for
+    the classification head and says nothing about whether the caller wants
+    regression. The same file must therefore back either estimator.
+    """
+    inference_config = InferenceConfig(
+        PREPROCESS_TRANSFORMS=[PreprocessorConfig("quantile_uni_coarse")]
+    )
+    # max_num_classes > 2 *and* regression borders present: the shape a multitask
+    # checkpoint has.
+    checkpoint = _build_small_v3_checkpoint(inference_config, max_num_classes=10)
+    assert any("regression_borders" in k for k in checkpoint["state_dict"])
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    def load(estimator_type: Literal["regressor", "classifier"]) -> object:
+        _, criterion, _, _ = model_loading.load_model_criterion_config(
+            model_path=[checkpoint_path],
+            check_bar_distribution_criterion=estimator_type == "regressor",
+            cache_trainset_representation=False,
+            estimator_type=estimator_type,
+            version="v3",
+            download_if_not_exists=False,
+        )
+        return criterion
+
+    assert isinstance(load("regressor"), FullSupportBarDistribution)
+    assert isinstance(load("classifier"), nn.CrossEntropyLoss)
+
+
+def test__load_classification_only_ckpt__as_regressor__raises(
+    tmp_path: Path,
+) -> None:
+    """A checkpoint with neither criterion state nor model borders cannot regress."""
+    architecture_config = {"max_num_classes": 10, "num_buckets": 100}
+    checkpoint = {
+        "state_dict": {},
+        "config": architecture_config,
+        "architecture_name": "fake_arch",
+    }
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    with (
+        patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule()),
+        pytest.raises(ValueError, match="regression_borders"),
+    ):
+        model_loading.load_model_criterion_config(
+            model_path=[checkpoint_path],
+            check_bar_distribution_criterion=True,
+            cache_trainset_representation=False,
+            estimator_type="regressor",
+            version="v2.5",
+            download_if_not_exists=False,
+        )
 
 
 @patch.dict(ARCHITECTURES, fake_arch=FakeArchitectureModule())
@@ -427,7 +492,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
         model_path=[checkpoint_1_path, checkpoint_2_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
-        which="classifier",
+        estimator_type="classifier",
         version="v2",
         download_if_not_exists=False,
     )
@@ -484,7 +549,7 @@ def test__load_multiple_models_with_difference_inference_configs__raises(
             model_path=[checkpoint_1_path, checkpoint_2_path],
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            which="classifier",
+            estimator_type="classifier",
             version="v2",
             download_if_not_exists=False,
         )
@@ -546,7 +611,7 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
             model_path=shared_checkpoint_path,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            which="classifier",
+            estimator_type="classifier",
             version="v2",
             download_if_not_exists=True,
         )

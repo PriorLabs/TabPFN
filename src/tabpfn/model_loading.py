@@ -7,7 +7,6 @@ from __future__ import annotations
 import contextlib
 import copy
 import functools
-import inspect
 import json
 import logging
 import os
@@ -375,6 +374,7 @@ def _try_direct_downloads(
 def download_all_models(to: Path) -> None:
     """Download all available classifier and regressor models into a local directory."""
     to.mkdir(parents=True, exist_ok=True)
+    first_download_exception: Exception | None = None
     for model_version, model_source, model_type in [
         (ModelVersion.V2, ModelSource.get_classifier_v2(), "classifier"),
         (ModelVersion.V2, ModelSource.get_regressor_v2(), "regressor"),
@@ -399,7 +399,16 @@ def download_all_models(to: Path) -> None:
                 model_name=ckpt_name,
             )
             if result != "ok":
-                logger.warning(f"Errors downloading model {model_version}: {result}")
+                for error in result:
+                    logger.error(f"Error downloading model {model_version}: {error}")
+                if first_download_exception is None:
+                    first_download_exception = result[0]
+
+    # We don't immediately raise the exception so we attempt to download every
+    # model, even if some fail.
+    if first_download_exception is not None:
+        msg = "One or more models failed to download"
+        raise RuntimeError(msg) from first_download_exception
 
 
 def _version_has_direct_download_option(version: ModelVersion) -> bool:
@@ -579,7 +588,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: Literal[False],
     cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
-    which: Literal["classifier"],
+    estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -596,7 +605,7 @@ def load_model_criterion_config(
     check_bar_distribution_criterion: Literal[True],
     cache_trainset_representation: bool,
     version: Literal["v2", "v2.5", "v2.6", "v3"],
-    which: Literal["regressor"],
+    estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
 ) -> tuple[
     list[Architecture],
@@ -606,12 +615,12 @@ def load_model_criterion_config(
 ]: ...
 
 
-def load_model_criterion_config(  # noqa: PLR0912
+def load_model_criterion_config(
     model_path: ModelPath | list[ModelPath] | None,
     *,
     check_bar_distribution_criterion: bool,
     cache_trainset_representation: bool,
-    which: Literal["regressor", "classifier"],
+    estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
 ) -> tuple[
@@ -634,7 +643,7 @@ def load_model_criterion_config(  # noqa: PLR0912
             for models trained for regression.
         cache_trainset_representation:
             Whether the model should know to cache the trainset representation.
-        which: Whether the model is a regressor or classifier.
+        estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
 
@@ -643,12 +652,15 @@ def load_model_criterion_config(  # noqa: PLR0912
         config
     """
     model_version = ModelVersion(version)
-    (resolved_model_paths, resolved_model_dirs, resolved_model_names, which) = (
-        resolve_model_path(
-            model_path=model_path,
-            which=which,
-            version=model_version.value,
-        )
+    (
+        resolved_model_paths,
+        resolved_model_dirs,
+        resolved_model_names,
+        estimator_type,
+    ) = resolve_model_path(
+        model_path=model_path,
+        which=estimator_type,
+        version=model_version.value,
     )
 
     for folder in resolved_model_dirs:
@@ -671,12 +683,12 @@ def load_model_criterion_config(  # noqa: PLR0912
             res = download_model(
                 path,
                 version=model_version,
-                which=cast("Literal['classifier', 'regressor']", which),
+                which=cast("Literal['classifier', 'regressor']", estimator_type),
                 model_name=resolved_model_names[i],
             )
             if res != "ok":
                 if _version_has_direct_download_option(model_version):
-                    repo_type = "clf" if which == "classifier" else "reg"
+                    repo_type = "clf" if estimator_type == "classifier" else "reg"
                     raise RuntimeError(
                         f"Failed to download model to {path}!\n\n"
                         f"For offline usage, please download the model manually from:\n"
@@ -687,18 +699,9 @@ def load_model_criterion_config(  # noqa: PLR0912
 
         loaded_model, criterion, architecture_config, inference_config = load_model(
             path=path,
+            estimator_type=estimator_type,
             cache_trainset_representation=cache_trainset_representation,
         )
-        if criterion is None:
-            if not hasattr(loaded_model, "regression_borders"):
-                # TODO(Phil): Add a a proper Regression API that removes the reliance
-                # on the external criterion and lets the model compute predictions.
-                # Then remove this hack.
-                raise ValueError(
-                    "If no criterion is saved, the model must have "
-                    "a regression_borders attribute."
-                )
-            criterion = FullSupportBarDistribution(loaded_model.regression_borders)
         if check_bar_distribution_criterion and not isinstance(
             criterion,
             FullSupportBarDistribution,
@@ -817,29 +820,69 @@ def resolve_model_path(
 
 def get_loss_criterion(
     config: ArchitectureConfig,
+    *,
+    estimator_type: Literal["regressor", "classifier"],
+    regression_borders: torch.Tensor | None = None,
 ) -> nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution:
     """Create: for classification, a loss function. For regression, a BarDistribution.
 
     The classification loss is only required for training, but we always create it, for
     simplicity. The BarDistribution serves the dual purpose of loss function
     and output distribution, thus is required even during inference.
+
+    The task cannot be read off `config`: a checkpoint that carries both a
+    classification and a regression head has `max_num_classes` set for the
+    classification head, which says nothing about the task the caller wants. Hence
+    `estimator_type`.
+
+    Args:
+        config: The architecture config of the checkpoint.
+        estimator_type: The task the estimator is being built for.
+        regression_borders: Bucket borders for the regression bar distribution.
+            Required when `estimator_type="regressor"`, since the distribution is
+            the model's output and has to use the borders it was trained with -- see
+            `_resolve_regression_borders`.
     """
-    # NOTE: We don't seem to have any of these
-    if config.max_num_classes == 2:
-        return nn.BCEWithLogitsLoss(reduction="none")
+    if estimator_type == "classifier":
+        # NOTE: We don't seem to have any of these
+        if config.max_num_classes == 2:
+            return nn.BCEWithLogitsLoss(reduction="none")
+        if config.max_num_classes > 2:
+            return nn.CrossEntropyLoss(reduction="none")
+        raise ValueError(
+            f"max_num_classes is {config.max_num_classes}, so this checkpoint has no "
+            "classification head and cannot back a classifier."
+        )
 
-    if config.max_num_classes > 2:
-        return nn.CrossEntropyLoss(reduction="none")
+    if regression_borders is None:
+        raise ValueError(
+            "regression_borders is required when estimator_type='regressor'."
+        )
+    return FullSupportBarDistribution(regression_borders, ignore_nan_targets=True)
 
-    assert config.max_num_classes == 0
-    num_buckets = config.num_buckets
 
-    # NOTE: This just seems to get overriddden in the module loading from `state_dict`
-    # dummy values, extra bad s.t. one realizes if they are used for training
-    borders = torch.arange(num_buckets + 1).float() * 10_000
-    borders = borders * 3  # Used to be `config.get("bucket_scaling", 3)`
+def _resolve_regression_borders(
+    *,
+    model: Architecture,
+    criterion_state: dict[str, torch.Tensor],
+    path: Path,
+) -> torch.Tensor:
+    """Bucket borders for the regression bar distribution.
 
-    return FullSupportBarDistribution(borders, ignore_nan_targets=True)
+    Checkpoints store them one of two ways, and never both: up to v2.6 as criterion
+    state saved alongside the model, from v3 as a `regression_borders` buffer on the
+    model itself.
+    """
+    if "borders" in criterion_state:
+        return criterion_state["borders"]
+    borders = getattr(model, "regression_borders", None)
+    if borders is None:
+        raise ValueError(
+            f"The model loaded, '{path}', has neither saved criterion borders nor a "
+            "regression_borders buffer, so it cannot produce a regression output "
+            "distribution."
+        )
+    return borders
 
 
 @functools.lru_cache(maxsize=1)
@@ -884,10 +927,11 @@ def clear_built_model_cache() -> None:
 def load_model(
     *,
     path: Path,
+    estimator_type: Literal["regressor", "classifier"],
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     ArchitectureConfig,
     InferenceConfig,
 ]:
@@ -902,6 +946,8 @@ def load_model(
 
     Args:
         path: Path to the checkpoint
+        estimator_type: The task the estimator is being built for. A checkpoint
+            with both heads backs either task, so this selects the criterion.
         cache_trainset_representation: If True, the model will cache the
             trainset representation. Forwarded to get_architecture.
     """
@@ -909,7 +955,9 @@ def load_model(
     identity = Checkpoint(resolved).identity()
 
     use_cache = _get_built_model_cache_size() > 0 and not cache_trainset_representation
-    key = (resolved, identity)
+    # `estimator_type` belongs in the key: the criterion differs per task, so a
+    # checkpoint built for one task must not be served for the other.
+    key = (resolved, identity, estimator_type)
     if use_cache:
         with _BUILT_MODEL_CACHE_LOCK:
             cached = _BUILT_MODEL_CACHE.get(key)
@@ -918,7 +966,10 @@ def load_model(
                 return cached
 
     result = _build_model(
-        resolved, identity, cache_trainset_representation=cache_trainset_representation
+        resolved,
+        identity,
+        estimator_type=estimator_type,
+        cache_trainset_representation=cache_trainset_representation,
     )
 
     if use_cache:
@@ -935,10 +986,11 @@ def _build_model(
     resolved: str,
     identity: tuple[int, int],
     *,
+    estimator_type: Literal["regressor", "classifier"],
     cache_trainset_representation: bool = True,
 ) -> tuple[
     Architecture,
-    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution | None,
+    nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     ArchitectureConfig,
     InferenceConfig,
 ]:
@@ -963,31 +1015,32 @@ def _build_model(
         cache_trainset_representation=cache_trainset_representation,
     )
 
-    if "test_targets_MB" in inspect.signature(model.forward).parameters:
-        # The model computes the loss internally. Strip criterion keys that
-        # save_tabpfn_model may have written so load_state_dict doesn't reject them.
-        model_state = {k: v for k, v in full_state.items() if "criterion." not in k}
-        model.load_state_dict(model_state)
-        model.eval()
-        inference_config = InferenceConfig(
-            **_rename_old_inference_config_keys(checkpoint["inference_config"])
-        )
-        empty_criterion = None
-        return model, empty_criterion, model_config, inference_config
-
+    # A checkpoint may carry criterion state for a task it is not being loaded for
+    # (save_tabpfn_model writes it for regressors), so it is always kept out of the
+    # model's own state and only read when this load is a regression one.
     criterion_state_keys = [k for k in full_state if "criterion." in k]
-    loss_criterion = get_loss_criterion(model_config)
-    if isinstance(loss_criterion, FullSupportBarDistribution):
-        criterion_state = {
-            k.replace("criterion.", ""): full_state[k] for k in criterion_state_keys
-        }
-        loss_criterion.load_state_dict(criterion_state)
-    else:
-        assert len(criterion_state_keys) == 0, criterion_state_keys
-
+    criterion_state = {
+        k.replace("criterion.", ""): full_state[k] for k in criterion_state_keys
+    }
     model_state = {k: v for k, v in full_state.items() if k not in criterion_state_keys}
     model.load_state_dict(model_state)
     model.eval()
+
+    # After load_state_dict, so a regression_borders buffer holds the checkpoint's
+    # borders rather than the ones the architecture initialised itself with.
+    loss_criterion = get_loss_criterion(
+        model_config,
+        estimator_type=estimator_type,
+        regression_borders=(
+            _resolve_regression_borders(
+                model=model, criterion_state=criterion_state, path=Path(resolved)
+            )
+            if estimator_type == "regressor"
+            else None
+        ),
+    )
+    if isinstance(loss_criterion, FullSupportBarDistribution) and criterion_state:
+        loss_criterion.load_state_dict(criterion_state)
     inference_config = _get_inference_config_from_checkpoint(checkpoint, loss_criterion)
     return model, loss_criterion, model_config, inference_config
 

@@ -142,7 +142,8 @@ def test__many_class_decoder_attention_weights_matches_forward(
     test_emb = torch.randn(B, M, E)
     targets = torch.randint(0, max_num_classes, (B, N))
 
-    weights = decoder.attention_weights(train_emb, test_emb)
+    train_keys = decoder.project_keys(train_emb)
+    weights = decoder.attention_weights(train_keys, test_emb)
     assert weights.shape == (B, M, N)
     assert torch.all(weights >= 0)
     torch.testing.assert_close(weights.sum(-1), torch.ones(B, M))
@@ -151,7 +152,7 @@ def test__many_class_decoder_attention_weights_matches_forward(
     class_avg = torch.einsum("bmn,bnt->bmt", weights, one_hot)
     logits = torch.log(torch.clamp(class_avg, min=1e-5) + 3e-5).transpose(0, 1)
 
-    expected = decoder(train_emb, test_emb, targets)
+    expected = decoder(train_keys, test_emb, targets)
     torch.testing.assert_close(logits, expected, atol=1e-4, rtol=1e-4)
 
 
@@ -288,7 +289,8 @@ def test__kv_cache__matches_standard_forward(use_chunkwise: bool) -> None:
 
     assert isinstance(cache, TabPFNV3Cache)
     assert not cache.is_empty()
-    assert cache.train_embeddings is not None
+    # Regression has no many-class decoder, so nothing is cached for it.
+    assert cache.decoder_keys is None
     assert len(cache.kv) == 2  # nlayers=2
 
     # Store-mode output matches standard
@@ -489,7 +491,7 @@ def test__kv_cache__layerwise_quantization_matches_post_forward(
     assert layerwise is not None
     post_forward = full_precision.quantize(cache_dtype)
 
-    assert layerwise.train_embeddings.dtype == full_precision.train_embeddings.dtype
+    assert layerwise.decoder_keys.dtype == full_precision.decoder_keys.dtype
     for layer_idx in post_forward.kv:
         expected = post_forward.kv[layer_idx]
         actual = layerwise.kv[layer_idx]
@@ -576,8 +578,8 @@ def test__quantized_kv_cache__close_to_standard_forward(use_chunkwise: bool) -> 
     for entry in q_cache.kv.values():
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == torch.int8
-    # Train embeddings stay in native dtype
-    assert q_cache.train_embeddings.dtype == torch.float32
+    # Regression caches no decoder keys.
+    assert q_cache.decoder_keys is None
 
     out_quantized = arch(x, y, performance_options=perf, kv_cache=q_cache)
 
@@ -611,9 +613,10 @@ def test__quantized_kv_cache__multiclass__close_to_standard_forward() -> None:
     for entry in q_cache.kv.values():
         assert isinstance(entry, QuantizedKVCacheEntry)
         assert entry.key.dtype == torch.int8
-    # Train embeddings stay in full precision
-    assert q_cache.train_embeddings is not None
-    assert q_cache.train_embeddings.dtype == torch.float32
+    # quantize() touches only the KV entries: the decoder keys keep the dtype they
+    # were computed at, which is fp32 here (fp32 model, no autocast context).
+    assert q_cache.decoder_keys is not None
+    assert q_cache.decoder_keys.dtype == torch.float32
 
     out_quantized = arch(x, y, kv_cache=q_cache)
 
@@ -718,7 +721,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
     GPU).
 
     Unlike the forced-precision path, autocast keeps fp32 model weights and casts
-    ops at runtime -- matmul-lineage tensors (KV, and ``train_embeddings`` via its
+    ops at runtime -- matmul-lineage tensors (KV, and ``decoder_keys`` via its
     explicit cast to the KV dtype) become the 2-byte compute dtype, while
     reduction/norm-lineage tensors (``inducing_hidden``, ``scaler_cache``) stay
     fp32. ``get_cache_size(dtype="autocast")`` must size each term at its real
@@ -745,7 +748,7 @@ def test__calculate_cache_size__matches_whole_classifier_cache_autocast(
         n_train=n_train,
         n_features=n_features,
         model_config=cfg,
-        # "autocast": KV/train_embeddings sized at fp16, inducing/scaler at fp32.
+        # "autocast": KV/decoder_keys sized at fp16, inducing/scaler at fp32.
         base_dtype="autocast",
         kv_cache_precision=kv_cache_precision,
     )
@@ -760,10 +763,8 @@ def test__calculate_cache_size__matches_whole_regression_cache(
     """get_cache_size equals the exact byte size of every tensor in a real
     regression cache, across the engine's forced-precision dtypes.
 
-    Regression currently *stores* train_embeddings even though it never uses
-    them, so counting the full physical cache is correct today. If a future
-    change stops caching those for regression, this exact-equality assert breaks
-    -- signalling that get_cache_size should then drop that term for regression.
+    Regression has no many-class decoder, so its cache carries no ``decoder_keys``
+    term at all -- exact equality here is what pins that down.
     """
     arch = _get_regression_model()
     arch.type(dtype)  # mirror the engine's set_dtype for forced precision.
@@ -831,7 +832,7 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     #   KV int8:            nlayers*2*H_kv*head_dim * N = 24*2*1*64 * 1000 = 3,072,000
     #   + int8 KV scales:   nlayers*2 * 2 bytes         = 24*2*2           =        96
     #   + scaler stats:     2 * n_features(1) * 2 bytes                    =         4
-    #   + fp16 activations: icl_emsize * N * 2 = 512 * 1000 * 2            = 1,024,000
+    #   + fp16 decoder keys: H_dec*D_dec * N * 2 = 6*64 * 1000 * 2        =   768,000
     # The inducing term depends on the shipped dist-embedder config, so derive it
     # from the config instead of hardcoding it.
     n_features = 1
@@ -845,4 +846,4 @@ def test__calculate_cache_size__tabpfn3_classifier_1000_rows() -> None:
     total = get_cache_size(**common)
 
     # Numbers need manual update if we bump the default architecture.
-    assert total == 3_072_000 + 96 + 4 + 1_024_000 + inducing
+    assert total == 3_072_000 + 96 + 4 + 768_000 + inducing

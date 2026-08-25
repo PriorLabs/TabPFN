@@ -22,6 +22,7 @@ from tabpfn.architectures.shared import workaround_mps_linear_bug
 from tabpfn.architectures.shared.workaround_mps_linear_bug import MpsSafeLinear
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Cache
 from tabpfn.base import create_inference_engine, get_embeddings
+from tabpfn.errors import TabPFNValidationError
 from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     InferenceEngineExplicitKVCache,
@@ -161,6 +162,7 @@ class _TestModelWithKVCache(Architecture):
         self.parameter = torch.nn.Parameter(torch.tensor(1.0))
         self.cache_build_count = 0
         self.cache_used_count = 0
+        self.cache_build_task_type: str | None = None
 
     @override
     def forward(
@@ -198,6 +200,7 @@ class _TestModelWithKVCache(Architecture):
 
         if return_kv_cache:
             self.cache_build_count += 1
+            self.cache_build_task_type = task_type
             # Build a dummy cache with a single KVCacheEntry
             dummy_kv = KVCacheEntry(
                 key=torch.zeros(1, n_train, 1, 1, device=x.device),
@@ -205,7 +208,7 @@ class _TestModelWithKVCache(Architecture):
             )
             cache = TabPFNV3Cache(
                 kv={0: dummy_kv},
-                train_embeddings=torch.zeros(1, n_train, 1, device=x.device),
+                decoder_keys=torch.zeros(1, n_train, 1, 1, device=x.device),
                 train_shape=(1, n_train),
             )
             return output, cache
@@ -226,6 +229,34 @@ class _TestModelWithKVCache(Architecture):
 
     def reset_save_peak_mem_factor(self, factor: int | None = None) -> None:
         pass
+
+
+class _TestModelWithKVCacheLegacy(_TestModelWithKVCache):
+    """Like _TestModelWithKVCache, but without a task_type forward argument."""
+
+    @override
+    def forward(  # type: ignore[override]
+        self,
+        x: Tensor | dict[str, Tensor],
+        y: Tensor | dict[str, Tensor] | None,
+        *,
+        only_return_standard_out: bool = True,
+        categorical_inds: list[list[int]] | None = None,
+        performance_options: PerformanceOptions | None = None,
+        return_kv_cache: bool = False,
+        kv_cache: TabPFNV3Cache | None = None,
+        x_is_test_only: bool = False,
+    ) -> Tensor | tuple[Tensor, TabPFNV3Cache]:
+        return super().forward(
+            x,
+            y,
+            only_return_standard_out=only_return_standard_out,
+            categorical_inds=categorical_inds,
+            performance_options=performance_options,
+            return_kv_cache=return_kv_cache,
+            kv_cache=kv_cache,
+            x_is_test_only=x_is_test_only,
+        )
 
 
 def test__cache_preprocessing__result_equal_in_serial_and_in_parallel() -> None:
@@ -524,6 +555,7 @@ def test__explicit_kv_cache__produces_outputs() -> None:
         force_inference_dtype=None,
         save_peak_mem=True,
         autocast=False,
+        task_type="multiclass",
     )
     # _build_cache runs once per ensemble member during engine construction.
     assert model.cache_build_count == n_configs
@@ -537,6 +569,62 @@ def test__explicit_kv_cache__produces_outputs() -> None:
     # Predict consumed each cache once and did not rebuild any of them.
     assert model.cache_build_count == n_configs
     assert model.cache_used_count == n_configs
+
+
+@pytest.mark.parametrize(
+    ("model_cls", "task_type"),
+    [
+        (_TestModelWithKVCache, "multiclass"),
+        (_TestModelWithKVCache, "regression"),
+        (_TestModelWithKVCacheLegacy, "multiclass"),
+        (_TestModelWithKVCacheLegacy, "regression"),
+    ],
+)
+def test__explicit_kv_cache__task_type_forwarded_to_cache_build(
+    model_cls: type[_TestModelWithKVCache],
+    task_type: str,
+) -> None:
+    """task_type reaches the cache build only when the model expects it."""
+    rng = default_rng(seed=0)
+    n_train = 50
+    n_features = 4
+    n_classes = 3
+    n_configs = 2
+    X_train = rng.standard_normal(size=(n_train, n_features))
+    y_train = rng.integers(low=0, high=n_classes - 1, size=(n_train, 1))
+
+    ensemble_preprocessor = TabPFNEnsemblePreprocessor(
+        configs=_create_test_ensemble_configs(
+            n_configs=n_configs,
+            n_classes=n_classes,
+            num_models=1,
+        ),
+        n_samples=X_train.shape[0],
+        feature_schema=FeatureSchema.from_only_categorical_indices([], n_features),
+        random_state=rng,
+        n_preprocessing_jobs=1,
+    )
+    model = model_cls()
+    engine = InferenceEngineExplicitKVCache(
+        X_train,
+        y_train,
+        ensemble_preprocessor=ensemble_preprocessor,
+        models=[model],
+        devices=[torch.device("cpu")],
+        dtype_byte_size=4,
+        force_inference_dtype=None,
+        save_peak_mem=True,
+        autocast=False,
+        task_type=task_type,
+    )
+
+    assert model.cache_build_count == n_configs
+    assert len(engine.kv_caches) == n_configs
+    if type(model) is _TestModelWithKVCache:
+        assert model.cache_build_task_type == task_type
+    else:
+        # Models without task_type in forward still build their caches.
+        assert model.cache_build_task_type is None
 
 
 @pytest.mark.parametrize("device", get_pytest_devices())
@@ -580,6 +668,7 @@ def test__explicit_kv_cache__keep_on_device_reuses_tensors(device: str) -> None:
         force_inference_dtype=None,
         save_peak_mem="auto",
         autocast=False,
+        task_type="multiclass",
         keep_cache_on_device=True,
     )
     assert model.cache_build_count == n_configs
@@ -709,6 +798,7 @@ def test__init__mps_target_device__applies_mps_linear_bug_workaround(
         forced_inference_dtype_=None,
         memory_saving_mode=True,
         use_autocast_=False,
+        task_type="multiclass",
         inference_mode=True,
     )
 
@@ -764,6 +854,7 @@ def test__to__mps_target_device__applies_mps_linear_bug_workaround(
         forced_inference_dtype_=None,
         memory_saving_mode=True,
         use_autocast_=False,
+        task_type="multiclass",
         inference_mode=True,
     )
 
@@ -853,15 +944,16 @@ def test__kv_cache_chunking__matches_unchunked(
 
 
 @pytest.mark.parametrize("device", get_pytest_devices())
-def test__kv_cache_chunking__train_embeddings_not_duplicated(
+def test__kv_cache__embeddings_test_only_and_chunk_safe(
     device: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Chunking must not inflate the dict (only_return_standard_out=False) path.
+    """The cached path serves test embeddings only, and chunking must not inflate them.
 
-    Test embeddings are test-indexed and get concatenated across chunks, but
-    train embeddings are read from the KV cache and are identical per chunk, so
-    naively concatenating them would yield n_chunks * n_train rows.
+    The cache holds the ICL KV pairs and the projected decoder keys, not the train
+    embeddings, so ``data_source="train"`` is rejected outright rather than
+    returning something empty or stale. Test embeddings are test-indexed and get
+    concatenated across chunks, so the merge must not multiply their row count.
     """
     if torch.device(device).type == "mps":
         pytest.skip("float64 inference is not supported on MPS")
@@ -881,10 +973,12 @@ def test__kv_cache_chunking__train_embeddings_not_duplicated(
     X_test = X[n_train:]
 
     monkeypatch.setattr(settings.tabpfn, "max_batched_test_rows", chunk)
-    train_emb = get_embeddings(model, X_test, data_source="train")
-    test_emb = get_embeddings(model, X_test, data_source="test")
+    with pytest.raises(
+        TabPFNValidationError, match='not supported with fit_mode="fit_with_cache"'
+    ):
+        get_embeddings(model, X_test, data_source="train")
 
-    assert train_emb.shape[-2] == n_train
+    test_emb = get_embeddings(model, X_test, data_source="test")
     assert test_emb.shape[-2] == n_test
 
 

@@ -893,6 +893,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         force_inference_dtype: torch.dtype | None,
         save_peak_mem: MemorySavingMode,
         autocast: bool,
+        task_type: str,
         keep_cache_on_device: bool = True,
         kv_cache_precision: Literal["auto", "int8", "fp8"] | None = None,
     ) -> None:
@@ -914,6 +915,9 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             force_inference_dtype: The dtype to force inference to.
             save_peak_mem: Whether to save peak memory usage.
             autocast: Whether to use torch.autocast during cache build.
+            task_type: The task type, e.g. "multiclass" or "regression". Needed
+                at build time because the cached activations are task-specific,
+                so a cache built for the wrong task would be silently wrong.
             keep_cache_on_device: If True (default), keep each per-estimator
                 KV cache on the device where it was built.  Uses more device
                 memory but avoids CPU↔GPU transfers, giving lower latency.
@@ -939,6 +943,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
         # against that member's own architecture (see _resolve_kv_cache_precision).
         self.kv_cache_precision = kv_cache_precision
         self.ensemble_preprocessor = ensemble_preprocessor
+        self.task_type = task_type
 
         # Place model copies on all devices before building caches
         self.to(devices, self.force_inference_dtype, self.dtype_byte_size)
@@ -1069,6 +1074,10 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             ),
         )
 
+        kwargs = {}
+        if _model_expectes_task_type_arg(model):
+            kwargs["task_type"] = self.task_type
+
         with (
             get_autocast_context(device, enabled=autocast),
             torch.inference_mode(),
@@ -1080,6 +1089,7 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
                 categorical_inds=batched_cat_ix,
                 performance_options=performance_options,
                 return_kv_cache=True,
+                **kwargs,
             )
 
         assert cache is not None
@@ -1248,7 +1258,8 @@ class InferenceEngineExplicitKVCache(MultiDeviceInferenceEngine):
             return torch.cat(outputs)
 
         concat_keys = {"standard", "test_embeddings"}
-        shared_keys = {"train_embeddings"}  # replicated across chunk
+        # Not emitted by the v3 cached path, but v2 still replicates it per chunk.
+        shared_keys = {"train_embeddings"}
         unexpected = outputs[0].keys() - concat_keys - shared_keys
         if unexpected:
             raise RuntimeError(
