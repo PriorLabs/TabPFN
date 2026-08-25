@@ -368,6 +368,22 @@ def test__order_preserving_column_transformer():
     np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
 
 
+def test__order_preserving_column_transformer__clone_keeps_its_parameters() -> None:
+    """Every parameter it was configured with has to survive sklearn's `clone`."""
+    encoder = get_ordinal_encoder()
+
+    assert set(encoder.get_params(deep=False)) == set(
+        ColumnTransformer(transformers=[]).get_params(deep=False)
+    )
+
+    copy = sklearn.base.clone(encoder)
+
+    # A `remainder` lost to its 'drop' default silently drops every numeric column
+    assert isinstance(copy.remainder, FunctionTransformer)
+    assert copy.sparse_threshold == encoder.sparse_threshold
+    assert copy.verbose_feature_names_out == encoder.verbose_feature_names_out
+
+
 @pytest.mark.parametrize("columns", [slice(0, 2), "b", 1, ("a", "b")])
 def test__order_preserving_column_transformer__selection_not_a_list_of_keys(
     columns: object,

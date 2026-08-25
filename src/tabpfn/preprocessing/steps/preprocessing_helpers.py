@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Any, ClassVar
 from typing_extensions import Self, override
 
@@ -13,7 +12,6 @@ import pandas as pd
 from scipy import sparse
 from sklearn import get_config
 from sklearn.base import (
-    BaseEstimator,
     OneToOneFeatureMixin,
     check_is_fitted,
 )
@@ -499,31 +497,14 @@ class EfficientColumnTransformer(ColumnTransformer):
 
 
 class OrderPreservingColumnTransformer(EfficientColumnTransformer):
-    """An EfficientColumnTransformer that preserves the column order after transform."""
+    """An EfficientColumnTransformer that preserves the column order after transform.
+
+    Its parameters are `ColumnTransformer`'s, narrowed to what restoring that order
+    needs: at most one transformer, one-to-one, over a list of column keys or a callable
+    returning one.
+    """
 
     preserves_column_order: ClassVar[bool] = True
-
-    def __init__(
-        self,
-        transformers: Sequence[
-            tuple[
-                str,
-                BaseEstimator,
-                Iterable[str | int] | Callable[[Any], Iterable[str | int]],
-            ]
-        ],
-        **kwargs: Any,
-    ):
-        """Implementation base on https://scikit-learn.org/stable/modules/generated/sklearn.compose.ColumnTransformer.html.
-
-        Parameters
-        ----------
-        transformers : sequence of (name, transformer, columns) tuples
-            List of (name, transformer, columns) tuples specifying the transformers.
-        **kwargs : additional keyword arguments
-            Passed to sklearn.compose.ColumnTransformer.
-        """
-        super().__init__(transformers=transformers, **kwargs)
 
     @override
     def _validate_transformers(self) -> None:
