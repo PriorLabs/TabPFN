@@ -525,30 +525,43 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
         """
         super().__init__(transformers=transformers, **kwargs)
 
-        # Check if there is a single transformer, of subtype OneToOneFeatureMixin
-        assert all(
-            isinstance(t, OneToOneFeatureMixin)
-            for name, t, _ in transformers
-            if name != "remainder"
-        ), (
-            "OrderPreservingColumnTransformer currently only supports transformers "
-            "that are instances of OneToOneFeatureMixin."
-        )
+    @override
+    def _validate_transformers(self) -> None:
+        """What restoring the input order needs of the transformers, checked at fit.
 
-        assert len([t for name, _, t in transformers if name != "remainder"]) <= 1, (
-            "OrderPreservingColumnTransformer only supports up to one transformer."
-        )
-
-        # Restoring the input order places one column at a time, by key
-        assert all(
-            callable(columns) or isinstance(columns, (list, np.ndarray, pd.Index))
-            for name, _, columns in transformers
+        Where `__init__` used to assert it. `set_params` writes `transformers` straight
+        onto the estimator, so a contract checked at construction is one every sklearn
+        caller that tunes a parameter steps around without seeing it -- and each of
+        these, unchecked, has the reorder returning columns in the wrong order rather
+        than failing.
+        """
+        super()._validate_transformers()
+        named = [
+            (name, transformer, columns)
+            for name, transformer, columns in self.transformers
             if name != "remainder"
-        ), (
-            "OrderPreservingColumnTransformer only supports selecting columns by a "
-            "list of keys, or a callable returning one -- not by a slice or a single "
-            "label."
-        )
+        ]
+        if len(named) > 1:
+            raise ValueError(
+                "OrderPreservingColumnTransformer only supports up to one transformer, "
+                f"got {[name for name, _, _ in named]}."
+            )
+        for name, transformer, columns in named:
+            if not isinstance(transformer, OneToOneFeatureMixin):
+                raise ValueError(
+                    "OrderPreservingColumnTransformer only supports transformers that "
+                    f"are instances of OneToOneFeatureMixin, which {name!r} "
+                    f"({type(transformer).__name__}) is not."
+                )
+            # the reorder places one column at a time, by key
+            if not callable(columns) and not isinstance(
+                columns, (list, np.ndarray, pd.Index)
+            ):
+                raise ValueError(
+                    "OrderPreservingColumnTransformer only supports selecting columns "
+                    "by a list of keys, or a callable returning one -- not by a slice "
+                    f"or a single label, as {name!r} selects by {columns!r}."
+                )
 
 
 def get_ordinal_encoder(

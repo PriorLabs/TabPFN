@@ -311,36 +311,40 @@ def test__pipeline__raises_error_when_modality_step_changes_column_count():
 
 
 def test__order_preserving_column_transformer():
-    """Should raise AssertionError if column sets overlap."""
+    """Should raise ValueError if column sets overlap."""
     ordinal_enc1 = OrdinalEncoder()
     ordinal_enc2 = OrdinalEncoder()
     onehotencoder1 = OneHotEncoder()
 
-    # Test assertion raised due to too many transformers
-    multiple_transformers = [
-        ("ordinal_enc1", ordinal_enc1, ["a", "b"]),
-        ("ordinal_enc2", ordinal_enc2, ["c", "d"]),
-    ]
-
-    with pytest.raises(
-        AssertionError,
-        match="OrderPreservingColumnTransformer only supports up to one transformer",
-    ):
-        OrderPreservingColumnTransformer(transformers=multiple_transformers)
-
-    # Test assertion, due to unsupported encoder type (OneHotEncoder)
-    incompatible_transformer = [("onehot", onehotencoder1, ["a", "b"])]
-
-    with pytest.raises(AssertionError, match="are instances of OneToOneFeatureMixin"):
-        OrderPreservingColumnTransformer(transformers=incompatible_transformer)
-
-        # --- Mock dataset ---
+    # --- Mock dataset ---
     mock_data_df = pd.DataFrame(
         {
             "a": [10, 20, 30, 40],
             "b": ["x", "y", "x", "z"],
         }
     )
+
+    # Test error raised due to too many transformers
+    multiple_transformers = [
+        ("ordinal_enc1", ordinal_enc1, ["a"]),
+        ("ordinal_enc2", ordinal_enc2, ["b"]),
+    ]
+
+    with pytest.raises(
+        ValueError,
+        match="OrderPreservingColumnTransformer only supports up to one transformer",
+    ):
+        OrderPreservingColumnTransformer(transformers=multiple_transformers).fit(
+            mock_data_df
+        )
+
+    # Test error, due to unsupported encoder type (OneHotEncoder)
+    incompatible_transformer = [("onehot", onehotencoder1, ["b"])]
+
+    with pytest.raises(ValueError, match="are instances of OneToOneFeatureMixin"):
+        OrderPreservingColumnTransformer(transformers=incompatible_transformer).fit(
+            mock_data_df
+        )
 
     # Test if normal column transformer shuffles column order,
     # while the OrderPreserving restores the original order
@@ -368,11 +372,40 @@ def test__order_preserving_column_transformer():
 def test__order_preserving_column_transformer__selection_not_a_list_of_keys(
     columns: object,
 ) -> None:
-    """A selection that cannot be placed one column at a time is refused up front."""
-    with pytest.raises(AssertionError, match="only supports selecting columns by a"):
-        OrderPreservingColumnTransformer(
-            transformers=[("encoder", OrdinalEncoder(), columns)]
-        )
+    """A selection that cannot be placed one column at a time is refused."""
+    X = pd.DataFrame({"a": ["x", "y"], "b": ["p", "q"]})
+    transformer = OrderPreservingColumnTransformer(
+        transformers=[("encoder", OrdinalEncoder(), columns)]
+    )
+
+    with pytest.raises(ValueError, match="only supports selecting columns by a"):
+        transformer.fit(X)
+
+
+@pytest.mark.parametrize(
+    "transformers",
+    [
+        [("encoder", OrdinalEncoder(), ["a"]), ("second", OrdinalEncoder(), ["b"])],
+        [("encoder", OneHotEncoder(), ["a"])],
+        [("encoder", OrdinalEncoder(), slice(0, 1))],
+    ],
+    ids=["two_transformers", "not_one_to_one", "selection_not_keys"],
+)
+def test__order_preserving_column_transformer__contract_survives_set_params(
+    transformers: list,
+) -> None:
+    """`set_params` writes past the constructor, so fit is what has to hold the line."""
+    X = pd.DataFrame({"a": ["x", "y"], "b": ["p", "q"]})
+    transformer = OrderPreservingColumnTransformer(
+        transformers=[("encoder", OrdinalEncoder(), ["a"])],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+
+    transformer.set_params(transformers=transformers)
+
+    with pytest.raises(ValueError, match="OrderPreservingColumnTransformer only"):
+        transformer.fit_transform(X)
 
 
 def test__order_preserving_column_transformer__callable_selects_a_slice() -> None:
