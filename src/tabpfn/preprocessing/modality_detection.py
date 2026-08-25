@@ -215,25 +215,29 @@ def _is_numeric_pandas_series(s: pd.Series) -> bool:
 
 def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
     # Below pandas 3.0, `pd.to_numeric` segfaults on a string whose scientific-notation
-    # exponent lands in [2**31, 2**32), e.g. "8e2569614270" (pandas#63650). A segfault
-    # cannot be caught, so such a value must never reach it. Not vectorized, but not
-    # slower for this: `pd.to_numeric` also walks an object column value by value, and
-    # builds a result array we would throw away. Delete once the pandas floor is 3.0.
+    # exponent lands in [2**31, 2**32), e.g. "8e2569614270" (pandas#63650), and a
+    # segfault cannot be caught. Not vectorized, but no slower here: `pd.to_numeric`
+    # also walks an object column value by value. Delete once the pandas floor is 3.0.
     try:
         parsed = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        # `is_scalar` first: `pd.isna` answers element-wise for a list or array cell.
+        # Not a number, so only a missing value still counts. `is_scalar` guards
+        # `pd.isna`, which answers element-wise for a list or an array cell.
         return bool(pd.api.types.is_scalar(value) and pd.isna(value))
+    # Anything else `float` accepted is already a number, not a spelling of one.
     if not isinstance(value, str):
         return True
-    # Four spellings `float` accepts and pandas' parser does not.
+    # Non-ASCII digits and spaces, e.g. "٣" and "\xa0 5".
     if not value.isascii():
-        return False  # non-ASCII digits and spaces, e.g. "٣", "\xa0 5"
+        return False
+    # PEP 515 digit separators, e.g. "1_000".
     if "_" in value:
-        return False  # PEP 515 digit separators, e.g. "1_000"
+        return False
+    # The literal "nan", in any spelling: no other string parses to NaN.
     if math.isnan(parsed):
-        return False  # the literal "nan"
-    # "1e400": finite, but too large for a float64. Only a literal infinity counts.
+        return False
+    # A finite literal too large for a float64, e.g. "1e400". Only a spelled-out
+    # infinity counts as numeric.
     return not (math.isinf(parsed) and "inf" not in value.lower())
 
 

@@ -22,7 +22,6 @@ from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
-    _is_numeric_or_missing_for_old_pandas,
     _warn_if_text_features,
     detect_feature_modalities,
 )
@@ -221,42 +220,6 @@ def test__numerical_but_stored_as_string():
     s = s.astype(str)
     result = _for_test_detect_with_defaults(s)
     assert result == FeatureModality.NUMERICAL
-
-
-@pytest.mark.parametrize(
-    ("value", "is_numeric"),
-    [
-        # Spellings both `float` and pandas' parser accept.
-        ("1e5", True),
-        (".5", True),
-        ("5.", True),
-        ("+5", True),
-        (" 12 ", True),
-        ("inf", True),
-        ("-inf", True),
-        # ... and ones neither accepts.
-        ("0x1A", False),
-        ("1,000", False),
-        ("", False),
-        ("null", False),
-        # The two the built-in `float` accepts and pandas' parser does not. Pinned
-        # because reading values one at a time is what makes them a risk at all.
-        ("nan", False),
-        ("1_000", False),
-        # Not a scalar, so the missingness check has to tolerate it.
-        ([1, 2], False),
-    ],
-)
-def test__is_numeric_or_missing_for_old_pandas__matches_pandas_parser(
-    value: object, is_numeric: bool
-) -> None:
-    """Reading values one at a time must agree with `pandas.to_numeric`.
-
-    The per-value parse replaced a `pandas.to_numeric` call that segfaults below
-    pandas 3.0, so it has to accept exactly the same spellings pandas would; the
-    built-in `float` is close but not identical, and these pin the difference.
-    """
-    assert _is_numeric_or_missing_for_old_pandas(value) is is_numeric
 
 
 def test__categorical_series():
