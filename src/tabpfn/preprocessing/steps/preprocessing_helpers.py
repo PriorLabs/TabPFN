@@ -426,8 +426,8 @@ class EfficientColumnTransformer(ColumnTransformer):
         # where it would also leave the layout alone, since it hands back a
         # Fortran-contiguous array whatever it was given and `_assembled_order` says
         # what reads that. A frame has no such layout to keep.
-        if all(index == position for position, index in enumerate(indices)) and (
-            not isinstance(X, np.ndarray) or X.flags.f_contiguous
+        if (not isinstance(X, np.ndarray) or X.flags.f_contiguous) and all(
+            index == position for position, index in enumerate(indices)
         ):
             return X
         # restore the column order from before the transformer has been applied
