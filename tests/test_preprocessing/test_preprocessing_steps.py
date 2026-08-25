@@ -364,6 +364,35 @@ def test__order_preserving_column_transformer():
     np.testing.assert_equal(mock_data_df.iloc[:, 0].values, preserved_output[:, 0])
 
 
+def test__order_preserving_column_transformer__already_in_input_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stack that is already in input order is handed back without a gather."""
+    stacked = []
+    hstack = ColumnTransformer._hstack
+
+    def recording(self: ColumnTransformer, Xs: list, **kwargs: object) -> np.ndarray:
+        stacked.append(hstack(self, Xs, **kwargs))
+        return stacked[-1]
+
+    monkeypatch.setattr(ColumnTransformer, "_hstack", recording)
+
+    # The encoded column leads, so `ColumnTransformer`'s own order is the input's. The
+    # int64 column is what keeps this off the assembly path, which reaches its result
+    # without a stack to gather over at all.
+    X = pd.DataFrame({"a": ["x", "y"], "b": [1, 2], "c": [3.0, 4.0]})
+    transformer = OrderPreservingColumnTransformer(
+        transformers=[("encoder", OrdinalEncoder(), ["a"])],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+
+    out = transformer.fit_transform(X)
+
+    np.testing.assert_array_equal(out, [[0.0, 1.0, 3.0], [1.0, 2.0, 4.0]])
+    assert out is stacked[-1]
+
+
 def test__pipeline__num_added_features():
     """Test that the pipeline returns the correct number of added features."""
     pipeline = PreprocessingPipeline(

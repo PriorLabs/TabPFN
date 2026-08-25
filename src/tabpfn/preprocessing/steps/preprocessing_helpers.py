@@ -488,6 +488,13 @@ class EfficientColumnTransformer(ColumnTransformer):
                     if index is None:
                         index, next_index = next_index, next_index + 1
                     indices.append(index)
+                # The gather below is a full-size copy, and the one order it need not
+                # restore is the one already there: a stack whose transformed block
+                # holds the columns it came from is handed back as `ColumnTransformer`
+                # built it. Still an array of this call's own -- `_hstack` concatenates
+                # the blocks it stacks -- so a caller may write into it either way.
+                if all(index == position for position, index in enumerate(indices)):
+                    continue
                 # restore the column order from before the transfomer has been applied
                 X = X.iloc[:, indices] if isinstance(X, pd.DataFrame) else X[:, indices]
         return X
