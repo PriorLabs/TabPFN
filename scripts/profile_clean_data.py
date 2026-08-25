@@ -124,7 +124,7 @@ ROOT_LABEL = "clean_data"
 # transformer's output and then stacks them, holding two full-size arrays at once, and
 # our subclass reorders the result afterwards. `_assemble` is the write-in-place that
 # stands in for both -- if it does not appear, the encoder fell back to sklearn's path,
-# and `_hstack` and `_preserve_order` say what that cost.
+# and `_hstack` and `_in_input_order` say what that cost.
 SKLEARN_METHOD_TARGETS: tuple[tuple[str, str, str], ...] = (
     (
         "tabpfn.preprocessing.steps.preprocessing_helpers",
@@ -139,7 +139,7 @@ SKLEARN_METHOD_TARGETS: tuple[tuple[str, str, str], ...] = (
     (
         "tabpfn.preprocessing.steps.preprocessing_helpers",
         "EfficientColumnTransformer",
-        "_preserve_order",
+        "_in_input_order",
     ),
     ("sklearn.compose", "ColumnTransformer", "fit_transform"),
     ("sklearn.compose", "ColumnTransformer", "_hstack"),
