@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 from packaging.version import Version
-from pandas.api.types import infer_dtype
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
@@ -41,9 +40,9 @@ OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
-# Before 3.0 `astype` copies by default; from 3.0 copy-on-write already makes an
-# unneeded copy a no-op, and passing `copy=False` explicitly warns.
-_ASTYPE_NO_COPY_KWARGS = {"copy": False} if PANDAS_BELOW_3 else {}
+# Before 3.0 `astype` copies every column by default, including the ones it is not
+# casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
+_ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
 
 _FLOAT64 = np.dtype(np.float64)
 
@@ -95,7 +94,7 @@ def _cast_columns(
 
     # fallback: never costly in time
     # cast only the columns that need to be:
-    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_NO_COPY_KWARGS)
+    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
 def clean_data(
@@ -297,65 +296,6 @@ def _is_single_float_block(X: pd.DataFrame) -> bool:
     return len(blocks) == 1 and blocks[0].values.dtype.kind == "f"  # noqa: PD011
 
 
-def to_numeric_or_nan(s: pd.Series) -> pd.Series:
-    """`pandas.to_numeric(s, errors="coerce")`, without the risk of it segfaulting.
-
-    Args:
-        s: The values to parse. Already-numeric values pass through unchanged.
-
-    Returns:
-        A float64 series the same length as `s`, `NaN` wherever a value is missing
-        or does not parse as a number.
-    """
-    # https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0.
-    if PANDAS_BELOW_3 and _may_hold_a_string(s):
-        return _to_numeric_or_nan_below_pandas_3(s)
-    coerced = pd.to_numeric(s, errors="coerce")
-    # `pd.to_numeric` narrows to int64 when nothing needs NaN; forced to float64 so
-    # this always matches the workaround above, regardless of installed pandas.
-    return coerced.astype("float64", **_ASTYPE_NO_COPY_KWARGS)
-
-
-def _may_hold_a_string(s: pd.Series) -> bool:
-    """Whether `s` could hold a `str` (the only thing the overflow bug can hit).
-
-    `s.dtype.kind` alone answers this for a native numeric dtype, but not for
-    `object` (also the kind of `category`/`string`/pandas 3's default `str`
-    dtype): a column of numbers boxed in an `object` array has the same kind as
-    one holding actual text, so that case falls through to `infer_dtype`.
-    """
-    if s.dtype.kind in NUMERIC_DTYPE_KINDS:
-        return False
-    return infer_dtype(s, skipna=True) not in {
-        "integer",
-        "floating",
-        "decimal",
-        "boolean",
-        "complex",
-        "empty",
-        "mixed-integer-float",
-    }
-
-
-def _to_numeric_or_nan_below_pandas_3(s: pd.Series) -> pd.Series:
-    """The pandas < 3 workaround: parse one value at a time with the built-in `float`.
-
-    The built-in does not share `to_numeric`'s overflow bug, at the cost of no
-    longer being vectorized; `_may_hold_a_string` limits this to columns that
-    could actually trigger it.
-    """
-    return s.map(_parse_float_or_nan).astype("float64")
-
-
-def _parse_float_or_nan(value: object) -> float:
-    if pd.isna(value):
-        return float("nan")
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return float("nan")
-
-
 def _align_columns_to_fitted_dtypes(
     X: pd.DataFrame, ord_encoder: OrderPreservingColumnTransformer
 ) -> pd.DataFrame:
@@ -369,8 +309,8 @@ def _align_columns_to_fitted_dtypes(
       sklearn's ``_check_unknown`` takes its numeric branch and compares float values
       against the string ``categories_``, raising a ``TypeError``.
     * numeric at fit, string at predict -> the column is cast to numeric via
-      `to_numeric_or_nan`. Numeric-looking strings match their fit category;
-      non-numeric strings become ``NaN`` (treated as missing).
+      ``pd.to_numeric(..., errors="coerce")``. Numeric-looking strings match their fit
+      category; non-numeric strings become ``NaN`` (treated as missing).
 
     Either way, values that do not match a fit category map to the encoder's unknown
     code. A dtype change between fit and predict usually signals an inconsistent feature
@@ -404,7 +344,7 @@ def _align_columns_to_fitted_dtypes(
     if to_string:
         X[to_string] = X[to_string].astype("string")
     for col in to_numeric:
-        X[col] = to_numeric_or_nan(X[col].astype("object"))
+        X[col] = pd.to_numeric(X[col].astype("object"), errors="coerce")
     return X
 
 
