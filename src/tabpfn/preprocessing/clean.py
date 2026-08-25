@@ -41,9 +41,9 @@ OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
-# Before 3.0 `astype` copies every column by default, including the ones it is not
-# casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
-_ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
+# Before 3.0 `astype` copies by default; from 3.0 copy-on-write already makes an
+# unneeded copy a no-op, and passing `copy=False` explicitly warns.
+_ASTYPE_NO_COPY_KWARGS = {"copy": False} if PANDAS_BELOW_3 else {}
 
 _FLOAT64 = np.dtype(np.float64)
 
@@ -95,7 +95,7 @@ def _cast_columns(
 
     # fallback: never costly in time
     # cast only the columns that need to be:
-    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
+    return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_NO_COPY_KWARGS)
 
 
 def clean_data(
@@ -310,7 +310,10 @@ def to_numeric_or_nan(s: pd.Series) -> pd.Series:
     # https://github.com/pandas-dev/pandas/issues/63650, fixed upstream in pandas 3.0.
     if PANDAS_BELOW_3 and _may_hold_a_string(s):
         return _to_numeric_or_nan_below_pandas_3(s)
-    return pd.to_numeric(s, errors="coerce")
+    coerced = pd.to_numeric(s, errors="coerce")
+    # `pd.to_numeric` narrows to int64 when nothing needs NaN; forced to float64 so
+    # this always matches the workaround above, regardless of installed pandas.
+    return coerced.astype("float64", **_ASTYPE_NO_COPY_KWARGS)
 
 
 def _may_hold_a_string(s: pd.Series) -> bool:

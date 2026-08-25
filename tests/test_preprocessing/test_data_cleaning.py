@@ -742,6 +742,23 @@ def test__to_numeric_or_nan__below_pandas_3__dispatches_to_workaround() -> None:
     assert out.tolist() == [1.5, 3.0]
 
 
+@pytest.mark.parametrize("pandas_below_3", [True, False])
+def test__to_numeric_or_nan__clean_integer_strings__always_returns_float64(
+    pandas_below_3: bool,
+) -> None:
+    """`pandas.to_numeric` alone narrows this to int64; both paths must agree.
+
+    Regression for the two paths disagreeing on dtype for a column with nothing
+    to coerce to NaN: `pandas.to_numeric` returns its narrowest lossless dtype
+    (int64 here), while the pandas < 3 workaround always returns float64.
+    """
+    with mock.patch.object(clean_module, "PANDAS_BELOW_3", new=pandas_below_3):
+        out = to_numeric_or_nan(pd.Series(["1", "2", "3"]))
+
+    assert out.dtype == np.float64
+    assert out.tolist() == [1.0, 2.0, 3.0]
+
+
 def test__to_numeric_or_nan__numeric_object_column__skips_the_workaround() -> None:
     """`_may_hold_a_string` should rule out a column with no `str` values at all.
 
