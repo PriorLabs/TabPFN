@@ -270,7 +270,9 @@ class EfficientColumnTransformer(ColumnTransformer):
                 continue
             if isinstance(columns, (list, np.ndarray, pd.Index)):
                 return name, list(columns)
+            # slow path: can't identify the column order
             return name, None
+        # fast path: nothing gets transformed
         return None, []
 
     def _can_assemble(self, X: XType, probe: XType, selected: list[Any] | None) -> bool:
