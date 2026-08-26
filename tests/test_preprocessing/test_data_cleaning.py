@@ -1217,3 +1217,25 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     out = fix_dtypes(frame, cat_indices=None)
 
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
+
+
+def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
+    """Documents a known, pre-existing bug rather than fixing it here.
+
+    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
+    converts the whole frame to one numpy array, and numpy has no dtype that unifies
+    `datetime64` with a numeric or string column. A fix would need to convert such a
+    column to a string (or otherwise numpy-unifiable type) before validation, which
+    is lossy for `datetime64[ns]` (no string format captures full nanosecond
+    precision) and is deferred to a follow-up rather than solved in this PR.
+    """
+    n = 50
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
+    )
+    y = rng.integers(0, 2, n)
+
+    clf = TabPFNClassifier(n_estimators=1, device="cpu")
+    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
+        clf.fit(X, y)

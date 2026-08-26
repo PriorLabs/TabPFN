@@ -197,6 +197,7 @@ def _schema_from_dataframe(df: pd.DataFrame) -> tuple[np.ndarray, FeatureSchema]
         min_samples_for_inference=1,
         max_unique_for_category=6,
         min_unique_for_numerical=5,
+        min_cardinality_for_text=6,
     )
     return X, schema
 

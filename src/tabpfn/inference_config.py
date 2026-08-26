@@ -68,6 +68,19 @@ class InferenceConfig:
     """The minimum number of samples in the data to run our infer which features might
     be categorical."""
 
+    MIN_CARDINALITY_FOR_TEXT: int = 30
+    """Number of distinct values above which a string column is read as text
+    rather than as a category. A separate decision from
+    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, which governs numerical-vs-categorical:
+    that one describes when a *number* is few enough to be a category, this one
+    describes when a *string* is varied enough to be text rather than a category,
+    and there is no reason the two should move together.
+
+    Set equal to `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` for now, so decoupling the
+    two into a separate field does not itself change any default behavior. A
+    follow-up that adds an actual text-encoding capability is expected to raise
+    this default independently."""
+
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
         - If None, no outliers are removed.
