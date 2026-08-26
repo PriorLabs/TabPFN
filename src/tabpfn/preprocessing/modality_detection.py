@@ -113,9 +113,7 @@ def _demote_dates(
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    Only called when `use_dates` is off (and there's at least one `DATE`
-    feature), so every one is demoted -- to whichever a same-shaped non-date
-    string would get, via the same cardinality checks.
+    Only called when `use_dates` is off, so every detected date is demoted.
 
     Returns:
         The updated schema, and the demoted column names, for the caller to
@@ -126,7 +124,10 @@ def _demote_dates(
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        if _detect_numeric_as_categorical(  # noqa: SIM114
+        # Two different reasons can produce CATEGORICAL here, kept as separate
+        # branches (not combined with `or`, despite what the linter suggests)
+        # so each is legible on its own.
+        if _is_categorical_by_cardinality(  # noqa: SIM114
             n_unique=n_unique,
             reported_categorical=index in declared,
             max_unique_for_category=max_unique_for_category,
@@ -247,7 +248,7 @@ def _detect_feature_modality(
         return FeatureModality.CONSTANT
 
     if _is_numeric_pandas_series(s):
-        if _detect_numeric_as_categorical(
+        if _is_categorical_by_cardinality(
             n_unique=n_unique,
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
@@ -346,7 +347,7 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     return bool(parsed.notna().all())
 
 
-def _detect_numeric_as_categorical(
+def _is_categorical_by_cardinality(
     n_unique: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
@@ -354,11 +355,13 @@ def _detect_numeric_as_categorical(
     reported_categorical: bool,
     big_enough_n_to_infer_cat: bool,
 ) -> bool:
-    """Detecting if a numerical feature is categorical depending on heuristics:
-    - Feature reported as categoricals are treated as such, as long as they
-      aren't highly cardinal.
-    - For non-reported numerical ones, we infer them as such if they are
-      sufficiently low-cardinal.
+    """Whether `n_unique` is low enough to call this column CATEGORICAL.
+
+    Looks only at cardinality, never at the column's actual values, so it's
+    reused for both a numeric column (CATEGORICAL vs NUMERICAL) and a detected
+    date (CATEGORICAL vs left for the caller to demote or expand):
+    - Declared categorical: treated as such, as long as it isn't highly cardinal.
+    - Otherwise: inferred as such if it's sufficiently low-cardinal.
     """
     if reported_categorical:
         if n_unique <= max_unique_for_category:
