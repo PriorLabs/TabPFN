@@ -862,18 +862,23 @@ class TestDateLikeColumnDetection:
             schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.TEXT
 
-    def test__declared_categorical_date_column__is_categorical(self) -> None:
-        """Declaring it categorical only wins within `max_unique_for_category`,
-        exactly like a declared-categorical numeric column.
+    def test__declared_categorical_date_column__declaration_has_no_effect(
+        self,
+    ) -> None:
+        """A declared-categorical date gets no special treatment once demoted,
+        exactly like a declared-categorical non-date string already doesn't
+        (see `test__declared_categorical_columns__do_not_warn`): only
+        `min_cardinality_for_text` decides, `max_unique_for_category` is not
+        even consulted, even though it would have saved this column.
         """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(10)})
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(40)})
         schema = detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
             provided_categorical_indices=[1],
             min_samples_for_inference=100,
-            max_unique_for_category=30,
+            max_unique_for_category=50,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
         )
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+        assert schema.features[1].modality is FeatureModality.TEXT

@@ -89,13 +89,7 @@ def detect_feature_modalities(
 
     if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
-            feature_schema,
-            X,
-            provided_categorical_indices=provided_categorical_indices,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
-            min_cardinality_for_text=min_cardinality_for_text,
-            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            feature_schema, X, min_cardinality_for_text=min_cardinality_for_text
         )
         _warn_on_dates(demoted_date_columns)
     return feature_schema
@@ -105,40 +99,31 @@ def _demote_dates(
     feature_schema: FeatureSchema,
     X: np.ndarray,
     *,
-    provided_categorical_indices: Sequence[int] | None,
-    max_unique_for_category: int,
-    min_unique_for_numerical: int,
     min_cardinality_for_text: int,
-    big_enough_n_to_infer_cat: bool,
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    Only called when `use_dates` is off, so every detected date is demoted.
+    Only called when `use_dates` is off, so every detected date is demoted --
+    via the same cardinality rule a same-shaped non-date string already gets
+    in `_classify_string_like_column`. A date is never numeric by the time
+    it's tagged `DATE` (the numeric check already ran and failed), so there's
+    no numeric-style threshold to reuse, and no `reported_categorical` either:
+    a declared-categorical *string* gets no special treatment today, so a
+    declared-categorical date shouldn't either.
 
     Returns:
         The updated schema, and the demoted column names, for the caller to
         warn about.
     """
-    declared = set(provided_categorical_indices or ())
     features = list(feature_schema.features)
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        # Two different reasons can produce CATEGORICAL here, kept as separate
-        # branches (not combined with `or`, despite what the linter suggests)
-        # so each is legible on its own.
-        if _detect_numeric_as_categorical(  # noqa: SIM114
-            n_unique=n_unique,
-            reported_categorical=index in declared,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
-            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        ):
-            demoted = FeatureModality.CATEGORICAL
-        elif n_unique <= min_cardinality_for_text:
-            demoted = FeatureModality.CATEGORICAL
-        else:
-            demoted = FeatureModality.TEXT
+        demoted = (
+            FeatureModality.CATEGORICAL
+            if n_unique <= min_cardinality_for_text
+            else FeatureModality.TEXT
+        )
         features[index] = dataclasses.replace(features[index], modality=demoted)
         demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
     return FeatureSchema(features=features), demoted_columns
