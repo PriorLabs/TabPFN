@@ -234,8 +234,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
-    date_encoders_: dict[str, FittedDatetimeEncoder]
-    """Date encoders by column name, if `USE_DATES` is on and dates are found."""
+    date_encoders_: dict[int, FittedDatetimeEncoder]
+    """Date encoders by column index, if `USE_DATES` is on and dates are found."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""

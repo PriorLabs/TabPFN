@@ -66,9 +66,8 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     # More than just the original numeric column survives: the date expanded.
     assert X_out.shape[1] > 2
 
-    assert list(fitted) == ["input_signed_on"]
-    fitted_encoder = fitted["input_signed_on"]
-    assert fitted_encoder.column_index == 1
+    assert list(fitted) == [1]
+    fitted_encoder = fitted[1]
     assert len(fitted_encoder.output_names) == X_out.shape[1] - 1
     assert all(
         name.startswith("input_signed_on_") for name in fitted_encoder.output_names
@@ -92,7 +91,7 @@ def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
     names = schema_out.feature_names
     assert len(names) == len(set(names))
     assert "input_signed_on_0" in names
-    assert fitted["input_signed_on"].output_names[0] != "input_signed_on_0"
+    assert fitted[0].output_names[0] != "input_signed_on_0"
 
 
 def test__expand_before_clean__vs__clean_before_expand() -> None:
@@ -208,7 +207,7 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
         model.fit(X, y)
 
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    assert "input_signed_on" in model.date_encoders_
+    assert 1 in model.date_encoders_  # "signed_on" is the second input column
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)

@@ -23,9 +23,8 @@ if TYPE_CHECKING:
 
 @dataclasses.dataclass
 class FittedDatetimeEncoder:
-    """A fitted `DatetimeEncoder` for one column, and what's needed to reapply it."""
+    """A fitted `DatetimeEncoder` for one column, and its output column names."""
 
-    column_index: int
     encoder: DatetimeEncoder
     output_names: list[str]
 
@@ -60,7 +59,6 @@ def _parse_dates(column: pd.Series) -> pd.Series:
 
 def _fit_one_column(
     column: pd.Series,
-    index: int,
     name: str,
     existing_names: list[str],
 ) -> tuple[pd.DataFrame, FittedDatetimeEncoder]:
@@ -71,9 +69,7 @@ def _fit_one_column(
         [f"{name}_{i}" for i in range(raw_encoded.shape[1])], existing=existing_names
     )
     encoded = raw_encoded.set_axis(output_names, axis=1)
-    fitted_encoder = FittedDatetimeEncoder(
-        column_index=index, encoder=encoder, output_names=output_names
-    )
+    fitted_encoder = FittedDatetimeEncoder(encoder=encoder, output_names=output_names)
     return encoded, fitted_encoder
 
 
@@ -87,22 +83,21 @@ def expand_date_features(
     X: np.ndarray,
     feature_schema: FeatureSchema | None,
     *,
-    fitted: dict[str, FittedDatetimeEncoder] | None = None,
-) -> tuple[np.ndarray, FeatureSchema | None, dict[str, FittedDatetimeEncoder]]:
+    fitted: dict[int, FittedDatetimeEncoder] | None = None,
+) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
     """Expand every `DATE`-modality column into numbers, via `DatetimeEncoder`.
 
     Args:
         X: The data, before any dtype fixing.
         feature_schema: The schema to fit against; `None` at predict time.
-        fitted: Previously fitted encoders, keyed by column name, to reuse at
+        fitted: Previously fitted encoders, keyed by column index, to reuse at
             predict time instead of fitting new ones.
 
     Returns:
         The (possibly wider) data, the updated schema, and the fitted encoders.
     """
     if fitted is not None:
-        by_index = {fe.column_index: fe for fe in fitted.values()}
-        to_expand = sorted(by_index)
+        to_expand = sorted(fitted)
     else:
         assert feature_schema is not None, "feature_schema is required to fit"
         to_expand = sorted(feature_schema.indices_for(FeatureModality.DATE))
@@ -110,7 +105,7 @@ def expand_date_features(
         return X, feature_schema, fitted or {}
 
     frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
-    new_fitted: dict[str, FittedDatetimeEncoder] = {}
+    new_fitted: dict[int, FittedDatetimeEncoder] = {}
     existing_names = list(feature_schema.feature_names) if feature_schema else []
     encoded_blocks: list[pd.DataFrame] = []
     for index in to_expand:
@@ -118,15 +113,13 @@ def expand_date_features(
         # column label is an int, which can't take a suffix.
         column = frame.iloc[:, index].rename(str(index))
         if fitted is not None:
-            encoded = _apply_one_column(column, by_index[index])
+            encoded = _apply_one_column(column, fitted[index])
         else:
             assert feature_schema is not None
             name = feature_schema.features[index].name
-            encoded, fitted_encoder = _fit_one_column(
-                column, index, name, existing_names
-            )
+            encoded, fitted_encoder = _fit_one_column(column, name, existing_names)
             existing_names += fitted_encoder.output_names
-            new_fitted[name] = fitted_encoder
+            new_fitted[index] = fitted_encoder
         encoded_blocks.append(encoded.reset_index(drop=True))
 
     remaining = frame.drop(columns=frame.columns[to_expand])
@@ -150,7 +143,7 @@ def encode_multimodal_data(
     X: np.ndarray,
     feature_schema: FeatureSchema | None,
     *,
-    fitted: dict[str, FittedDatetimeEncoder] | None = None,
-) -> tuple[np.ndarray, FeatureSchema | None, dict[str, FittedDatetimeEncoder]]:
+    fitted: dict[int, FittedDatetimeEncoder] | None = None,
+) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
     """Encode every modality with an encoder available (today: dates)."""
     return expand_date_features(X, feature_schema, fitted=fitted)
