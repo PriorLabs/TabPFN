@@ -95,13 +95,8 @@ class FeatureModality(str, Enum):
     or categorical features, while a string could represent categorical
     or text features.
 
-    ``DATE`` is reserved, not yet produced by anything: `detect_feature_modalities`
-    already recognizes a date-like string column internally, but since no step
-    yet expands a date into calendar features, it is always demoted to whichever
-    of `CATEGORICAL`/`TEXT` its cardinality implies, the same modality it would
-    have gotten had it never been recognized as a date. A future change that adds
-    that expansion step is expected to return this modality for such a column
-    instead.
+    ``DATE`` is reserved and not yet produced by anything; a recognized date is
+    always demoted to `CATEGORICAL`/`TEXT` for now.
     """
 
     NUMERICAL = "numerical"

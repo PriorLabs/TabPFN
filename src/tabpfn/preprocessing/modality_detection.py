@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import math
 import warnings
-from collections.abc import Collection, Sequence
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -65,9 +65,10 @@ def detect_feature_modalities(
             The minimum number of unique values for a
             feature to be considered numerical.
         min_cardinality_for_text: The number of distinct values above which a
-            string column (not a date) is `TEXT` rather than `CATEGORICAL`. A
-            separate decision from `max_unique_for_category`/
-            `min_unique_for_numerical`, which govern numerical-vs-categorical.
+            candidate string column (one that wasn't parsed as a number or a
+            date) is `TEXT` rather than `CATEGORICAL`. A separate decision from
+            `max_unique_for_category`/`min_unique_for_numerical`, which govern
+            numerical-vs-categorical.
 
     Returns:
         A dictionary with the feature modalities as keys and the column as
@@ -93,34 +94,12 @@ def detect_feature_modalities(
             date_columns.append(feature_name.removeprefix(INPUT_FEATURE_PREFIX))
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    _warn_about_dates(date_columns)
-    _warn_if_text_features(
+    _warn_about_text_or_dates(
         feature_schema,
+        date_columns,
         declared_categorical_indices=provided_categorical_indices,
-        already_reported_columns=date_columns,
     )
     return feature_schema
-
-
-def _warn_about_dates(date_columns: list[str]) -> None:
-    """Say which columns hold dates, so they are not reported only as free text.
-
-    Nothing expands a date into calendar features yet, so a recognized date is
-    always read as a plain category or text, same as before it was recognized as
-    one; this only makes that explicit instead of leaving it to be reported as
-    generic free text, which would suggest remedies that do not apply to a date.
-    """
-    if not date_columns:
-        return
-    warnings.warn(
-        f"These columns hold dates, which are not yet expanded into calendar "
-        f"features, so they are read as plain categories or text: "
-        f"{_format_names_for_warning(date_columns)}.",
-        UserWarning,
-        # Same call depth as `_warn_if_text_features`, called from the same point
-        # in `detect_feature_modalities`; see the comment there for the frame count.
-        stacklevel=6,
-    )
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -132,19 +111,25 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_if_text_features(
+def _warn_about_text_or_dates(
     feature_schema: FeatureSchema,
+    date_columns: list[str],
     *,
     declared_categorical_indices: Sequence[int] | None = None,
-    already_reported_columns: Collection[str] = (),
 ) -> None:
-    """Warn when input columns look like free text rather than categoricals.
+    """Warn about date columns, then about any remaining free-text columns.
+
+    Nothing expands a date into calendar features yet, so a recognized date is
+    always read as a plain category or text, same as before it was recognized as
+    one; naming it explicitly avoids reporting it as generic free text, which
+    would suggest remedies that do not apply to a date.
 
     High-cardinality string columns are labelled `FeatureModality.TEXT` by
     `detect_feature_modalities` and are then swept into the same `OrdinalEncoder` as
     real categoricals, which selects columns by dtype (see `get_ordinal_encoder`).
     That turns near-unique text into near-unique integer codes, i.e. noise rather
-    than signal, without any error to hint at it.
+    than signal, without any error to hint at it. A date column is excluded from
+    this second warning since it was already reported above.
 
     Called by `detect_feature_modalities` while the schema still carries the TEXT
     labels, i.e. before the first preprocessing step that rebuilds it, since
@@ -152,18 +137,24 @@ def _warn_if_text_features(
 
     Args:
         feature_schema: The schema produced by `detect_feature_modalities`.
+        date_columns: Names of columns recognized as date-like.
         declared_categorical_indices: Positional indices the caller passed as
             `categorical_features_indices`. These are never reported: declaring a
             column categorical states that the user already knows it holds
             non-numeric values and intends them as categories, so warning about it
             would be noise.
-        already_reported_columns: Names already warned about elsewhere. A date
-            column reported by `_warn_about_dates` reaches here as a
-            high-cardinality string, and reporting it again as free text would
-            offer remedies that do not apply to a date.
     """
+    if date_columns:
+        warnings.warn(
+            f"These columns hold dates, which are not yet expanded into calendar "
+            f"features, so they are read as plain categories or text: "
+            f"{_format_names_for_warning(date_columns)}.",
+            UserWarning,
+            stacklevel=6,
+        )
+
     declared = set(declared_categorical_indices or ())
-    reported = set(already_reported_columns)
+    reported = set(date_columns)
     text_names = [
         name
         for index, feature in enumerate(feature_schema.features)
