@@ -446,6 +446,34 @@ def test__early_exit_not_fooled_by_uninformative_prefix():
     assert _for_test_detect_with_defaults(s) == FeatureModality.NUMERICAL
 
 
+def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
+    """The early-exit threshold must include `min_cardinality_for_text` too.
+
+    Regression: `decided_at` only considered `max_unique_for_category` and
+    `min_unique_for_numerical`. With `min_cardinality_for_text` set above both
+    (the real defaults are 30 and 40), a string column whose prefix already
+    clears the first two, but not the text threshold, stopped scanning early
+    and used the undercounted prefix value to decide category-vs-text --
+    silently leaving a genuinely high-cardinality column CATEGORICAL, so
+    neither `USE_TEXT` encoding nor the free-text warning ever saw it.
+    """
+    # Prefix cycles through only 8 distinct values, clearing
+    # max_unique_for_category (5) and min_unique_for_numerical (3) alone, but
+    # the tail introduces new values the prefix never saw, pushing the true
+    # count past min_cardinality_for_text (10).
+    prefix = [f"v{i % 8}" for i in range(_EARLY_EXIT_PREFIX_ROWS)]
+    tail = [f"new{i}" for i in range(10)]
+    s = pd.Series(prefix + tail)
+
+    result = _for_test_detect_with_defaults(
+        s,
+        max_unique_for_category=5,
+        min_unique_for_numerical=3,
+        min_cardinality_for_text=10,
+    )
+    assert result == FeatureModality.TEXT
+
+
 def _text_schema(*names: str) -> FeatureSchema:
     """Schema of TEXT features with the `input_` prefix real input names carry."""
     return FeatureSchema(

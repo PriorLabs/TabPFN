@@ -235,12 +235,25 @@ def _detect_feature_modality(
     """
     # Early exit for the distinct count: counts only grow with the number of
     # rows scanned, and every comparison below is against a threshold of at
-    # most max(max_unique_for_category, min_unique_for_numerical). So once a
-    # small prefix of the column already exceeds all of them, every decision
-    # equals the full-column one and scanning the remaining rows is skipped —
-    # the common case for continuous columns. Low-cardinality columns fall
-    # through to the exact full count, paying one extra prefix pass.
-    decided_at = max(max_unique_for_category, min_unique_for_numerical, 1) + 1
+    # most max(max_unique_for_category, min_unique_for_numerical,
+    # min_cardinality_for_text). So once a small prefix of the column already
+    # exceeds all of them, every decision equals the full-column one and
+    # scanning the remaining rows is skipped — the common case for continuous
+    # columns. Low-cardinality columns fall through to the exact full count,
+    # paying one extra prefix pass. `min_cardinality_for_text` has to be
+    # included here too: `_classify_string_like_column` compares against it as
+    # well, and it can be set above the other two (the default already is),
+    # in which case a prefix count that clears only those two would stop early
+    # on an undercount and land a long TEXT column on CATEGORICAL instead.
+    decided_at = (
+        max(
+            max_unique_for_category,
+            min_unique_for_numerical,
+            min_cardinality_for_text,
+            1,
+        )
+        + 1
+    )
     n_unique = 0
     if len(s) > _EARLY_EXIT_PREFIX_ROWS:
         n_unique = _get_unique_with_sklearn_compatible_error(
