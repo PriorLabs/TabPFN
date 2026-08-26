@@ -1047,9 +1047,11 @@ def test__efficient_column_transformer__declines_routed_metadata(
     X = _mixed_frame()
     transformer = get_ordinal_encoder()
 
-    # Left to sklearn to accept or refuse -- which without metadata routing enabled
-    # is to refuse. What must not happen is an assembly that ignores it.
-    with pytest.raises(ValueError, match="enable_metadata_routing"):
+    # Left to sklearn to accept or refuse -- which without metadata routing enabled is
+    # to refuse: a `ValueError` saying so, or, on the sklearn 1.2 floor whose
+    # `fit_transform` takes no such parameter at all, a `TypeError` from the call.
+    # What must not happen is an assembly that ignores it.
+    with pytest.raises((TypeError, ValueError), match="sample_weight"):
         transformer.fit_transform(X, None, encoder__sample_weight=np.ones(6))
 
     assert assemblies == []
