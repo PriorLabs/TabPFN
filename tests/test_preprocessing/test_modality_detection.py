@@ -44,6 +44,7 @@ def test__detect_feature_modalities_basic():
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=5,
+        min_cardinality_for_text=3,
     )
     assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0]
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
@@ -110,6 +111,7 @@ def test__detect_feature_modalities__input_types(
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=4,  # small so we detect numericals
+        min_cardinality_for_text=3,
     )
     assert (
         feature_schema.indices_for(FeatureModality.NUMERICAL)
@@ -129,12 +131,14 @@ def _for_test_detect_with_defaults(
     reported_categorical: bool = False,
     big_enough_n_to_infer_cat: bool = True,
     use_dates: bool = False,
+    min_cardinality_for_text: int = 10,
 ) -> FeatureModality:
     modality, _ = _detect_feature_modality(
         s,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         use_dates=use_dates,
     )
@@ -280,7 +284,7 @@ def test__detect_for_categorical_with_category_dtype():
 
 def test__detect_textual_feature():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
 
 
@@ -301,18 +305,18 @@ def test__detect_long_texts():
             "Last one",
         ]
     )
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
 
 def test__detect_text_as_object():
     s = pd.Series(["a", "b", "c", "e", "f"], dtype=object)
     s = s.astype(object)
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
 
@@ -394,6 +398,7 @@ def test__infer_categorical_features(
         min_samples_for_inference=min_samples_for_inference,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=30,
         provided_categorical_indices=provided,
     )
     assert (
@@ -475,7 +480,7 @@ class TestWarnIfTextFeatures:
         assert "'review'" in message
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
-        assert "MAX_UNIQUE_FOR_CATEGORICAL_FEATURES" in message
+        assert "MIN_CARDINALITY_FOR_TEXT" in message
         assert "USE_TEXT" in message
         assert "categorical_features_indices" in message
 
@@ -540,6 +545,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
         )
 
     def test__free_text_column__warns(self) -> None:
@@ -689,6 +695,35 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
     assert not [w for w in caught if "look like free text" in str(w.message)]
 
 
+def test__category_and_text_thresholds__move_independently() -> None:
+    """Numerical-vs-categorical and categorical-vs-text are separate decisions.
+
+    A numeric column with 35 distinct values and a string column with 35 distinct
+    values, under the same `max_unique_for_category`, land on opposite sides of
+    it for reasons that have nothing to do with each other: the number is simply
+    above the categorical cutoff, the string is below the (independent) text
+    cutoff. Coupling the two, as an earlier version of this code did, would make
+    `min_cardinality_for_text` silently move whenever
+    `max_unique_for_category` did.
+    """
+    rng = np.random.default_rng(0)
+    numeric_column = rng.choice(35, size=200).astype(float)
+    string_column = np.array([f"g{i % 35}" for i in range(200)], dtype=object)
+    X = np.column_stack([numeric_column, string_column])
+
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=["num", "str"],
+        min_samples_for_inference=100,
+        max_unique_for_category=30,  # below 35: the number is NUMERICAL
+        min_unique_for_numerical=4,
+        min_cardinality_for_text=40,  # above 35: the string is CATEGORICAL
+    )
+
+    assert schema.features[0].modality is FeatureModality.NUMERICAL
+    assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+
 class TestDetectFeatureModalitiesDate:
     """`detect_feature_modalities` recognizing date-like string columns.
 
@@ -711,6 +746,7 @@ class TestDetectFeatureModalitiesDate:
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
             use_dates=use_dates,
             use_text=use_text,
         )
@@ -802,6 +838,7 @@ class TestDetectFeatureModalitiesDate:
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
             use_dates=True,
         )
         assert schema.features[1].modality is FeatureModality.CATEGORICAL

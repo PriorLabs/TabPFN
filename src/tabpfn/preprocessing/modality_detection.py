@@ -38,6 +38,7 @@ def detect_feature_modalities(
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
     use_dates: bool = False,
     use_text: bool = False,
     provided_categorical_indices: Sequence[int] | None = None,
@@ -66,6 +67,10 @@ def detect_feature_modalities(
         min_unique_for_numerical:
             The minimum number of unique values for a
             feature to be considered numerical.
+        min_cardinality_for_text: The number of distinct values above which a
+            string column (not a date) is `TEXT` rather than `CATEGORICAL`. A
+            separate decision from `max_unique_for_category`/
+            `min_unique_for_numerical`, which govern numerical-vs-categorical.
         use_dates: Whether a date-like string column will be expanded into
             calendar features by `clean_data`. When ``False``, such a column is
             labelled `CATEGORICAL`/`TEXT` instead of `DATE`, since nothing would
@@ -96,6 +101,7 @@ def detect_feature_modalities(
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
+            min_cardinality_for_text=min_cardinality_for_text,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             use_dates=use_dates,
         )
@@ -196,9 +202,9 @@ def _warn_if_text_features(
         f"high-cardinality categoricals, which usually adds noise rather than "
         f"signal: {_format_names_for_warning(text_names)}.\n"
         "If such a column holds genuine text, raise "
-        '`inference_config={"MAX_UNIQUE_FOR_CATEGORICAL_FEATURES": ...}` above its '
-        "number of distinct values so that it is treated as a category instead, or "
-        'set `inference_config={"USE_TEXT": True}` to encode it as text.\n'
+        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
+        "distinct values so that it is treated as a category instead, or set "
+        '`inference_config={"USE_TEXT": True}` to encode it as text.\n'
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
@@ -216,6 +222,7 @@ def _detect_feature_modality(
     reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
     use_dates: bool,
 ) -> tuple[FeatureModality, bool]:
@@ -272,6 +279,7 @@ def _detect_feature_modality(
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
+            min_cardinality_for_text=min_cardinality_for_text,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
             use_dates=use_dates,
         )
@@ -287,19 +295,27 @@ def _classify_string_like_column(
     reported_categorical: bool,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
+    min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
     use_dates: bool,
 ) -> tuple[FeatureModality, bool]:
     """Classify a string/categorical-dtype column as DATE, CATEGORICAL, or TEXT.
+
+    Two independent cardinality decisions are in play here, deliberately not
+    coupled: `max_unique_for_category`/`min_unique_for_numerical` (shared with
+    the numeric branch, via `_detect_numeric_as_categorical`) decide whether a
+    low-cardinality date is just a plain category, the same call a low-cardinality
+    *number* already gets; `min_cardinality_for_text` separately decides, for
+    whatever is left a plain string, whether it is a category or text. A number
+    being few enough to be a category says nothing about how much variety makes a
+    string text, so the two thresholds are free to move independently.
 
     Returns the same `(modality, was_demoted_date)` pair as `_detect_feature_modality`.
     """
     if _is_date_like_pandas_series(s):
         # Checked before the cardinality split below, so a low-cardinality date
         # (e.g. a handful of distinct quarter-end dates) is not swallowed into
-        # CATEGORICAL before ever being recognized as a date. The same
-        # low-cardinality-to-categorical downgrade a numeric column already gets
-        # applies here too, via the same helper and the same thresholds.
+        # CATEGORICAL before ever being recognized as a date.
         if _detect_numeric_as_categorical(
             n_unique=n_unique,
             reported_categorical=reported_categorical,
@@ -316,15 +332,13 @@ def _classify_string_like_column(
             # demoted date rather than plain free text.
             demoted = (
                 FeatureModality.CATEGORICAL
-                if n_unique <= max_unique_for_category
+                if n_unique <= min_cardinality_for_text
                 else FeatureModality.TEXT
             )
             return demoted, True
         return FeatureModality.DATE, False
 
-    # This is the second cardinality threshold a string column meets, independent
-    # of the one above: below it, a string is a category; above it, it is free text.
-    if n_unique <= max_unique_for_category:
+    if n_unique <= min_cardinality_for_text:
         return FeatureModality.CATEGORICAL, False
     return FeatureModality.TEXT, False
 
