@@ -398,12 +398,15 @@ class EfficientColumnTransformer(ColumnTransformer):
             return Xt
         return self._in_input_order(X=Xt, original_columns=original_columns)
 
-    def _in_input_order(
-        self, X: XType, original_columns: list | range | pd.Index
-    ) -> XType:
-        """`X` with the columns back where the input had them."""
-        check_is_fitted(self)
-        assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
+    def _stacked_positions(
+        self, original_columns: list | range | pd.Index
+    ) -> list[int]:
+        """Where each input column sits in the output `ColumnTransformer` stacked.
+
+        Returns:
+            indices (list[int]): `indices[i]` is the column index in the output
+                corresponding to input column i.
+        """
         name, selected = self._named_selection()
         if selected is None:
             raise TypeError(
@@ -414,7 +417,6 @@ class EfficientColumnTransformer(ColumnTransformer):
         # the selection, or, unselected, at the next place after that block.
         rank = {column: index for index, column in enumerate(selected)}
         next_index = len(selected)
-        # indices[i] is the column index in X corresponding to input column i
         indices = []
         for column in original_columns:
             index = rank.get(column)
@@ -422,6 +424,15 @@ class EfficientColumnTransformer(ColumnTransformer):
                 # column wasn't input to the transformer
                 index, next_index = next_index, next_index + 1
             indices.append(index)
+        return indices
+
+    def _in_input_order(
+        self, X: XType, original_columns: list | range | pd.Index
+    ) -> XType:
+        """`X` with the columns back where the input had them."""
+        check_is_fitted(self)
+        assert X.ndim == 2, f"Expected 2D input, got {X.ndim}D (shape={X.shape})"
+        indices = self._stacked_positions(original_columns)
         # Nothing moved, and the gather below is a full-size copy -- but only skipped
         # where it would also leave the layout alone, since it hands back a
         # Fortran-contiguous array whatever it was given and `_assembled_order` says
@@ -504,6 +515,22 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
                 f"{self.remainder!r} does not. Note that `ColumnTransformer`'s default "
                 "is 'drop': pass `remainder=FunctionTransformer()` to keep them."
             )
+
+    @override
+    def get_feature_names_out(self, input_features: Any = None) -> np.ndarray:
+        """The names of the output's columns, in the order the output has them.
+
+        `ColumnTransformer` names its two blocks in the order it stacked them, which is
+        the order the reorder above undoes. Left as it is, the name a column is given
+        is the one belonging to whatever used to sit at its position -- silently, since
+        sklearn's `set_output` wrapper labels a pandas output with exactly this.
+        """
+        names = super().get_feature_names_out(input_features)
+        # the input's own keys, which is what the selection is expressed in
+        original_columns = getattr(self, "feature_names_in_", None)
+        if original_columns is None:
+            original_columns = range(self.n_features_in_)
+        return names[self._stacked_positions(list(original_columns))]
 
 
 def get_ordinal_encoder(
