@@ -842,6 +842,18 @@ class TestDateLikeColumnDetection:
         schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.NUMERICAL
 
+    def test__mixed_date_and_datetime_string_formats__is_still_a_date(self) -> None:
+        """Regression: naive `pd.to_datetime` infers a format from an early
+        value and silently coerces a later, differently-shaped but valid value
+        to NaT, which would otherwise fail the all-or-nothing date check.
+        """
+        values = self._dates(60)
+        values[0] = "2020-06-15 13:45:30"  # date-only pool plus one full datetime
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.TEXT
+
     def test__declared_categorical_date_column__is_categorical(self) -> None:
         """Declaring it categorical only wins within `max_unique_for_category`,
         exactly like a declared-categorical numeric column.
