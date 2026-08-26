@@ -518,13 +518,7 @@ class OrderPreservingColumnTransformer(EfficientColumnTransformer):
 
     @override
     def get_feature_names_out(self, input_features: Any = None) -> np.ndarray:
-        """The names of the output's columns, in the order the output has them.
-
-        `ColumnTransformer` names its two blocks in the order it stacked them, which is
-        the order the reorder above undoes. Left as it is, the name a column is given
-        is the one belonging to whatever used to sit at its position -- silently, since
-        sklearn's `set_output` wrapper labels a pandas output with exactly this.
-        """
+        """The names of the output's columns, in the order the output has them."""
         names = super().get_feature_names_out(input_features)
         # the input's own keys, which is what the selection is expressed in
         original_columns = getattr(self, "feature_names_in_", None)
