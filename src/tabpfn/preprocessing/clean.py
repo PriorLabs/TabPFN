@@ -18,10 +18,6 @@ from packaging.version import Version
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.date_encoding import (
-    FittedDatetimeEncoder,
-    encode_multimodal_data,
-)
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 
 if TYPE_CHECKING:
@@ -106,12 +102,7 @@ def clean_data(
     feature_schema: FeatureSchema,
     *,
     passthrough_inf: bool = False,
-) -> tuple[
-    np.ndarray,
-    OrderPreservingColumnTransformer,
-    FeatureSchema,
-    dict[str, FittedDatetimeEncoder],
-]:
+) -> tuple[np.ndarray, OrderPreservingColumnTransformer, FeatureSchema]:
     """Clean the data by converting dtypes and ordinally encoding categorical columns.
 
     Args:
@@ -122,13 +113,9 @@ def clean_data(
             `process_text_na_dataframe`).
 
     Returns:
-        A tuple containing the cleaned data, the ordinal encoder, the inferred
-        feature modalities, and the fitted multimodal encoders (empty when no
-        `DATE`-modality column was expanded).
+        A tuple containing the cleaned data, the ordinal encoder, and the inferred
+        feature modalities.
     """
-    X, feature_schema, date_encoders = encode_multimodal_data(X, feature_schema)
-    assert feature_schema is not None
-
     cat_indices = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
     # Ensure categories are ordinally encoded
@@ -157,7 +144,6 @@ def clean_data(
             np.array(X, dtype=np.float64, order="F", copy=True),
             ord_encoder,
             feature_schema,
-            date_encoders,
         )
 
     # Will convert inferred categorical indices to category dtype,
@@ -172,7 +158,7 @@ def clean_data(
         passthrough_inf=passthrough_inf,
     )
 
-    return X_numpy, ord_encoder, feature_schema, date_encoders
+    return X_numpy, ord_encoder, feature_schema
 
 
 def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:

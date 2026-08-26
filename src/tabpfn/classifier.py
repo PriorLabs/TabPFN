@@ -745,7 +745,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
             use_dates=self.inference_config_.USE_DATES,
         )
-        X, ordinal_encoder, feature_schema, date_encoders = clean_data(
+        X, feature_schema, date_encoders = encode_multimodal_data(X, feature_schema)
+        X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
