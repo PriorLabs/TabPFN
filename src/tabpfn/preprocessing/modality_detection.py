@@ -87,10 +87,6 @@ def detect_feature_modalities(
     # Before dates are demoted, so a date isn't yet TEXT and is never counted here.
     _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
 
-    demoted_date_columns: list[str] = []
-    # `_demote_dates` is what honors a declared-categorical column via
-    # `_detect_numeric_as_categorical`; skipping it when `use_dates` is on means
-    # a declared-categorical date is expanded anyway, the declaration ignored.
     if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
             feature_schema,
@@ -101,7 +97,6 @@ def detect_feature_modalities(
             min_cardinality_for_text=min_cardinality_for_text,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
-    if demoted_date_columns:
         _warn_on_dates(demoted_date_columns)
     return feature_schema
 
