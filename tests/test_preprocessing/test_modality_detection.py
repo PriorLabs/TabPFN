@@ -132,7 +132,7 @@ def _for_test_detect_with_defaults(
     big_enough_n_to_infer_cat: bool = True,
     min_cardinality_for_text: int = 10,
 ) -> FeatureModality:
-    modality, _ = _detect_feature_modality(
+    return _detect_feature_modality(
         s,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
@@ -140,7 +140,6 @@ def _for_test_detect_with_defaults(
         min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     )
-    return modality
 
 
 def _for_test_detect_modality(
@@ -494,11 +493,11 @@ class TestWarnAboutTextOrDates:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_about_text_or_dates(schema, [])
+            _warn_about_text_or_dates(schema)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_about_text_or_dates(_text_schema("review"), [])
+            _warn_about_text_or_dates(_text_schema("review"))
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -513,14 +512,14 @@ class TestWarnAboutTextOrDates:
         schema = _text_schema("sku", "review")
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_about_text_or_dates(schema, [], declared_categorical_indices=[0])
+            _warn_about_text_or_dates(schema, declared_categorical_indices=[0])
         message = str(record[0].message)
         assert "'review'" in message
         assert "'sku'" not in message
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_about_text_or_dates(schema, [], declared_categorical_indices=[0, 1])
+            _warn_about_text_or_dates(schema, declared_categorical_indices=[0, 1])
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -528,7 +527,7 @@ class TestWarnAboutTextOrDates:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_about_text_or_dates(schema, [])
+            _warn_about_text_or_dates(schema)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
