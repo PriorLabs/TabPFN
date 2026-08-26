@@ -9,7 +9,8 @@ nothing would consume `FeatureModality.DATE` otherwise.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import dataclasses
+from typing import TYPE_CHECKING
 
 import pandas as pd
 
@@ -21,8 +22,14 @@ if TYPE_CHECKING:
 
     from tabpfn.preprocessing.datamodel import FeatureSchema
 
-#: Fitted (encoder, output column names) per original column index.
-FittedDateEncoders = dict[int, tuple[Any, list[str]]]
+
+@dataclasses.dataclass
+class FittedDatetimeEncoder:
+    """A fitted `DatetimeEncoder` for one column, and what's needed to reapply it."""
+
+    column_index: int
+    encoder: DatetimeEncoder
+    output_names: list[str]
 
 
 def make_datetime_encoder() -> DatetimeEncoder:
@@ -49,8 +56,8 @@ def expand_date_features(
     X: np.ndarray,
     feature_schema: FeatureSchema | None,
     *,
-    fitted: FittedDateEncoders | None = None,
-) -> tuple[np.ndarray, FeatureSchema | None, FittedDateEncoders]:
+    fitted: dict[str, FittedDatetimeEncoder] | None = None,
+) -> tuple[np.ndarray, FeatureSchema | None, dict[str, FittedDatetimeEncoder]]:
     """Expand every `DATE`-modality column into numbers, via `DatetimeEncoder`.
 
     A genuine single-column transformer (`.fit(series)`), not
@@ -66,9 +73,12 @@ def expand_date_features(
             consulted when `fitted` is `None` (the fit-time path); at predict
             time the encoders already fitted carry everything they need, so
             this may be left `None`.
-        fitted: Previously fitted `(encoder, output_names)` pairs keyed by
-            original column index, to reuse at predict time. `None` fits new
-            ones instead (the fit-time path).
+        fitted: Previously fitted encoders keyed by original column name, to
+            reuse at predict time. Reapplied by each entry's `column_index`,
+            not by dict order: sklearn guarantees predict-time column position
+            matches fit time, so that index is a reliable, available key,
+            unlike the name, which isn't recoverable from a raw array.
+            `None` fits new ones instead (the fit-time path).
 
     Returns:
         The (possibly wider) data, the updated schema (unchanged, and possibly
@@ -76,7 +86,8 @@ def expand_date_features(
         back in as `fitted` at predict time.
     """
     if fitted is not None:
-        to_expand = sorted(fitted)
+        by_index = {fe.column_index: fe for fe in fitted.values()}
+        to_expand = sorted(by_index)
     else:
         assert feature_schema is not None, "feature_schema is required to fit"
         to_expand = sorted(feature_schema.indices_for(FeatureModality.DATE))
@@ -84,7 +95,7 @@ def expand_date_features(
         return X, feature_schema, fitted or {}
 
     frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
-    new_fitted: FittedDateEncoders = {}
+    new_fitted: dict[str, FittedDatetimeEncoder] = {}
     encoded_blocks: list[pd.DataFrame] = []
     for index in to_expand:
         # Renamed to a plain string regardless of what the frame's own column
@@ -99,16 +110,20 @@ def expand_date_features(
         # silently drops the second to NaT under the default format inference).
         column = pd.to_datetime(column, errors="coerce", format="mixed")
         if fitted is not None:
-            encoder, names = fitted[index]
-            encoded = pd.DataFrame(encoder.transform(column)).set_axis(names, axis=1)
+            fitted_encoder = by_index[index]
+            encoded = pd.DataFrame(fitted_encoder.encoder.transform(column)).set_axis(
+                fitted_encoder.output_names, axis=1
+            )
         else:
             assert feature_schema is not None
+            name = feature_schema.features[index].name
             encoder = make_datetime_encoder()
             raw_encoded = pd.DataFrame(encoder.fit_transform(column))
-            prefix = feature_schema.features[index].name
-            names = [f"{prefix}_{i}" for i in range(raw_encoded.shape[1])]
-            encoded = raw_encoded.set_axis(names, axis=1)
-            new_fitted[index] = (encoder, names)
+            output_names = [f"{name}_{i}" for i in range(raw_encoded.shape[1])]
+            encoded = raw_encoded.set_axis(output_names, axis=1)
+            new_fitted[name] = FittedDatetimeEncoder(
+                column_index=index, encoder=encoder, output_names=output_names
+            )
         encoded_blocks.append(encoded.reset_index(drop=True))
 
     remaining = frame.drop(columns=frame.columns[to_expand])
@@ -118,9 +133,27 @@ def expand_date_features(
     if fitted is None:
         assert schema is not None
         schema = schema.remove_columns(to_expand)
-        for _, names in new_fitted.values():
+        for fitted_encoder in new_fitted.values():
             schema = schema.append_columns(
-                FeatureModality.NUMERICAL, len(names), names=names
+                FeatureModality.NUMERICAL,
+                len(fitted_encoder.output_names),
+                names=fitted_encoder.output_names,
             )
 
     return out.to_numpy(), schema, (fitted if fitted is not None else new_fitted)
+
+
+def encode_multimodal_data(
+    X: np.ndarray,
+    feature_schema: FeatureSchema | None,
+    *,
+    fitted: dict[str, FittedDatetimeEncoder] | None = None,
+) -> tuple[np.ndarray, FeatureSchema | None, dict[str, FittedDatetimeEncoder]]:
+    """Encode every non-numeric modality that has a real encoder to turn to numbers.
+
+    The seam `clean_data` (and `classifier.py`/`regressor.py`'s predict paths)
+    call, kept separate from encoding mechanics: today this is only
+    `expand_date_features`, but a future `USE_TEXT` is expected to add a
+    `StringEncoder` pass here too, mirroring `_warn_on_multimodal`.
+    """
+    return expand_date_features(X, feature_schema, fitted=fitted)

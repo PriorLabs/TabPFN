@@ -81,7 +81,10 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import FittedDateEncoders, expand_date_features
+from tabpfn.preprocessing.date_encoding import (
+    FittedDatetimeEncoder,
+    encode_multimodal_data,
+)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -231,10 +234,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
-    date_encoders_: FittedDateEncoders
-    """Fitted `DatetimeEncoder` per expanded `DATE` column (empty unless
-    `USE_DATES` is on and a date-like column was found), keyed by its original
-    column index."""
+    date_encoders_: dict[str, FittedDatetimeEncoder]
+    """Fitted date encoders by column name; empty unless `USE_DATES` expanded one."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -1497,7 +1498,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
-        X, _, _ = expand_date_features(
+        X, _, _ = encode_multimodal_data(
             X, feature_schema=None, fitted=self.date_encoders_
         )
         cat_indices = self.inferred_feature_schema_.indices_for(
@@ -1726,7 +1727,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test, _, _ = expand_date_features(  # noqa: PLW2901
+            X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
                 X_test, feature_schema=None, fitted=worker.date_encoders_
             )
             X_test = fix_dtypes(  # noqa: PLW2901

@@ -65,10 +65,13 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     # More than just the original numeric column survives: the date expanded.
     assert X_out.shape[1] > 2
 
-    assert list(fitted) == [1]
-    _encoder, names = fitted[1]
-    assert len(names) == X_out.shape[1] - 1
-    assert all(name.startswith("input_signed_on_") for name in names)
+    assert list(fitted) == ["input_signed_on"]
+    fitted_encoder = fitted["input_signed_on"]
+    assert fitted_encoder.column_index == 1
+    assert len(fitted_encoder.output_names) == X_out.shape[1] - 1
+    assert all(
+        name.startswith("input_signed_on_") for name in fitted_encoder.output_names
+    )
     # Every expanded feature is real-valued for a fully populated date column.
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
@@ -159,7 +162,7 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
         model.fit(X, y)
 
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    assert 1 in model.date_encoders_
+    assert "input_signed_on" in model.date_encoders_
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)
