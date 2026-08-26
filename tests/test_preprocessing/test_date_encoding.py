@@ -77,22 +77,31 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
 
-def test__expand_before_clean__year_feature_keeps_its_real_value() -> None:
-    """Ordering guard: `clean_data` has no notion of `DATE` at all, so a date
-    column must already be expanded before it gets there -- verified directly:
-    feeding `clean_data` a still-`DATE`-tagged column doesn't error, it
-    silently turns the dates into sequential ordinal codes (0, 1, 2, ...)
-    instead of raising. Expanding first, as the real fit/predict paths always
-    do, must survive `clean_data` with the real year value intact.
+def test__expand_before_clean__vs__clean_before_expand() -> None:
+    """Ordering guard: `clean_data` has no notion of `DATE` at all.
+
+    Expand-then-clean (what fit/predict actually do) keeps the real date
+    value: the year feature reads 2020. Clean-before-expand -- swapping the
+    two calls -- doesn't error; `clean_data` just doesn't recognize the
+    still-`DATE`-tagged column as anything special and silently ordinal-codes
+    it like any other string column, replacing the dates with 0, 1, 2, ...
     """
     X = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
 
+    # Correct order: expand, then clean.
     X_expanded, schema_expanded, _ = expand_date_features(X, schema)
-    X_out, _, schema_out = clean_data(X_expanded, schema_expanded)
+    X_right_order, _, schema_right_order = clean_data(X_expanded, schema_expanded)
+    year_index = schema_right_order.feature_names.index("input_signed_on_0")
+    np.testing.assert_array_equal(X_right_order[:, year_index], 2020.0)
 
-    year_index = schema_out.feature_names.index("input_signed_on_0")
-    np.testing.assert_array_equal(X_out[:, year_index], 2020.0)
+    # Swapped order: clean first, on the still-DATE-tagged column.
+    X_wrong_order, _, _ = clean_data(X, schema)
+    date_column_index = 1  # unchanged: clean_data never expands/removes columns
+    assert not np.allclose(X_wrong_order[:, date_column_index], 2020.0)
+    np.testing.assert_array_equal(
+        X_wrong_order[:, date_column_index], np.arange(N, dtype=float)
+    )
 
 
 def test__predict__reapplies_fitted_encoder_positionally() -> None:
