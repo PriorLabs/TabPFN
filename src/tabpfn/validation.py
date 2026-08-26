@@ -20,10 +20,7 @@ from sklearn.utils.multiclass import check_classification_targets
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.preprocessing.clean import (
-    coerce_nullable_dtypes_to_numpy,
-    stringify_datetime_columns,
-)
+from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -104,7 +101,6 @@ def ensure_compatible_predict_input_sklearn(
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
-        X = stringify_datetime_columns(X)
     try:
         result = validate_data(
             estimator,
@@ -182,7 +178,6 @@ def ensure_compatible_fit_inputs_sklearn(
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
-        X = stringify_datetime_columns(X)
     try:
         X, y = validate_data(
             estimator,

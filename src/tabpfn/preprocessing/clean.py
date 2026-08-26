@@ -182,33 +182,6 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     return _cast_columns(X, cols, "float64")
 
 
-def stringify_datetime_columns(X: pd.DataFrame) -> pd.DataFrame:
-    """Turn any native datetime-dtype column into a formatted string column.
-
-    Runs *before* sklearn's ``validate_data``, for the same reason as
-    `coerce_nullable_dtypes_to_numpy`: that call converts the whole frame into one
-    numpy array, and numpy has no dtype that unifies ``datetime64`` with a numeric
-    or string column, so a frame holding both fails outright with a promotion
-    error before `detect_feature_modalities` (which recognizes the stringified
-    date internally) ever gets to see it.
-
-    A missing timestamp becomes ``NaN`` rather than the literal string ``"NaT"``,
-    via `strftime` returning ``NaN`` for a missing value, so missingness survives
-    the round trip the same way it does for every other column.
-    """
-    cols = [
-        col
-        for col, dtype in X.dtypes.items()
-        if pd.api.types.is_datetime64_any_dtype(dtype)
-    ]
-    if not cols:
-        return X
-    X = X.copy()
-    for col in cols:
-        X[col] = X[col].dt.strftime("%Y-%m-%d %H:%M:%S")
-    return X
-
-
 def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,

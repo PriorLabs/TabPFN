@@ -23,7 +23,6 @@ from tabpfn.preprocessing.clean import (
     _owned_float64_values,
     fix_dtypes,
     process_text_na_dataframe,
-    stringify_datetime_columns,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
@@ -1220,31 +1219,15 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
 
 
-def test__stringify_datetime_columns__no_datetime_columns__is_a_no_op() -> None:
-    X = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
-    out = stringify_datetime_columns(X)
-    assert out is X
+def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
+    """Documents a known, pre-existing bug rather than fixing it here.
 
-
-def test__stringify_datetime_columns__formats_and_preserves_missing() -> None:
-    X = pd.DataFrame(
-        {
-            "num": [1.0, 2.0, 3.0],
-            "signed_on": pd.to_datetime(["2020-01-01", None, "2020-01-03"]),
-        }
-    )
-    out = stringify_datetime_columns(X)
-    assert out["signed_on"].tolist() == [
-        "2020-01-01 00:00:00",
-        np.nan,
-        "2020-01-03 00:00:00",
-    ]
-    assert out["num"].tolist() == [1.0, 2.0, 3.0]
-
-
-def test__classifier_fit_predict__native_datetime_column__does_not_crash() -> None:
-    """Regression: mixing a native `datetime64` column with any other dtype used
-    to crash with a numpy dtype-promotion error inside `validate_data`.
+    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
+    converts the whole frame to one numpy array, and numpy has no dtype that unifies
+    `datetime64` with a numeric or string column. A fix would need to convert such a
+    column to a string (or otherwise numpy-unifiable type) before validation, which
+    is lossy for `datetime64[ns]` (no string format captures full nanosecond
+    precision) and is deferred to a follow-up rather than solved in this PR.
     """
     n = 50
     rng = np.random.default_rng(0)
@@ -1254,8 +1237,5 @@ def test__classifier_fit_predict__native_datetime_column__does_not_crash() -> No
     y = rng.integers(0, 2, n)
 
     clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    clf.fit(X, y)
-    proba = clf.predict_proba(X)
-
-    assert proba.shape == (n, 2)
-    assert np.isfinite(proba).all()
+    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
+        clf.fit(X, y)
