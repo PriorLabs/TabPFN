@@ -352,6 +352,12 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
     numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
     reclassified here.
+
+    `format="mixed"` matters here, not just for speed: without it, `to_datetime`
+    infers one format from an early value and silently coerces every later
+    value that doesn't match it to NaT, even a genuinely valid date (verified: a
+    column mixing "2020-01-01" and "2020-06-15 13:45:30" drops the second to
+    NaT under the default format inference, with no warning at all).
     """
     non_null = s.dropna()
     if non_null.empty:
@@ -361,7 +367,7 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
             # `to_datetime` warns when it cannot infer a format and falls back to
             # parsing value by value. This is only a probe, so that is noise.
             warnings.simplefilter("ignore")
-            parsed = pd.to_datetime(non_null, errors="coerce")
+            parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
     except (TypeError, ValueError):
         return False
     return bool(parsed.notna().all())
