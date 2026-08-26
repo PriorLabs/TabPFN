@@ -44,6 +44,11 @@ def detect_feature_modalities(
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
+    !!! note
+
+        This function may infer particular columns to not be categorical
+        as defined by what suits the model predictions and it's pre-training.
+
     Args:
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
