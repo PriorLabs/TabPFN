@@ -103,13 +103,9 @@ def _demote_dates(
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    Only called when `use_dates` is off, so every detected date is demoted --
-    via the same cardinality rule a same-shaped non-date string already gets
-    in `_classify_string_like_column`. A date is never numeric by the time
-    it's tagged `DATE` (the numeric check already ran and failed), so there's
-    no numeric-style threshold to reuse, and no `reported_categorical` either:
-    a declared-categorical *string* gets no special treatment today, so a
-    declared-categorical date shouldn't either.
+    Only called when `use_dates` is off, so every detected date is demoted,
+    via the same cardinality rule `_classify_string_like_column` already
+    applies to a same-shaped non-date string.
 
     Returns:
         The updated schema, and the demoted column names, for the caller to
@@ -119,11 +115,10 @@ def _demote_dates(
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        demoted = (
-            FeatureModality.CATEGORICAL
-            if n_unique <= min_cardinality_for_text
-            else FeatureModality.TEXT
-        )
+        if n_unique <= min_cardinality_for_text:
+            demoted = FeatureModality.CATEGORICAL
+        else:
+            demoted = FeatureModality.TEXT
         features[index] = dataclasses.replace(features[index], modality=demoted)
         demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
     return FeatureSchema(features=features), demoted_columns
