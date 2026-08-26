@@ -42,38 +42,22 @@ def detect_feature_modalities(
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
-    """Infer the features modalities from the given data, based on heuristics
-    and user-provided indices for categorical features.
-
-    !!! note
-
-        This function may infer particular columns to not be categorical
-        as defined by what suits the model predictions and it's pre-training.
+    """Infer each feature's modality, using heuristics and declared categoricals.
 
     Args:
-        X: The data to infer the categorical features from.\
+        X: The data to infer feature modalities from.
         feature_names: The names of the features.
-        provided_categorical_indices: Any user provided indices of what is
-            considered categorical.
-        min_samples_for_inference:
-            The minimum number of samples required
-            for automatic inference of features which were not provided
-            as categorical.
-        max_unique_for_category:
-            The maximum number of unique values for a
-            feature to be considered categorical.
-        min_unique_for_numerical:
-            The minimum number of unique values for a
-            feature to be considered numerical.
-        min_cardinality_for_text: The number of distinct values above which a
-            candidate string column (one that wasn't parsed as a number or a
-            date) is `TEXT` rather than `CATEGORICAL`. A separate decision from
-            `max_unique_for_category`/`min_unique_for_numerical`, which govern
-            numerical-vs-categorical.
+        provided_categorical_indices: User-provided indices considered categorical.
+        min_samples_for_inference: Minimum samples required to auto-infer a
+            feature not provided as categorical.
+        max_unique_for_category: Max unique values for a feature to be categorical.
+        min_unique_for_numerical: Min unique values for a feature to be numerical.
+        min_cardinality_for_text: Unique-value count above which a candidate
+            string column (not parsed as a number or date) is `TEXT` rather than
+            `CATEGORICAL` -- independent of the two thresholds above.
 
     Returns:
-        A dictionary with the feature modalities as keys and the column as
-        values.
+        The inferred `FeatureSchema`.
     """
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
@@ -92,8 +76,8 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    _warn_about_text_or_dates(
-        feature_schema, declared_categorical_indices=provided_categorical_indices
+    _warn_on_multimodal(
+        feature_schema, declared_cat_indices=provided_categorical_indices
     )
     return _demote_dates_for_now(
         feature_schema,
@@ -116,19 +100,13 @@ def _demote_dates_for_now(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureSchema:
-    """Temporary: turn every detected `DATE` feature into `CATEGORICAL`/`TEXT`.
+    """Temporary: demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    Detection recognizes a date-like column, but nothing yet expands one into
-    calendar features, so a `DATE` result isn't consumable by anything
-    downstream. This function only exists to make it consumable for this PR --
-    demoting it to whichever of `CATEGORICAL`/`TEXT` a same-shaped non-date
-    string would get, reusing `_detect_numeric_as_categorical` for the
-    low-cardinality case, exactly like a low-cardinality number already gets.
-    A follow-up PR that adds real date expansion should delete this function
-    outright rather than extend it.
-
-    Called after `_warn_about_text_or_dates`, which reports a `DATE` column by
-    name while the schema still says so.
+    Nothing expands a date into calendar features yet, so `DATE` isn't
+    consumable downstream -- demoted the same way a same-shaped non-date
+    string would be. A follow-up adding real date expansion should delete this
+    function outright. Called after `_warn_on_multimodal`, while the schema
+    still says `DATE`.
     """
     date_indices = feature_schema.indices_for(FeatureModality.DATE)
     if not date_indices:
@@ -165,37 +143,21 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_about_text_or_dates(
+def _warn_on_multimodal(
     feature_schema: FeatureSchema,
     *,
-    declared_categorical_indices: Sequence[int] | None = None,
+    declared_cat_indices: Sequence[int] | None = None,
 ) -> None:
-    """Warn about date columns, then about any free-text columns.
+    """Warn about detected dates, then about any remaining free-text columns.
 
-    Nothing expands a date into calendar features yet, so a recognized date
-    ends up read as a plain category or text; naming it explicitly avoids
-    reporting it as generic free text, which would suggest remedies that do
-    not apply to a date.
-
-    High-cardinality string columns are labelled `FeatureModality.TEXT` by
-    `detect_feature_modalities` and are then swept into the same `OrdinalEncoder` as
-    real categoricals, which selects columns by dtype (see `get_ordinal_encoder`).
-    That turns near-unique text into near-unique integer codes, i.e. noise rather
-    than signal, without any error to hint at it.
-
-    Called by `detect_feature_modalities` on the schema detection produced,
-    before anything has acted on a `DATE` result -- so a date column is simply
-    not `TEXT` yet and needs no special-casing to stay out of the second
-    warning below.
+    Called before `_demote_dates_for_now` acts on `DATE`, so a date column
+    isn't `TEXT` yet and needs no special-casing to avoid a double warning.
 
     Args:
-        feature_schema: The schema produced by detection, before any
-            `DATE` feature has been acted on.
-        declared_categorical_indices: Positional indices the caller passed as
-            `categorical_features_indices`. These are never reported: declaring a
-            column categorical states that the user already knows it holds
-            non-numeric values and intends them as categories, so warning about it
-            would be noise.
+        feature_schema: The schema produced by detection, before `DATE` is acted on.
+        declared_cat_indices: Indices passed as `categorical_features_indices`;
+            never reported, since declaring a column categorical means the user
+            already intends its non-numeric values as categories.
     """
     date_columns = [
         feature_schema.features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
@@ -210,7 +172,7 @@ def _warn_about_text_or_dates(
             stacklevel=6,
         )
 
-    declared = set(declared_categorical_indices or ())
+    declared = set(declared_cat_indices or ())
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
         for index, feature in enumerate(feature_schema.features)
@@ -232,10 +194,8 @@ def _warn_about_text_or_dates(
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
-        # Points at a direct `estimator.fit(X, y)` call site. Six frames out: this
-        # function, `detect_feature_modalities`, `_initialize_dataset_preprocessing`,
-        # `fit`, and the contextlib wrapper added by the `@config_context(...)`
-        # decorator on `fit`. Pinned by the `warning.filename` asserts in the tests.
+        # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
+        # `warning.filename` asserts in the tests.
         stacklevel=6,
     )
 
@@ -249,25 +209,10 @@ def _detect_feature_modality(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    """Decide a single column's modality.
-
-    Detection only, not action: a `DATE` result is not yet actionable, since
-    nothing expands a date into calendar features, so the caller
-    (`detect_feature_modalities`, via `_demote_dates_for_now`) demotes it to
-    `CATEGORICAL`/`TEXT` separately.
-    """
-    # Early exit for the distinct count: counts only grow with the number of
-    # rows scanned, and every comparison below is against a threshold of at
-    # most max(max_unique_for_category, min_unique_for_numerical,
-    # min_cardinality_for_text). So once a small prefix of the column already
-    # exceeds all of them, every decision equals the full-column one and
-    # scanning the remaining rows is skipped — the common case for continuous
-    # columns. Low-cardinality columns fall through to the exact full count,
-    # paying one extra prefix pass. `min_cardinality_for_text` has to be
-    # included here too: `_classify_string_like_column` compares against it as
-    # well, and it can be set above the other two, in which case a prefix
-    # count that clears only those two would stop early on an undercount and
-    # land a long TEXT column on CATEGORICAL instead.
+    """Decide a single column's modality; see `_demote_dates_for_now` for DATE."""
+    # Early exit: once a prefix already clears every threshold below, the full
+    # count would land in the same bucket, so skip scanning the rest.
+    # min_cardinality_for_text is included since it can exceed the other two.
     decided_at = (
         max(
             max_unique_for_category,
@@ -286,12 +231,9 @@ def _detect_feature_modality(
         n_unique = _get_unique_with_sklearn_compatible_error(s)
 
     if n_unique <= 1 and not reported_categorical:
-        # Either all values are missing, or all values are the same.
-        # If there's a single value but also missing ones, it's not constant.
-        # Columns the user explicitly declared categorical are kept categorical
-        # (handled below) even when all-missing, so they route through the ordinal
-        # encoder consistently between fit and predict instead of being treated as
-        # a constant numeric column that crashes on string values seen at predict.
+        # All-missing or single-value. A declared-categorical column is exempt so
+        # it still routes through the ordinal encoder instead of crashing as a
+        # constant numeric column when predict sees an unseen string value.
         return FeatureModality.CONSTANT
 
     if _is_numeric_pandas_series(s):
@@ -323,20 +265,13 @@ def _classify_string_like_column(
     n_unique: int,
     min_cardinality_for_text: int,
 ) -> FeatureModality:
-    """Classify a string/categorical-dtype column: CATEGORICAL, TEXT, or DATE.
-
-    Detection only: a `DATE` result is not yet actionable, since nothing
-    expands a date into calendar features, so `_demote_dates_for_now` demotes
-    it to `CATEGORICAL`/`TEXT` afterwards -- see `_is_date_like_pandas_series`
-    for what counts as date-like.
-    """
+    """Classify a string/categorical-dtype column as CATEGORICAL, TEXT, or DATE."""
     if _is_date_like_pandas_series(s):
         return FeatureModality.DATE
-    return (
-        FeatureModality.CATEGORICAL
-        if n_unique <= min_cardinality_for_text
-        else FeatureModality.TEXT
-    )
+    elif n_unique <= min_cardinality_for_text:  # noqa: RET505
+        return FeatureModality.CATEGORICAL
+    else:
+        return FeatureModality.TEXT
 
 
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
@@ -381,11 +316,9 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
 def _is_date_like_pandas_series(s: pd.Series) -> bool:
     """Whether every non-null value in `s` parses as a date.
 
-    All-or-nothing, the same style as `_is_numeric_pandas_series`: a column that is
-    mostly dates but has a few non-date values is left as a string rather than
-    guessed at. Only reached for a column that already failed the numeric check, so
-    a column of plain numbers (including one that could also be read as a date,
-    e.g. an 8-digit `"20240101"`) is never reclassified here.
+    All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
+    numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
+    reclassified here.
     """
     non_null = s.dropna()
     if non_null.empty:
