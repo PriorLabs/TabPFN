@@ -330,9 +330,8 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
         return False
     try:
         with warnings.catch_warnings():
-            # A mixed-format column makes `to_datetime` fall back to parsing one
-            # value at a time and warn about it; this is only a probe, so the
-            # warning would be noise for the caller regardless of the outcome.
+            # `to_datetime` warns when it cannot infer a format and falls back to
+            # parsing value by value. This is only a probe, so that is noise.
             warnings.simplefilter("ignore")
             parsed = pd.to_datetime(non_null, errors="coerce")
     except (TypeError, ValueError):
