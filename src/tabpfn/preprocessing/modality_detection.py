@@ -38,6 +38,8 @@ def detect_feature_modalities(
     min_samples_for_inference: int,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
+    use_dates: bool = False,
+    use_text: bool = False,
     provided_categorical_indices: Sequence[int] | None = None,
     already_reported_columns: Collection[str] = (),
 ) -> FeatureSchema:
@@ -64,41 +66,87 @@ def detect_feature_modalities(
         min_unique_for_numerical:
             The minimum number of unique values for a
             feature to be considered numerical.
-        already_reported_columns: Names of columns input type conversion has
-            already warned about, so the free-text warning does not report the
-            same column a second time under a different diagnosis.
+        use_dates: Whether a date-like string column will be expanded into
+            calendar features by `clean_data`. When ``False``, such a column is
+            labelled `CATEGORICAL`/`TEXT` instead of `DATE`, since nothing would
+            expand it, and a warning names it instead of letting it be reported
+            only as free text.
+        use_text: Whether a `TEXT`-modality column will be encoded by
+            `clean_data`. When ``True``, the free-text warning is skipped
+            entirely, since every `TEXT` column is about to be encoded rather
+            than falling through to the ordinal encoder as noise.
+        already_reported_columns: Names of columns already warned about
+            elsewhere, so the free-text warning does not report the same column
+            a second time under a different diagnosis.
 
     Returns:
         A dictionary with the feature modalities as keys and the column as
         values.
     """
     features: list[Feature] = []
+    demoted_date_columns: list[str] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
     for i, index in enumerate(range(X.shape[1])):
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
         feature_name = unique_feature_names[i]
-        feat_modality = _detect_feature_modality(
+        feat_modality, was_demoted_date = _detect_feature_modality(
             s=pd.Series(X_slice, name=feature_name),
             reported_categorical=reported_categorical,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            use_dates=use_dates,
         )
+        if was_demoted_date:
+            demoted_date_columns.append(feature_name.removeprefix(INPUT_FEATURE_PREFIX))
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
+    _warn_about_unused_dates(demoted_date_columns)
     _warn_if_text_features(
         feature_schema,
+        use_text=use_text,
         declared_categorical_indices=provided_categorical_indices,
-        already_reported_columns=already_reported_columns,
+        already_reported_columns=set(already_reported_columns)
+        | set(demoted_date_columns),
     )
     return feature_schema
+
+
+def _warn_about_unused_dates(demoted_date_columns: list[str]) -> None:
+    """Say which columns hold dates that `USE_DATES` told us to leave alone.
+
+    Without this the column is reported by the free-text warning downstream
+    instead, which suggests remedies that make no sense for a date.
+    """
+    if not demoted_date_columns:
+        return
+    warnings.warn(
+        f"These columns hold dates, and `USE_DATES` is off, so they are treated "
+        f"as plain categories or text rather than being expanded into calendar "
+        f"features: {_format_names_for_warning(demoted_date_columns)}.\n"
+        'Set `inference_config={"USE_DATES": True}` to expand them instead.',
+        UserWarning,
+        # Same call depth as `_warn_if_text_features`, called from the same point
+        # in `detect_feature_modalities`; see the comment there for the frame count.
+        stacklevel=6,
+    )
+
+
+def _format_names_for_warning(names: list[str]) -> str:
+    """Render column names for a warning, capped so it stays readable."""
+    shown = names[:_MAX_TEXT_COLUMNS_IN_WARNING]
+    printed = ", ".join(repr(name) for name in shown)
+    if len(names) > len(shown):
+        printed += f" (and {len(names) - len(shown)} more)"
+    return printed
 
 
 def _warn_if_text_features(
     feature_schema: FeatureSchema,
     *,
+    use_text: bool,
     declared_categorical_indices: Sequence[int] | None = None,
     already_reported_columns: Collection[str] = (),
 ) -> None:
@@ -110,26 +158,27 @@ def _warn_if_text_features(
     That turns near-unique text into near-unique integer codes, i.e. noise rather
     than signal, without any error to hint at it.
 
-    A column only reaches here as TEXT if input type conversion did not encode it as
-    text first, either because `USE_TEXT` is off or because it has fewer distinct
-    values than `MIN_CARDINALITY_FOR_TEXT` (both `InferenceConfig` fields).
-
     Called by `detect_feature_modalities` while the schema still carries the TEXT
     labels, i.e. before the first preprocessing step that rebuilds it, since
     `FeatureSchema.from_only_categorical_indices` collapses TEXT into NUMERICAL.
 
     Args:
         feature_schema: The schema produced by `detect_feature_modalities`.
+        use_text: Whether `clean_data` is about to encode every `TEXT` column into
+            numeric features. When ``True`` none of them fall through to the
+            ordinal encoder as noise, so there is nothing to warn about.
         declared_categorical_indices: Positional indices the caller passed as
             `categorical_features_indices`. These are never reported: declaring a
             column categorical states that the user already knows it holds
             non-numeric values and intends them as categories, so warning about it
             would be noise.
-        already_reported_columns: Names input type conversion already warned about.
-            A date column it was told to leave alone reaches here as a
-            high-cardinality string, and reporting it as free text would offer
-            remedies that do not apply to a date.
+        already_reported_columns: Names already warned about elsewhere. A date
+            column reported by `_warn_about_unused_dates` reaches here as a
+            high-cardinality string, and reporting it again as free text would
+            offer remedies that do not apply to a date.
     """
+    if use_text:
+        return
     declared = set(declared_categorical_indices or ())
     reported = set(already_reported_columns)
     text_names = [
@@ -142,19 +191,14 @@ def _warn_if_text_features(
     if not text_names:
         return
 
-    shown = text_names[:_MAX_TEXT_COLUMNS_IN_WARNING]
-    column_names_to_print = ", ".join(repr(name) for name in shown)
-    if len(text_names) > len(shown):
-        column_names_to_print += f" (and {len(text_names) - len(shown)} more)"
-
     warnings.warn(
         f"These columns look like free text and are being ordinal-encoded as "
         f"high-cardinality categoricals, which usually adds noise rather than "
-        f"signal: {column_names_to_print}.\n"
-        "If such a column holds genuine text, lower "
-        '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` below its number of '
-        "distinct values so that it is encoded as text instead, or set "
-        '`inference_config={"USE_TEXT": True}` if it is off.\n'
+        f"signal: {_format_names_for_warning(text_names)}.\n"
+        "If such a column holds genuine text, raise "
+        '`inference_config={"MAX_UNIQUE_FOR_CATEGORICAL_FEATURES": ...}` above its '
+        "number of distinct values so that it is treated as a category instead, or "
+        'set `inference_config={"USE_TEXT": True}` to encode it as text.\n'
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
@@ -173,7 +217,15 @@ def _detect_feature_modality(
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     big_enough_n_to_infer_cat: bool,
-) -> FeatureModality:
+    use_dates: bool,
+) -> tuple[FeatureModality, bool]:
+    """Decide a single column's modality.
+
+    Returns:
+        The modality, and whether it is a date-like column that was demoted to
+        `CATEGORICAL`/`TEXT` because `use_dates` is off (so the caller can warn
+        about it once, batched, instead of only as generic free text).
+    """
     # Early exit for the distinct count: counts only grow with the number of
     # rows scanned, and every comparison below is against a threshold of at
     # most max(max_unique_for_category, min_unique_for_numerical). So once a
@@ -197,7 +249,7 @@ def _detect_feature_modality(
         # (handled below) even when all-missing, so they route through the ordinal
         # encoder consistently between fit and predict instead of being treated as
         # a constant numeric column that crashes on string values seen at predict.
-        return FeatureModality.CONSTANT
+        return FeatureModality.CONSTANT, False
 
     if _is_numeric_pandas_series(s):
         if _detect_numeric_as_categorical(
@@ -207,23 +259,74 @@ def _detect_feature_modality(
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         ):
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.NUMERICAL
-    if pd.api.types.is_string_dtype(s.dtype) or isinstance(
+            return FeatureModality.CATEGORICAL, False
+        return FeatureModality.NUMERICAL, False
+
+    is_string_like = pd.api.types.is_string_dtype(s.dtype) or isinstance(
         s.dtype, pd.CategoricalDtype
-    ):
-        # This is the second cardinality threshold a string column meets: input
-        # type conversion already used its own to decide whether to encode the
-        # column as text (see `input_conversion.InputTypeConverter`), and columns
-        # it passed through arrive here. The two are set independently, so a
-        # column can be a category to one and text to the other; coupling them
-        # may well be the right move.
-        if n_unique <= max_unique_for_category:
-            return FeatureModality.CATEGORICAL
-        return FeatureModality.TEXT
+    )
+    if is_string_like:
+        return _classify_string_like_column(
+            s,
+            n_unique=n_unique,
+            reported_categorical=reported_categorical,
+            max_unique_for_category=max_unique_for_category,
+            min_unique_for_numerical=min_unique_for_numerical,
+            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            use_dates=use_dates,
+        )
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
+
+
+def _classify_string_like_column(
+    s: pd.Series,
+    *,
+    n_unique: int,
+    reported_categorical: bool,
+    max_unique_for_category: int,
+    min_unique_for_numerical: int,
+    big_enough_n_to_infer_cat: bool,
+    use_dates: bool,
+) -> tuple[FeatureModality, bool]:
+    """Classify a string/categorical-dtype column as DATE, CATEGORICAL, or TEXT.
+
+    Returns the same `(modality, was_demoted_date)` pair as `_detect_feature_modality`.
+    """
+    if _is_date_like_pandas_series(s):
+        # Checked before the cardinality split below, so a low-cardinality date
+        # (e.g. a handful of distinct quarter-end dates) is not swallowed into
+        # CATEGORICAL before ever being recognized as a date. The same
+        # low-cardinality-to-categorical downgrade a numeric column already gets
+        # applies here too, via the same helper and the same thresholds.
+        if _detect_numeric_as_categorical(
+            n_unique=n_unique,
+            reported_categorical=reported_categorical,
+            max_unique_for_category=max_unique_for_category,
+            min_unique_for_numerical=min_unique_for_numerical,
+            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        ):
+            return FeatureModality.CATEGORICAL, False
+        if not use_dates:
+            # Nothing will expand it, so it gets whatever modality it would have
+            # gotten had it never been recognized as a date -- exactly the
+            # cardinality split just below, computed here rather than falling
+            # through to it, since that split does not know to report it as a
+            # demoted date rather than plain free text.
+            demoted = (
+                FeatureModality.CATEGORICAL
+                if n_unique <= max_unique_for_category
+                else FeatureModality.TEXT
+            )
+            return demoted, True
+        return FeatureModality.DATE, False
+
+    # This is the second cardinality threshold a string column meets, independent
+    # of the one above: below it, a string is a category; above it, it is free text.
+    if n_unique <= max_unique_for_category:
+        return FeatureModality.CATEGORICAL, False
+    return FeatureModality.TEXT, False
 
 
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
@@ -263,6 +366,30 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
     # A finite literal too large for a float64, e.g. "1e400". Only a spelled-out
     # infinity counts as numeric.
     return not (math.isinf(parsed) and "inf" not in value.lower())
+
+
+def _is_date_like_pandas_series(s: pd.Series) -> bool:
+    """Whether every non-null value in `s` parses as a date.
+
+    All-or-nothing, the same style as `_is_numeric_pandas_series`: a column that is
+    mostly dates but has a few non-date values is left as a string rather than
+    guessed at. Only reached for a column that already failed the numeric check, so
+    a column of plain numbers (including one that could also be read as a date,
+    e.g. an 8-digit `"20240101"`) is never reclassified here.
+    """
+    non_null = s.dropna()
+    if non_null.empty:
+        return False
+    try:
+        with warnings.catch_warnings():
+            # A mixed-format column makes `to_datetime` fall back to parsing one
+            # value at a time and warn about it; this is only a probe, so the
+            # warning would be noise for the caller regardless of the outcome.
+            warnings.simplefilter("ignore")
+            parsed = pd.to_datetime(non_null, errors="coerce")
+    except (TypeError, ValueError):
+        return False
+    return bool(parsed.notna().all())
 
 
 def _detect_numeric_as_categorical(

@@ -79,7 +79,11 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import (
+    expand_date_and_text_features,
+    fix_dtypes,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -99,7 +103,6 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
-    remap_categorical_indices,
     validate_dataset_size,
 )
 
@@ -116,7 +119,6 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
-    from tabpfn.preprocessing.input_conversion import InputTypeConverter
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -230,8 +232,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     """The inference engine used to make predictions."""
 
     ordinal_encoder_: OrderPreservingColumnTransformer
-    input_converter_: InputTypeConverter
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    expansion_encoders_: dict[int, tuple[str, Any, list[str]]]
+    """The fitted `DatetimeEncoder`/`StringEncoder` instances that expanded a `DATE`
+    or `TEXT` column into numeric features, keyed by their original column index.
+    Empty when neither ever fires. See `clean.expand_date_and_text_features`."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -861,14 +867,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        original_X = X
         (
             X,
             y,
             feature_names,
             n_features,
             _,
-            input_converter,
         ) = ensure_compatible_fit_inputs(
             X,
             y,
@@ -888,24 +892,22 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
-            provided_categorical_indices=remap_categorical_indices(
-                original_X=original_X,
-                categorical_indices=self.categorical_features_indices,
-                converted_feature_names=feature_names,
-            ),
+            provided_categorical_indices=self.categorical_features_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-            already_reported_columns=input_converter.reported_columns_,
+            use_dates=self.inference_config_.USE_DATES,
+            use_text=self.inference_config_.USE_TEXT,
         )
-        X, ordinal_encoder, feature_schema = clean_data(
+        X, ordinal_encoder, feature_schema, expansion_encoders = clean_data(
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
+            use_text=self.inference_config_.USE_TEXT,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.input_converter_ = input_converter
+        self.expansion_encoders_ = expansion_encoders
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1507,10 +1509,20 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
+        X, _, _ = expand_date_and_text_features(
+            X, None, fitted=self.expansion_encoders_
+        )
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
-        X = fix_dtypes(X, cat_indices=cat_indices)
+        numerical_string_indices = self.inferred_feature_schema_.indices_for(
+            FeatureModality.NUMERICAL
+        )
+        X = fix_dtypes(
+            X,
+            cat_indices=cat_indices,
+            numerical_string_indices=numerical_string_indices,
+        )
         X = process_text_na_dataframe(
             X,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
@@ -1733,10 +1745,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            X_test, _, _ = expand_date_and_text_features(  # noqa: PLW2901
+                X_test, None, fitted=worker.expansion_encoders_
+            )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
+                ),
+                numerical_string_indices=worker.inferred_feature_schema_.indices_for(
+                    FeatureModality.NUMERICAL
                 ),
             )
             X_test = process_text_na_dataframe(  # noqa: PLW2901

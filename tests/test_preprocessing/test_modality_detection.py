@@ -128,14 +128,17 @@ def _for_test_detect_with_defaults(
     *,
     reported_categorical: bool = False,
     big_enough_n_to_infer_cat: bool = True,
+    use_dates: bool = False,
 ) -> FeatureModality:
-    return _detect_feature_modality(
+    modality, _ = _detect_feature_modality(
         s,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        use_dates=use_dates,
     )
+    return modality
 
 
 def _for_test_detect_modality(
@@ -461,33 +464,42 @@ class TestWarnIfTextFeatures:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_if_text_features(schema)
+            _warn_if_text_features(schema, use_text=False)
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_if_text_features(_text_schema("review"))
+            _warn_if_text_features(_text_schema("review"), use_text=False)
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
         assert "'review'" in message
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
-        assert "MIN_CARDINALITY_FOR_TEXT" in message
+        assert "MAX_UNIQUE_FOR_CATEGORICAL_FEATURES" in message
         assert "USE_TEXT" in message
         assert "categorical_features_indices" in message
+
+    def test__use_text__does_not_warn(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _warn_if_text_features(_text_schema("review"), use_text=True)
 
     def test__declared_categorical_indices__are_not_reported(self) -> None:
         schema = _text_schema("sku", "review")
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_if_text_features(schema, declared_categorical_indices=[0])
+            _warn_if_text_features(
+                schema, use_text=False, declared_categorical_indices=[0]
+            )
         message = str(record[0].message)
         assert "'review'" in message
         assert "'sku'" not in message
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_if_text_features(schema, declared_categorical_indices=[0, 1])
+            _warn_if_text_features(
+                schema, use_text=False, declared_categorical_indices=[0, 1]
+            )
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -495,7 +507,7 @@ class TestWarnIfTextFeatures:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_if_text_features(schema)
+            _warn_if_text_features(schema, use_text=False)
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
@@ -675,3 +687,184 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         warnings.simplefilter("always")
         model.fit(X, y)
     assert not [w for w in caught if "look like free text" in str(w.message)]
+
+
+class TestDetectFeatureModalitiesDate:
+    """`detect_feature_modalities` recognizing date-like string columns.
+
+    A trivially-detected date only becomes `DATE` when `use_dates` is on, and
+    even then only above the same low-cardinality-to-categorical threshold a
+    numeric column already has (`_detect_numeric_as_categorical`, reused as-is).
+    """
+
+    n_rows = 200
+
+    def _numeric_column(self) -> np.ndarray:
+        return np.random.default_rng(0).normal(size=self.n_rows)
+
+    def _detect(
+        self, X: pd.DataFrame, *, use_dates: bool = True, use_text: bool = False
+    ) -> FeatureSchema:
+        return detect_feature_modalities(
+            X=X.to_numpy(dtype=object),
+            feature_names=list(X.columns),
+            min_samples_for_inference=100,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            use_dates=use_dates,
+            use_text=use_text,
+        )
+
+    def _dates(self, n_unique: int) -> list[str]:
+        pool = pd.date_range("2020-01-01", periods=n_unique).strftime("%Y-%m-%d")
+        return [pool[i % n_unique] for i in range(self.n_rows)]
+
+    def test__high_cardinality_dates__use_dates_on__is_date(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.DATE
+
+    def test__four_distinct_dates__is_date(self) -> None:
+        """4 is not below `MIN_UNIQUE_FOR_NUMERICAL_FEATURES` (4), so it stays DATE."""
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.DATE
+
+    def test__three_distinct_dates__is_categorical(self) -> None:
+        """Below the threshold, exactly like a 3-distinct-value numeric column."""
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+    def test__use_dates_off__high_cardinality_date__is_text_not_date(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X, use_dates=False)
+        assert schema.features[1].modality is FeatureModality.TEXT
+
+    def test__use_dates_off__low_cardinality_date__is_categorical(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X, use_dates=False)
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+    def test__use_dates_off__demoted_date__is_not_also_reported_as_text(self) -> None:
+        """The demoted-date warning fires; the free-text warning must not repeat it."""
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._detect(X, use_dates=False)
+        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
+        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
+        assert len(date_warnings) == 1
+        assert not text_warnings
+
+    def test__use_dates_on__does_not_warn(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._detect(X, use_dates=True)
+
+    def test__genuine_free_text__is_not_a_date(self) -> None:
+        X = pd.DataFrame(
+            {
+                "num": self._numeric_column(),
+                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
+            }
+        )
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.TEXT
+
+    def test__mostly_dates_with_one_bad_value__is_not_a_date(self) -> None:
+        """All-or-nothing, like the numeric check: one bad value disqualifies it."""
+        values = self._dates(60)
+        values[0] = "not a date at all"
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is not FeatureModality.DATE
+
+    def test__numeric_string_column__is_not_a_date(self) -> None:
+        """The numeric check runs first and wins, even for an 8-digit date shape."""
+        values = [f"2024010{i % 9 + 1}" for i in range(self.n_rows)]
+        X = pd.DataFrame({"num": self._numeric_column(), "code": values})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
+
+    def test__declared_categorical_date_column__is_categorical(self) -> None:
+        """Declaring it categorical only wins within `max_unique_for_category`,
+        exactly like a declared-categorical numeric column.
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(10)})
+        schema = detect_feature_modalities(
+            X=X.to_numpy(dtype=object),
+            feature_names=list(X.columns),
+            provided_categorical_indices=[1],
+            min_samples_for_inference=100,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            use_dates=True,
+        )
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_date_column__use_dates_expands_features(estimator_cls: type) -> None:
+    """End-to-end: a date column only grows `n_features_in_`'s downstream width
+    when `USE_DATES` is on; `n_features_in_` itself never changes either way.
+    """
+    n = 150
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "date": pd.date_range("2020-01-01", periods=n).strftime("%Y-%m-%d"),
+        }
+    )
+    y = (
+        rng.integers(0, 2, n)
+        if estimator_cls is TabPFNClassifier
+        else rng.normal(size=n)
+    )
+
+    off = estimator_cls(n_estimators=1, device="cpu")
+    off.fit(X, y)
+    on = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"USE_DATES": True}
+    )
+    on.fit(X, y)
+
+    assert off.n_features_in_ == 2
+    assert on.n_features_in_ == 2
+    assert (
+        on.inferred_feature_schema_.num_columns
+        > off.inferred_feature_schema_.num_columns
+    )
+
+
+def test__declared_categorical_after_expanding_date_column__stays_attributed() -> None:
+    """`categorical_features_indices` is resolved against the original frame by
+    `detect_feature_modalities`, before the date column ahead of it ever expands
+    -- unlike the old `InputTypeConverter` design, there is no remapping step that
+    could misattribute it, by construction rather than by a fix.
+    """
+    n = 60
+    X = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=n).strftime("%Y-%m-%d"),
+            "cat": [f"g{i % 5}" for i in range(n)],
+        }
+    )
+    y = np.arange(n) % 2
+
+    clf = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"USE_DATES": True},
+        categorical_features_indices=[1],
+    )
+    clf.fit(X, y)
+
+    cat_indices = clf.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL)
+    assert [clf.inferred_feature_schema_.features[i].name for i in cat_indices] == [
+        "input_cat"
+    ]

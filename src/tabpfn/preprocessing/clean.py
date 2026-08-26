@@ -18,6 +18,11 @@ from packaging.version import Version
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.input_conversion import (
+    DEFAULT_TEXT_N_COMPONENTS,
+    make_datetime_encoder,
+    make_text_encoder,
+)
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
 
 if TYPE_CHECKING:
@@ -97,12 +102,119 @@ def _cast_columns(
     return X.astype(dict.fromkeys(columns, dtype), **_ASTYPE_KEEPS_UNCAST_COLUMNS)
 
 
+def expand_date_and_text_features(
+    X: np.ndarray,
+    feature_schema: FeatureSchema | None,
+    *,
+    use_text: bool = False,
+    fitted: dict[int, tuple[str, Any, list[str]]] | None = None,
+) -> tuple[np.ndarray, FeatureSchema | None, dict[int, tuple[str, Any, list[str]]]]:
+    """Expand DATE columns, and TEXT columns when `use_text` is on, into numbers.
+
+    A `DATE`-modality column only exists in `feature_schema` when it is meant to be
+    expanded: `detect_feature_modalities` already demotes a date-like column to
+    `CATEGORICAL`/`TEXT` when `USE_DATES` is off, since nothing would expand it
+    otherwise. So every `DATE` column reaching here is expanded unconditionally,
+    via `skrub.DatetimeEncoder`. A `TEXT` column is expanded the same way, via
+    `skrub.StringEncoder`, only when `use_text` is on; otherwise it is left exactly
+    as it arrived, unchanged from today, and reaches the ordinal encoder as a
+    plain high-cardinality string.
+
+    Both encoders are used as genuine single-column transformers (`.fit(series)`),
+    not through `skrub.TableVectorizer`: no automatic type detection is wanted
+    here, only the feature engineering, since the type decision was already made
+    by `detect_feature_modalities`.
+
+    Args:
+        X: The data, before any dtype fixing.
+        feature_schema: The schema from `detect_feature_modalities`. Only
+            consulted when `fitted` is `None` (the fit-time path); at predict
+            time the encoders already fitted carry everything they need, so this
+            may be left `None`.
+        use_text: Whether to encode `TEXT` columns with `StringEncoder`. Ignored
+            when `fitted` is given, since which columns to expand and how is
+            already decided by what was fitted.
+        fitted: Previously fitted `(kind, encoder, output_names)` triples keyed
+            by original column index, to reuse at predict time. `None` fits new
+            ones instead (the fit-time path).
+
+    Returns:
+        The (possibly wider) data, the updated schema (unchanged, and possibly
+        `None`, at predict time), and the fitted encoders to store and pass back
+        in as `fitted` at predict time.
+    """
+    if fitted is not None:
+        to_expand = sorted(fitted)
+    else:
+        assert feature_schema is not None, "feature_schema is required to fit"
+        to_expand = feature_schema.indices_for(FeatureModality.DATE)
+        if use_text:
+            to_expand += feature_schema.indices_for(FeatureModality.TEXT)
+        to_expand = sorted(to_expand)
+    if not to_expand:
+        return X, feature_schema, fitted or {}
+
+    frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
+    new_fitted: dict[int, tuple[str, Any, list[str]]] = {}
+    encoded_blocks: list[pd.DataFrame] = []
+    for index in to_expand:
+        # Renamed to a plain string regardless of what the frame's own column
+        # labels are: skrub's encoders build their output feature names from the
+        # input series' `.name`, and a bare `pd.DataFrame(ndarray)` has integer
+        # column labels, which `DatetimeEncoder` cannot concatenate a suffix onto.
+        # The name chosen here does not otherwise matter, since the output columns
+        # are renamed below regardless of what skrub produced.
+        column = frame.iloc[:, index].rename(str(index))
+        if fitted is not None:
+            kind, encoder, names = fitted[index]
+            # A column can drift dtype between fit and predict just like any other
+            # (see `_align_columns_to_fitted_dtypes`); both encoders need a specific
+            # dtype regardless of what arrives, `StringEncoder` rejects anything
+            # that is not string/categorical outright.
+            column = (
+                pd.to_datetime(column, errors="coerce")
+                if kind == "date"
+                else column.astype("string")
+            )
+            encoded = pd.DataFrame(encoder.transform(column)).set_axis(names, axis=1)
+        else:
+            assert feature_schema is not None
+            is_date = feature_schema.features[index].modality is FeatureModality.DATE
+            if is_date:
+                column = pd.to_datetime(column, errors="coerce")
+                encoder = make_datetime_encoder()
+            else:
+                column = column.astype("string")
+                encoder = make_text_encoder(DEFAULT_TEXT_N_COMPONENTS)
+            raw_encoded = pd.DataFrame(encoder.fit_transform(column))
+            prefix = feature_schema.features[index].name
+            names = [f"{prefix}_{i}" for i in range(raw_encoded.shape[1])]
+            encoded = raw_encoded.set_axis(names, axis=1)
+            new_fitted[index] = ("date" if is_date else "text", encoder, names)
+        encoded_blocks.append(encoded.reset_index(drop=True))
+
+    remaining = frame.drop(columns=frame.columns[to_expand])
+    out = pd.concat([remaining, *encoded_blocks], axis=1)
+
+    schema = feature_schema
+    if fitted is None:
+        assert schema is not None
+        schema = schema.remove_columns(to_expand)
+        for _, _, names in new_fitted.values():
+            schema = schema.append_columns(
+                FeatureModality.NUMERICAL, len(names), names=names
+            )
+
+    return out.to_numpy(), schema, (fitted if fitted is not None else new_fitted)
+
+
 def clean_data(
     X: np.ndarray,
     feature_schema: FeatureSchema,
     *,
     passthrough_inf: bool = False,
-) -> tuple[np.ndarray, OrderPreservingColumnTransformer, FeatureSchema]:
+    use_text: bool = False,
+) -> tuple[np.ndarray, OrderPreservingColumnTransformer, FeatureSchema, dict[int, Any]]:
     """Clean the data by converting dtypes and ordinally encoding categorical columns.
 
     Args:
@@ -111,11 +223,17 @@ def clean_data(
         passthrough_inf: If True, +/-inf values are carried through the ordinal
             encoding stage unchanged instead of crashing it (see
             `process_text_na_dataframe`).
+        use_text: Whether to encode `TEXT`-modality columns with `StringEncoder`
+            (see `expand_date_and_text_features`).
 
     Returns:
-        A tuple containing the cleaned data, the ordinal encoder, and the inferred
-        feature modalities.
+        A tuple containing the cleaned data, the ordinal encoder, the inferred
+        feature modalities, and the fitted date/text expansion encoders (empty
+        when neither ever fires).
     """
+    X, feature_schema, expansion_encoders = expand_date_and_text_features(
+        X, feature_schema, use_text=use_text
+    )
     cat_indices = feature_schema.indices_for(FeatureModality.CATEGORICAL)
 
     # Ensure categories are ordinally encoded
@@ -144,12 +262,17 @@ def clean_data(
             np.array(X, dtype=np.float64, order="F", copy=True),
             ord_encoder,
             feature_schema,
+            expansion_encoders,
         )
 
     # Will convert inferred categorical indices to category dtype,
     # to be picked up by the ord_encoder, as well
     # as handle `np.object` arrays or otherwise `object` dtype pandas columns.
-    X_pandas: pd.DataFrame = fix_dtypes(X=X, cat_indices=cat_indices)
+    X_pandas: pd.DataFrame = fix_dtypes(
+        X=X,
+        cat_indices=cat_indices,
+        numerical_string_indices=feature_schema.indices_for(FeatureModality.NUMERICAL),
+    )
 
     X_numpy = process_text_na_dataframe(
         X=X_pandas,
@@ -158,7 +281,7 @@ def clean_data(
         passthrough_inf=passthrough_inf,
     )
 
-    return X_numpy, ord_encoder, feature_schema
+    return X_numpy, ord_encoder, feature_schema, expansion_encoders
 
 
 def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
@@ -182,10 +305,58 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     return _cast_columns(X, cols, "float64")
 
 
+def stringify_datetime_columns(X: pd.DataFrame) -> pd.DataFrame:
+    """Turn any native datetime-dtype column into a formatted string column.
+
+    Runs *before* sklearn's ``validate_data``, for the same reason as
+    `coerce_nullable_dtypes_to_numpy`: that call converts the whole frame into one
+    numpy array, and numpy has no dtype that unifies ``datetime64`` with a numeric
+    or string column, so a frame holding both fails outright with a promotion
+    error before `detect_feature_modalities` (which could otherwise recognize the
+    stringified date, see `USE_DATES`) ever gets to see it.
+
+    A missing timestamp becomes ``NaN`` rather than the literal string ``"NaT"``,
+    via `strftime` returning ``NaN`` for a missing value, so missingness survives
+    the round trip the same way it does for every other column.
+    """
+    cols = [
+        col
+        for col, dtype in X.dtypes.items()
+        if pd.api.types.is_datetime64_any_dtype(dtype)
+    ]
+    if not cols:
+        return X
+    X = X.copy()
+    for col in cols:
+        X[col] = X[col].dt.strftime("%Y-%m-%d %H:%M:%S")
+    return X
+
+
+def _resolve_column_labels(
+    X: pd.DataFrame, indices: Sequence[int | str]
+) -> Sequence[int | str]:
+    """Resolve `indices` (positions or names) to the column labels they refer to.
+
+    Things like AutoML Benchmark may sometimes provide numeric indices for
+    categoricals even when the dataframe has named columns; equally, a dataframe
+    loaded from something like a csv may just have integer column names, so it
+    makes sense to access them just like you would string columns. Hence, we check
+    if the types match and decide whether the indices mean positions or labels.
+    """
+    is_numeric_indices = all(isinstance(i, (int, np.integer)) for i in indices)
+    columns_are_numeric = all(
+        isinstance(col, (int, np.integer)) for col in X.columns.tolist()
+    )
+    if is_numeric_indices and not columns_are_numeric:
+        return [X.columns[i] for i in indices]
+    return indices
+
+
 def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
     numeric_dtype: Literal["float32", "float64"] = "float64",
+    numerical_string_indices: Sequence[int | str] | None = None,
 ) -> pd.DataFrame:
     if isinstance(X, pd.DataFrame):
         # This will help us get better dtype inference later
@@ -210,23 +381,7 @@ def fix_dtypes(  # noqa: D103
         raise ValueError(f"Invalid type for X: {type(X)}")
 
     if cat_indices is not None:
-        # So annoyingly, things like AutoML Benchmark may sometimes provide
-        # numeric indices for categoricals, while providing named columns in the
-        # dataframe. Equally, dataframes loaded from something like a csv may just have
-        # integer column names, and so it makes sense to access them just like you would
-        # string columns.
-        # Hence, we check if the types match and decide whether to use `iloc` to select
-        # columns, or use the indices as column names...
-        is_numeric_indices = all(isinstance(i, (int, np.integer)) for i in cat_indices)
-        columns_are_numeric = all(
-            isinstance(col, (int, np.integer)) for col in X.columns.tolist()
-        )
-        use_col_names = is_numeric_indices and not columns_are_numeric
-        if use_col_names:
-            cat_col_names = [X.columns[i] for i in cat_indices]
-            X = _cast_columns(X, cat_col_names, "category")
-        else:
-            X = _cast_columns(X, cat_indices, "category")
+        X = _cast_columns(X, _resolve_column_labels(X, cat_indices), "category")
 
     # Alright, pandas can have a few things go wrong.
     #
@@ -263,6 +418,37 @@ def fix_dtypes(  # noqa: D103
         and not (X.dtypes[numerical_columns] == np.dtype(numeric_dtype)).all()
     ):
         X = _cast_columns(X, numerical_columns, numeric_dtype)
+
+    if numerical_string_indices:
+        X = _parse_numerical_string_columns(X, numerical_string_indices, numeric_dtype)
+    return X
+
+
+def _parse_numerical_string_columns(
+    X: pd.DataFrame,
+    numerical_string_indices: Sequence[int | str],
+    numeric_dtype: Literal["float32", "float64"],
+) -> pd.DataFrame:
+    """Parse `NUMERICAL`-modality columns still holding strings into real numbers.
+
+    `detect_feature_modalities` already decided these columns are numeric, but a
+    string column of e.g. "1", "2", "10" is not something `convert_dtypes()`
+    parses, so without this it would stay string-dtype and reach the ordinal
+    encoder, which encodes by alphabetical rank rather than by the column's
+    actual numeric value.
+    """
+    string_cols = [
+        col
+        for col in _resolve_column_labels(X, numerical_string_indices)
+        if not pd.api.types.is_numeric_dtype(X[col].dtype)
+    ]
+    if not string_cols:
+        return X
+    X = X.copy()
+    for col in string_cols:
+        X[col] = pd.to_numeric(X[col].astype("object"), errors="coerce").astype(
+            numeric_dtype
+        )
     return X
 
 

@@ -20,8 +20,10 @@ from sklearn.utils.multiclass import check_classification_targets
 
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.misc._sklearn_compat import check_array, validate_data
-from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
-from tabpfn.preprocessing.input_conversion import InputTypeConverter
+from tabpfn.preprocessing.clean import (
+    coerce_nullable_dtypes_to_numpy,
+    stringify_datetime_columns,
+)
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -46,9 +48,7 @@ def ensure_compatible_fit_inputs(
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
     max_cpu_samples: int = 1000,
-) -> tuple[
-    np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None, InputTypeConverter
-]:
+) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
     """Validate and convert inputs to standardized format.
 
     Args:
@@ -64,26 +64,19 @@ def ensure_compatible_fit_inputs(
         max_cpu_samples: Sample count above which CPU inference raises by default.
 
     Returns:
-        A tuple of six elements:
+        A tuple of five elements:
         - the validated input data X as np.ndarray,
         - target data y as np.ndarray,
         - feature names as npt.NDArray[Any] | None,
         - number of features as int
         - target name if the input was a Series, otherwise None
-        - the fitted input type converter
     """
     # Preserve the name of the target data, if it exists.
     original_y_name: str | None = str(y.name) if isinstance(y, pd.Series) else None
 
     # Rely on sklearn's validation to return feature names to be consistent
     # with sklearn interfaces.
-    (
-        X,
-        y,
-        feature_names_in,
-        n_features_in,
-        input_converter,
-    ) = ensure_compatible_fit_inputs_sklearn(
+    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
         X,
         y,
         estimator=estimator,
@@ -98,48 +91,7 @@ def ensure_compatible_fit_inputs(
         devices=devices,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    return X, y, feature_names_in, n_features_in, original_y_name, input_converter
-
-
-def remap_categorical_indices(
-    original_X: XType,
-    categorical_indices: Sequence[int] | None,
-    converted_feature_names: npt.NDArray[Any] | None,
-) -> Sequence[int] | None:
-    """Translate user-declared categorical indices to their post-conversion position.
-
-    `categorical_features_indices` is defined against the frame the caller passed
-    to `fit()`, but `InputTypeConverter` can grow that frame before this is ever
-    consulted (a date expanding into calendar features, a text column into its
-    encoded dimensions), which shifts every column after the one that grew. A
-    column that is not itself expanded keeps its exact name through the
-    conversion, so its new position is found by name; a column that IS expanded
-    no longer exists as one column, and its index is dropped rather than kept
-    pointing at whatever unrelated column now sits at that position. There is no
-    guarantee a declared-categorical column survives as one column: only that,
-    when it does, it is still correctly attributed after conversion.
-
-    Args:
-        original_X: The input as the caller passed it, before conversion.
-        categorical_indices: The user-declared indices, against `original_X`.
-        converted_feature_names: The feature names after conversion, i.e. what
-            `categorical_indices` must be translated to index into.
-
-    Returns:
-        The translated indices, or `categorical_indices` unchanged when `original_X`
-        is not a dataframe (nothing shifts) or there is nothing to translate.
-    """
-    if (
-        not categorical_indices
-        or not isinstance(original_X, pd.DataFrame)
-        or converted_feature_names is None
-    ):
-        return categorical_indices
-    original_names = [original_X.columns[i] for i in categorical_indices]
-    new_index_by_name = {name: i for i, name in enumerate(converted_feature_names)}
-    return [
-        new_index_by_name[name] for name in original_names if name in new_index_by_name
-    ]
+    return X, y, feature_names_in, n_features_in, original_y_name
 
 
 def ensure_compatible_predict_input_sklearn(
@@ -150,11 +102,9 @@ def ensure_compatible_predict_input_sklearn(
 
     Note that this also changes the type of X to np.ndarray.
     """
-    converter = getattr(estimator, "input_converter_", None)
-    if converter is not None:
-        X = converter.transform(X)
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
+        X = stringify_datetime_columns(X)
     try:
         result = validate_data(
             estimator,
@@ -215,8 +165,7 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
-    input_converter: InputTypeConverter | None = None,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, InputTypeConverter]:
+) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
     """Validate the input data for fitting with standard input.
 
     Note that this also changes the type of X and y to np.ndarray.
@@ -226,30 +175,14 @@ def ensure_compatible_fit_inputs_sklearn(
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
-        input_converter: An already fitted converter to reuse. Pass the one fitted
-            on the training split when validating a held-out split, so both get the
-            same conversions. A new one is fitted when this is None.
 
     Returns:
-        A tuple of the validated input data X, target data y, feature names,
-        number of features, and the fitted input type converter.
+        A tuple of the validated input data X, target data y, feature names, and
+        number of features.
     """
-    # Runs before `validate_data`, which is where the dataframe becomes an array and
-    # where `n_features_in_` and `feature_names_in_` are recorded. Predict converts
-    # first too, so both describe the converted frame at both ends.
-    if input_converter is None:
-        inference_config = estimator.get_inference_config()
-        input_converter = InputTypeConverter(
-            use_dates=inference_config.USE_DATES,
-            use_text=inference_config.USE_TEXT,
-            text_cardinality_threshold=inference_config.MIN_CARDINALITY_FOR_TEXT,
-            text_n_components=inference_config.TEXT_N_COMPONENTS,
-        )
-        X = input_converter.fit_transform(X)
-    else:
-        X = input_converter.transform(X)
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
+        X = stringify_datetime_columns(X)
     try:
         X, y = validate_data(
             estimator,
@@ -303,7 +236,6 @@ def ensure_compatible_fit_inputs_sklearn(
         y,
         getattr(estimator, "feature_names_in_", None),
         estimator.n_features_in_,
-        input_converter,
     )
 
 

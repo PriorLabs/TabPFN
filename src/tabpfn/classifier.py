@@ -77,7 +77,11 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import (
+    expand_date_and_text_features,
+    fix_dtypes,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -94,7 +98,6 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     ensure_compatible_fit_inputs,
     ensure_compatible_predict_input_sklearn,
-    remap_categorical_indices,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -110,7 +113,6 @@ if TYPE_CHECKING:
     )
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
-    from tabpfn.preprocessing.input_conversion import InputTypeConverter
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -191,8 +193,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The label encoder used to encode the target variable."""
 
     ordinal_encoder_: OrderPreservingColumnTransformer
-    input_converter_: InputTypeConverter
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    expansion_encoders_: dict[int, tuple[str, Any, list[str]]]
+    """The fitted `DatetimeEncoder`/`StringEncoder` instances that expanded a `DATE`
+    or `TEXT` column into numeric features, keyed by their original column index.
+    Empty when neither ever fires. See `clean.expand_date_and_text_features`."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -720,7 +726,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
-        original_X = X
         # Data validation and cleaning
         (
             X,
@@ -728,7 +733,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_names,
             n_features,
             original_y_name,
-            input_converter,
         ) = ensure_compatible_fit_inputs(
             X,
             y,
@@ -744,24 +748,22 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         feature_schema = detect_feature_modalities(
             X=X,
             feature_names=feature_names,
-            provided_categorical_indices=remap_categorical_indices(
-                original_X=original_X,
-                categorical_indices=self.categorical_features_indices,
-                converted_feature_names=feature_names,
-            ),
+            provided_categorical_indices=self.categorical_features_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
-            already_reported_columns=input_converter.reported_columns_,
+            use_dates=self.inference_config_.USE_DATES,
+            use_text=self.inference_config_.USE_TEXT,
         )
-        X, ordinal_encoder, feature_schema = clean_data(
+        X, ordinal_encoder, feature_schema, expansion_encoders = clean_data(
             X=X,
             feature_schema=feature_schema,
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
+            use_text=self.inference_config_.USE_TEXT,
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.input_converter_ = input_converter
+        self.expansion_encoders_ = expansion_encoders
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
@@ -1114,10 +1116,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            X_test, _, _ = expand_date_and_text_features(  # noqa: PLW2901
+                X_test, None, fitted=worker.expansion_encoders_
+            )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
+                ),
+                numerical_string_indices=worker.inferred_feature_schema_.indices_for(
+                    FeatureModality.NUMERICAL
                 ),
             )
             X_test = process_text_na_dataframe(  # noqa: PLW2901
@@ -1403,10 +1411,16 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
+            X, _, _ = expand_date_and_text_features(
+                X, None, fitted=self.expansion_encoders_
+            )
             X = fix_dtypes(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
+                ),
+                numerical_string_indices=self.inferred_feature_schema_.indices_for(
+                    FeatureModality.NUMERICAL
                 ),
             )
             X = process_text_na_dataframe(

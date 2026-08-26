@@ -21,12 +21,14 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     _owned_float64_values,
+    expand_date_and_text_features,
     fix_dtypes,
     process_text_na_dataframe,
+    stringify_datetime_columns,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
-from tabpfn.validation import ensure_compatible_fit_inputs, remap_categorical_indices
+from tabpfn.validation import ensure_compatible_fit_inputs
 
 
 @pytest.fixture
@@ -76,16 +78,14 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name, _ = (
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
+        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+            X,
+            y,
+            estimator=classifier,
+            max_num_samples=10_000,
+            max_num_features=500,
+            ignore_pretraining_limits=False,
+            devices=cpu_devices,
         )
 
         assert X.shape == (3, 2)
@@ -101,7 +101,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
         y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _, _ = ensure_compatible_fit_inputs(
+        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -120,7 +120,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name, _ = ensure_compatible_fit_inputs(
+        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -338,7 +338,7 @@ class TestTagFeaturesAndSanitizeData:
             n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
             n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
         )
-        X_out, ord_encoder, _ = clean_data(
+        X_out, ord_encoder, _, _ = clean_data(
             X=input_data,
             feature_schema=schema,
         )
@@ -389,7 +389,7 @@ class TestTagFeaturesAndSanitizeData:
             n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
             n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
         )
-        X_out, ord_encoder, _ = clean_data(
+        X_out, ord_encoder, _, _ = clean_data(
             X=input_data.values,
             feature_schema=schema,
         )
@@ -425,11 +425,11 @@ class TestTagFeaturesAndSanitizeData:
                 Feature(name="type", modality=FeatureModality.CATEGORICAL),
             ]
         )
-        X_out_first, _, feature_schema_first = clean_data(
+        X_out_first, _, feature_schema_first, _ = clean_data(
             X=df.values,
             feature_schema=schema,
         )
-        X_out_second, _, feature_schema_second = clean_data(
+        X_out_second, _, feature_schema_second, _ = clean_data(
             X=X_out_first,
             feature_schema=schema,
         )
@@ -597,14 +597,15 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     categories and raise a ``TypeError`` (``'<' not supported between 'float' and
     'str'`` / ``ufunc 'isnan' not supported``).
 
-    With `USE_TEXT` on and more distinct values than `MIN_CARDINALITY_FOR_TEXT`,
-    input type conversion encodes the column as text and the ordinal encoder never
-    sees it. The predict-time floats are stringified and scored against the
-    vocabulary fitted on train, which shares nothing with them, so nothing reaches
-    the fit/predict drift check as a mismatch and no warning is raised. With
-    `USE_TEXT` off (the default), the column instead reaches the ordinal encoder,
-    which is `test__process_text_na_dataframe__numeric_against_string_fit_categories`
-    below.
+    With `USE_TEXT` on and more distinct values than
+    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES`, the column is detected as `TEXT` and
+    encoded into numeric features before the ordinal encoder ever sees it. The
+    predict-time floats are stringified and scored
+    against the vocabulary fitted on train, which shares nothing with them, so
+    nothing reaches the fit/predict drift check as a mismatch and no warning is
+    raised. With `USE_TEXT` off (the default), the column instead reaches the
+    ordinal encoder, which is
+    `test__process_text_na_dataframe__numeric_against_string_fit_categories` below.
     """
     n, n_unique = 120, 60
     y = np.array([0, 1] * (n // 2))
@@ -638,7 +639,7 @@ def test__classifier_predict__numeric_against_string_fit_categories() -> None:
     assert np.isfinite(proba).all()
     # The column was encoded as text, so it reaches the model as numeric features
     # rather than as a category the frozen encoder has to recognise.
-    assert "code" not in clf.input_converter_.transform(X_pred).columns
+    assert {kind for kind, _, _ in clf.expansion_encoders_.values()} == {"text"}
 
 
 def test__classifier_predict__numpy_array_against_string_fit_categories() -> None:
@@ -786,7 +787,7 @@ def test__clean_data__numeric_array_converts_without_intermediate_copy(
     rng = np.random.default_rng(0)
     X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
 
-    out, encoder, schema = clean_data(
+    out, encoder, schema, _ = clean_data(
         X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
     )
 
@@ -811,7 +812,7 @@ def test__clean_data__non_finite_survive_the_numeric_shortcut(
     X[1, 2] = np.inf
     X[3, 0] = -np.inf
 
-    out, _, _ = clean_data(
+    out, _, _, _ = clean_data(
         X=X, feature_schema=_numeric_schema(3), passthrough_inf=passthrough_inf
     )
 
@@ -827,8 +828,8 @@ def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
     rng = np.random.default_rng(0)
     X = (rng.integers(0, 4, size=(50, 3))).astype("float64")
 
-    shortcut, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
-    general, encoder, _ = clean_data(
+    shortcut, _, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
+    general, encoder, _, _ = clean_data(
         X=X, feature_schema=_numeric_schema(3, cat_indices=(0,))
     )
 
@@ -838,6 +839,175 @@ def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
     np.testing.assert_array_equal(shortcut, general)
     assert shortcut.dtype == general.dtype
     assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+
+
+def test__clean_data__numeric_string_column__is_parsed_not_alphabetized() -> None:
+    """Regression for the bug found this session: a column already correctly
+    detected `NUMERICAL` was, until now, never actually parsed -- it fell through
+    to the ordinal encoder and was encoded by alphabetical rank, discarding its
+    real numeric order (`"10"` sorts before `"2"`).
+    """
+    values = ["1", "2", "3", "10", "20", "30", "100", "200"]
+    X = np.array([[v] for v in values], dtype=object)
+    schema = FeatureSchema(
+        features=[Feature(name="f0", modality=FeatureModality.NUMERICAL)]
+    )
+
+    out, _, _, _ = clean_data(X=X, feature_schema=schema)
+
+    np.testing.assert_array_equal(
+        out.ravel(), [1.0, 2.0, 3.0, 10.0, 20.0, 30.0, 100.0, 200.0]
+    )
+
+
+def test__clean_data__numeric_string_column__unparseable_values_become_nan() -> None:
+    values = ["1", "2", "not a number", "4"]
+    X = np.array([[v] for v in values], dtype=object)
+    schema = FeatureSchema(
+        features=[Feature(name="f0", modality=FeatureModality.NUMERICAL)]
+    )
+
+    out, _, _, _ = clean_data(X=X, feature_schema=schema)
+
+    np.testing.assert_array_equal(out.ravel()[:2], [1.0, 2.0])
+    assert np.isnan(out.ravel()[2])
+    assert out.ravel()[3] == 4.0
+
+
+class TestExpandDateAndTextFeatures:
+    """`expand_date_and_text_features`, the mechanism replacing `InputTypeConverter`."""
+
+    def _schema(self, modality: FeatureModality) -> FeatureSchema:
+        return FeatureSchema(
+            features=[
+                Feature(name="num", modality=FeatureModality.NUMERICAL),
+                Feature(name="col", modality=modality),
+            ]
+        )
+
+    def test__no_date_or_text_columns__is_a_no_op(self) -> None:
+        X = np.array([[1.0, 2.0], [3.0, 4.0]])
+        schema = FeatureSchema(
+            features=[Feature(name="a", modality=FeatureModality.NUMERICAL)] * 2
+        )
+        out, out_schema, fitted = expand_date_and_text_features(X, schema)
+        assert out is X
+        assert out_schema is schema
+        assert fitted == {}
+
+    def test__date_column__use_text_irrelevant__always_expands(self) -> None:
+        """A `DATE` feature only exists when `USE_DATES` already decided to expand
+        it (see `detect_feature_modalities`), so it is unconditional here.
+        """
+        n = 60
+        X = np.array(
+            [
+                [float(i), d]
+                for i, d in enumerate(
+                    pd.date_range("2020-01-01", periods=n).strftime("%Y-%m-%d")
+                )
+            ],
+            dtype=object,
+        )
+        out, schema, fitted = expand_date_and_text_features(
+            X, self._schema(FeatureModality.DATE), use_text=False
+        )
+        assert out.shape[1] > 2
+        assert schema.num_columns == out.shape[1]
+        assert all(f.modality is FeatureModality.NUMERICAL for f in schema.features)
+        assert list(fitted.keys()) == [1]
+        assert fitted[1][0] == "date"
+
+    def test__text_column__use_text_off__is_unchanged(self) -> None:
+        n = 60
+        X = np.array(
+            [[float(i), f"free text number {i} words words"] for i in range(n)],
+            dtype=object,
+        )
+        out, schema, fitted = expand_date_and_text_features(
+            X, self._schema(FeatureModality.TEXT), use_text=False
+        )
+        assert out is X
+        assert schema.num_columns == 2
+        assert fitted == {}
+
+    def test__text_column__use_text_on__expands(self) -> None:
+        n = 60
+        X = np.array(
+            [[float(i), f"free text number {i} words words"] for i in range(n)],
+            dtype=object,
+        )
+        out, schema, fitted = expand_date_and_text_features(
+            X, self._schema(FeatureModality.TEXT), use_text=True
+        )
+        assert out.shape[1] > 2
+        assert schema.num_columns == out.shape[1]
+        assert list(fitted.keys()) == [1]
+        assert fitted[1][0] == "text"
+
+    def test__predict_time__reuses_fitted_encoder_without_a_schema(self) -> None:
+        """The predict path passes `feature_schema=None`; only `fitted` matters."""
+        n = 60
+        dates = pd.date_range("2020-01-01", periods=n).strftime("%Y-%m-%d")
+        X_fit = np.array([[float(i), d] for i, d in enumerate(dates)], dtype=object)
+        _, _, fitted = expand_date_and_text_features(
+            X_fit, self._schema(FeatureModality.DATE), use_text=False
+        )
+
+        X_predict = np.array([[0.0, dates[0]], [1.0, dates[1]]], dtype=object)
+        out, schema, fitted_out = expand_date_and_text_features(
+            X_predict, None, fitted=fitted
+        )
+        assert out.shape[0] == 2
+        assert schema is None
+        assert fitted_out is fitted
+
+
+def test__stringify_datetime_columns__no_datetime_columns__is_a_no_op() -> None:
+    X = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
+    out = stringify_datetime_columns(X)
+    assert out is X
+
+
+def test__stringify_datetime_columns__formats_and_preserves_missing() -> None:
+    X = pd.DataFrame(
+        {
+            "num": [1.0, 2.0, 3.0],
+            "signed_on": pd.to_datetime(["2020-01-01", None, "2020-01-03"]),
+        }
+    )
+    out = stringify_datetime_columns(X)
+    assert out["signed_on"].tolist() == [
+        "2020-01-01 00:00:00",
+        np.nan,
+        "2020-01-03 00:00:00",
+    ]
+    assert out["num"].tolist() == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.parametrize("use_dates", [False, True])
+def test__classifier_fit_predict__native_datetime_column__does_not_crash(
+    use_dates: bool,
+) -> None:
+    """Regression: mixing a native `datetime64` column with any other dtype used
+    to crash with a numpy dtype-promotion error inside `validate_data`, regardless
+    of `USE_DATES` -- this is the crash the original skrub-based PR set out to fix.
+    """
+    n = 50
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {"num": rng.normal(size=n), "signed_on": pd.date_range("2020-01-01", periods=n)}
+    )
+    y = rng.integers(0, 2, n)
+
+    clf = TabPFNClassifier(
+        n_estimators=1, device="cpu", inference_config={"USE_DATES": use_dates}
+    )
+    clf.fit(X, y)
+    proba = clf.predict_proba(X)
+
+    assert proba.shape == (n, 2)
+    assert np.isfinite(proba).all()
 
 
 def test__fix_dtypes__numeric_array_stays_consolidated() -> None:
@@ -1024,7 +1194,7 @@ def test__clean_data__mixed_columns_take_the_assembly_path() -> None:
         "tabpfn.preprocessing.clean._encode_into_preallocated",
         wraps=clean_module._encode_into_preallocated,
     ) as assembled:
-        out, _encoder, _ = clean_data(X=X, feature_schema=schema)
+        out, _encoder, _, _ = clean_data(X=X, feature_schema=schema)
 
     assert assembled.call_count == 1, "fell back to ColumnTransformer.fit_transform"
     # Numeric columns keep their own values, in their own positions -- the thing the
@@ -1049,7 +1219,7 @@ def test__clean_data__assembly_fits_the_encoder_sklearn_would_have() -> None:
         X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
     )
 
-    _, assembled, _ = clean_data(X=X, feature_schema=schema)
+    _, assembled, _, _ = clean_data(X=X, feature_schema=schema)
     reference = get_ordinal_encoder()
     reference.fit_transform(frame)
 
@@ -1074,7 +1244,7 @@ def test__clean_data__assembly_matches_the_column_transformer_exactly() -> None:
         X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
     )
 
-    assembled, _, _ = clean_data(X=X, feature_schema=schema)
+    assembled, _, _, _ = clean_data(X=X, feature_schema=schema)
     expected = get_ordinal_encoder().fit_transform(frame).astype(np.float64)
 
     np.testing.assert_array_equal(assembled, expected)
@@ -1234,56 +1404,3 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     out = fix_dtypes(frame, cat_indices=None)
 
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
-
-
-def test__remap_categorical_indices__pushed_back_by_expansion__follows_by_name() -> (
-    None
-):
-    """A categorical column after an expanding one is found at its new position."""
-    original_X = pd.DataFrame({"date_col": ["x"], "cat_col": ["a"]})
-    converted_names = np.array(["date_col_year", "date_col_total_seconds", "cat_col"])
-
-    result = remap_categorical_indices(
-        original_X=original_X,
-        categorical_indices=[1],
-        converted_feature_names=converted_names,
-    )
-
-    assert result == [2]
-
-
-def test__remap_categorical_indices__declared_column_itself_expanded__is_dropped() -> (
-    None
-):
-    """A categorical index on a column that no longer exists is dropped, not guessed."""
-    original_X = pd.DataFrame({"date_col": ["x"], "other": ["a"]})
-    converted_names = np.array(["date_col_year", "date_col_total_seconds", "other"])
-
-    result = remap_categorical_indices(
-        original_X=original_X,
-        categorical_indices=[0],
-        converted_feature_names=converted_names,
-    )
-
-    assert result == []
-
-
-def test__remap_categorical_indices__non_dataframe_input__unchanged() -> None:
-    """Nothing shifts for array input, since `InputTypeConverter` never touches it."""
-    result = remap_categorical_indices(
-        original_X=np.zeros((3, 2)),
-        categorical_indices=[1],
-        converted_feature_names=np.array(["f0", "f1"]),
-    )
-
-    assert result == [1]
-
-
-def test__remap_categorical_indices__no_indices_declared__returns_none() -> None:
-    result = remap_categorical_indices(
-        original_X=pd.DataFrame({"a": [1]}),
-        categorical_indices=None,
-        converted_feature_names=np.array(["a"]),
-    )
-
-    assert result is None

@@ -80,10 +80,10 @@ class InferenceConfig:
     """Whether to encode columns read as text into numeric features, using tf-idf
     over character n-grams followed by a truncated SVD. Off by default, which leaves
     them as strings, sending them to the ordinal encoder as high-cardinality
-    categories."""
-    MIN_CARDINALITY_FOR_TEXT: int = 30
-    """Number of distinct values above which a string column is read as text rather
-    than as a category. Only consulted when `USE_TEXT` is True."""
+    categories. A string column is read as text above
+    `MAX_UNIQUE_FOR_CATEGORICAL_FEATURES` distinct values, the same threshold that
+    decides a category, regardless of this flag; it only decides whether that
+    column is then encoded or left as a string."""
     TEXT_N_COMPONENTS: int = 30
     """Number of numeric features each text column is encoded into, as an upper
     bound: a column with little variety yields fewer. Every text column costs up to

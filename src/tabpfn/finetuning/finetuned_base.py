@@ -868,7 +868,6 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
             y_validated,
             self.feature_names_in_,
             self.n_features_in_,
-            input_converter,
         ) = ensure_compatible_fit_inputs_sklearn(
             X,
             y,
@@ -881,14 +880,11 @@ class FinetunedTabPFNBase(BaseEstimator, ABC):
 
         if X_val is not None and y_val is not None:
             X_train, y_train = X, y
-            X_val, y_val, _, _, _ = ensure_compatible_fit_inputs_sklearn(
+            X_val, y_val, _, _ = ensure_compatible_fit_inputs_sklearn(
                 X_val,
                 y_val,
                 estimator=self.finetuned_estimator_,
                 ensure_y_numeric=self._model_type == "regressor",
-                # The held-out split must get the training split's conversions, not
-                # its own, or the two disagree on what a column is.
-                input_converter=input_converter,
             )
         elif self.validation_split_ratio:
             X_train, X_val, y_train, y_val = self._get_train_val_split(X, y)

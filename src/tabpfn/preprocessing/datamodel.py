@@ -95,19 +95,21 @@ class FeatureModality(str, Enum):
     or categorical features, while a string could represent categorical
     or text features.
 
-    There is deliberately no ``DATETIME`` member. Dates are detected and expanded
-    into calendar features before modality detection runs (see
-    :class:`~tabpfn.preprocessing.input_conversion.InputTypeConverter`), so what
-    arrives here is the year, the seconds since epoch and the cyclical parts, all
-    of which are numerical and need the numerical transforms. A date that was not
-    expanded, because ``USE_DATES`` is off, cannot be represented by any step in
-    the pipeline, so a member for it would describe data nothing can consume.
+    ``DATE`` is transient: it exists only between `detect_feature_modalities`
+    deciding a string column is date-like and `clean_data` acting on that decision.
+    With ``USE_DATES`` on, the column is expanded into calendar features and the
+    schema is updated to label those `NUMERICAL`, so a `DATE` feature never reaches
+    the rest of the pipeline. With it off, the column is instead demoted to
+    whichever of `CATEGORICAL`/`TEXT` its cardinality implies, the same modality it
+    would have gotten had it never been recognized as a date. Either way, nothing
+    downstream ever sees a `DATE`-labeled feature.
     """
 
     NUMERICAL = "numerical"
     CATEGORICAL = "categorical"
     TEXT = "text"
     CONSTANT = "constant"
+    DATE = "date"
 
 
 class GPUTransformType(str, Enum):

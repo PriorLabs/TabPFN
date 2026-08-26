@@ -35,7 +35,8 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.clean import expand_date_and_text_features, fix_dtypes
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
@@ -511,7 +512,14 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     X = ensure_compatible_predict_input_sklearn(X, model)
-    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    X, _, _ = expand_date_and_text_features(X, None, fitted=model.expansion_encoders_)
+    X = fix_dtypes(
+        X,
+        cat_indices=model.categorical_features_indices,
+        numerical_string_indices=model.inferred_feature_schema_.indices_for(
+            FeatureModality.NUMERICAL
+        ),
+    )
     X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []
