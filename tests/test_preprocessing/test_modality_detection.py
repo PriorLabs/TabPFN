@@ -44,6 +44,7 @@ def test__detect_feature_modalities_basic():
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=5,
+        min_cardinality_for_text=3,
     )
     assert feature_schema.indices_for(FeatureModality.NUMERICAL) == [0]
     assert feature_schema.indices_for(FeatureModality.CATEGORICAL) == [1, 2]
@@ -110,6 +111,7 @@ def test__detect_feature_modalities__input_types(
         min_samples_for_inference=1,
         max_unique_for_category=3,
         min_unique_for_numerical=4,  # small so we detect numericals
+        min_cardinality_for_text=3,
     )
     assert (
         feature_schema.indices_for(FeatureModality.NUMERICAL)
@@ -128,14 +130,17 @@ def _for_test_detect_with_defaults(
     *,
     reported_categorical: bool = False,
     big_enough_n_to_infer_cat: bool = True,
+    min_cardinality_for_text: int = 10,
 ) -> FeatureModality:
-    return _detect_feature_modality(
+    modality, _ = _detect_feature_modality(
         s,
         reported_categorical=reported_categorical,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     )
+    return modality
 
 
 def _for_test_detect_modality(
@@ -277,7 +282,7 @@ def test__detect_for_categorical_with_category_dtype():
 
 def test__detect_textual_feature():
     s = pd.Series(["a", "b", "c", "a", "b", "c"])
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
 
 
@@ -298,18 +303,18 @@ def test__detect_long_texts():
             "Last one",
         ]
     )
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
 
 def test__detect_text_as_object():
     s = pd.Series(["a", "b", "c", "e", "f"], dtype=object)
     s = s.astype(object)
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=2)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=2)
     assert result == FeatureModality.TEXT
-    result = _for_test_detect_with_defaults(s, max_unique_for_category=15)
+    result = _for_test_detect_with_defaults(s, min_cardinality_for_text=15)
     assert result == FeatureModality.CATEGORICAL
 
 
@@ -391,6 +396,7 @@ def test__infer_categorical_features(
         min_samples_for_inference=min_samples_for_inference,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
+        min_cardinality_for_text=30,
         provided_categorical_indices=provided,
     )
     assert (
@@ -436,6 +442,33 @@ def test__early_exit_not_fooled_by_uninformative_prefix():
         np.concatenate([np.zeros(_EARLY_EXIT_PREFIX_ROWS), np.arange(1.0, 4000.0)])
     )
     assert _for_test_detect_with_defaults(s) == FeatureModality.NUMERICAL
+
+
+def test__early_exit_accounts_for_min_cardinality_for_text() -> None:
+    """The early-exit threshold must include `min_cardinality_for_text` too.
+
+    Regression: `decided_at` only considered `max_unique_for_category` and
+    `min_unique_for_numerical`. If `min_cardinality_for_text` is configured
+    above both, a string column whose prefix already clears the first two, but
+    not the text threshold, stopped scanning early and used the undercounted
+    prefix value to decide category-vs-text -- silently leaving a genuinely
+    high-cardinality column CATEGORICAL instead of TEXT.
+    """
+    # Prefix cycles through only 8 distinct values, clearing
+    # max_unique_for_category (5) and min_unique_for_numerical (3) alone, but
+    # the tail introduces new values the prefix never saw, pushing the true
+    # count past min_cardinality_for_text (10).
+    prefix = [f"v{i % 8}" for i in range(_EARLY_EXIT_PREFIX_ROWS)]
+    tail = [f"new{i}" for i in range(10)]
+    s = pd.Series(prefix + tail)
+
+    result = _for_test_detect_with_defaults(
+        s,
+        max_unique_for_category=5,
+        min_unique_for_numerical=3,
+        min_cardinality_for_text=10,
+    )
+    assert result == FeatureModality.TEXT
 
 
 def _text_schema(*names: str) -> FeatureSchema:
@@ -528,6 +561,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
         )
 
     def test__free_text_column__warns(self) -> None:
@@ -672,3 +706,131 @@ def test__fit_with_text_column__warns_at_call_site(estimator_cls: type) -> None:
         warnings.simplefilter("always")
         model.fit(X, y)
     assert not [w for w in caught if "look like free text" in str(w.message)]
+
+
+def test__category_and_text_thresholds__move_independently() -> None:
+    """Numerical-vs-categorical and categorical-vs-text are separate decisions.
+
+    A numeric column with 35 distinct values and a string column with 35
+    distinct values, under the same `max_unique_for_category`, land on
+    opposite sides of it for reasons that have nothing to do with each other:
+    the number is simply above the categorical cutoff, the string is below
+    the (independent) text cutoff. Coupling the two would make
+    `min_cardinality_for_text` silently move whenever `max_unique_for_category`
+    did.
+    """
+    rng = np.random.default_rng(0)
+    numeric_column = rng.choice(35, size=200).astype(float)
+    string_column = np.array([f"g{i % 35}" for i in range(200)], dtype=object)
+    X = np.column_stack([numeric_column, string_column])
+
+    schema = detect_feature_modalities(
+        X=X,
+        feature_names=["num", "str"],
+        min_samples_for_inference=100,
+        max_unique_for_category=30,  # below 35: the number is NUMERICAL
+        min_unique_for_numerical=4,
+        min_cardinality_for_text=40,  # above 35: the string is CATEGORICAL
+    )
+
+    assert schema.features[0].modality is FeatureModality.NUMERICAL
+    assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+
+class TestDateLikeColumnDetection:
+    """`detect_feature_modalities` recognizing date-like string columns.
+
+    Nothing expands a date into calendar features yet, so a recognized date is
+    always demoted to whichever of CATEGORICAL/TEXT its cardinality implies --
+    exactly the modality a non-date string of the same shape would get. The
+    only observable difference recognizing it makes right now is the warning:
+    a demoted date is named as a date, not reported as generic free text.
+    """
+
+    n_rows = 200
+
+    def _numeric_column(self) -> np.ndarray:
+        return np.random.default_rng(0).normal(size=self.n_rows)
+
+    def _detect(self, X: pd.DataFrame) -> FeatureSchema:
+        return detect_feature_modalities(
+            X=X.to_numpy(dtype=object),
+            feature_names=list(X.columns),
+            min_samples_for_inference=100,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
+        )
+
+    def _dates(self, n_unique: int) -> list[str]:
+        pool = pd.date_range("2020-01-01", periods=n_unique).strftime("%Y-%m-%d")
+        return [pool[i % n_unique] for i in range(self.n_rows)]
+
+    def test__high_cardinality_date__is_text_like_a_same_shaped_string(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.TEXT
+
+    def test__low_cardinality_date__is_categorical(self) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+    def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
+        """The date warning fires; the free-text warning must not repeat it."""
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._detect(X)
+        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
+        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
+        assert len(date_warnings) == 1
+        assert not text_warnings
+
+    def test__genuine_free_text__is_not_a_date(self) -> None:
+        X = pd.DataFrame(
+            {
+                "num": self._numeric_column(),
+                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
+            }
+        )
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.TEXT
+        assert not [w for w in caught if "hold dates" in str(w.message)]
+
+    def test__mostly_dates_with_one_bad_value__is_not_a_date(self) -> None:
+        """All-or-nothing, like the numeric check: one bad value disqualifies it."""
+        values = self._dates(60)
+        values[0] = "not a date at all"
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            self._detect(X)
+        assert not [w for w in caught if "hold dates" in str(w.message)]
+
+    def test__numeric_string_column__is_not_a_date(self) -> None:
+        """The numeric check runs first and wins, even for an 8-digit date shape."""
+        values = [f"2024010{i % 9 + 1}" for i in range(self.n_rows)]
+        X = pd.DataFrame({"num": self._numeric_column(), "code": values})
+        schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
+
+    def test__declared_categorical_date_column__is_categorical(self) -> None:
+        """Declaring it categorical only wins within `max_unique_for_category`,
+        exactly like a declared-categorical numeric column.
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(10)})
+        schema = detect_feature_modalities(
+            X=X.to_numpy(dtype=object),
+            feature_names=list(X.columns),
+            provided_categorical_indices=[1],
+            min_samples_for_inference=100,
+            max_unique_for_category=30,
+            min_unique_for_numerical=4,
+            min_cardinality_for_text=30,
+        )
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
