@@ -94,9 +94,6 @@ class FeatureModality(str, Enum):
     instance, a numerical dtype could represent numerical features
     or categorical features, while a string could represent categorical
     or text features.
-
-    ``DATE`` is reserved and not yet produced by anything; a recognized date is
-    always demoted to `CATEGORICAL`/`TEXT` for now.
     """
 
     NUMERICAL = "numerical"
