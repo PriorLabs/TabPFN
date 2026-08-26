@@ -493,11 +493,11 @@ class TestWarnOnMultimodal:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_multimodal(schema)
+            _warn_on_multimodal(schema, [])
 
     def test__text_features__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(_text_schema("review"))
+            _warn_on_multimodal(_text_schema("review"), [])
 
         message = str(record[0].message)
         # Column names are shown as the user wrote them, without the input_ prefix.
@@ -512,14 +512,14 @@ class TestWarnOnMultimodal:
         schema = _text_schema("sku", "review")
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(schema, declared_cat_indices=[0])
+            _warn_on_multimodal(schema, [], declared_cat_indices=[0])
         message = str(record[0].message)
         assert "'review'" in message
         assert "'sku'" not in message
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            _warn_on_multimodal(schema, declared_cat_indices=[0, 1])
+            _warn_on_multimodal(schema, [], declared_cat_indices=[0, 1])
 
     def test__many_text_columns__message_is_truncated(self) -> None:
         n_extra = 5
@@ -527,7 +527,7 @@ class TestWarnOnMultimodal:
         schema = _text_schema(*(f"t{i}" for i in range(n_columns)))
 
         with pytest.warns(UserWarning, match="look like free text") as record:
-            _warn_on_multimodal(schema)
+            _warn_on_multimodal(schema, [])
 
         message = str(record[0].message)
         assert f"(and {n_extra} more)" in message
@@ -751,7 +751,7 @@ class TestDateLikeColumnDetection:
     def _numeric_column(self) -> np.ndarray:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
-    def _detect(self, X: pd.DataFrame) -> FeatureSchema:
+    def _detect(self, X: pd.DataFrame, *, use_dates: bool = False) -> FeatureSchema:
         return detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
@@ -759,6 +759,7 @@ class TestDateLikeColumnDetection:
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
+            use_dates=use_dates,
         )
 
     def _dates(self, n_unique: int) -> list[str]:
@@ -775,6 +776,29 @@ class TestDateLikeColumnDetection:
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
         with pytest.warns(UserWarning, match="hold dates"):
             schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+
+    def test__use_dates__high_cardinality_date__stays_date_and_does_not_warn(
+        self,
+    ) -> None:
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is FeatureModality.DATE
+
+    def test__use_dates__low_cardinality_date__is_still_categorical(self) -> None:
+        """A handful of repeating dates is a category, not worth expanding,
+        regardless of `use_dates` -- gated by `min_unique_for_numerical` (4 in
+        `_detect`), the same threshold a low-cardinality *number* is judged
+        against, strictly below which counts (3, not 4: see
+        `test__declared_categorical_date_column__is_categorical` for the
+        boundary already exercised on the `use_dates=False` side).
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, use_dates=True)
         assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
     def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:

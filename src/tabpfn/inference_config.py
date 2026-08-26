@@ -81,6 +81,14 @@ class InferenceConfig:
     follow-up that adds an actual text-encoding capability is expected to raise
     this default independently."""
 
+    USE_DATES: bool = False
+    """Whether a detected date column is expanded into calendar features.
+
+    Off by default: a detected date is read as a plain category or text, exactly
+    as if it had never been recognized as a date. When on, it is instead expanded
+    via `skrub.DatetimeEncoder` into numeric calendar features (year, month, day,
+    weekday, ...), and the raw column is dropped."""
+
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
         - If None, no outliers are removed.
