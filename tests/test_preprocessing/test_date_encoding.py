@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import expand_date_features
 
@@ -74,6 +75,24 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     )
     # Every expanded feature is real-valued for a fully populated date column.
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
+
+
+def test__expand_before_clean__year_feature_keeps_its_real_value() -> None:
+    """Ordering guard: `clean_data` has no notion of `DATE` at all, so a date
+    column must already be expanded before it gets there -- verified directly:
+    feeding `clean_data` a still-`DATE`-tagged column doesn't error, it
+    silently turns the dates into sequential ordinal codes (0, 1, 2, ...)
+    instead of raising. Expanding first, as the real fit/predict paths always
+    do, must survive `clean_data` with the real year value intact.
+    """
+    X = _numeric_and_date_frame(_dates())
+    schema = _numeric_and_date_schema()
+
+    X_expanded, schema_expanded, _ = expand_date_features(X, schema)
+    X_out, _, schema_out = clean_data(X_expanded, schema_expanded)
+
+    year_index = schema_out.feature_names.index("input_signed_on_0")
+    np.testing.assert_array_equal(X_out[:, year_index], 2020.0)
 
 
 def test__predict__reapplies_fitted_encoder_positionally() -> None:
