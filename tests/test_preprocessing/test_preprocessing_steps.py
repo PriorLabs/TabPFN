@@ -12,11 +12,14 @@ from unittest import mock
 import numpy as np
 import pandas as pd
 import pytest
+import sklearn
 import sklearn.base
+from scipy import sparse
 from sklearn.compose import ColumnTransformer
 from sklearn.exceptions import NotFittedError
 from sklearn.preprocessing import (
     FunctionTransformer,
+    MaxAbsScaler,
     OneHotEncoder,
     OrdinalEncoder,
 )
@@ -941,6 +944,218 @@ def test__efficient_column_transformer__a_validating_remainder_is_not_a_passthro
     with pytest.raises(ValueError, match="NaN"):
         transformer.fit_transform(X)
     assert assemblies == []
+
+
+# --- what the assembly declines -------------------------------------------------
+#
+# Three shapes reach the same result through sklearn only. What each has in common is
+# that the assembly would not be wrong so much as silently different -- a dense array
+# where a sparse one was asked for, a name where a value was, a routed parameter
+# nobody looked at.
+
+
+@pytest.mark.parametrize("globally", [False, True], ids=["set_output", "config"])
+def test__efficient_column_transformer__declines_a_frame_output(
+    assemblies: list[tuple[int, ...]], *, globally: bool
+) -> None:
+    """A caller asking for a frame gets one, from sklearn, not an array from here.
+
+    Either route to it: the estimator's own `set_output`, or sklearn's global config,
+    which a surrounding `config_context` turns on without touching this estimator at
+    all.
+    """
+    X = _mixed_frame()
+    transformer = get_ordinal_encoder()
+    if not globally:
+        transformer.set_output(transform="pandas")
+
+    with sklearn.config_context(transform_output="pandas" if globally else "default"):
+        out = transformer.fit_transform(X)
+
+    assert assemblies == []
+    assert isinstance(out, pd.DataFrame)
+    # in the input's order, values and names alike
+    assert list(out.columns) == list(X.columns)
+    np.testing.assert_array_equal(out["n0"], X["n0"])
+    np.testing.assert_array_equal(out["n1"], X["n1"])
+
+
+def test__order_preserving_column_transformer__names_the_order_it_returns() -> None:
+    """The names have to be reordered with the columns, not left in sklearn's order.
+
+    Nothing here reads them, but sklearn's `set_output` wrapper does: it labels a
+    frame output with exactly these, over data this class has already reordered. Left
+    alone, every column would be named after whatever used to sit at its position.
+    """
+    X = _mixed_frame()
+    # A named remainder, since `FunctionTransformer` cannot name its own columns and
+    # sklearn refuses to name the output at all through one.
+    transformer = OrderPreservingColumnTransformer(
+        [("encoder", OrdinalEncoder(), ["s0", "s1"])],
+        remainder="passthrough",
+        sparse_threshold=0.0,
+        verbose_feature_names_out=False,
+    ).fit(X)
+
+    assert list(transformer.get_feature_names_out()) == list(X.columns)
+    # The stacked order is still what the parent reports, and what has to be undone.
+    assert list(ColumnTransformer.get_feature_names_out(transformer)) == [
+        "s0",
+        "s1",
+        "n0",
+        "n1",
+    ]
+
+
+def test__efficient_column_transformer__declines_routed_metadata(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A parameter meant for the inner transformer must not be quietly dropped."""
+    X = _mixed_frame()
+    transformer = get_ordinal_encoder()
+
+    # Left to sklearn to accept or refuse -- which without metadata routing enabled
+    # is to refuse. What must not happen is an assembly that ignores it.
+    with pytest.raises(ValueError, match="enable_metadata_routing"):
+        transformer.fit_transform(X, None, encoder__sample_weight=np.ones(6))
+
+    assert assemblies == []
+
+
+def test__efficient_column_transformer__declines_a_sparse_input(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A sparse input keeps sklearn's sparse output, which the assembly cannot write.
+
+    The same transformer over the same values densely *is* assembled, so sparseness is
+    the only reason for the fallback here.
+    """
+    values = np.zeros((10, 4))
+    values[0, 0], values[3, 1], values[5, 2] = 1.0, 2.0, 3.0
+    transformers = [("scaler", MaxAbsScaler(), [1])]
+
+    dense = EfficientColumnTransformer(transformers, remainder="passthrough")
+    dense.fit_transform(values)
+    assert assemblies == [(10, 4)], "the dense input is one the assembly takes"
+
+    transformer = EfficientColumnTransformer(transformers, remainder="passthrough")
+    out = transformer.fit_transform(sparse.csr_matrix(values))
+
+    assert assemblies == [(10, 4)], "a sparse input was assembled"
+    assert transformer.sparse_output_
+    assert sparse.issparse(out)
+    np.testing.assert_array_equal(
+        out.toarray(), _reference(transformer, sparse.csr_matrix(values)).toarray()
+    )
+
+
+def test__efficient_column_transformer__fit_falls_back_to_sklearns_state(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A `fit` the assembly declines has to leave exactly the state sklearn leaves.
+
+    The one-row probe fit runs first and is then thrown away, so what the estimator
+    carries into `transform` is the full fit's -- categories learned from every row
+    included.
+    """
+    frame = _mixed_frame().assign(o=np.arange(6).astype(object))
+    transformer = get_ordinal_encoder().fit(frame)
+    reference = ColumnTransformer(
+        list(transformer.transformers),
+        remainder=transformer.remainder,
+        sparse_threshold=transformer.sparse_threshold,
+    ).fit(frame)
+
+    assert assemblies == [], "an object passthrough column was assembled"
+    assert transformer.n_features_in_ == reference.n_features_in_
+    assert transformer.output_indices_ == reference.output_indices_
+    for learned, wanted in zip(
+        transformer.named_transformers_["encoder"].categories_,
+        reference.named_transformers_["encoder"].categories_,
+        strict=True,
+    ):
+        np.testing.assert_array_equal(learned, wanted)
+
+
+# --- the assembly and the fallback are the same output ----------------------------
+#
+# `fit_transform` assembles where `transform` goes through sklearn, so the two routes
+# have to arrive at the same array -- values, dtype and memory layout. Fit and predict
+# run one each, and a layout that differs between them rotates the SVD's basis
+# downstream on exactly one of the two.
+
+
+@pytest.mark.parametrize("selected", [[1], [0], [0, 2], [1, 2], [0, 1, 2]], ids=str)
+def test__efficient_column_transformer__transform_repeats_the_assembly(
+    selected: list[int], assemblies: list[tuple[int, ...]]
+) -> None:
+    """Every selection over an array, assembled at fit and stacked at transform."""
+    X = np.column_stack([np.arange(6.0), np.tile([1.0, 2.0], 3), np.arange(6.0) * 3])
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), selected)], remainder="passthrough"
+    )
+
+    assembled = transformer.fit_transform(X)
+    stacked = transformer.transform(X)
+
+    assert assemblies == [(6, 3)], "the fit was not assembled"
+    np.testing.assert_array_equal(assembled, stacked)
+    assert assembled.dtype == stacked.dtype
+    assert np.isfortran(assembled) == np.isfortran(stacked)
+
+
+def test__order_preserving_column_transformer__transform_repeats_the_assembly(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """The same, where the fallback reaches the input's order through a gather."""
+    X = _mixed_frame()
+    transformer = get_ordinal_encoder()
+
+    assembled = transformer.fit_transform(X)
+    gathered = transformer.transform(X)
+
+    assert assemblies == [(6, 4)], "the fit was not assembled"
+    np.testing.assert_array_equal(assembled, gathered)
+    assert assembled.dtype == gathered.dtype
+    assert np.isfortran(assembled) == np.isfortran(gathered)
+
+
+def test__efficient_column_transformer__assembles_a_frame_in_the_stacked_layout(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A frame through the plain class, whose output order is sklearn's own.
+
+    Every other frame case here goes through the order-preserving subclass, so this is
+    what pins the other half of `_output_positions` -- the transformed columns in their
+    own slice -- for an input whose columns are keyed by name.
+    """
+    X = _mixed_frame()
+    transformer = EfficientColumnTransformer(
+        [("encoder", OrdinalEncoder(), ["s0", "s1"])],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+
+    out = transformer.fit_transform(X)
+    reference = _reference(transformer, X)
+
+    assert assemblies == [(6, 4)]
+    np.testing.assert_array_equal(out, reference)
+    assert out.dtype == reference.dtype
+    assert np.isfortran(out) == np.isfortran(reference)
+
+
+def test__order_preserving_column_transformer__promotes_a_narrower_encoder(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """A float32 encoder against float64 passthrough columns: sklearn promotes."""
+    X = _mixed_frame()
+    transformer = get_ordinal_encoder(numpy_dtype=np.float32)  # type: ignore[arg-type]
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == [(6, 4)]
+    assert out.dtype == _reference(transformer, X).dtype == np.float64
 
 
 # --- the shared identity predicate ------------------------------------------------
