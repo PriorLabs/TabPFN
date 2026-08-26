@@ -336,7 +336,7 @@ class TestTagFeaturesAndSanitizeData:
             n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
             n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
         )
-        X_out, ord_encoder, _ = clean_data(
+        X_out, ord_encoder, _, _ = clean_data(
             X=input_data,
             feature_schema=schema,
         )
@@ -387,7 +387,7 @@ class TestTagFeaturesAndSanitizeData:
             n_numerical_features=len(modalities[FeatureModality.NUMERICAL]),
             n_categorical_features=len(modalities[FeatureModality.CATEGORICAL]),
         )
-        X_out, ord_encoder, _ = clean_data(
+        X_out, ord_encoder, _, _ = clean_data(
             X=input_data.values,
             feature_schema=schema,
         )
@@ -423,11 +423,11 @@ class TestTagFeaturesAndSanitizeData:
                 Feature(name="type", modality=FeatureModality.CATEGORICAL),
             ]
         )
-        X_out_first, _, feature_schema_first = clean_data(
+        X_out_first, _, feature_schema_first, _ = clean_data(
             X=df.values,
             feature_schema=schema,
         )
-        X_out_second, _, feature_schema_second = clean_data(
+        X_out_second, _, feature_schema_second, _ = clean_data(
             X=X_out_first,
             feature_schema=schema,
         )
@@ -769,7 +769,7 @@ def test__clean_data__numeric_array_converts_without_intermediate_copy(
     rng = np.random.default_rng(0)
     X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
 
-    out, encoder, schema = clean_data(
+    out, encoder, schema, _ = clean_data(
         X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
     )
 
@@ -794,7 +794,7 @@ def test__clean_data__non_finite_survive_the_numeric_shortcut(
     X[1, 2] = np.inf
     X[3, 0] = -np.inf
 
-    out, _, _ = clean_data(
+    out, _, _, _ = clean_data(
         X=X, feature_schema=_numeric_schema(3), passthrough_inf=passthrough_inf
     )
 
@@ -810,8 +810,8 @@ def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
     rng = np.random.default_rng(0)
     X = (rng.integers(0, 4, size=(50, 3))).astype("float64")
 
-    shortcut, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
-    general, encoder, _ = clean_data(
+    shortcut, _, _, _ = clean_data(X=X, feature_schema=_numeric_schema(3))
+    general, encoder, _, _ = clean_data(
         X=X, feature_schema=_numeric_schema(3, cat_indices=(0,))
     )
 
@@ -1007,7 +1007,7 @@ def test__clean_data__mixed_columns_take_the_assembly_path() -> None:
         "tabpfn.preprocessing.clean._encode_into_preallocated",
         wraps=clean_module._encode_into_preallocated,
     ) as assembled:
-        out, _encoder, _ = clean_data(X=X, feature_schema=schema)
+        out, _encoder, _, _ = clean_data(X=X, feature_schema=schema)
 
     assert assembled.call_count == 1, "fell back to ColumnTransformer.fit_transform"
     # Numeric columns keep their own values, in their own positions -- the thing the
@@ -1032,7 +1032,7 @@ def test__clean_data__assembly_fits_the_encoder_sklearn_would_have() -> None:
         X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
     )
 
-    _, assembled, _ = clean_data(X=X, feature_schema=schema)
+    _, assembled, _, _ = clean_data(X=X, feature_schema=schema)
     reference = get_ordinal_encoder()
     reference.fit_transform(frame)
 
@@ -1057,7 +1057,7 @@ def test__clean_data__assembly_matches_the_column_transformer_exactly() -> None:
         X.copy(), cat_indices=schema.indices_for(FeatureModality.CATEGORICAL)
     )
 
-    assembled, _, _ = clean_data(X=X, feature_schema=schema)
+    assembled, _, _, _ = clean_data(X=X, feature_schema=schema)
     expected = get_ordinal_encoder().fit_transform(frame).astype(np.float64)
 
     np.testing.assert_array_equal(assembled, expected)

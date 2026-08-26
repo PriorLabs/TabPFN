@@ -41,6 +41,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    use_dates: bool = False,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -60,6 +61,9 @@ def detect_feature_modalities(
         min_cardinality_for_text: Unique-value count above which a candidate
             string column (not parsed as a number or date) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
+        use_dates: Whether a detected date column is left as `DATE` for the
+            caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`. Does
+            not otherwise change what counts as a date (see `_resolve_dates`).
 
     Returns:
         The inferred `FeatureSchema`.
@@ -80,45 +84,57 @@ def detect_feature_modalities(
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
-    feature_schema = FeatureSchema(features=features)
-    _warn_on_multimodal(
-        feature_schema, declared_cat_indices=provided_categorical_indices
-    )
-    return _demote_dates_for_now(
-        feature_schema,
+    feature_schema, demoted_date_columns = _resolve_dates(
+        FeatureSchema(features=features),
         X,
+        use_dates=use_dates,
         provided_categorical_indices=provided_categorical_indices,
         max_unique_for_category=max_unique_for_category,
         min_unique_for_numerical=min_unique_for_numerical,
         min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     )
+    _warn_on_multimodal(
+        feature_schema,
+        demoted_date_columns,
+        declared_cat_indices=provided_categorical_indices,
+    )
+    return feature_schema
 
 
-def _demote_dates_for_now(
+def _resolve_dates(
     feature_schema: FeatureSchema,
     X: np.ndarray,
     *,
+    use_dates: bool,
     provided_categorical_indices: Sequence[int] | None,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
-) -> FeatureSchema:
-    """Temporary: demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
+) -> tuple[FeatureSchema, list[str]]:
+    """Decide what to do with every detected `DATE` feature.
 
-    Nothing expands a date into calendar features yet, so `DATE` isn't
-    consumable downstream -- demoted the same way a same-shaped non-date
-    string would be. A follow-up adding real date expansion should delete this
-    function outright. Called after `_warn_on_multimodal`, while the schema
-    still says `DATE`.
+    A low-cardinality date is always demoted to `CATEGORICAL`, via the same
+    `_detect_numeric_as_categorical` check a low-cardinality *number* already
+    gets, regardless of `use_dates`: a handful of repeating dates is a category,
+    not a signal worth expanding. Everything else is left tagged `DATE` when
+    `use_dates` is on, for the caller to expand into calendar features, or
+    demoted via the text-cardinality split when it is off, exactly as a
+    same-shaped non-date string would be.
+
+    Returns:
+        The updated schema, and the names of columns demoted by the
+        text-cardinality split (not the low-cardinality ones, which never
+        warrant a warning either) -- for the caller to warn about by name.
     """
     date_indices = feature_schema.indices_for(FeatureModality.DATE)
     if not date_indices:
-        return feature_schema
+        return feature_schema, []
 
     declared = set(provided_categorical_indices or ())
     features = list(feature_schema.features)
+    demoted_columns = []
     for index in date_indices:
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
         if _detect_numeric_as_categorical(
@@ -128,15 +144,20 @@ def _demote_dates_for_now(
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         ):
-            demoted = FeatureModality.CATEGORICAL
-        else:
-            demoted = (
-                FeatureModality.CATEGORICAL
-                if n_unique <= min_cardinality_for_text
-                else FeatureModality.TEXT
+            features[index] = dataclasses.replace(
+                features[index], modality=FeatureModality.CATEGORICAL
             )
+            continue
+        if use_dates:
+            continue
+        demoted = (
+            FeatureModality.CATEGORICAL
+            if n_unique <= min_cardinality_for_text
+            else FeatureModality.TEXT
+        )
         features[index] = dataclasses.replace(features[index], modality=demoted)
-    return FeatureSchema(features=features)
+        demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
+    return FeatureSchema(features=features), demoted_columns
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -150,38 +171,45 @@ def _format_names_for_warning(names: list[str]) -> str:
 
 def _warn_on_multimodal(
     feature_schema: FeatureSchema,
+    demoted_date_columns: list[str],
     *,
     declared_cat_indices: Sequence[int] | None = None,
 ) -> None:
-    """Warn about detected dates, then about any remaining free-text columns.
+    """Warn about demoted dates, then about any remaining free-text columns.
 
-    Called before `_demote_dates_for_now` acts on `DATE`, so a date column
-    isn't `TEXT` yet and needs no special-casing to avoid a double warning.
+    Called after `_resolve_dates`, so a column left tagged `DATE` (because
+    `use_dates` is on) is genuinely about to be expanded and gets no warning --
+    only `demoted_date_columns` (silently downgraded because `use_dates` is off)
+    does. A column demoted to `TEXT` by the cardinality split is excluded from
+    the free-text warning below, via `demoted_date_columns`, so it isn't
+    reported twice with remedies that don't apply to a date.
 
     Args:
-        feature_schema: The schema produced by detection, before `DATE` is acted on.
+        feature_schema: The schema `_resolve_dates` produced.
+        demoted_date_columns: Names of columns `_resolve_dates` demoted via the
+            text-cardinality split.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
     """
-    date_columns = [
-        feature_schema.features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index in feature_schema.indices_for(FeatureModality.DATE)
-    ]
-    if date_columns:
+    if demoted_date_columns:
         warnings.warn(
             f"These columns hold dates, which are not yet expanded into calendar "
             f"features, so they are read as plain categories or text: "
-            f"{_format_names_for_warning(date_columns)}.",
+            f"{_format_names_for_warning(demoted_date_columns)}.",
             UserWarning,
             stacklevel=6,
         )
 
     declared = set(declared_cat_indices or ())
+    already_reported = set(demoted_date_columns)
     text_names = [
-        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
+        name
         for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT and index not in declared
+        if feature.modality is FeatureModality.TEXT
+        and index not in declared
+        and (name := feature.name.removeprefix(INPUT_FEATURE_PREFIX))
+        not in already_reported
     ]
     if not text_names:
         return
@@ -214,7 +242,7 @@ def _detect_feature_modality(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    """Decide a single column's modality; see `_demote_dates_for_now` for DATE."""
+    """Decide a single column's modality; see `_resolve_dates` for DATE."""
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.
