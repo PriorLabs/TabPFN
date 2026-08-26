@@ -77,6 +77,24 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
 
+def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
+    """A pre-existing column can happen to look like a generated output name."""
+    X = np.column_stack([np.array(_dates(), dtype=object), np.zeros(N, dtype=object)])
+    schema = FeatureSchema(
+        features=[
+            Feature(name="input_signed_on", modality=FeatureModality.DATE),
+            Feature(name="input_signed_on_0", modality=FeatureModality.NUMERICAL),
+        ]
+    )
+
+    _, schema_out, fitted = expand_date_features(X, schema)
+
+    names = schema_out.feature_names
+    assert len(names) == len(set(names))
+    assert "input_signed_on_0" in names
+    assert fitted["input_signed_on"].output_names[0] != "input_signed_on_0"
+
+
 def test__expand_before_clean__vs__clean_before_expand() -> None:
     """Ordering guard: `clean_data` has no notion of `DATE` at all.
 
