@@ -537,12 +537,9 @@ class TestWarnOnTexts:
 
 
 class TestWarnOnDates:
-    """Schema-level unit tests for `_warn_on_dates`."""
-
-    def test__no_demoted_dates__does_not_warn(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_dates([])
+    """Schema-level unit tests for `_warn_on_dates`. Only ever called with a
+    non-empty list; the empty case is the caller's job to skip.
+    """
 
     def test__demoted_dates__warn_with_column_names(self) -> None:
         with pytest.warns(UserWarning, match="hold dates") as record:
@@ -802,19 +799,15 @@ class TestDateLikeColumnDetection:
             schema = self._detect(X, use_dates=True)
         assert schema.features[1].modality is FeatureModality.DATE
 
-    def test__use_dates__low_cardinality_date__is_still_categorical(self) -> None:
-        """A handful of repeating dates is a category, not worth expanding,
-        regardless of `use_dates` -- gated by `min_unique_for_numerical` (4 in
-        `_detect`), the same threshold a low-cardinality *number* is judged
-        against, strictly below which counts (3, not 4: see
-        `test__declared_categorical_date_column__is_categorical` for the
-        boundary already exercised on the `use_dates=False` side).
+    def test__use_dates__low_cardinality_date__is_still_expanded(self) -> None:
+        """`_demote_dates` never runs once `use_dates` is on, low-cardinality
+        or not: every detected date is left for the caller to expand.
         """
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             schema = self._detect(X, use_dates=True)
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
+        assert schema.features[1].modality is FeatureModality.DATE
 
     def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
         """The date warning fires; the free-text warning must not repeat it."""

@@ -103,11 +103,8 @@ def expand_date_features(
         # input series' `.name`, and a bare `pd.DataFrame(ndarray)` has integer
         # column labels, which `DatetimeEncoder` cannot concatenate a suffix onto.
         column = frame.iloc[:, index].rename(str(index))
-        # `format="mixed"` matters here, not just for speed: without it,
-        # `to_datetime` infers one format from an early value and coerces every
-        # later value that doesn't match it to NaT, even genuinely valid dates
-        # (verified: a column mixing "2020-01-01" and "2020-06-15 13:45:30"
-        # silently drops the second to NaT under the default format inference).
+        # format="mixed": otherwise a format inferred from an early value
+        # silently coerces a later, differently-shaped but valid date to NaT.
         column = pd.to_datetime(column, errors="coerce", format="mixed")
         if fitted is not None:
             fitted_encoder = by_index[index]

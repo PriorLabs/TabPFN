@@ -84,80 +84,65 @@ def detect_feature_modalities(
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-
-    # Warn about free text before dates are resolved: at this point a column
-    # that will end up TEXT (demoted, since `use_dates` is off) or DATE (left
-    # alone, since it is on) is still tagged DATE here, never TEXT, so it is
-    # never counted as free text to begin with.
+    # Before dates are demoted, so a date isn't yet TEXT and is never counted here.
     _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
 
-    feature_schema, demoted_date_columns = _resolve_dates(
-        feature_schema,
-        X,
-        use_dates=use_dates,
-        provided_categorical_indices=provided_categorical_indices,
-        max_unique_for_category=max_unique_for_category,
-        min_unique_for_numerical=min_unique_for_numerical,
-        min_cardinality_for_text=min_cardinality_for_text,
-        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-    )
-    _warn_on_dates(demoted_date_columns)
+    demoted_date_columns: list[str] = []
+    # `_demote_dates` is what honors a declared-categorical column via
+    # `_detect_numeric_as_categorical`; skipping it when `use_dates` is on means
+    # a declared-categorical date is expanded anyway, the declaration ignored.
+    if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
+        feature_schema, demoted_date_columns = _demote_dates(
+            feature_schema,
+            X,
+            provided_categorical_indices=provided_categorical_indices,
+            max_unique_for_category=max_unique_for_category,
+            min_unique_for_numerical=min_unique_for_numerical,
+            min_cardinality_for_text=min_cardinality_for_text,
+            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        )
+    if demoted_date_columns:
+        _warn_on_dates(demoted_date_columns)
     return feature_schema
 
 
-def _resolve_dates(
+def _demote_dates(
     feature_schema: FeatureSchema,
     X: np.ndarray,
     *,
-    use_dates: bool,
     provided_categorical_indices: Sequence[int] | None,
     max_unique_for_category: int,
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> tuple[FeatureSchema, list[str]]:
-    """Decide what to do with every detected `DATE` feature.
+    """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    A low-cardinality date is always demoted to `CATEGORICAL`, via the same
-    `_detect_numeric_as_categorical` check a low-cardinality *number* already
-    gets, regardless of `use_dates`: a handful of repeating dates is a category,
-    not a signal worth expanding. Everything else is left tagged `DATE` when
-    `use_dates` is on, for the caller to expand into calendar features, or
-    demoted via the text-cardinality split when it is off, exactly as a
-    same-shaped non-date string would be.
+    Only called when `use_dates` is off (and there's at least one `DATE`
+    feature), so every one is demoted -- to whichever a same-shaped non-date
+    string would get, via the same cardinality checks.
 
     Returns:
-        The updated schema, and the names of columns demoted by the
-        text-cardinality split (not the low-cardinality ones, which never
-        warrant a warning either) -- for the caller to warn about by name.
+        The updated schema, and the demoted column names, for the caller to
+        warn about.
     """
-    date_indices = feature_schema.indices_for(FeatureModality.DATE)
-    if not date_indices:
-        return feature_schema, []
-
     declared = set(provided_categorical_indices or ())
     features = list(feature_schema.features)
     demoted_columns = []
-    for index in date_indices:
+    for index in feature_schema.indices_for(FeatureModality.DATE):
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        if _detect_numeric_as_categorical(
+        if _detect_numeric_as_categorical(  # noqa: SIM114
             n_unique=n_unique,
             reported_categorical=index in declared,
             max_unique_for_category=max_unique_for_category,
             min_unique_for_numerical=min_unique_for_numerical,
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         ):
-            features[index] = dataclasses.replace(
-                features[index], modality=FeatureModality.CATEGORICAL
-            )
-            continue
-        if use_dates:
-            continue
-        demoted = (
-            FeatureModality.CATEGORICAL
-            if n_unique <= min_cardinality_for_text
-            else FeatureModality.TEXT
-        )
+            demoted = FeatureModality.CATEGORICAL
+        elif n_unique <= min_cardinality_for_text:
+            demoted = FeatureModality.CATEGORICAL
+        else:
+            demoted = FeatureModality.TEXT
         features[index] = dataclasses.replace(features[index], modality=demoted)
         demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
     return FeatureSchema(features=features), demoted_columns
@@ -179,12 +164,11 @@ def _warn_on_texts(
 ) -> None:
     """Warn when input columns look like free text rather than categoricals.
 
-    Called before `_resolve_dates` acts, while the schema still tags a date
-    `DATE` rather than `TEXT` -- so a date column, whatever `_resolve_dates`
-    later turns it into, is never counted here.
+    Called before `_demote_dates`, while a date is still tagged `DATE` rather
+    than `TEXT`, so it's never counted here.
 
     Args:
-        feature_schema: The schema before any `DATE` column has been resolved.
+        feature_schema: The schema before any `DATE` column has been demoted.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
@@ -218,14 +202,10 @@ def _warn_on_texts(
 
 
 def _warn_on_dates(demoted_date_columns: list[str]) -> None:
-    """Warn about dates silently demoted to a plain category or text.
+    """Warn about dates `_demote_dates` demoted to a plain category or text.
 
-    Called after `_resolve_dates`, so `demoted_date_columns` only ever holds
-    columns demoted because `use_dates` is off -- one genuinely expanded (or
-    demoted for being too low-cardinality to bother with) gets no warning.
+    Only called when `demoted_date_columns` is non-empty.
     """
-    if not demoted_date_columns:
-        return
     warnings.warn(
         f"These columns hold dates, which are not yet expanded into calendar "
         f"features, so they are read as plain categories or text: "
@@ -244,7 +224,7 @@ def _detect_feature_modality(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    """Decide a single column's modality; see `_resolve_dates` for DATE."""
+    """Decide a single column's modality; see `_demote_dates` for DATE."""
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.
@@ -354,12 +334,6 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
     numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
     reclassified here.
-
-    `format="mixed"` matters here, not just for speed: without it, `to_datetime`
-    infers one format from an early value and silently coerces every later
-    value that doesn't match it to NaT, even a genuinely valid date (verified: a
-    column mixing "2020-01-01" and "2020-06-15 13:45:30" drops the second to
-    NaT under the default format inference, with no warning at all).
     """
     non_null = s.dropna()
     if non_null.empty:
@@ -369,6 +343,8 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
             # `to_datetime` warns when it cannot infer a format and falls back to
             # parsing value by value. This is only a probe, so that is noise.
             warnings.simplefilter("ignore")
+            # format="mixed": otherwise a format inferred from an early value
+            # silently coerces a later, differently-shaped but valid date to NaT.
             parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
     except (TypeError, ValueError):
         return False
