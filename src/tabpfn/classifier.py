@@ -196,7 +196,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The column transformer used to preprocess categorical data to be numeric."""
 
     date_encoders_: dict[str, FittedDatetimeEncoder]
-    """Fitted date encoders by column name; empty unless `USE_DATES` expanded one."""
+    """Date encoders by column name, if `USE_DATES` is on and dates are found."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is

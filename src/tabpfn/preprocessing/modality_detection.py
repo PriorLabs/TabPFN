@@ -62,8 +62,7 @@ def detect_feature_modalities(
             string column (not parsed as a number or date) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
         use_dates: Whether a detected date column is left as `DATE` for the
-            caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`. Does
-            not otherwise change what counts as a date (see `_resolve_dates`).
+            caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -84,8 +83,16 @@ def detect_feature_modalities(
             big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
         )
         features.append(Feature(name=feature_name, modality=feat_modality))
+    feature_schema = FeatureSchema(features=features)
+
+    # Warn about free text before dates are resolved: at this point a column
+    # that will end up TEXT (demoted, since `use_dates` is off) or DATE (left
+    # alone, since it is on) is still tagged DATE here, never TEXT, so it is
+    # never counted as free text to begin with.
+    _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
+
     feature_schema, demoted_date_columns = _resolve_dates(
-        FeatureSchema(features=features),
+        feature_schema,
         X,
         use_dates=use_dates,
         provided_categorical_indices=provided_categorical_indices,
@@ -94,11 +101,7 @@ def detect_feature_modalities(
         min_cardinality_for_text=min_cardinality_for_text,
         big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
     )
-    _warn_on_multimodal(
-        feature_schema,
-        demoted_date_columns,
-        declared_cat_indices=provided_categorical_indices,
-    )
+    _warn_on_dates(demoted_date_columns)
     return feature_schema
 
 
@@ -169,47 +172,28 @@ def _format_names_for_warning(names: list[str]) -> str:
     return printed
 
 
-def _warn_on_multimodal(
+def _warn_on_texts(
     feature_schema: FeatureSchema,
-    demoted_date_columns: list[str],
     *,
     declared_cat_indices: Sequence[int] | None = None,
 ) -> None:
-    """Warn about demoted dates, then about any remaining free-text columns.
+    """Warn when input columns look like free text rather than categoricals.
 
-    Called after `_resolve_dates`, so a column left tagged `DATE` (because
-    `use_dates` is on) is genuinely about to be expanded and gets no warning --
-    only `demoted_date_columns` (silently downgraded because `use_dates` is off)
-    does. A column demoted to `TEXT` by the cardinality split is excluded from
-    the free-text warning below, via `demoted_date_columns`, so it isn't
-    reported twice with remedies that don't apply to a date.
+    Called before `_resolve_dates` acts, while the schema still tags a date
+    `DATE` rather than `TEXT` -- so a date column, whatever `_resolve_dates`
+    later turns it into, is never counted here.
 
     Args:
-        feature_schema: The schema `_resolve_dates` produced.
-        demoted_date_columns: Names of columns `_resolve_dates` demoted via the
-            text-cardinality split.
+        feature_schema: The schema before any `DATE` column has been resolved.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
     """
-    if demoted_date_columns:
-        warnings.warn(
-            f"These columns hold dates, which are not yet expanded into calendar "
-            f"features, so they are read as plain categories or text: "
-            f"{_format_names_for_warning(demoted_date_columns)}.",
-            UserWarning,
-            stacklevel=6,
-        )
-
     declared = set(declared_cat_indices or ())
-    already_reported = set(demoted_date_columns)
     text_names = [
-        name
+        feature.name.removeprefix(INPUT_FEATURE_PREFIX)
         for index, feature in enumerate(feature_schema.features)
-        if feature.modality is FeatureModality.TEXT
-        and index not in declared
-        and (name := feature.name.removeprefix(INPUT_FEATURE_PREFIX))
-        not in already_reported
+        if feature.modality is FeatureModality.TEXT and index not in declared
     ]
     if not text_names:
         return
@@ -229,6 +213,24 @@ def _warn_on_multimodal(
         UserWarning,
         # stacklevel=6 reaches the `estimator.fit(X, y)` call site; pinned by the
         # `warning.filename` asserts in the tests.
+        stacklevel=6,
+    )
+
+
+def _warn_on_dates(demoted_date_columns: list[str]) -> None:
+    """Warn about dates silently demoted to a plain category or text.
+
+    Called after `_resolve_dates`, so `demoted_date_columns` only ever holds
+    columns demoted because `use_dates` is off -- one genuinely expanded (or
+    demoted for being too low-cardinality to bother with) gets no warning.
+    """
+    if not demoted_date_columns:
+        return
+    warnings.warn(
+        f"These columns hold dates, which are not yet expanded into calendar "
+        f"features, so they are read as plain categories or text: "
+        f"{_format_names_for_warning(demoted_date_columns)}.",
+        UserWarning,
         stacklevel=6,
     )
 
