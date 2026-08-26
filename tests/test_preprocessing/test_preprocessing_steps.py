@@ -980,6 +980,39 @@ def test__efficient_column_transformer__declines_a_frame_output(
     np.testing.assert_array_equal(out["n1"], X["n1"])
 
 
+def test__efficient_column_transformer__names_the_stacked_order_it_returns(
+    assemblies: list[tuple[int, ...]],
+) -> None:
+    """The plain class returns sklearn's own order, so it keeps sklearn's own names.
+
+    Nothing is overridden here, and nothing may be: the reorder in the subclass is
+    what makes the parent's names wrong, and an override hoisted up to this class
+    would name every column after whatever that reorder would have moved there. What
+    keeps the two in step is that the assembly places the transformed columns by
+    `output_indices_`, which is the same state the names are read off.
+    """
+    X = _mixed_frame()
+    transformers = [("encoder", OrdinalEncoder(), ["s0", "s1"])]
+    kwargs = {
+        "remainder": "passthrough",
+        "sparse_threshold": 0.0,
+        "verbose_feature_names_out": False,
+    }
+    transformer = EfficientColumnTransformer(transformers, **kwargs)
+
+    out = transformer.fit_transform(X)
+    names = list(transformer.get_feature_names_out())
+
+    assert assemblies == [(6, 4)]
+    assert names == list(
+        ColumnTransformer(transformers, **kwargs).fit(X).get_feature_names_out()
+    )
+    # And they describe the columns they are on, which is the whole point of them.
+    named = pd.DataFrame(out, columns=names)
+    for column in ["n0", "n1"]:
+        np.testing.assert_array_equal(named[column], X[column])
+
+
 def test__order_preserving_column_transformer__names_the_order_it_returns() -> None:
     """The names have to be reordered with the columns, not left in sklearn's order.
 
