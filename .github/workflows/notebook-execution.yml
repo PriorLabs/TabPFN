@@ -73,6 +73,9 @@ jobs:
           uv venv --python 3.12 "$VIRTUAL_ENV"
           uv pip install -e .
           uv pip install ipykernel nbclient nbformat pytest
+          # Cells that shell out to an installed command (`!gdown`) resolve it
+          # on PATH, which is how it works in Colab.
+          echo "$VIRTUAL_ENV/bin" >> "$GITHUB_PATH"
 
       - name: Run the notebook
         shell: bash
