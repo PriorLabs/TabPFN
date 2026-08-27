@@ -1155,18 +1155,25 @@ def test__order_preserving_column_transformer__transform_repeats_the_assembly(
     assert np.isfortran(assembled) == np.isfortran(gathered)
 
 
+@pytest.mark.parametrize("selected", [["s0"], ["s0", "s1"]], ids=str)
 def test__efficient_column_transformer__assembles_a_frame_in_the_stacked_layout(
-    assemblies: list[tuple[int, ...]],
+    selected: list[str], assemblies: list[tuple[int, ...]]
 ) -> None:
     """A frame through the plain class, whose output order is sklearn's own.
 
     Every other frame case here goes through the order-preserving subclass, so this is
     what pins the other half of `_output_positions` -- the transformed columns in their
     own slice -- for an input whose columns are keyed by name.
+
+    Both widths of selection, because they land on different layouts: sklearn stacks a
+    column-major output only when the encoder's own block is column-major too, which
+    one column is and two are not.
     """
-    X = _mixed_frame()
+    # Only the selected string columns: an unselected one is not float64, which the
+    # assembly declines outright.
+    X = _mixed_frame().drop(columns=[s for s in ("s0", "s1") if s not in selected])
     transformer = EfficientColumnTransformer(
-        [("encoder", OrdinalEncoder(), ["s0", "s1"])],
+        [("encoder", OrdinalEncoder(), selected)],
         remainder=FunctionTransformer(),
         sparse_threshold=0.0,
     )
@@ -1174,7 +1181,7 @@ def test__efficient_column_transformer__assembles_a_frame_in_the_stacked_layout(
     out = transformer.fit_transform(X)
     reference = _reference(transformer, X)
 
-    assert assemblies == [(6, 4)]
+    assert assemblies == [(6, X.shape[1])]
     np.testing.assert_array_equal(out, reference)
     assert out.dtype == reference.dtype
     assert np.isfortran(out) == np.isfortran(reference)

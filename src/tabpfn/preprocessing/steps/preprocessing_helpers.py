@@ -382,7 +382,8 @@ class EfficientColumnTransformer(ColumnTransformer):
             # the single column where the two layouts coincide
             return "F"
         blocks = [] if transformed is None else [transformed]
-        if passthrough:
+        # A frame's passthrough block is column-major
+        if passthrough and not isinstance(X, pd.DataFrame):
             sources = [source for _, source in passthrough]
             # read off two rows rather than the full-size block this exists not to
             # build; selecting columns gives the same layout at either height
