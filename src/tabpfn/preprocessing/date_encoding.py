@@ -17,6 +17,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
     make_names_unique,
 )
+from tabpfn.preprocessing.modality_detection import _is_fully_specified_date_value
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -56,9 +57,19 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     """Parse to datetime, tolerant of per-row format differences.
 
     format="mixed": a format inferred from one value would otherwise silently
-    coerce a later, differently-shaped but valid date to NaT.
+    coerce a later, differently-shaped but valid date to NaT. A value needing
+    a defaulted year/month/day (e.g. a bare time) is masked to NaT the same
+    way, instead of silently taking on today's date -- fit-time columns are
+    already screened for this, but a predict-time value can still drift.
     """
-    return pd.to_datetime(column, errors="coerce", format="mixed")
+    parsed = pd.to_datetime(column, errors="coerce", format="mixed")
+    non_null = column.dropna()
+    underspecified = {
+        v for v in non_null.unique() if not _is_fully_specified_date_value(v)
+    }
+    if underspecified:
+        parsed[column.isin(underspecified)] = pd.NaT
+    return parsed
 
 
 def _fit_one_column(

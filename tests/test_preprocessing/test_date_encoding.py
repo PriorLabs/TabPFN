@@ -179,6 +179,26 @@ def test__predict__value_that_no_longer_parses_as_a_date__becomes_nan() -> None:
     assert np.isfinite(X_test_out[other_rows][:, 1:].astype(float)).all()
 
 
+def test__predict__underspecified_value__becomes_nan_not_todays_date() -> None:
+    """A predict-time value missing a year/month/day (e.g. a bare time) must
+    not silently take on today's date -- that would make the same input map
+    to different features depending on which day predict runs.
+    """
+    X_fit = _numeric_and_date_frame(_dates())
+    schema = _numeric_and_date_schema()
+    _, _, fitted = expand_date_features(X_fit, schema)
+
+    dates = _dates()
+    dates[3] = "12:00"
+    X_test = _numeric_and_date_frame(dates)
+
+    X_test_out, _, _ = expand_date_features(X_test, feature_schema=None, fitted=fitted)
+
+    assert np.isnan(X_test_out[3, 1:].astype(float)).all()
+    other_rows = [i for i in range(N) if i != 3]
+    assert np.isfinite(X_test_out[other_rows][:, 1:].astype(float)).all()
+
+
 def test__mixed_date_and_datetime_string_formats__all_parse() -> None:
     """Regression: naive `pd.to_datetime` infers a format from an early value
     and silently coerces a later, differently-shaped but valid value to NaT.

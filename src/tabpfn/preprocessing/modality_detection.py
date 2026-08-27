@@ -5,12 +5,14 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import math
 import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from dateutil import parser as dateutil_parser
 
 from tabpfn.errors import TabPFNUserError
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
@@ -304,8 +306,32 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
     return not (math.isinf(parsed) and "inf" not in value.lower())
 
 
+# Two dates picked to differ in year, month, and day, and both leap years (so a
+# bare "Feb 29" parses against either without raising). Whatever part `value`
+# doesn't specify comes out differently between the two, so parsing against
+# both and requiring they agree catches a missing part regardless of which one.
+_UNDERSPECIFIED_CHECK_DEFAULT_A = datetime.datetime(1904, 1, 1)
+_UNDERSPECIFIED_CHECK_DEFAULT_B = datetime.datetime(2224, 8, 8)
+
+
+def _is_fully_specified_date_value(value: object) -> bool:
+    """Whether `value` states its own year, month, and day, not a filled-in one.
+
+    `pd.to_datetime` defaults a missing part to today's date (or, on some
+    pandas versions, a fixed epoch) instead of raising, so a bare time like
+    "12:00" silently becomes today's date: not a real calendar signal, and not
+    reproducible across days.
+    """
+    try:
+        return dateutil_parser.parse(
+            value, default=_UNDERSPECIFIED_CHECK_DEFAULT_A
+        ) == dateutil_parser.parse(value, default=_UNDERSPECIFIED_CHECK_DEFAULT_B)
+    except (ValueError, OverflowError, TypeError):
+        return False
+
+
 def _is_date_like_pandas_series(s: pd.Series) -> bool:
-    """Whether every non-null value in `s` parses as a date.
+    """Whether every non-null value in `s` parses as a fully-specified date.
 
     All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
     numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
@@ -324,7 +350,9 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
             parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
     except (TypeError, ValueError):
         return False
-    return bool(parsed.notna().all())
+    if not parsed.notna().all():
+        return False
+    return all(_is_fully_specified_date_value(v) for v in non_null.unique())
 
 
 def _detect_numeric_as_categorical(

@@ -790,6 +790,42 @@ class TestDateLikeColumnDetection:
             schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
+    def test__clock_time_column__is_not_a_date(self) -> None:
+        """A bare time needs a year/month/day filled in to parse at all, and
+        `pd.to_datetime` fills it in from today's date -- not a real calendar
+        signal, and not reproducible across days, so it must not count.
+        """
+        times = [f"{h:02d}:{m:02d}" for h in range(24) for m in (0, 15, 30, 45)]
+        clock = [times[i % len(times)] for i in range(self.n_rows)]
+        X = pd.DataFrame({"num": self._numeric_column(), "clock": clock})
+        # High cardinality, so it now reads as free text instead -- that warning
+        # is expected here, unlike the "no warnings at all" cases below.
+        with pytest.warns(UserWarning, match="look like free text"):
+            schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is not FeatureModality.DATE
+
+    def test__month_and_day_without_a_year__is_not_a_date(self) -> None:
+        """Missing just the year is the same gap as a missing time: `pd.to_datetime`
+        fills it in (from today's year, or a fixed one, depending on pandas
+        version) rather than raising.
+        """
+        values = [f"May {(i % 28) + 1}" for i in range(self.n_rows)]
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is not FeatureModality.DATE
+
+    def test__one_underspecified_value_among_full_dates__is_not_a_date(self) -> None:
+        """All-or-nothing, like the rest of date detection: one bare time
+        mixed into an otherwise fully-specified date column disqualifies it.
+        """
+        values = self._dates(60)
+        values[0] = "12:00"
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        schema = self._detect(X, use_dates=True)
+        assert schema.features[1].modality is not FeatureModality.DATE
+
     def test__use_dates__high_cardinality_date__stays_date_and_does_not_warn(
         self,
     ) -> None:
