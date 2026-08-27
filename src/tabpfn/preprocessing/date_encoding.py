@@ -11,6 +11,7 @@ import dataclasses
 from typing import TYPE_CHECKING
 
 import pandas as pd
+from skrub import DatetimeEncoder
 
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import numpy as np
-    from skrub import DatetimeEncoder
 
 
 @dataclasses.dataclass
@@ -42,9 +42,6 @@ def make_datetime_encoder() -> DatetimeEncoder:
         and the cyclical month, day and weekday pairs, plus the time of day when
         the column carries one.
     """
-    # Local import: skrub depends on matplotlib.
-    from skrub import DatetimeEncoder  # noqa: PLC0415
-
     return DatetimeEncoder(
         resolution="second",
         add_weekday=True,
