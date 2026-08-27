@@ -72,15 +72,18 @@ def _parse_dates(column: pd.Series) -> pd.Series:
 
 def _fit_one_column(
     column: pd.Series,
-    name: str,
     existing_names: list[str],
 ) -> tuple[pd.DataFrame, FittedDatetimeEncoder]:
-    """Fit a new encoder on one column."""
+    """Fit a new encoder on one column.
+
+    `column` must already carry the real feature name: skrub names each
+    output after it (e.g. "signed_on_year", "signed_on_month_circular_0"),
+    and those are kept as-is here rather than replaced with a generic
+    "{name}_{i}", deduped only against name collisions with existing columns.
+    """
     encoder = make_datetime_encoder()
     raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
-    output_names = make_names_unique(
-        [f"{name}_{i}" for i in range(raw_encoded.shape[1])], existing=existing_names
-    )
+    output_names = make_names_unique(list(raw_encoded.columns), existing=existing_names)
     encoded = raw_encoded.set_axis(output_names, axis=1)
     fitted_encoder = FittedDatetimeEncoder(encoder=encoder, output_names=output_names)
     return encoded, fitted_encoder
@@ -142,15 +145,18 @@ def expand_date_features(
     existing_names = list(feature_schema.feature_names) if feature_schema else []
     encoded_blocks: list[pd.DataFrame] = []
     for index in to_expand:
-        # skrub names outputs from the series' `.name`; a bare `pd.DataFrame`
-        # column label is an int, which can't take a suffix.
-        column = frame.iloc[:, index].rename(str(index))
         if fitted is not None:
+            # The exact name doesn't matter here: `_apply_one_column` overrides
+            # the output labels with the already-fitted ones regardless. Still
+            # needs to be a string, not the bare `pd.DataFrame`'s int label --
+            # some of skrub's own naming code concatenates onto it directly.
+            column = frame.iloc[:, index].rename(str(index))
             encoded = _apply_one_column(column, fitted[index])
         else:
             assert feature_schema is not None
             name = feature_schema.features[index].name
-            encoded, fitted_encoder = _fit_one_column(column, name, existing_names)
+            column = frame.iloc[:, index].rename(name)
+            encoded, fitted_encoder = _fit_one_column(column, existing_names)
             existing_names += fitted_encoder.output_names
             new_fitted[index] = fitted_encoder
         encoded_blocks.append(encoded.reset_index(drop=True))

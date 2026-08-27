@@ -77,6 +77,29 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
 
+def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
+    """Skrub's own per-feature names (e.g. "_year", "_month_circular_0") are
+    kept as-is, not replaced with a generic "_0", "_1", ... -- readable, and
+    independent of skrub ever changing its output order.
+    """
+    X = _numeric_and_date_frame(_dates())
+    schema = _numeric_and_date_schema()
+
+    _, _, fitted = expand_date_features(X, schema)
+
+    assert fitted[1].output_names == [
+        "input_signed_on_year",
+        "input_signed_on_total_seconds",
+        "input_signed_on_day_of_year",
+        "input_signed_on_month_circular_0",
+        "input_signed_on_month_circular_1",
+        "input_signed_on_day_circular_0",
+        "input_signed_on_day_circular_1",
+        "input_signed_on_weekday_circular_0",
+        "input_signed_on_weekday_circular_1",
+    ]
+
+
 def test__fit__declared_categorical_column__is_excluded_from_expansion() -> None:
     """A column declared categorical still classifies `DATE` (detection
     ignores the declaration), so `expand_date_features` must exclude it and
@@ -101,7 +124,7 @@ def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
     schema = FeatureSchema(
         features=[
             Feature(name="input_signed_on", modality=FeatureModality.DATE),
-            Feature(name="input_signed_on_0", modality=FeatureModality.NUMERICAL),
+            Feature(name="input_signed_on_year", modality=FeatureModality.NUMERICAL),
         ]
     )
 
@@ -109,8 +132,8 @@ def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
 
     names = schema_out.feature_names
     assert len(names) == len(set(names))
-    assert "input_signed_on_0" in names
-    assert fitted[0].output_names[0] != "input_signed_on_0"
+    assert "input_signed_on_year" in names
+    assert fitted[0].output_names[0] != "input_signed_on_year"
 
 
 def test__expand_before_clean__vs__clean_before_expand() -> None:
@@ -128,7 +151,7 @@ def test__expand_before_clean__vs__clean_before_expand() -> None:
     # Correct order: expand, then clean.
     X_expanded, schema_expanded, _ = expand_date_features(X, schema)
     X_right_order, _, schema_right_order = clean_data(X_expanded, schema_expanded)
-    year_index = schema_right_order.feature_names.index("input_signed_on_0")
+    year_index = schema_right_order.feature_names.index("input_signed_on_year")
     np.testing.assert_array_equal(X_right_order[:, year_index], 2020.0)
 
     # Swapped order: clean first, on the still-DATE-tagged column.
