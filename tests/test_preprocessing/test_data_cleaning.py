@@ -20,6 +20,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
+    clean_data_transform,
     fix_dtypes,
     process_text_na_dataframe,
 )
@@ -1179,3 +1180,66 @@ def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
     clf = TabPFNClassifier(n_estimators=1, device="cpu")
     with pytest.raises(TabPFNValidationError, match="could not be promoted"):
         clf.fit(X, y)
+
+
+def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> None:
+    """The single-cast shortcut produces exactly what going through pandas does.
+
+    `clean_data_transform` skips `fix_dtypes` + `process_text_na_dataframe` for a
+    numeric array that nothing is encoded from, to avoid holding two full-size
+    float64 buffers to produce one. The shortcut is only worth taking if it is
+    indistinguishable from the path it replaces -- values, dtype, memory order and
+    ownership, since callers write into the result in place.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((40, 6)).astype(np.float32)
+    X[3, 2] = np.nan
+    encoder = get_ordinal_encoder()
+    encoder.fit(fix_dtypes(X=X[:1], cat_indices=None))
+
+    shortcut = clean_data_transform(X, cat_indices=None, ord_encoder=encoder)
+    general = process_text_na_dataframe(
+        X=fix_dtypes(X=X, cat_indices=None), ord_encoder=encoder
+    )
+
+    np.testing.assert_array_equal(shortcut, general)
+    assert shortcut.dtype == general.dtype == np.float64
+    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+    assert shortcut.flags.writeable
+    assert not np.shares_memory(shortcut, X)
+
+
+def test__clean_data_transform__still_encodes_a_text_column_fit_as_strings() -> None:
+    """A numeric predict array does not escape an encoder that was fitted on it.
+
+    The shortcut cannot be decided from the incoming array's categorical indices:
+    a column detected as *text* is ordinal-encoded at fit yet never appears in
+    `indices_for(CATEGORICAL)`, so a predict-time array of the same field arriving
+    numeric would look encoding-free while the fitted encoder still holds it. Gating
+    on the encoder keeps such a column on the general path, where its values are
+    matched against the fit-time categories instead of being read as raw numbers.
+    """
+    n, n_unique = 60, 30
+    # An object array, as `validate_data` hands one over for a mixed frame, so the
+    # encoder's column keys are the integer positions a numpy predict input has too.
+    X_fit = np.empty((n, 2), dtype=object)
+    X_fit[:, 0] = np.arange(n, dtype="float64")
+    X_fit[:, 1] = [f"s{i % n_unique}" for i in range(n)]
+    encoder = get_ordinal_encoder()
+    process_text_na_dataframe(
+        fix_dtypes(X=X_fit, cat_indices=None), ord_encoder=encoder, fit_encoder=True
+    )
+    assert encoder.selected_columns() == [1]
+
+    X_pred = np.column_stack(
+        [
+            np.arange(n, dtype="float64"),
+            np.array([float(i % n_unique) for i in range(n)], dtype="float64"),
+        ]
+    )
+
+    with pytest.warns(UserWarning, match="differs.*from fit time"):
+        out = clean_data_transform(X_pred, cat_indices=None, ord_encoder=encoder)
+
+    # Encoded against the fit categories, so the codes are not the raw numbers.
+    assert not np.array_equal(out[:, 1], X_pred[:, 1])
