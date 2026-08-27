@@ -50,9 +50,8 @@ Smoke test locally (seconds, ~10 MB on disk; `--mix` combines with it):
     uv run scripts/bench_ensemble_preprocessing.py --small
 
 This is pure CPU work -- the GPU-scheduled steps only run at inference time -- so the
-partition to use is a high-memory CPU one. The profiled shape holds ~11 GB of input and
-reaches ~55 GB of RSS, so `cpuhighmem16spot` (300 nodes at ~123 GB) is both big enough
-and quick to get hold of:
+partition to use is a high-memory CPU one, and `cpuhighmem16spot` is quick to get hold
+of:
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_ensemble_preprocessing.py
@@ -79,10 +78,9 @@ dependency range, built here on first use the way CI builds its own two legs:
         uv run scripts/bench_ensemble_preprocessing.py --mix all --reference main \
             --environment lowest --environment highest
 
-See `bench_clean_data.py`'s header for what those cost and where they are kept.
+See `bench_clean_data.py`'s header for where they are kept.
 
-The full numeric shape writes ~11 GB per estimator per run. Pair either with
-`scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
+Pair either with `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
 """
 
 from __future__ import annotations

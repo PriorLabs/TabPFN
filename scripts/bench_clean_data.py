@@ -45,8 +45,8 @@ Smoke test locally (seconds, ~20 MB on disk; `--mix` combines with it):
     uv run scripts/bench_clean_data.py --small
 
 `clean_data` is pure CPU work -- pandas and numpy, no device involved -- so the
-partition to use is a high-memory CPU one. `cpuhighmem16spot` has 300 nodes at ~123 GB,
-so it is both big enough for the full shape and quick to get hold of:
+partition to use is a high-memory CPU one, and `cpuhighmem16spot` is quick to get hold
+of:
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py
@@ -78,14 +78,13 @@ in the grid beside them.
             --environment lowest --environment highest
 
 The first use of `lowest` or `highest` resolves and downloads a virtualenv under
-`--environment-root`, which takes a couple of minutes and a few GB of disk (torch
-brings its CUDA wheels either way); later runs reuse it, and `--refresh-environments`
-rebuilds it. `LABEL=PYTHON` measures under an interpreter of your own instead. Each
-environment but `current` keeps its baselines in a subdirectory of `--out-root` of its
-own, because one recorded against a different dependency set is not comparable with it.
+`--environment-root`, which takes a couple of minutes; later runs reuse it, and
+`--refresh-environments` rebuilds it. `LABEL=PYTHON` measures under an interpreter of
+your own instead. Each environment but `current` keeps its baselines in a subdirectory
+of `--out-root` of its own, because one recorded against a different dependency set is
+not comparable with it.
 
-The full numeric shape needs ~20 GB of RAM and writes ~11 GB per run. Pair either with
-`scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
+Pair either with `scripts/srun_retry.py` when allocations are getting stuck CONFIGURING.
 """
 
 from __future__ import annotations
