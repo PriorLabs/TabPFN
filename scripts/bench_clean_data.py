@@ -1,7 +1,7 @@
 # ruff: noqa: T201, S603, S607
 #  Copyright (c) Prior Labs GmbH 2026.
 
-r"""Regression gate for `clean_data`'s transient RAM and wall time.
+r"""Regression gate for the data cleaning's transient RAM and wall time.
 
 `clean_data` was measured holding 42.68 GB of transient RSS -- the single largest
 contributor to the wrapper's host-RAM peak -- while fitting a 666,667 x 2,000
@@ -23,6 +23,14 @@ really does, so a change can be told apart from a float-only one:
   back, and so the one where a copy of that is worth avoiding.
 
 Each mix keeps its own baseline, and `--mix all` runs all three of them.
+
+`--stage` picks which half of the cleaning is measured. `fit` (the default) is
+`clean_data` itself. `predict` is `clean_data_transform`, the call `predict()` makes
+on the data it is given, which re-uses the encoder `clean_data` fitted rather than
+fitting one -- separately gated because it is separate code, and it kept taking the
+two-buffer route through pandas long after the fit half stopped. It is measured on
+the same generated table, after an unmeasured fit run that supplies the encoder, so
+the two stages' numbers sit side by side without a rescaling.
 
 What it measures:
 
@@ -55,6 +63,11 @@ Either object-array mix, on the same shape (see `--mix`):
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py --mix half-string
+
+The predict half of the same table:
+
+    srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
+        uv run scripts/bench_clean_data.py --stage predict
 
 Or every mix in one command -- a child process each, tabled together at the end, so a
 change is answered for on all three tables rather than the one it was written against:
@@ -117,6 +130,7 @@ from torch.utils.benchmark import Measurement, Timer
 
 import tabpfn
 from tabpfn.preprocessing.clean import clean_data
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 
 if TYPE_CHECKING:
@@ -126,6 +140,32 @@ if TYPE_CHECKING:
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
+
+try:
+    from tabpfn.preprocessing.clean import clean_data_transform
+except ImportError:  # pragma: no cover - only on a revision from before it existed
+    from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+
+    def clean_data_transform(  # type: ignore[misc]
+        X: np.ndarray,
+        *,
+        cat_indices: Any,
+        ord_encoder: Any,
+        passthrough_inf: bool = False,
+    ) -> np.ndarray:
+        """The predict-time cleaning as it was spelled before it had a name.
+
+        `--reference <revision>` runs this same script against another checkout's
+        `tabpfn`, and the revision on the other side may predate the function. What
+        is being compared is the work `predict()` does, not the name it calls it by,
+        so fall back to the two calls that used to be inlined at each call site.
+        """
+        return process_text_na_dataframe(
+            X=fix_dtypes(X=X, cat_indices=cat_indices),
+            ord_encoder=ord_encoder,
+            passthrough_inf=passthrough_inf,
+        )
+
 
 # ---------------------------------------------------------------------------
 # The input `clean_data` receives from the wrapper profiler
@@ -154,6 +194,16 @@ MIXES = (MIX_NUMERIC, MIX_HALF_STRING, MIX_NUMERIC_OBJECT)
 # Not a mix but a request for every one of them, a child process each; see
 # `run_every_mix`.
 MIX_ALL = "all"
+
+# Which half of the cleaning is measured. `clean_data` fits the ordinal encoder on
+# the training table; `clean_data_transform` reuses that encoder on data being
+# predicted on. They are separate gates because they hit different code -- the
+# predict half took the two-buffer pandas route long after the fit half stopped --
+# and each keeps its own baseline directory.
+STAGE_FIT = "fit"
+STAGE_PREDICT = "predict"
+STAGES = (STAGE_FIT, STAGE_PREDICT)
+STAGE_CALLABLE = {STAGE_FIT: "clean_data", STAGE_PREDICT: "clean_data_transform"}
 
 # Distinct values per string column. Below MAX_UNIQUE_FOR_CATEGORICAL_FEATURES so
 # the columns detect as CATEGORICAL rather than TEXT, and deliberately not
@@ -191,7 +241,7 @@ PASSTHROUGH_INF = False
 # input description, changes -- so an old baseline is rejected rather than silently
 # compared against. 2: `input` gained `mix`. 3: its `string_levels` became `levels`,
 # which the numeric-object mix has one of too.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 METRICS_FILE = "metrics.json"
 ARRAY_FILE = "X_cleaned.npy"
@@ -535,12 +585,59 @@ def build_feature_schema(X: np.ndarray) -> FeatureSchema:
 CleanDataOutput = tuple[np.ndarray, "OrderPreservingColumnTransformer", "FeatureSchema"]
 
 
-def measure_memory(
+def fit_encoder_for_predict(
     X: np.ndarray,
     feature_schema: FeatureSchema,
+) -> tuple[OrderPreservingColumnTransformer, FeatureSchema]:
+    """Run the fit half once, keeping only what the predict half needs from it.
+
+    `clean_data_transform` encodes against the encoder `clean_data` fitted, so the
+    predict stage cannot be measured without first paying for a fit. The training
+    table that fit produced is dropped again here, and the allocator asked for the
+    pages back, so the measured call runs at the footprint a `predict()` runs at
+    rather than carrying a spare copy of the training table.
+    """
+    _, ord_encoder, out_schema = clean_data(
+        X=X,
+        feature_schema=feature_schema,
+        passthrough_inf=PASSTHROUGH_INF,
+    )
+    gc.collect()
+    release_free_memory()
+    return ord_encoder, out_schema
+
+
+def stage_call(
+    stage: str,
+    X: np.ndarray,
+    feature_schema: FeatureSchema,
+    ord_encoder: OrderPreservingColumnTransformer,
+) -> Callable[[], Any]:
+    """The measured call for `stage`, with its arguments already bound.
+
+    One definition for both the RSS pass and the timing pass, so the two cannot
+    drift into measuring different work.
+    """
+    if stage == STAGE_FIT:
+        return lambda: clean_data(
+            X=X,
+            feature_schema=feature_schema,
+            passthrough_inf=PASSTHROUGH_INF,
+        )
+    cat_indices = feature_schema.indices_for(FeatureModality.CATEGORICAL)
+    return lambda: clean_data_transform(
+        X,
+        cat_indices=cat_indices,
+        ord_encoder=ord_encoder,
+        passthrough_inf=PASSTHROUGH_INF,
+    )
+
+
+def measure_memory(
+    call: Callable[[], Any],
     interval_s: float,
-) -> tuple[CleanDataOutput, MemoryProfile]:
-    """Run `clean_data` once, sampling RSS throughout, and keep its output.
+) -> tuple[Any, MemoryProfile]:
+    """Run the measured call once, sampling RSS throughout, and keep its output.
 
     Deliberately un-warmed, and deliberately before the timing pass: once a call
     has run, the allocator holds on to the arenas it freed, so a second call can
@@ -554,11 +651,7 @@ def measure_memory(
     sampler.start()
     start = time.perf_counter()
     try:
-        output = clean_data(
-            X=X,
-            feature_schema=feature_schema,
-            passthrough_inf=PASSTHROUGH_INF,
-        )
+        output = call()
     finally:
         end = time.perf_counter()
         sampler.stop()
@@ -575,16 +668,41 @@ def measure_memory(
     return output, profile
 
 
-def measure_time(
+def prepare_and_measure(
+    args: argparse.Namespace,
     X: np.ndarray,
     feature_schema: FeatureSchema,
+) -> tuple[Callable[[], Any], CleanDataOutput, MemoryProfile]:
+    """Set the chosen stage up, measure one call of it, and report it.
+
+    Returns the bound call as well, so the timing pass runs exactly what the RSS
+    pass ran. Both stages report the same triple: on the predict stage the encoder
+    and the schema come from the fit that has to run first (and is not measured),
+    so a baseline holds the same three things either way and drift in the fit half
+    is caught on both.
+    """
+    ord_encoder, out_schema = (
+        fit_encoder_for_predict(X, feature_schema)
+        if args.stage == STAGE_PREDICT
+        else (None, None)
+    )
+    call = stage_call(args.stage, X, feature_schema, ord_encoder)
+    output, memory = measure_memory(call, args.sample_interval_ms / 1000)
+    if args.stage == STAGE_FIT:
+        return call, output, memory
+    return call, (output, ord_encoder, out_schema), memory
+
+
+def measure_time(
+    call: Callable[[], Any],
+    stage: str,
     repeats: int,
     warmup_calls: int,
 ) -> Measurement:
-    """Median-of-`repeats` wall time for one `clean_data` call.
+    """Median-of-`repeats` wall time for one call of the measured stage.
 
-    `clean_data` does not mutate `X` -- `fix_dtypes` builds a new float64 frame from
-    it -- so every call, warmup included, measures the same work.
+    Neither stage mutates `X` -- each builds its output from it -- so every call,
+    warmup included, measures the same work.
 
     The warmup is what makes the repeats comparable: it settles the allocator, the
     page cache and the BLAS/OpenMP thread pools, all of which the first call pays
@@ -594,18 +712,10 @@ def measure_time(
     through the same inner timer afterwards.
     """
     timer = Timer(
-        stmt=(
-            "clean_data(X=X, feature_schema=feature_schema, "
-            "passthrough_inf=passthrough_inf)"
-        ),
-        globals={
-            "clean_data": clean_data,
-            "X": X,
-            "feature_schema": feature_schema,
-            "passthrough_inf": PASSTHROUGH_INF,
-        },
+        stmt="call()",
+        globals={"call": call},
         num_threads=torch.get_num_threads(),
-        label="clean_data",
+        label=STAGE_CALLABLE[stage],
     )
     if warmup_calls:
         timer._timeit(number=warmup_calls)
@@ -647,9 +757,14 @@ def timing_as_dict(measurement: Measurement, warmup_calls: int) -> dict[str, Any
 # ---------------------------------------------------------------------------
 
 
-def shape_dir_name(train_rows: int, cols: int, dtype: str, mix: str) -> str:
-    """Directory name identifying one input, so each mix keeps its own baseline."""
-    return f"rows{train_rows}_cols{cols}_{dtype}_{mix}"
+def shape_dir_name(train_rows: int, cols: int, dtype: str, mix: str, stage: str) -> str:
+    """Directory name identifying one measurement, so each keeps its own baseline.
+
+    The fit stage is unsuffixed, so the baselines recorded before there was a
+    second stage stay where they are.
+    """
+    suffix = "" if stage == STAGE_FIT else f"_{stage}"
+    return f"rows{train_rows}_cols{cols}_{dtype}_{mix}{suffix}"
 
 
 def baseline_paths(out_dir: Path) -> dict[str, Path]:
@@ -915,6 +1030,8 @@ def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]
         spec["dtype"],
         "--mix",
         spec["mix"],
+        "--stage",
+        spec["stage"],
         "--timing-repeats",
         str(args.timing_repeats),
         "--warmup-calls",
@@ -943,7 +1060,9 @@ def read_recorded_environment(run_dir: Path, spec: dict[str, Any]) -> dict[str, 
     """The `environment` block a side of the comparison just recorded."""
     metrics_path = (
         run_dir
-        / shape_dir_name(spec["rows"], spec["cols"], spec["dtype"], spec["mix"])
+        / shape_dir_name(
+            spec["rows"], spec["cols"], spec["dtype"], spec["mix"], spec["stage"]
+        )
         / METRICS_FILE
     )
     return json.loads(metrics_path.read_text())["environment"]
@@ -1697,6 +1816,7 @@ def resolve_input_spec(args: argparse.Namespace) -> dict[str, Any]:
         "cols": cols,
         "dtype": args.input_dtype,
         "mix": args.mix,
+        "stage": args.stage,
         "levels": MIX_LEVELS.get(args.mix),
         "seed": SEED,
         "passthrough_inf": PASSTHROUGH_INF,
@@ -1801,7 +1921,7 @@ def main(args: argparse.Namespace) -> None:
 
     spec = resolve_input_spec(args)
     out_dir = args.out_root / shape_dir_name(
-        spec["rows"], spec["cols"], spec["dtype"], spec["mix"]
+        spec["rows"], spec["cols"], spec["dtype"], spec["mix"], spec["stage"]
     )
     paths = baseline_paths(out_dir)
     # A baseline is only a baseline once all three files are there; a partial one
@@ -1821,8 +1941,9 @@ def main(args: argparse.Namespace) -> None:
 
     X = generate_input(spec)
     input_fingerprint = fingerprint(X)
+    measured = STAGE_CALLABLE[args.stage]
     print(
-        f"\nInput to clean_data: {X.shape} {X.dtype} ({describe_input_size(X)})"
+        f"\nInput to {measured}: {X.shape} {X.dtype} ({describe_input_size(X)})"
         f"\n  mix: {spec['mix']}, fingerprint {input_fingerprint[:16]}"
     )
     if recorded is not None and recorded["input"]["fingerprint"] != input_fingerprint:
@@ -1836,7 +1957,7 @@ def main(args: argparse.Namespace) -> None:
         )
 
     feature_schema = build_feature_schema(X)
-    output, memory = measure_memory(X, feature_schema, args.sample_interval_ms / 1000)
+    call, output, memory = prepare_and_measure(args, X, feature_schema)
     X_cleaned, ord_encoder, out_schema = output
     print(
         f"\nTransient RSS: {memory.transient_bytes / _GB:.2f} GB "
@@ -1869,7 +1990,7 @@ def main(args: argparse.Namespace) -> None:
 
     try:
         measurement = measure_time(
-            X, feature_schema, args.timing_repeats, args.warmup_calls
+            call, args.stage, args.timing_repeats, args.warmup_calls
         )
         timing = timing_as_dict(measurement, args.warmup_calls)
         print(
@@ -1948,6 +2069,16 @@ def get_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Use a shape that runs in seconds, for debugging this script. Its "
         "baseline lives in its own directory, so it never touches the full one.",
+    )
+    parser.add_argument(
+        "--stage",
+        default=STAGE_FIT,
+        choices=STAGES,
+        help="Which half of the cleaning to measure. 'fit' is `clean_data`, which "
+        "fits the ordinal encoder on the training table. 'predict' is "
+        "`clean_data_transform`, which reuses that encoder on data being predicted "
+        "on -- measured on the same generated table, after a fit run that is not "
+        "itself measured. Each stage keeps its own baseline directory.",
     )
     parser.add_argument(
         "--mix",
