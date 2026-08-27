@@ -22,6 +22,7 @@ from sklearn.preprocessing import (
     MaxAbsScaler,
     OneHotEncoder,
     OrdinalEncoder,
+    StandardScaler,
 )
 
 from tabpfn.preprocessing import steps
@@ -1038,6 +1039,43 @@ def test__order_preserving_column_transformer__names_the_order_it_returns() -> N
         "n0",
         "n1",
     ]
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [EfficientColumnTransformer, OrderPreservingColumnTransformer],
+    ids=lambda cls: cls.__name__,
+)
+def test__efficient_column_transformer__declines_a_data_dependent_selector(
+    cls: type[EfficientColumnTransformer], assemblies: list[tuple[int, ...]]
+) -> None:
+    """A selector that reads the values resolves differently against the one probe row.
+
+    And it fails silently where the others fail loudly: the columns the probe left out
+    come back untransformed, in the right places, at the right dtype. Only a
+    `make_column_selector`, which reads dtypes, survives one row -- as every other
+    frame case here relies on.
+    """
+
+    def more_than_one_value(frame: pd.DataFrame) -> list[str]:
+        return [name for name in frame.columns if frame[name].std() > 0]
+
+    # One row has no spread in any column, so the selector picks nothing where the
+    # bookkeeping fit asks it and 'a' where `ColumnTransformer` asks it.
+    X = pd.DataFrame({"a": [1.0, 1.0, 2.0], "b": [1.0, 1.0, 1.0]})
+    transformer = cls(
+        [("scaler", StandardScaler(), more_than_one_value)],
+        remainder=FunctionTransformer(),
+        sparse_threshold=0.0,
+    )
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == []
+    # The selection is 'a' alone, so sklearn's order is the input's and the two
+    # classes have the same answer to compare against.
+    np.testing.assert_allclose(out, _reference(transformer, X))
+    assert out[0, 0] != X["a"][0], "the selected column came back unscaled"
 
 
 def test__efficient_column_transformer__declines_routed_metadata(

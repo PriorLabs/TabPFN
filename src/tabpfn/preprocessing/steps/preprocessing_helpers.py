@@ -97,7 +97,7 @@ class EfficientColumnTransformer(ColumnTransformer):
         Decided on the same conditions as the assembly, so the state left here is either
         sklearn's own or one those conditions vouch for.
         """
-        if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
+        if not self._may_assemble_a_fit(X, y, params):
             return super().fit(X, y, **params)
         # widths and output positions do not depend on the row count here, so one row
         # settles all of the bookkeeping
@@ -114,7 +114,7 @@ class EfficientColumnTransformer(ColumnTransformer):
     def fit_transform(self, X: XType, y: YType = None, **params: Any) -> XType:
         """Fit and transform, writing each column straight to its final place."""
         original_columns = _input_columns(X)
-        if not (y is None and self._is_one_to_one and self._may_assemble(X, params)):
+        if not self._may_assemble_a_fit(X, y, params):
             return self._maybe_in_input_order(
                 super().fit_transform(X, y, **params), original_columns
             )
@@ -153,6 +153,24 @@ class EfficientColumnTransformer(ColumnTransformer):
         """
         _, selected = self._named_selection()
         return selected or []
+
+    def _may_assemble_a_fit(self, X: XType, y: YType, params: dict[str, Any]) -> bool:
+        """Whether a fit over this input can be assembled instead of stacked."""
+        return (
+            y is None
+            and self._is_one_to_one
+            and self._selects_the_same_from_one_row
+            and self._may_assemble(X, params)
+        )
+
+    @property
+    def _selects_the_same_from_one_row(self) -> bool:
+        """Whether every column selection can be made based on a single row."""
+        return all(
+            not callable(columns) or isinstance(columns, make_column_selector)
+            for name, _, columns in self.transformers
+            if name != "remainder"
+        )
 
     def _may_assemble(self, X: XType, params: dict[str, Any]) -> bool:
         """Whether an output of this shape could be written into one array at all."""
