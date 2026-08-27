@@ -85,24 +85,29 @@ def test_full_support_cdf_icdf_round_trip(left_prob: float):
 
 def test_full_support_inherited_quantiles_and_border_translation():
     dist, logits = _make_full_support_distribution()
+    batch_logits = logits.expand(2, -1)
 
-    assert torch.equal(dist.median(logits), dist.icdf(logits, 0.5))
+    assert torch.equal(dist.median(batch_logits), dist.icdf(batch_logits, 0.5))
     assert torch.equal(
-        dist.quantile(logits, center_prob=0.75),
-        torch.stack((dist.icdf(logits, 0.125), dist.icdf(logits, 0.875))),
+        dist.quantile(batch_logits, center_prob=0.75),
+        torch.stack(
+            (dist.icdf(batch_logits, 0.125), dist.icdf(batch_logits, 0.875)),
+            dim=-1,
+        ),
     )
     assert torch.equal(
-        dist.ucb(logits, best_f=0.0, rest_prob=0.125),
-        dist.icdf(logits, 0.875),
+        dist.ucb(batch_logits, best_f=0.0, rest_prob=0.125),
+        dist.icdf(batch_logits, 0.875),
     )
     assert torch.equal(
-        dist.ucb(logits, best_f=0.0, rest_prob=0.125, maximize=False),
-        dist.icdf(logits, 0.125),
+        dist.ucb(batch_logits, best_f=0.0, rest_prob=0.125, maximize=False),
+        dist.icdf(batch_logits, 0.125),
     )
 
     new_borders = torch.tensor([-3.0, -2.0, 0.0, 2.0, 3.0])
-    translated = dist.get_probs_for_different_borders(logits, new_borders)
-    assert torch.allclose(translated, torch.tensor([0.125, 0.375, 0.375, 0.125]))
+    translated = dist.get_probs_for_different_borders(batch_logits, new_borders)
+    expected = torch.tensor([0.125, 0.375, 0.375, 0.125]).expand(2, -1)
+    assert torch.allclose(translated, expected)
 
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
@@ -117,8 +122,13 @@ def test_full_support_sample_preserves_shape_device_and_dtype(
     dist, logits = _make_full_support_distribution(dtype=dtype, device=device)
     batch_logits = logits.expand(2, 3, -1).contiguous()
 
+    scalar_sample = dist.sample(logits)
     samples = dist.sample(batch_logits)
 
+    assert scalar_sample.shape == logits.shape[:-1]
+    assert scalar_sample.device.type == torch.device(device).type
+    assert scalar_sample.dtype == dtype
+    assert torch.isfinite(scalar_sample)
     assert samples.shape == batch_logits.shape[:-1]
     assert samples.device.type == torch.device(device).type
     assert samples.dtype == dtype
@@ -135,7 +145,10 @@ def test_full_support_sample_matches_tail_mass_and_cdf():
 
     ys = torch.tensor([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=samples.dtype)
     empirical_cdf = torch.stack([(samples <= y).double().mean() for y in ys])
-    expected_cdf = dist.cdf(logits, ys)
+    expected_cdf = torch.tensor(
+        [0.125, 0.25, 0.5, 0.75, 0.875],
+        dtype=samples.dtype,
+    )
     assert torch.allclose(empirical_cdf, expected_cdf, atol=0.015, rtol=0.0)
 
 
