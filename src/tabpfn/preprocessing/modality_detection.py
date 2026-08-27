@@ -355,7 +355,11 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
 
     All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
     numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
-    reclassified here.
+    reclassified here. One underspecified value (e.g. a bare time like
+    "12:00") disqualifies the whole column from DATE -- it's read as an
+    ordinary category or text instead, exactly like any non-date string.
+    Nothing is masked or dropped at this stage; see `_parse_dates` for the
+    narrower, per-value case this doesn't cover.
     """
     non_null = s.dropna()
     if non_null.empty:

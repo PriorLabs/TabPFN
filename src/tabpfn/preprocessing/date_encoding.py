@@ -59,8 +59,12 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     format="mixed": a format inferred from one value would otherwise silently
     coerce a later, differently-shaped but valid date to NaT. A value needing
     a defaulted year/month/day (e.g. a bare time) is masked to NaT the same
-    way, instead of silently taking on today's date -- fit-time columns are
-    already screened for this, but a predict-time value can still drift.
+    way, instead of silently taking on today's date.
+
+    Inference-only in practice: at fit time this never actually masks
+    anything, since `_is_date_like_pandas_series` already rejected the whole
+    column unless every value here was fully specified. It only fires for a
+    value that drifts into being underspecified after fitting.
     """
     parsed = pd.to_datetime(column, errors="coerce", format="mixed")
     underspecified = _underspecified_date_values(column.dropna())
