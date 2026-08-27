@@ -750,6 +750,17 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             feature_schema,
             provided_categorical_indices=self.categorical_features_indices,
         )
+        # Expansion can only widen X, so re-check: the first check above ran
+        # against the pre-expansion column count.
+        validate_dataset_size(
+            X=X,
+            y=y,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
+            devices=self.devices_,
+            ignore_pretraining_limits=self.ignore_pretraining_limits,
+        )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
