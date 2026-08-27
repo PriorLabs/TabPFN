@@ -161,7 +161,13 @@ def expand_date_features(
             new_fitted[index] = fitted_encoder
         encoded_blocks.append(encoded.reset_index(drop=True))
 
-    remaining = frame.drop(columns=frame.columns[to_expand])
+    # Positional, not `frame.drop(columns=...)`: `X` is always an ndarray here,
+    # so `frame`'s labels are its default positions today, but dropping by
+    # label instead of position would silently misbehave the day that stops
+    # being true (e.g. duplicate labels, which `build_input_feature_names`
+    # exists to handle elsewhere).
+    keep = [i for i in range(frame.shape[1]) if i not in set(to_expand)]
+    remaining = frame.iloc[:, keep]
     out = pd.concat([remaining, *encoded_blocks], axis=1)
 
     schema = feature_schema
