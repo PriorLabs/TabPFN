@@ -539,14 +539,20 @@ class TestWarnOnTexts:
 
 
 class TestWarnOnDates:
-    """Schema-level unit tests for `_warn_on_dates`. Only ever called with a
-    non-empty list; the empty case is the caller's job to skip.
-    """
+    """Schema-level unit tests for `_warn_on_dates`."""
 
-    def test__demoted_dates__warn_with_column_names(self) -> None:
+    def test__demoted_dates__warn_with_column_names_and_remedies(self) -> None:
         with pytest.warns(UserWarning, match="hold dates") as record:
             _warn_on_dates(["signed_on"])
-        assert "'signed_on'" in str(record[0].message)
+        message = str(record[0].message)
+        assert "'signed_on'" in message
+        assert "USE_DATES" in message
+        assert "categorical_features_indices" in message
+
+    def test__no_demoted_dates__does_not_warn(self) -> None:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            _warn_on_dates([])
 
 
 class TestDetectFeatureModalitiesWarnsOnText:
@@ -765,10 +771,17 @@ class TestDateLikeColumnDetection:
     def _numeric_column(self) -> np.ndarray:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
-    def _detect(self, X: pd.DataFrame, *, use_dates: bool = False) -> FeatureSchema:
+    def _detect(
+        self,
+        X: pd.DataFrame,
+        *,
+        use_dates: bool = False,
+        declared: list[int] | None = None,
+    ) -> FeatureSchema:
         return detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
+            provided_categorical_indices=declared,
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
@@ -935,3 +948,29 @@ class TestDateLikeColumnDetection:
             min_cardinality_for_text=30,
         )
         assert schema.features[1].modality is FeatureModality.TEXT
+
+    def test__declared_categorical_date_column__is_not_reported_in_warning(
+        self,
+    ) -> None:
+        """The declaration doesn't change the demotion target (see
+        `test__declared_categorical_date_column__declaration_has_no_effect`),
+        but it does silence the warning, like a declared-categorical text
+        column already does.
+        """
+        X = pd.DataFrame(
+            {
+                "num": self._numeric_column(),
+                "declared": self._dates(60),
+                "undeclared": self._dates(60),
+            }
+        )
+        with pytest.warns(UserWarning, match="hold dates") as record:
+            schema = self._detect(X, declared=[1])
+        message = str(record[0].message)
+        assert "'undeclared'" in message
+        assert "'declared'" not in message
+        assert schema.features[1].modality is FeatureModality.TEXT
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            self._detect(X, declared=[1, 2])

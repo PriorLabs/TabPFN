@@ -92,7 +92,10 @@ def detect_feature_modalities(
 
     if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
-            feature_schema, X, min_cardinality_for_text=min_cardinality_for_text
+            feature_schema,
+            X,
+            min_cardinality_for_text=min_cardinality_for_text,
+            declared_cat_indices=provided_categorical_indices,
         )
         _warn_on_dates(demoted_date_columns)
     return feature_schema
@@ -103,6 +106,7 @@ def _demote_dates(
     X: np.ndarray,
     *,
     min_cardinality_for_text: int,
+    declared_cat_indices: Sequence[int] | None = None,
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
@@ -111,9 +115,12 @@ def _demote_dates(
     applies to a same-shaped non-date string.
 
     Returns:
-        The updated schema, and the demoted column names, for the caller to
-        warn about.
+        The updated schema, and the demoted column names to warn about --
+        excluding any declared categorical, since that declaration already
+        states the intent the warning would otherwise nag about, matching
+        `_warn_on_texts`.
     """
+    declared = set(declared_cat_indices or ())
     features = list(feature_schema.features)
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
@@ -123,7 +130,10 @@ def _demote_dates(
         else:
             demoted = FeatureModality.TEXT
         features[index] = dataclasses.replace(features[index], modality=demoted)
-        demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
+        if index not in declared:
+            demoted_columns.append(
+                features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
+            )
     return FeatureSchema(features=features), demoted_columns
 
 
@@ -183,12 +193,17 @@ def _warn_on_texts(
 def _warn_on_dates(demoted_date_columns: list[str]) -> None:
     """Warn about dates `_demote_dates` demoted to a plain category or text.
 
-    Only called when `demoted_date_columns` is non-empty.
+    Empty whenever every demoted date was declared categorical.
     """
+    if not demoted_date_columns:
+        return
     warnings.warn(
-        f"These columns hold dates, which are not yet expanded into calendar "
-        f"features, so they are read as plain categories or text: "
-        f"{_format_names_for_warning(demoted_date_columns)}.",
+        f"These columns hold dates, which are read as plain categories or "
+        f"text: {_format_names_for_warning(demoted_date_columns)}.\n"
+        'Raise `inference_config={"USE_DATES": True}` to expand them into '
+        "calendar features instead. To silence this for a column that should "
+        "stay a plain category or text, pass its index in "
+        "`categorical_features_indices`.",
         UserWarning,
         stacklevel=6,
     )
