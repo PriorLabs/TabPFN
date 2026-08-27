@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for `expand_date_features`."""
+"""Tests for `DateFeatureExpander`."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
 from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import expand_date_features
+from tabpfn.preprocessing.date_encoding import DateFeatureExpander
 
 N = 20
 
@@ -47,17 +47,19 @@ def test__no_date_columns__is_a_noop() -> None:
             Feature(name="b", modality=FeatureModality.NUMERICAL),
         ]
     )
-    X_out, schema_out, fitted = expand_date_features(X, schema)
+    expander = DateFeatureExpander()
+    X_out, schema_out = expander.fit_transform(X, schema)
     assert X_out is X
     assert schema_out is schema
-    assert fitted == {}
+    assert expander.expanded_indices == []
 
 
 def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     X = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
 
-    X_out, schema_out, fitted = expand_date_features(X, schema)
+    expander = DateFeatureExpander()
+    X_out, schema_out = expander.fit_transform(X, schema)
 
     assert schema_out is not None
     assert schema_out.indices_for(FeatureModality.DATE) == []
@@ -67,12 +69,10 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     # More than just the original numeric column survives: the date expanded.
     assert X_out.shape[1] > 2
 
-    assert list(fitted) == [1]
-    fitted_encoder = fitted[1]
-    assert len(fitted_encoder.output_names) == X_out.shape[1] - 1
-    assert all(
-        name.startswith("input_signed_on_") for name in fitted_encoder.output_names
-    )
+    assert expander.expanded_indices == [1]
+    output_names = schema_out.feature_names[1:]
+    assert len(output_names) == X_out.shape[1] - 1
+    assert all(name.startswith("input_signed_on_") for name in output_names)
     # Every expanded feature is real-valued for a fully populated date column.
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
@@ -85,9 +85,9 @@ def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
     X = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
 
-    _, _, fitted = expand_date_features(X, schema)
+    _, schema_out = DateFeatureExpander().fit_transform(X, schema)
 
-    assert fitted[1].output_names == [
+    assert schema_out.feature_names[1:] == [
         "input_signed_on_year",
         "input_signed_on_total_seconds",
         "input_signed_on_day_of_year",
@@ -102,19 +102,20 @@ def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
 
 def test__fit__declared_categorical_column__is_excluded_from_expansion() -> None:
     """A column declared categorical still classifies `DATE` (detection
-    ignores the declaration), so `expand_date_features` must exclude it and
-    demote it to `CATEGORICAL` itself -- leaving it tagged `DATE` would reach
+    ignores the declaration), so `fit_transform` must exclude it and demote it
+    to `CATEGORICAL` itself -- leaving it tagged `DATE` would reach
     `clean_data`, which has no notion of `DATE` and would silently corrupt it.
     """
     X = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
 
-    X_out, schema_out, fitted = expand_date_features(
+    expander = DateFeatureExpander()
+    X_out, schema_out = expander.fit_transform(
         X, schema, provided_categorical_indices=[1]
     )
 
     assert X_out is X
-    assert fitted == {}
+    assert expander.expanded_indices == []
     assert schema_out.features[1].modality is FeatureModality.CATEGORICAL
 
 
@@ -128,12 +129,14 @@ def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
         ]
     )
 
-    _, schema_out, fitted = expand_date_features(X, schema)
+    _, schema_out = DateFeatureExpander().fit_transform(X, schema)
 
     names = schema_out.feature_names
     assert len(names) == len(set(names))
     assert "input_signed_on_year" in names
-    assert fitted[0].output_names[0] != "input_signed_on_year"
+    # The pre-existing column keeps the name; the newly generated one deduped.
+    assert names[0] == "input_signed_on_year"
+    assert names[1] != "input_signed_on_year"
 
 
 def test__expand_before_clean__vs__clean_before_expand() -> None:
@@ -149,7 +152,7 @@ def test__expand_before_clean__vs__clean_before_expand() -> None:
     schema = _numeric_and_date_schema()
 
     # Correct order: expand, then clean.
-    X_expanded, schema_expanded, _ = expand_date_features(X, schema)
+    X_expanded, schema_expanded = DateFeatureExpander().fit_transform(X, schema)
     X_right_order, _, schema_right_order = clean_data(X_expanded, schema_expanded)
     year_index = schema_right_order.feature_names.index("input_signed_on_year")
     np.testing.assert_array_equal(X_right_order[:, year_index], 2020.0)
@@ -166,15 +169,12 @@ def test__expand_before_clean__vs__clean_before_expand() -> None:
 def test__predict__reapplies_fitted_encoder_positionally() -> None:
     X_fit = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
-    X_fit_out, _, fitted = expand_date_features(X_fit, schema)
+    expander = DateFeatureExpander()
+    X_fit_out, _ = expander.fit_transform(X_fit, schema)
 
     X_test = _numeric_and_date_frame(_dates())
-    X_test_out, schema_out, fitted_out = expand_date_features(
-        X_test, feature_schema=None, fitted=fitted
-    )
+    X_test_out = expander.transform(X_test)
 
-    assert schema_out is None
-    assert fitted_out is fitted
     assert X_test_out.shape[1] == X_fit_out.shape[1]
     # Same dates in, same encoded values out.
     np.testing.assert_array_equal(
@@ -188,13 +188,14 @@ def test__predict__value_that_no_longer_parses_as_a_date__becomes_nan() -> None:
     """
     X_fit = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
-    _, _, fitted = expand_date_features(X_fit, schema)
+    expander = DateFeatureExpander()
+    expander.fit_transform(X_fit, schema)
 
     dates = _dates()
     dates[3] = "not a date at all"
     X_test = _numeric_and_date_frame(dates)
 
-    X_test_out, _, _ = expand_date_features(X_test, feature_schema=None, fitted=fitted)
+    X_test_out = expander.transform(X_test)
 
     assert np.isnan(X_test_out[3, 1:].astype(float)).all()
     # Every other row is unaffected.
@@ -209,13 +210,14 @@ def test__predict__underspecified_value__becomes_nan_not_todays_date() -> None:
     """
     X_fit = _numeric_and_date_frame(_dates())
     schema = _numeric_and_date_schema()
-    _, _, fitted = expand_date_features(X_fit, schema)
+    expander = DateFeatureExpander()
+    expander.fit_transform(X_fit, schema)
 
     dates = _dates()
     dates[3] = "12:00"
     X_test = _numeric_and_date_frame(dates)
 
-    X_test_out, _, _ = expand_date_features(X_test, feature_schema=None, fitted=fitted)
+    X_test_out = expander.transform(X_test)
 
     assert np.isnan(X_test_out[3, 1:].astype(float)).all()
     other_rows = [i for i in range(N) if i != 3]
@@ -232,7 +234,7 @@ def test__mixed_date_and_datetime_string_formats__all_parse() -> None:
     X = _numeric_and_date_frame(dates)
     schema = _numeric_and_date_schema()
 
-    X_out, _, _ = expand_date_features(X, schema)
+    X_out, _ = DateFeatureExpander().fit_transform(X, schema)
 
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
@@ -269,7 +271,7 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
         model.fit(X, y)
 
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    assert 1 in model.date_encoders_  # "signed_on" is the second input column
+    assert 1 in model.date_expander_.expanded_indices  # "signed_on" is 2nd column
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)
@@ -302,18 +304,18 @@ def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -
     )
     model.fit(X, y)
 
-    assert model.date_encoders_ == {}
+    assert model.date_expander_.expanded_indices == []
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
     out = model.predict_proba(X)
     assert np.isfinite(out).all()
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__predict__date_encoders_attribute_missing__does_not_crash(
+def test__predict__date_expander_attribute_missing__does_not_crash(
     estimator_cls: type,
 ) -> None:
     """A path that skips `_initialize_dataset_preprocessing` (e.g.
-    `fit_from_preprocessed`) never sets `date_encoders_` at all -- predict
+    `fit_from_preprocessed`) never sets `date_expander_` at all -- predict
     must not crash on that, the same way it already tolerates a missing
     `ordinal_encoder_`.
     """
@@ -324,7 +326,7 @@ def test__predict__date_encoders_attribute_missing__does_not_crash(
 
     model = estimator_cls(n_estimators=1, device="cpu")
     model.fit(X, y)
-    del model.date_encoders_
+    del model.date_expander_
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)

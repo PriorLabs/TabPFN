@@ -81,10 +81,7 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import (
-    FittedDatetimeEncoder,
-    encode_multimodal_data,
-)
+from tabpfn.preprocessing.date_encoding import DateFeatureExpander, apply_date_expansion
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -234,8 +231,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
-    date_encoders_: dict[int, FittedDatetimeEncoder]
-    """Date encoders by column index, if `USE_DATES` is on and dates are found."""
+    date_expander_: DateFeatureExpander
+    """Expands `DATE`-modality columns into numbers, if `USE_DATES` is on."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -889,7 +886,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
             use_dates=self.inference_config_.USE_DATES,
         )
-        X, feature_schema, date_encoders = encode_multimodal_data(
+        date_expander = DateFeatureExpander()
+        X, feature_schema = date_expander.fit_transform(
             X,
             feature_schema,
             provided_categorical_indices=self.categorical_features_indices,
@@ -901,7 +899,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.date_encoders_ = date_encoders
+        self.date_expander_ = date_expander
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1503,9 +1501,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
-        X, _, _ = encode_multimodal_data(
-            X, feature_schema=None, fitted=getattr(self, "date_encoders_", {})
-        )
+        X = apply_date_expansion(X, self)
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
@@ -1732,11 +1728,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test,
-                feature_schema=None,
-                fitted=getattr(worker, "date_encoders_", {}),
-            )
+            X_test = apply_date_expansion(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(

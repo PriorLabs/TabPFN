@@ -27,15 +27,7 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-@dataclasses.dataclass
-class FittedDatetimeEncoder:
-    """A fitted `DatetimeEncoder` for one column, and its output column names."""
-
-    encoder: DatetimeEncoder
-    output_names: list[str]
-
-
-def make_datetime_encoder() -> DatetimeEncoder:
+def _make_datetime_encoder() -> DatetimeEncoder:
     """Build the encoder that turns a datetime column into calendar features.
 
     Returns:
@@ -77,66 +69,69 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     return parsed
 
 
-def _fit_one_column(
-    column: pd.Series,
-    existing_names: list[str],
-) -> tuple[pd.DataFrame, FittedDatetimeEncoder]:
-    """Fit a new encoder on one column.
+class DateFeatureExpander:
+    """Expands every `DATE`-modality column into numbers via `skrub.DatetimeEncoder`.
 
-    `column` must already carry the real feature name: skrub names each
-    output after it (e.g. "signed_on_year", "signed_on_month_circular_0"),
-    and those are kept as-is here rather than replaced with a generic
-    "{name}_{i}", deduped only against name collisions with existing columns.
+    Not a `PreprocessingStep` (`pipeline_interface.py`): that tier runs per
+    ensemble member on already-numeric arrays, after `clean_data`/`fix_dtypes`
+    -- by which point the raw date strings this needs are already gone. Not
+    `BaseEstimator`/`TransformerMixin` either: fitting needs a `FeatureSchema`
+    alongside `X`, which doesn't fit sklearn's `fit(X, y=None)` signature.
+
+    Usage mirrors `ordinal_encoder_`: construct one, call `fit_transform` once
+    at fit time and keep the instance around (e.g. as `self.date_expander_`),
+    then call `transform` on it at predict time.
     """
-    encoder = make_datetime_encoder()
-    raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
-    output_names = make_names_unique(list(raw_encoded.columns), existing=existing_names)
-    encoded = raw_encoded.set_axis(output_names, axis=1)
-    fitted_encoder = FittedDatetimeEncoder(encoder=encoder, output_names=output_names)
-    return encoded, fitted_encoder
 
+    @dataclasses.dataclass
+    class _FittedColumn:
+        """A fitted `DatetimeEncoder` for one column, and its output names."""
 
-def _apply_one_column(column: pd.Series, fitted: FittedDatetimeEncoder) -> pd.DataFrame:
-    """Reapply an already-fitted encoder to one column."""
-    encoded = fitted.encoder.transform(_parse_dates(column))
-    return pd.DataFrame(encoded).set_axis(fitted.output_names, axis=1)
+        encoder: DatetimeEncoder
+        output_names: list[str]
 
+    def __init__(self) -> None:
+        self._fitted: dict[int, DateFeatureExpander._FittedColumn] = {}
 
-def expand_date_features(
-    X: np.ndarray,
-    feature_schema: FeatureSchema | None,
-    *,
-    provided_categorical_indices: Sequence[int] | None = None,
-    fitted: dict[int, FittedDatetimeEncoder] | None = None,
-) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
-    """Expand every `DATE`-modality column into numbers, via `DatetimeEncoder`.
+    @property
+    def expanded_indices(self) -> list[int]:
+        """Raw column indices that were expanded, ascending.
 
-    Args:
-        X: The data, before any dtype fixing.
-        feature_schema: The schema to fit against; `None` at predict time.
-        provided_categorical_indices: Indices declared categorical by the
-            caller. Detection tags a date-like column `DATE` regardless of
-            this declaration, so it must be excluded here instead, or the
-            declaration would have no effect once `USE_DATES` is on.
-        fitted: Previously fitted encoders, keyed by column index, to reuse at
-            predict time instead of fitting new ones.
+        Empty both before `fit_transform` is called and after it finds no
+        `DATE` columns to expand.
+        """
+        return sorted(self._fitted)
 
-    Returns:
-        The (possibly wider) data, the updated schema, and the fitted encoders.
-    """
-    if fitted is not None:
-        to_expand = sorted(fitted)
-    else:
-        assert feature_schema is not None, "feature_schema is required to fit"
+    def fit_transform(
+        self,
+        X: np.ndarray,
+        feature_schema: FeatureSchema,
+        *,
+        provided_categorical_indices: Sequence[int] | None = None,
+    ) -> tuple[np.ndarray, FeatureSchema]:
+        """Fit a new encoder per `DATE` column and expand it into numbers.
+
+        Args:
+            X: The data, before any dtype fixing.
+            feature_schema: The schema to fit against.
+            provided_categorical_indices: Indices declared categorical by the
+                caller. Detection tags a date-like column `DATE` regardless of
+                this declaration, so it must be excluded here instead, or the
+                declaration would have no effect once `USE_DATES` is on.
+
+        Returns:
+            The (possibly wider) data and the updated schema.
+        """
         declared = set(provided_categorical_indices or ())
         date_indices = feature_schema.indices_for(FeatureModality.DATE)
         declared_dates = [i for i in date_indices if i in declared]
         if declared_dates:
             # A declared date can't just be skipped: unlike a genuine TEXT
-            # column, a column left tagged DATE has no safe fallback -- clean_data
-            # doesn't recognize it and would silently ordinal-code the raw
-            # strings. Demote it exactly like `_demote_dates` already does when
-            # USE_DATES is off, since the declaration means the same thing here.
+            # column, a column left tagged DATE has no safe fallback --
+            # clean_data doesn't recognize it and would silently ordinal-code
+            # the raw strings. Demote it exactly like `_demote_dates` already
+            # does when USE_DATES is off, since the declaration means the
+            # same thing here.
             features = list(feature_schema.features)
             for index in declared_dates:
                 features[index] = dataclasses.replace(
@@ -144,64 +139,111 @@ def expand_date_features(
                 )
             feature_schema = FeatureSchema(features=features)
         to_expand = sorted(i for i in date_indices if i not in declared)
-    if not to_expand:
-        return X, feature_schema, fitted or {}
+        self._fitted = {}
+        if not to_expand:
+            return X, feature_schema
 
-    frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
-    new_fitted: dict[int, FittedDatetimeEncoder] = {}
-    existing_names = list(feature_schema.feature_names) if feature_schema else []
-    encoded_blocks: list[pd.DataFrame] = []
-    for index in to_expand:
-        if fitted is not None:
-            # The exact name doesn't matter here: `_apply_one_column` overrides
-            # the output labels with the already-fitted ones regardless. Still
+        frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
+        existing_names = list(feature_schema.feature_names)
+        encoded_blocks: list[pd.DataFrame] = []
+        for index in to_expand:
+            name = feature_schema.features[index].name
+            column = frame.iloc[:, index].rename(name)
+            encoded, fitted_column = self._fit_one_column(column, existing_names)
+            existing_names += fitted_column.output_names
+            self._fitted[index] = fitted_column
+            encoded_blocks.append(encoded.reset_index(drop=True))
+
+        out = self._assemble(frame, to_expand, encoded_blocks)
+
+        schema = feature_schema.remove_columns(to_expand)
+        for index in to_expand:
+            fitted_column = self._fitted[index]
+            schema = schema.append_columns(
+                FeatureModality.NUMERICAL,
+                len(fitted_column.output_names),
+                names=fitted_column.output_names,
+            )
+        return out.to_numpy(), schema
+
+    def transform(self, X: np.ndarray) -> np.ndarray:
+        """Reapply the encoders fit by `fit_transform`, positionally.
+
+        A no-op (returns `X` unchanged) if nothing was fit -- either
+        `fit_transform` found no `DATE` columns, or it was never called.
+        """
+        to_expand = self.expanded_indices
+        if not to_expand:
+            return X
+
+        frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
+        encoded_blocks = []
+        for index in to_expand:
+            # The exact name doesn't matter: `_apply_one_column` overrides the
+            # output labels with the already-fitted ones regardless. Still
             # needs to be a string, not the bare `pd.DataFrame`'s int label --
             # some of skrub's own naming code concatenates onto it directly.
             column = frame.iloc[:, index].rename(str(index))
-            encoded = _apply_one_column(column, fitted[index])
-        else:
-            assert feature_schema is not None
-            name = feature_schema.features[index].name
-            column = frame.iloc[:, index].rename(name)
-            encoded, fitted_encoder = _fit_one_column(column, existing_names)
-            existing_names += fitted_encoder.output_names
-            new_fitted[index] = fitted_encoder
-        encoded_blocks.append(encoded.reset_index(drop=True))
+            encoded = self._apply_one_column(column, self._fitted[index])
+            encoded_blocks.append(encoded.reset_index(drop=True))
 
-    # Positional, not `frame.drop(columns=...)`: `X` is always an ndarray here,
-    # so `frame`'s labels are its default positions today, but dropping by
-    # label instead of position would silently misbehave the day that stops
-    # being true (e.g. duplicate labels, which `build_input_feature_names`
-    # exists to handle elsewhere).
-    keep = [i for i in range(frame.shape[1]) if i not in set(to_expand)]
-    remaining = frame.iloc[:, keep]
-    out = pd.concat([remaining, *encoded_blocks], axis=1)
+        return self._assemble(frame, to_expand, encoded_blocks).to_numpy()
 
-    schema = feature_schema
-    if fitted is None:
-        assert schema is not None
-        schema = schema.remove_columns(to_expand)
-        for fitted_encoder in new_fitted.values():
-            schema = schema.append_columns(
-                FeatureModality.NUMERICAL,
-                len(fitted_encoder.output_names),
-                names=fitted_encoder.output_names,
-            )
+    @staticmethod
+    def _assemble(
+        frame: pd.DataFrame,
+        to_expand: list[int],
+        encoded_blocks: list[pd.DataFrame],
+    ) -> pd.DataFrame:
+        # Positional, not `frame.drop(columns=...)`: `X` is always an ndarray
+        # here, so `frame`'s labels are its default positions today, but
+        # dropping by label instead of position would silently misbehave the
+        # day that stops being true (e.g. duplicate labels, which
+        # `build_input_feature_names` exists to handle elsewhere).
+        keep = [i for i in range(frame.shape[1]) if i not in set(to_expand)]
+        remaining = frame.iloc[:, keep]
+        return pd.concat([remaining, *encoded_blocks], axis=1)
 
-    return out.to_numpy(), schema, (fitted if fitted is not None else new_fitted)
+    @staticmethod
+    def _fit_one_column(
+        column: pd.Series,
+        existing_names: list[str],
+    ) -> tuple[pd.DataFrame, DateFeatureExpander._FittedColumn]:
+        """Fit a new encoder on one column.
+
+        `column` must already carry the real feature name: skrub names each
+        output after it (e.g. "signed_on_year", "signed_on_month_circular_0"),
+        and those are kept as-is here rather than replaced with a generic
+        "{name}_{i}", deduped only against name collisions with existing
+        columns.
+        """
+        encoder = _make_datetime_encoder()
+        raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
+        output_names = make_names_unique(
+            list(raw_encoded.columns), existing=existing_names
+        )
+        encoded = raw_encoded.set_axis(output_names, axis=1)
+        fitted_column = DateFeatureExpander._FittedColumn(
+            encoder=encoder, output_names=output_names
+        )
+        return encoded, fitted_column
+
+    @staticmethod
+    def _apply_one_column(
+        column: pd.Series,
+        fitted: DateFeatureExpander._FittedColumn,
+    ) -> pd.DataFrame:
+        """Reapply an already-fitted encoder to one column."""
+        encoded = fitted.encoder.transform(_parse_dates(column))
+        return pd.DataFrame(encoded).set_axis(fitted.output_names, axis=1)
 
 
-def encode_multimodal_data(
-    X: np.ndarray,
-    feature_schema: FeatureSchema | None,
-    *,
-    provided_categorical_indices: Sequence[int] | None = None,
-    fitted: dict[int, FittedDatetimeEncoder] | None = None,
-) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
-    """Encode every modality with an encoder available (today: dates)."""
-    return expand_date_features(
-        X,
-        feature_schema,
-        provided_categorical_indices=provided_categorical_indices,
-        fitted=fitted,
-    )
+def apply_date_expansion(X: np.ndarray, source: object) -> np.ndarray:
+    """Reapply `source`'s fitted `date_expander_` at predict time, if any.
+
+    `source` (a fitted estimator or ensemble worker) may never have set
+    `date_expander_` at all -- e.g. `fit_from_preprocessed` skips the step
+    that would, exactly like the pre-existing `ordinal_encoder_` guard.
+    """
+    date_expander = getattr(source, "date_expander_", None)
+    return X if date_expander is None else date_expander.transform(X)
