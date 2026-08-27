@@ -57,7 +57,7 @@ and quick to get hold of:
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_ensemble_preprocessing.py
 
-Either object-array mix, at the smaller shape they force:
+Either object-array mix, on the same shape:
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_ensemble_preprocessing.py --mix half-string
@@ -766,8 +766,8 @@ def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]
     """The measurement arguments both sides of the comparison are run with.
 
     Built from the resolved spec rather than forwarded from argv, so the `--small` and
-    per-mix shape defaults are already applied and the two children cannot disagree
-    about what they measured.
+    default shapes are already applied and the two children cannot disagree about what
+    they measured.
     """
     forwarded = [
         "--rows",

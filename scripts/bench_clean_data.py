@@ -51,7 +51,7 @@ so it is both big enough for the full shape and quick to get hold of:
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py
 
-Either object-array mix, at the smaller shape they force (see `--mix`):
+Either object-array mix, on the same shape (see `--mix`):
 
     srun -p cpuhighmem16spot --mem=0 --time=01:00:00 \
         uv run scripts/bench_clean_data.py --mix half-string
@@ -155,14 +155,6 @@ MIXES = (MIX_NUMERIC, MIX_HALF_STRING, MIX_NUMERIC_OBJECT)
 # Not a mix but a request for every one of them, a child process each; see
 # `run_every_mix`.
 MIX_ALL = "all"
-
-# Both of the others reach `clean_data` as an object array (see their generators),
-# which costs a pointer *and* a Python object per cell -- roughly 40 bytes against
-# float32's 4 -- so they carry their own default shape. The numeric default would
-# need over 100 GB to build the input alone, before cleaning it.
-OBJECT_MIXES = frozenset({MIX_HALF_STRING, MIX_NUMERIC_OBJECT})
-OBJECT_PROFILER_ROWS = 500_000
-OBJECT_COLS = 400
 
 # Distinct values per string column. Below MAX_UNIQUE_FOR_CATEGORICAL_FEATURES so
 # the columns detect as CATEGORICAL rather than TEXT, and deliberately not
@@ -912,8 +904,8 @@ def child_arguments(args: argparse.Namespace, spec: dict[str, Any]) -> list[str]
     """The measurement arguments both sides of the comparison are run with.
 
     Built from the resolved spec rather than forwarded from argv, so the `--small`
-    and per-mix shape defaults are already applied and the two children cannot
-    disagree about what they measured.
+    and default shapes are already applied and the two children cannot disagree
+    about what they measured.
     """
     forwarded = [
         "--rows",
@@ -1091,10 +1083,9 @@ def run_reference_comparison(args: argparse.Namespace) -> int:
 # six measured processes.
 #
 # The children are handed this run's own argv with `--mix` substituted, rather than a
-# spec resolved here: each mix carries its own default shape, and forwarding the flags
-# verbatim is what lets every child apply its own. (`--reference`'s two children are
-# the opposite case -- there the spec is resolved up front precisely so the two sides
-# cannot disagree about what they measured.)
+# spec resolved here, so a cell is measured under exactly the flags this run was given.
+# (`--reference`'s two children are the opposite case -- there the spec is resolved up
+# front precisely so the two sides cannot disagree about what they measured.)
 #
 # The table is read back off what the children printed, which makes their report lines
 # an interface. Nothing else in either script prints a metric in these shapes.
@@ -1532,8 +1523,8 @@ def print_grid_report(
         print("\n".join(described) + "\n")
     print("\n".join(render_grid_table(outcomes)))
     print(
-        "\nEach mix carries its own shape, so only cells of the same mix are "
-        "comparable with each other."
+        "\nEvery mix runs on the same shape, so the cells are directly comparable; "
+        "each still gates against a baseline of its own."
     )
     if any(outcome.ok and not outcome.outputs_identical for outcome in outcomes):
         print(
@@ -1674,20 +1665,18 @@ def print_pass_summary(
 
 
 def resolve_shape(args: argparse.Namespace) -> tuple[int, int]:
-    """Rows to generate and columns, from whichever of --rows/--cols/--small/--mix.
+    """Rows to generate and columns, from whichever of --rows/--cols/--small.
 
     An explicit --rows/--cols wins, then --small (debugging beats everything it is
-    combined with), then the shape the mix carries, then the profiled default. Shared
-    with `profile_clean_data.py` so the two cannot drift into measuring different
-    tables under the same flags.
+    combined with), then the profiled default. Every mix is measured on the same
+    shape, so their numbers sit in one table without a mental rescaling. Shared with
+    `profile_clean_data.py` so the two cannot drift into measuring different tables
+    under the same flags.
     """
-    object_mix = args.mix in OBJECT_MIXES
     if args.rows is not None:
         profiler_rows = args.rows
     elif args.small:
         profiler_rows = SMALL_PROFILER_ROWS
-    elif object_mix:
-        profiler_rows = OBJECT_PROFILER_ROWS
     else:
         profiler_rows = DEFAULT_PROFILER_ROWS
 
@@ -1695,8 +1684,6 @@ def resolve_shape(args: argparse.Namespace) -> tuple[int, int]:
         cols = args.cols
     elif args.small:
         cols = SMALL_COLS
-    elif object_mix:
-        cols = OBJECT_COLS
     else:
         cols = DEFAULT_COLS
     return profiler_rows, cols
@@ -1972,10 +1959,10 @@ def get_parser() -> argparse.ArgumentParser:
         "values, so it detects as categorical), which is what exercises the ordinal "
         "encoder. 'numeric-object' makes every other column an integer instead, which "
         "encodes nothing but forces a recast of every column. The latter two arrive "
-        "as object arrays, far heavier per cell, so they also lower the default shape "
-        f"to {OBJECT_PROFILER_ROWS} rows x {OBJECT_COLS} cols. Each keeps its own "
-        "baseline directory. 'all' runs the three of them in sequence, a child "
-        "process each, and prints what they reported as one table.",
+        "as object arrays, far heavier per cell, but all three run on the profiled "
+        "shape, so their numbers compare directly. Each keeps its own baseline "
+        "directory. 'all' runs the three of them in sequence, a child process each, "
+        "and prints what they reported as one table.",
     )
     parser.add_argument(
         "--environment",
