@@ -782,7 +782,9 @@ class TestDateLikeColumnDetection:
     def _numeric_column(self) -> np.ndarray:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
-    def _detect(self, X: pd.DataFrame, *, use_dates: bool = False) -> FeatureSchema:
+    def _detect(
+        self, X: pd.DataFrame, *, use_dates: bool = False, use_text: bool = False
+    ) -> FeatureSchema:
         return detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
@@ -791,6 +793,7 @@ class TestDateLikeColumnDetection:
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
             use_dates=use_dates,
+            use_text=use_text,
         )
 
     def _dates(self, n_unique: int) -> list[str]:
@@ -802,6 +805,18 @@ class TestDateLikeColumnDetection:
         with pytest.warns(UserWarning, match="hold dates"):
             schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.TEXT
+
+    def test__use_text__high_cardinality_date__demotes_to_categorical_not_text(
+        self,
+    ) -> None:
+        """With `USE_TEXT` on, a demoted date must never land on `TEXT`: that
+        would sweep a calendar string into `StringEncoder` right along with
+        genuine free text.
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X, use_text=True)
+        assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
     def test__low_cardinality_date__is_categorical(self) -> None:
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})

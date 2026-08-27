@@ -749,7 +749,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             use_text=self.inference_config_.USE_TEXT,
         )
         X, feature_schema, date_encoders, text_encoders = encode_multimodal_data(
-            X, feature_schema, use_text=self.inference_config_.USE_TEXT
+            X,
+            feature_schema,
+            use_text=self.inference_config_.USE_TEXT,
+            provided_categorical_indices=self.categorical_features_indices,
         )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,

@@ -10,6 +10,8 @@ from tabpfn.preprocessing.date_encoding import expand_date_features
 from tabpfn.preprocessing.string_encoding import expand_text_features
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
 
     from tabpfn.preprocessing.datamodel import FeatureSchema
@@ -22,6 +24,7 @@ def encode_multimodal_data(
     feature_schema: FeatureSchema | None,
     *,
     use_text: bool = False,
+    provided_categorical_indices: Sequence[int] | None = None,
     date_fitted: dict[int, FittedDatetimeEncoder] | None = None,
     text_fitted: dict[int, FittedStringEncoder] | None = None,
 ) -> tuple[
@@ -35,6 +38,10 @@ def encode_multimodal_data(
         X, feature_schema, fitted=date_fitted
     )
     X, feature_schema, text_encoders = expand_text_features(
-        X, feature_schema, fitted=text_fitted, use_text=use_text
+        X,
+        feature_schema,
+        fitted=text_fitted,
+        use_text=use_text,
+        provided_categorical_indices=provided_categorical_indices,
     )
     return X, feature_schema, date_encoders, text_encoders

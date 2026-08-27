@@ -67,6 +67,24 @@ def test__use_text_false__is_a_noop_even_with_a_text_column() -> None:
     assert fitted == {}
 
 
+def test__fit__declared_categorical_column__is_excluded_from_expansion() -> None:
+    """A column declared categorical can still classify as `TEXT` (detection
+    ignores the declaration for strings, like it already does for a
+    declared-categorical date), so `expand_text_features` must exclude it
+    itself or the declaration would have no effect once `USE_TEXT` is on.
+    """
+    X = _numeric_and_text_frame(_texts())
+    schema = _numeric_and_text_schema()
+
+    X_out, schema_out, fitted = expand_text_features(
+        X, schema, use_text=True, provided_categorical_indices=[1]
+    )
+
+    assert X_out is X
+    assert schema_out is schema
+    assert fitted == {}
+
+
 def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     X = _numeric_and_text_frame(_texts())
     schema = _numeric_and_text_schema()
@@ -201,6 +219,59 @@ def test__fit_predict__use_text__expands_text_and_predicts(
         out = model.predict_proba(X)
     else:
         out = model.predict(X)
+    assert np.isfinite(out).all()
+
+
+def test__fit__use_text_true_use_dates_false__date_column_not_text_encoded() -> None:
+    """A high-cardinality date, demoted since `USE_DATES` is off, must not be
+    swept into `StringEncoder` just because `USE_TEXT` is on.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
+                "%Y-%m-%d"
+            ),
+        }
+    )
+    y = rng.integers(0, 2, size=n)
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"USE_DATES": False, "USE_TEXT": True},
+    )
+    with pytest.warns(UserWarning, match="hold dates"):
+        model.fit(X, y)
+
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
+    assert model.text_encoders_ == {}
+
+
+def test__fit__declared_categorical__is_not_text_encoded_even_with_use_text() -> None:
+    """A column declared categorical must stay excluded from `StringEncoder`,
+    exactly as the declaration already excludes it from one-hot/ordinal
+    treatment blowing up -- `USE_TEXT` must not override that intent.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame({"num": rng.normal(size=n), "review": _texts(n)})
+    y = rng.integers(0, 2, size=n)
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={"USE_TEXT": True},
+    )
+    model.fit(X, y)
+
+    assert model.text_encoders_ == {}
+    out = model.predict_proba(X)
     assert np.isfinite(out).all()
 
 

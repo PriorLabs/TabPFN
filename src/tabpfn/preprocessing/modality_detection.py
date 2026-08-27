@@ -95,7 +95,10 @@ def detect_feature_modalities(
 
     if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
-            feature_schema, X, min_cardinality_for_text=min_cardinality_for_text
+            feature_schema,
+            X,
+            min_cardinality_for_text=min_cardinality_for_text,
+            use_text=use_text,
         )
         _warn_on_dates(demoted_date_columns)
     return feature_schema
@@ -106,12 +109,16 @@ def _demote_dates(
     X: np.ndarray,
     *,
     min_cardinality_for_text: int,
+    use_text: bool,
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
     Only called when `use_dates` is off, so every detected date is demoted,
     via the same cardinality rule `_classify_string_like_column` already
-    applies to a same-shaped non-date string.
+    applies to a same-shaped non-date string -- except when `use_text` is on,
+    where a calendar string demoted to `TEXT` would otherwise be swept into
+    `StringEncoder` right along with genuine free text, so it goes to
+    `CATEGORICAL` unconditionally instead.
 
     Returns:
         The updated schema, and the demoted column names, for the caller to
@@ -121,7 +128,7 @@ def _demote_dates(
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
         n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        if n_unique <= min_cardinality_for_text:
+        if use_text or n_unique <= min_cardinality_for_text:
             demoted = FeatureModality.CATEGORICAL
         else:
             demoted = FeatureModality.TEXT

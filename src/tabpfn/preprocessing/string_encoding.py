@@ -15,6 +15,8 @@ import pandas as pd
 from tabpfn.preprocessing.datamodel import FeatureModality, make_names_unique
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
     from skrub import StringEncoder
 
@@ -79,6 +81,7 @@ def expand_text_features(
     feature_schema: FeatureSchema | None,
     *,
     use_text: bool = False,
+    provided_categorical_indices: Sequence[int] | None = None,
     fitted: dict[int, FittedStringEncoder] | None = None,
 ) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedStringEncoder]]:
     """Expand every `TEXT`-modality column into numbers, via `StringEncoder`.
@@ -90,6 +93,11 @@ def expand_text_features(
             that way in the schema regardless of this flag, unlike `DATE`, so
             this is the only place that decides whether fitting happens.
             Ignored when `fitted` is given.
+        provided_categorical_indices: Indices declared categorical by the
+            caller. A string column can still classify as `TEXT` despite the
+            declaration (detection ignores it, like it already does for a
+            declared-categorical date), so it must be excluded here instead,
+            or the declaration would have no effect once `USE_TEXT` is on.
         fitted: Previously fitted encoders, keyed by column index, to reuse at
             predict time instead of fitting new ones.
 
@@ -100,8 +108,15 @@ def expand_text_features(
         to_expand = sorted(fitted)
     else:
         assert feature_schema is not None, "feature_schema is required to fit"
+        declared = set(provided_categorical_indices or ())
         to_expand = (
-            sorted(feature_schema.indices_for(FeatureModality.TEXT)) if use_text else []
+            sorted(
+                i
+                for i in feature_schema.indices_for(FeatureModality.TEXT)
+                if i not in declared
+            )
+            if use_text
+            else []
         )
     if not to_expand:
         return X, feature_schema, fitted or {}
