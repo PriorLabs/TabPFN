@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.preprocessing import modality_detection
 from tabpfn.preprocessing.clean import PANDAS_BELOW_3
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
@@ -508,38 +509,61 @@ def _dates_after(n: int, *, start: str = "2020-01-01") -> list[str]:
     return list(pd.date_range(start, periods=n).strftime("%Y-%m-%d"))
 
 
-_PREFIX = _EARLY_EXIT_PREFIX_ROWS
-#: Columns whose prefix and tail disagree, so the prefix rejection either has to
-#: fire correctly or fall through. Named by where the disagreement sits.
+#: Prefix these tests run the rejection at. The logic is identical at any size,
+#: so a smaller one than production keeps the columns below cheap to build and
+#: easy to reason about. Only `test__prefix_rejection__fires_within_the_real_prefix`
+#: uses the production value, since that is the one thing a shrunk prefix cannot
+#: check.
+_TEST_PREFIX_ROWS = 50
+
+
+@pytest.fixture
+def small_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Shrink the rejection prefix so test columns can stay a handful of rows."""
+    monkeypatch.setattr(
+        modality_detection, "_EARLY_EXIT_PREFIX_ROWS", _TEST_PREFIX_ROWS
+    )
+
+
+#: Columns whose prefix and tail disagree, so the rejection either has to fire
+#: correctly or fall through. Named by where the disagreement sits. Every column
+#: is longer than `_TEST_PREFIX_ROWS`, or the guard would not run at all.
+_TAIL = 10
+_NUMBERS = [str(i) for i in range(_TEST_PREFIX_ROWS + _TAIL)]
 _PROBE_COLUMNS: dict[str, list[Any]] = {
+    # Clean prefix and clean tail: the guard must fall through and answer True.
+    # Without this, a guard that rejects whenever the prefix is clean still
+    # agrees with the reference on every column that is genuinely not a date.
+    "dates": _dates_after(_TEST_PREFIX_ROWS + _TAIL),
     # Fails on its very first value.
-    "free_text": [f"a fairly long sentence, number {i}" for i in range(_PREFIX + 500)],
+    "text": [f"a sentence, number {i}" for i in range(_TEST_PREFIX_ROWS + _TAIL)],
     # Clean prefix, one bad value the prefix can see.
-    "bad_inside_prefix": (
-        [*_dates_after(_PREFIX - 1), "not a date", *_dates_after(500)]
-    ),
+    "bad_inside_prefix": [
+        *_dates_after(_TEST_PREFIX_ROWS - 1),
+        "not a date",
+        *_dates_after(_TAIL),
+    ],
     # Clean prefix, one bad value only the full parse can see.
-    "bad_beyond_prefix": [*_dates_after(_PREFIX + 200), "not a date"],
-    # Prefix is one format, the tail another. `to_datetime` infers from the
-    # first value, so the tail coerces to NaT and the column is not a date.
-    "format_switches_beyond_prefix": (
-        _dates_after(_PREFIX + 10)
-        + list(pd.date_range("2020-01-01", periods=100).strftime("%d/%m/%Y"))
-    ),
-    # Entirely missing prefix: says nothing, so it must fall through.
-    "missing_prefix_then_dates": [None] * _PREFIX + _dates_after(200),
-    "missing_prefix_then_text": [None] * _PREFIX + ["not a date"] * 200,
-    "all_missing": [None] * (_PREFIX + 200),
+    "bad_beyond_prefix": [*_dates_after(_TEST_PREFIX_ROWS + _TAIL), "not a date"],
+    # Prefix is one format, the tail another. `to_datetime` infers a format from
+    # the first value, so the tail coerces to NaT and this is not a date column.
+    "format_switches_beyond_prefix": [
+        *_dates_after(_TEST_PREFIX_ROWS + 1),
+        *pd.date_range("2020-06-01", periods=_TAIL).strftime("%d/%m/%Y"),
+    ],
+    # An entirely missing prefix says nothing, so it must fall through.
+    "missing_prefix_then_dates": [None] * _TEST_PREFIX_ROWS + _dates_after(_TAIL),
+    "missing_prefix_then_text": [None] * _TEST_PREFIX_ROWS + ["not a date"] * _TAIL,
+    "all_missing": [None] * (_TEST_PREFIX_ROWS + _TAIL),
     # Numeric strings, with the offending value on either side of the prefix.
-    "numeric_strings": [str(i) for i in range(_PREFIX + 500)],
-    "non_numeric_inside_prefix": (
-        [str(i) for i in range(_PREFIX - 1)] + ["abc"] + [str(i) for i in range(500)]
-    ),
-    "non_numeric_beyond_prefix": [str(i) for i in range(_PREFIX + 200)] + ["abc"],
+    "numeric_strings": _NUMBERS,
+    "non_numeric_inside_prefix": [*_NUMBERS[: _TEST_PREFIX_ROWS - 1], "abc", *_NUMBERS],
+    "non_numeric_beyond_prefix": [*_NUMBERS, "abc"],
 }
 
 
 @pytest.mark.parametrize("name", list(_PROBE_COLUMNS))
+@pytest.mark.usefixtures("small_prefix")
 def test__prefix_rejection__agrees_with_parsing_the_whole_column(name: str) -> None:
     """The prefix rejection is exact, not an approximation.
 
@@ -552,18 +576,72 @@ def test__prefix_rejection__agrees_with_parsing_the_whole_column(name: str) -> N
     assert _is_numeric_pandas_series(s) == _reference_is_numeric(s)
 
 
-def test__prefix_rejection__does_not_change_short_column_behavior() -> None:
-    """A column no longer than the prefix skips the probe entirely."""
-    short = pd.Series(_dates_after(_PREFIX), dtype=object)
-    assert _is_date_like_pandas_series(short) is True
-    assert _is_date_like_pandas_series(short) == _reference_is_date_like(short)
+@pytest.mark.parametrize(
+    ("helper_name", "detect", "passing_values"),
+    [
+        ("_all_parse_as_dates", _is_date_like_pandas_series, _dates_after),
+        (
+            "_all_numeric_or_missing",
+            _is_numeric_pandas_series,
+            lambda n: [str(i) for i in range(n)],
+        ),
+    ],
+)
+@pytest.mark.usefixtures("small_prefix")
+def test__prefix_rejection__skips_the_guard_on_a_short_column(
+    helper_name: str,
+    detect: Any,
+    passing_values: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A column no longer than the prefix is parsed once, not twice.
+
+    Counting the parses rather than the answer, since parsing twice gives the
+    same answer. A longer column that clears its prefix is parsed twice, which
+    is the cost this trade accepts.
+    """
+    real = getattr(modality_detection, helper_name)
+    parses = []
+
+    def counting(s: pd.Series) -> bool:
+        parses.append(len(s))
+        return real(s)
+
+    monkeypatch.setattr(modality_detection, helper_name, counting)
+
+    assert detect(pd.Series(passing_values(_TEST_PREFIX_ROWS), dtype=object)) is True
+    assert len(parses) == 1
+
+    parses.clear()
+    assert (
+        detect(pd.Series(passing_values(_TEST_PREFIX_ROWS + 2), dtype=object)) is True
+    )
+    assert len(parses) == 2
 
 
-def test__date_probe__rejects_text_without_parsing_the_whole_column() -> None:
-    """Text is rejected off the prefix, so the tail is never parsed.
+@pytest.mark.usefixtures("small_prefix")
+def test__prefix_rejection__reads_the_head_so_day_first_dates_survive() -> None:
+    """A real date column must not be rejected off an unrepresentative prefix.
 
-    Guards the point of the change. A tail that would raise on parse proves the
-    full column was never reached; without the prefix rejection this raises.
+    `to_datetime` infers a format from the first non-null value and applies it to
+    the rest, so a prefix starting anywhere else can infer a different format and
+    coerce valid values to `NaT`. Here `13/01/2020` pins `%d/%m/%Y` for the whole
+    column and every value parses, but a prefix starting at `06/03/2020` is
+    ambiguous, infers `%m/%d/%Y`, and rejects `13/01/2020` as month 13. Reading
+    the head keeps the prefix and the full pass in agreement; sampling would not.
+    """
+    s = pd.Series(["13/01/2020", "05/02/2020", "06/03/2020"] * 30, dtype=object)
+    assert _is_date_like_pandas_series(s) is True
+    assert _is_date_like_pandas_series(s) == _reference_is_date_like(s)
+
+
+def test__prefix_rejection__fires_within_the_real_prefix() -> None:
+    """The guard rejects off `_EARLY_EXIT_PREFIX_ROWS`, not some other length.
+
+    The tests above shrink the prefix, so this is the one that exercises the
+    production value. A tail that raises when parsed proves the full column was
+    never reached, which only holds if the guard rejected inside the leading
+    `_EARLY_EXIT_PREFIX_ROWS` rows.
     """
 
     class Unparseable:
@@ -571,7 +649,8 @@ def test__date_probe__rejects_text_without_parsing_the_whole_column() -> None:
             raise AssertionError("the tail must not be parsed")
 
     s = pd.Series(
-        ["a fairly long sentence"] * _PREFIX + [Unparseable()] * 10, dtype=object
+        ["a fairly long sentence"] * _EARLY_EXIT_PREFIX_ROWS + [Unparseable()] * 10,
+        dtype=object,
     )
     assert _is_date_like_pandas_series(s) is False
 
