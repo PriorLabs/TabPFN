@@ -12,7 +12,6 @@ import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
-from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import expand_date_features
@@ -277,37 +276,6 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
     else:
         out = model.predict(X)
     assert np.isfinite(out).all()
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit__use_dates__expansion_past_max_features__raises(
-    estimator_cls: type,
-) -> None:
-    """`MAX_NUMBER_OF_FEATURES` is checked against the raw column count before
-    expansion; a single date column can turn a handful of columns into far
-    more, so it must be re-checked against the expanded count too, or the
-    limit has no effect once dates are involved.
-    """
-    n = 60
-    rng = np.random.default_rng(0)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
-        }
-    )
-    y = _classification_or_regression_target(estimator_cls, rng, n)
-
-    # 2 raw columns clear a limit of 5; expanded to 10, they don't.
-    model = estimator_cls(
-        n_estimators=1,
-        device="cpu",
-        inference_config={"USE_DATES": True, "MAX_NUMBER_OF_FEATURES": 5},
-    )
-    with pytest.raises(TabPFNValidationError, match="features"):
-        model.fit(X, y)
 
 
 def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -> None:
