@@ -12,13 +12,17 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from tabpfn.preprocessing.datamodel import FeatureModality, make_names_unique
+from tabpfn.preprocessing.datamodel import (
+    FeatureModality,
+    FeatureSchema,
+    make_names_unique,
+)
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import numpy as np
     from skrub import DatetimeEncoder
-
-    from tabpfn.preprocessing.datamodel import FeatureSchema
 
 
 @dataclasses.dataclass
@@ -83,6 +87,7 @@ def expand_date_features(
     X: np.ndarray,
     feature_schema: FeatureSchema | None,
     *,
+    provided_categorical_indices: Sequence[int] | None = None,
     fitted: dict[int, FittedDatetimeEncoder] | None = None,
 ) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
     """Expand every `DATE`-modality column into numbers, via `DatetimeEncoder`.
@@ -90,6 +95,10 @@ def expand_date_features(
     Args:
         X: The data, before any dtype fixing.
         feature_schema: The schema to fit against; `None` at predict time.
+        provided_categorical_indices: Indices declared categorical by the
+            caller. Detection tags a date-like column `DATE` regardless of
+            this declaration, so it must be excluded here instead, or the
+            declaration would have no effect once `USE_DATES` is on.
         fitted: Previously fitted encoders, keyed by column index, to reuse at
             predict time instead of fitting new ones.
 
@@ -100,7 +109,22 @@ def expand_date_features(
         to_expand = sorted(fitted)
     else:
         assert feature_schema is not None, "feature_schema is required to fit"
-        to_expand = sorted(feature_schema.indices_for(FeatureModality.DATE))
+        declared = set(provided_categorical_indices or ())
+        date_indices = feature_schema.indices_for(FeatureModality.DATE)
+        declared_dates = [i for i in date_indices if i in declared]
+        if declared_dates:
+            # A declared date can't just be skipped: unlike a genuine TEXT
+            # column, a column left tagged DATE has no safe fallback -- clean_data
+            # doesn't recognize it and would silently ordinal-code the raw
+            # strings. Demote it exactly like `_demote_dates` already does when
+            # USE_DATES is off, since the declaration means the same thing here.
+            features = list(feature_schema.features)
+            for index in declared_dates:
+                features[index] = dataclasses.replace(
+                    features[index], modality=FeatureModality.CATEGORICAL
+                )
+            feature_schema = FeatureSchema(features=features)
+        to_expand = sorted(i for i in date_indices if i not in declared)
     if not to_expand:
         return X, feature_schema, fitted or {}
 
@@ -143,7 +167,13 @@ def encode_multimodal_data(
     X: np.ndarray,
     feature_schema: FeatureSchema | None,
     *,
+    provided_categorical_indices: Sequence[int] | None = None,
     fitted: dict[int, FittedDatetimeEncoder] | None = None,
 ) -> tuple[np.ndarray, FeatureSchema | None, dict[int, FittedDatetimeEncoder]]:
     """Encode every modality with an encoder available (today: dates)."""
-    return expand_date_features(X, feature_schema, fitted=fitted)
+    return expand_date_features(
+        X,
+        feature_schema,
+        provided_categorical_indices=provided_categorical_indices,
+        fitted=fitted,
+    )

@@ -76,6 +76,24 @@ def test__fit__removes_raw_column_and_appends_numeric_features() -> None:
     assert np.isfinite(X_out[:, 1:].astype(float)).all()
 
 
+def test__fit__declared_categorical_column__is_excluded_from_expansion() -> None:
+    """A column declared categorical still classifies `DATE` (detection
+    ignores the declaration), so `expand_date_features` must exclude it and
+    demote it to `CATEGORICAL` itself -- leaving it tagged `DATE` would reach
+    `clean_data`, which has no notion of `DATE` and would silently corrupt it.
+    """
+    X = _numeric_and_date_frame(_dates())
+    schema = _numeric_and_date_schema()
+
+    X_out, schema_out, fitted = expand_date_features(
+        X, schema, provided_categorical_indices=[1]
+    )
+
+    assert X_out is X
+    assert fitted == {}
+    assert schema_out.features[1].modality is FeatureModality.CATEGORICAL
+
+
 def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
     """A pre-existing column can happen to look like a generated output name."""
     X = np.column_stack([np.array(_dates(), dtype=object), np.zeros(N, dtype=object)])
@@ -213,6 +231,36 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
         out = model.predict_proba(X)
     else:
         out = model.predict(X)
+    assert np.isfinite(out).all()
+
+
+def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -> None:
+    """A date column declared categorical must stay excluded from
+    `DatetimeEncoder` -- `USE_DATES` must not override that intent.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
+                "%Y-%m-%d"
+            ),
+        }
+    )
+    y = rng.integers(0, 2, size=n)
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[1],
+        inference_config={"USE_DATES": True},
+    )
+    model.fit(X, y)
+
+    assert model.date_encoders_ == {}
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
+    out = model.predict_proba(X)
     assert np.isfinite(out).all()
 
 
