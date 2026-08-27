@@ -36,6 +36,7 @@ from tabpfn.model_loading import (
     resolve_model_version,
 )
 from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.date_encoding import apply_date_expansion
 from tabpfn.utils import (
     DevicesSpecification,
@@ -513,7 +514,16 @@ def get_embeddings(
 
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = apply_date_expansion(X, model)
-    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    # Not model.categorical_features_indices: those are raw, pre-expansion
+    # indices, and date expansion can shift every column after it. The
+    # inferred schema already reflects the post-expansion layout, exactly
+    # like the classifier/regressor predict paths use for the same reason.
+    X = fix_dtypes(
+        X,
+        cat_indices=model.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ),
+    )
     X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []

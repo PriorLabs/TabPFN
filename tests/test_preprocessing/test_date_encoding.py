@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import tabpfn.base
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
 from tabpfn.preprocessing.clean import clean_data
@@ -386,3 +387,56 @@ def test__get_embeddings__transform_dates__expands_before_the_ordinal_encoder(
 
     embeddings = get_embeddings(model, X, data_source="test")
     assert np.isfinite(embeddings).all()
+
+
+def test__get_embeddings__transform_dates__categorical_indices_shift_with_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A date column expanding *before* a declared-categorical one shifts that
+    column's position. `get_embeddings` must pass the post-expansion index to
+    `fix_dtypes`, not the raw, pre-expansion `categorical_features_indices` --
+    otherwise it silently marks the wrong (date-derived, numeric) column as
+    categorical instead, with no error to reveal it.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
+                "%Y-%m-%d"
+            ),
+            "num": rng.normal(size=n),
+            "cat": rng.integers(0, 3, size=n),
+        }
+    )
+    y = rng.integers(0, 2, size=n)
+
+    model = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        categorical_features_indices=[2],  # "cat", before expansion
+        inference_config={"TRANSFORM_DATES": True},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.fit(X, y)
+
+    # The date column expanded and was moved to the end, so "cat" shifted from
+    # raw index 2 down to 1 -- distinct from the stale raw index.
+    assert model.categorical_features_indices == [2]
+    assert model.inferred_feature_schema_.indices_for(FeatureModality.CATEGORICAL) == [
+        1
+    ]
+
+    seen_cat_indices = []
+    original_fix_dtypes = tabpfn.base.fix_dtypes
+
+    def _spy_fix_dtypes(X, cat_indices, **kwargs) -> pd.DataFrame:
+        seen_cat_indices.append(cat_indices)
+        return original_fix_dtypes(X, cat_indices, **kwargs)
+
+    monkeypatch.setattr(tabpfn.base, "fix_dtypes", _spy_fix_dtypes)
+
+    get_embeddings(model, X, data_source="test")
+
+    assert seen_cat_indices == [[1]]
