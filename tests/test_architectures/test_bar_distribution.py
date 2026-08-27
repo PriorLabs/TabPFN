@@ -83,6 +83,13 @@ def test_full_support_cdf_icdf_round_trip(left_prob: float):
     )
 
 
+def test_full_support_icdf_clamps_conditional_probability_roundoff():
+    dist, _ = _make_full_support_distribution()
+    logits = torch.tensor([0.40334684, 0.83802634, -0.7192576])
+
+    assert torch.isposinf(dist.icdf(logits, 1.0))
+
+
 def test_full_support_inherited_quantiles_and_border_translation():
     dist, logits = _make_full_support_distribution()
     batch_logits = logits.expand(2, -1)

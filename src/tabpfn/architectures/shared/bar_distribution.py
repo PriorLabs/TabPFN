@@ -568,6 +568,7 @@ class FullSupportBarDistribution(BarDistribution):
         conditional_prob = (
             left_prob - cumprobs_before.gather(-1, idx[..., None]).squeeze(-1)
         ) / selected_probs
+        conditional_prob = conditional_prob.clamp(0.0, 1.0)
 
         values = self.borders[idx] + self.bucket_widths[idx] * conditional_prob
         side_normals = (
