@@ -580,10 +580,19 @@ def test__prefix_rejection__agrees_with_parsing_the_whole_column(name: str) -> N
     ("helper_name", "detect", "passing_values"),
     [
         ("_all_parse_as_dates", _is_date_like_pandas_series, _dates_after),
-        (
+        pytest.param(
             "_all_numeric_or_missing",
             _is_numeric_pandas_series,
             lambda n: [str(i) for i in range(n)],
+            marks=pytest.mark.skipif(
+                PANDAS_BELOW_3,
+                reason=(
+                    "Below pandas 3 the numeric check walks values through an "
+                    "`all(...)` generator that already stops at the first "
+                    "non-numeric one, so it has no prefix guard to skip and never "
+                    "calls `_all_numeric_or_missing`."
+                ),
+            ),
         ),
     ],
 )
