@@ -1111,7 +1111,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test, feature_schema=None, fitted=worker.date_encoders_
+                X_test,
+                feature_schema=None,
+                fitted=getattr(worker, "date_encoders_", {}),
             )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
@@ -1403,7 +1405,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
             X, _, _ = encode_multimodal_data(
-                X, feature_schema=None, fitted=self.date_encoders_
+                X, feature_schema=None, fitted=getattr(self, "date_encoders_", {})
             )
             X = fix_dtypes(
                 X,

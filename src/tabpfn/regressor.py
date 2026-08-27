@@ -1504,7 +1504,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `ensemble_softmax_temperature_` applied.
         """
         X, _, _ = encode_multimodal_data(
-            X, feature_schema=None, fitted=self.date_encoders_
+            X, feature_schema=None, fitted=getattr(self, "date_encoders_", {})
         )
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
@@ -1733,7 +1733,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test, feature_schema=None, fitted=worker.date_encoders_
+                X_test,
+                feature_schema=None,
+                fitted=getattr(worker, "date_encoders_", {}),
             )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,

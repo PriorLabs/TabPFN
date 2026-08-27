@@ -285,6 +285,31 @@ def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -
     assert np.isfinite(out).all()
 
 
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__predict__date_encoders_attribute_missing__does_not_crash(
+    estimator_cls: type,
+) -> None:
+    """A path that skips `_initialize_dataset_preprocessing` (e.g.
+    `fit_from_preprocessed`) never sets `date_encoders_` at all -- predict
+    must not crash on that, the same way it already tolerates a missing
+    `ordinal_encoder_`.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame({"num": rng.normal(size=n)})
+    y = _classification_or_regression_target(estimator_cls, rng, n)
+
+    model = estimator_cls(n_estimators=1, device="cpu")
+    model.fit(X, y)
+    del model.date_encoders_
+
+    if estimator_cls is TabPFNClassifier:
+        out = model.predict_proba(X)
+    else:
+        out = model.predict(X)
+    assert np.isfinite(out).all()
+
+
 def test__predict_proba_batched__use_dates__reapplies_encoder_on_worker() -> None:
     """The ensemble-worker predict path also reapplies the fitted date encoder,
     not just the direct-`self` path.
