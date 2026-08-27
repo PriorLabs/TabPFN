@@ -41,7 +41,10 @@ from tabpfn.preprocessing.steps.kdi_transformer import (
 )
 from tabpfn.preprocessing.steps.safe_power_transformer import SafePowerTransformer
 from tabpfn.preprocessing.steps.squashing_scaler_transformer import SquashingScaler
-from tabpfn.preprocessing.steps.utils import wrap_with_safe_standard_scaler
+from tabpfn.preprocessing.steps.utils import (
+    is_identity_transformer,
+    wrap_with_safe_standard_scaler,
+)
 from tabpfn.utils import infer_random_state
 
 if TYPE_CHECKING:
@@ -265,6 +268,8 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         """Whether this step's transformer would hand the data back untouched, in which
         case it is not built and the data pass is skipped. ``None`` until fitted, so
         "not fitted yet" stays distinguishable from "fitted to a no-op"."""
+        self.column_order_: list[int] | None = None
+        """Input columns in output order, when this step only reorders them."""
 
     def _create_transformers_and_new_schema(
         self,
@@ -371,16 +376,28 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         self._set_ancestors(new_schema, feature_schema, layout)
 
         # A transform scheduled onto the GPU leaves "none" behind on this side, which
-        # the registry maps to the identity `FunctionTransformer`.
-        self.data_is_unchanged_ = (
-            # FunctionTransformer(func=None, validate=False) is the identity function
-            isinstance(_transformer, FunctionTransformer)
-            and _transformer.func is None
-            and not _transformer.validate
-            # also check if the column order should change
-            and [column.source_ix for column in layout] == all_feats_ix
+        # the registry maps to the identity `FunctionTransformer`. Then the only thing
+        # the ColumnTransformer still does to the data is move columns, and it pays two
+        # full-size arrays to do it: one for the blocks, one for the hstack.
+        passes_values_through = is_identity_transformer(_transformer)
+        source_order = [column.source_ix for column in layout]
+        self.data_is_unchanged_ = passes_values_through and source_order == all_feats_ix
+        # Every input column used exactly once, only in a different place: one gather
+        # gets there in a single array. Anything else -- a column dropped, duplicated
+        # by append_to_original, or a multi-output transform -- fails the sort and
+        # keeps the ColumnTransformer.
+        self.column_order_ = (
+            source_order
+            if passes_values_through
+            and not self.data_is_unchanged_
+            and sorted(source_order) == all_feats_ix
+            else None
         )
-        self.transformer_ = None if self.data_is_unchanged_ else transformer
+        self.transformer_ = (
+            None
+            if self.data_is_unchanged_ or self.column_order_ is not None
+            else transformer
+        )
 
         if self.schedule_gpu_transform is not None:
             if self.append_to_original_decision_:
@@ -458,6 +475,9 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
         # so the skip is off for it and the assert below is what reports "not fitted".
         if getattr(self, "data_is_unchanged_", False):
             return X, None, None
+        column_order = getattr(self, "column_order_", None)
+        if column_order is not None:
+            return X[:, column_order], None, None
         assert self.transformer_ is not None, "You must call fit first"
         return self.transformer_.transform(X), None, None
 
@@ -484,7 +504,12 @@ class ReshapeFeatureDistributionsStep(PreprocessingStep):
             n_features,
             feature_schema,
         )
-        x_transformed = X if transformer is None else transformer.fit_transform(X)
+        if transformer is not None:
+            x_transformed = transformer.fit_transform(X)
+        elif self.column_order_ is not None:
+            x_transformed = X[:, self.column_order_]
+        else:
+            x_transformed = X
         self.transformer_ = transformer
         self.feature_schema_updated_ = output_schema
 

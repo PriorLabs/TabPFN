@@ -288,6 +288,18 @@ def _is_numeric_pandas_series(s: pd.Series) -> bool:
         return True
     if PANDAS_BELOW_3:
         return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
+    # The generator above stops at the first non-numeric value; `pd.to_numeric`
+    # coerces the whole column first, so reject on a prefix instead. See
+    # `_is_date_like_pandas_series` for why this cannot change the answer.
+    if len(s) > _EARLY_EXIT_PREFIX_ROWS and not _all_numeric_or_missing(
+        s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
+    ):
+        return False
+    return _all_numeric_or_missing(s)
+
+
+def _all_numeric_or_missing(s: pd.Series) -> bool:
+    """Whether every value in `s` is a number, a spelling of one, or missing."""
     coerced = pd.to_numeric(s, errors="coerce")
     is_numeric_or_missing = coerced.notna() | s.isna()
     return bool(is_numeric_or_missing.all())
@@ -375,10 +387,30 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     ordinary category or text instead, exactly like any non-date string.
     Nothing is masked or dropped at this stage; see `_parse_dates` for the
     narrower, per-value case this doesn't cover.
+
+    A prefix rejects the column before the whole of it is parsed, which is exact
+    rather than approximate: one unparseable value settles the answer, and a text
+    column fails on its first. A clean prefix proves nothing, so it falls through
+    to the full parse. The prefix has to be the head specifically, since
+    `to_datetime` infers a format from the first non-null value and applies it to
+    every other one; a head starts at that same value, a sample need not.
     """
+    if len(s) > _EARLY_EXIT_PREFIX_ROWS and not _all_parse_as_dates(
+        s.iloc[:_EARLY_EXIT_PREFIX_ROWS].dropna()
+    ):
+        return False
     non_null = s.dropna()
     if non_null.empty:
         return False
+    return _all_parse_as_dates(non_null)
+
+
+def _all_parse_as_dates(s: pd.Series) -> bool:
+    """Whether every value in `s` parses as a date; vacuously true when empty.
+
+    An empty result matters for the prefix call: a head that is entirely missing
+    says nothing about the column, so it must fall through rather than reject.
+    """
     try:
         with warnings.catch_warnings():
             # `to_datetime` warns when it cannot infer a format and falls back to
@@ -389,7 +421,7 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
             # NaT. Only on pandas >= 2.0, where it exists and works -- below
             # it, "mixed" is a literal (nonsensical) strftime directive.
             parsed = pd.to_datetime(
-                non_null,
+                s,
                 errors="coerce",
                 **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
             )
@@ -397,7 +429,7 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
         return False
     if not parsed.notna().all():
         return False
-    return not _underspecified_date_values(non_null)
+    return not _underspecified_date_values(s)
 
 
 def _detect_numeric_as_categorical(
