@@ -187,6 +187,10 @@ MIX_LEVELS = {MIX_HALF_STRING: STRING_LEVELS, MIX_NUMERIC_OBJECT: INTEGER_LEVELS
 MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE = 100
 MAX_UNIQUE_FOR_CATEGORICAL_FEATURES = 30
 MIN_UNIQUE_FOR_NUMERICAL_FEATURES = 4
+# Above this many distinct values a string column detects as TEXT rather than
+# CATEGORICAL. STRING_LEVELS sits under it, so the half-string mix stays on the
+# encoder path it exists to exercise.
+MIN_CARDINALITY_FOR_TEXT = 30
 
 # `InferenceConfig.PASSTHROUGH_INF` defaults to False and the profiler leaves it
 # alone, so the +/-inf masking path is not exercised.
@@ -529,6 +533,7 @@ def build_feature_schema(X: np.ndarray) -> FeatureSchema:
         min_samples_for_inference=MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
         max_unique_for_category=MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
         min_unique_for_numerical=MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
+        min_cardinality_for_text=MIN_CARDINALITY_FOR_TEXT,
     )
 
 
