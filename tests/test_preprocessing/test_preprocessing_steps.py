@@ -599,6 +599,7 @@ def _reference(
         list(transformer.transformers),
         remainder=transformer.remainder,
         sparse_threshold=transformer.sparse_threshold,
+        transformer_weights=transformer.transformer_weights,
     )
     return plain.fit_transform(X, y)
 
@@ -1039,6 +1040,38 @@ def test__order_preserving_column_transformer__names_the_order_it_returns() -> N
         "n0",
         "n1",
     ]
+
+
+@pytest.mark.parametrize(
+    "cls",
+    [EfficientColumnTransformer, OrderPreservingColumnTransformer],
+    ids=lambda cls: cls.__name__,
+)
+def test__efficient_column_transformer__declines_a_transformer_weight(
+    cls: type[EfficientColumnTransformer], assemblies: list[tuple[int, ...]]
+) -> None:
+    """A weight is `ColumnTransformer`'s to apply, and the assembly goes around it.
+
+    It calls the transformer itself and writes what comes back, so a weight would be
+    dropped on the floor -- and it is a parameter `get_params` exposes, which any
+    sklearn `clone` or `set_params` caller can set.
+    """
+    X = pd.DataFrame(
+        {"a": pd.Series(list("xyz"), dtype="string"), "b": [1.0, 2.0, 3.0]}
+    )
+    transformer = cls(
+        [("encoder", OrdinalEncoder(), ["a"])],
+        remainder=FunctionTransformer(),
+        transformer_weights={"encoder": 10.0},
+        sparse_threshold=0.0,
+    )
+
+    out = transformer.fit_transform(X)
+
+    assert assemblies == []
+    # The selection is 'a' alone, so sklearn's order is the input's here too.
+    np.testing.assert_array_equal(out, _reference(transformer, X))
+    np.testing.assert_array_equal(out[:, 0], [0.0, 10.0, 20.0])
 
 
 @pytest.mark.parametrize(

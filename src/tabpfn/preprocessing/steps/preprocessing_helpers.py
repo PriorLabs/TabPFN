@@ -174,10 +174,14 @@ class EfficientColumnTransformer(ColumnTransformer):
 
     def _may_assemble(self, X: XType, params: dict[str, Any]) -> bool:
         """Whether an output of this shape could be written into one array at all."""
-        # Routed metadata is declined outright: nothing assembled here has any use for
-        # it. So is an input that is neither an array nor a frame -- a sparse one would
-        # come back dense, which is not what `ColumnTransformer` hands back.
-        if params or not isinstance(X, (np.ndarray, pd.DataFrame)):
+        if (
+            # extra fit/predict params would be ignored:
+            params
+            # no transformer weight support:
+            or self.transformer_weights
+            # input can't be metadata:
+            or not isinstance(X, (np.ndarray, pd.DataFrame))
+        ):
             return False
         output_config = getattr(self, "_sklearn_output_config", {}).get(
             "transform", get_config()["transform_output"]
