@@ -22,6 +22,9 @@ from tabpfn.preprocessing.pipeline_interface import (
     PreprocessingStep,
     PreprocessingStepResult,
 )
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    EfficientColumnTransformer,
+)
 from tabpfn.utils import infer_random_state
 
 ONE_HOT_ENCODER_NAME = "one_hot_encoder"
@@ -227,7 +230,11 @@ class EncodeCategoricalFeaturesStep(PreprocessingStep):
                 # would rebuild the array
                 return None, categorical_features
 
-            ct = ColumnTransformer(
+            # `EfficientColumnTransformer` rather than a plain `ColumnTransformer`:
+            # ordinal encoding is one-to-one over a subset of the columns with the rest
+            # handed through, which it assembles into one array instead of stacking
+            # each transformer's full-size output.
+            ct = EfficientColumnTransformer(
                 [
                     (
                         "ordinal_encoder",

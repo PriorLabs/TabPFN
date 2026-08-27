@@ -18,7 +18,10 @@ from packaging.version import Version
 
 from tabpfn.constants import NA_PLACEHOLDER
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.steps.preprocessing_helpers import get_ordinal_encoder
+from tabpfn.preprocessing.steps.preprocessing_helpers import (
+    get_ordinal_encoder,
+    to_numpy_may_alias,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -43,8 +46,6 @@ PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
 _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
-
-_FLOAT64 = np.dtype(np.float64)
 
 
 def _cast_columns_share_a_block(
@@ -273,14 +274,6 @@ def _column_kind(dtype: Any) -> str:
     return dtype.kind
 
 
-def _encoder_selection(ord_encoder: OrderPreservingColumnTransformer) -> list[Any]:
-    """The columns a fitted encoder takes, in the order it holds them."""
-    return next(
-        (cols for name, _, cols in ord_encoder.transformers_ if name == "encoder"),
-        [],
-    )
-
-
 def _is_single_float_block(X: pd.DataFrame) -> bool:
     """True if ``X`` is backed by a single contiguous numpy float block.
 
@@ -319,7 +312,7 @@ def _align_columns_to_fitted_dtypes(
     encoder = ord_encoder.named_transformers_.get("encoder")
     if encoder is None or not hasattr(encoder, "categories_"):
         return X
-    selected = _encoder_selection(ord_encoder)
+    selected = ord_encoder.selected_columns()
     to_string, to_numeric = [], []
     for col, categories in zip(selected, encoder.categories_, strict=True):
         fit_kind = categories.dtype.kind
@@ -458,216 +451,6 @@ def _inf_masks_dataframe(X: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 inf_masks_dataframe = _inf_masks_pandas_only if PANDAS_BELOW_3 else _inf_masks_dataframe
 
 
-def _encoding_is_identity(
-    X: pd.DataFrame,
-    ord_encoder: OrderPreservingColumnTransformer | None,
-    *,
-    fit_encoder: bool,
-) -> bool:
-    """Whether the ordinal-encoding step provably cannot change any value.
-
-    The encoder selects columns by dtype (``category``/``string``), so a frame of
-    plain float64 columns leaves it with nothing to select: the transformer reduces
-    to its passthrough remainder and the whole step is the float64 cast it ends
-    with. Plain float64 specifically, not merely numeric -- a nullable ``Float64``
-    holds ``pd.NA``, which only survives the trip through pandas.
-
-    A *frozen* encoder does not re-select, it reuses the columns it saw at fit, so
-    that selection has to be empty as well -- and the frame has to be one sklearn
-    would have accepted, since skipping `transform` skips its checks along with it.
-    """
-    return (
-        # only passthrough non-nullable all-fp64 dataframes
-        all(dtype == _FLOAT64 for dtype in X.dtypes)
-        and (
-            # trainable encoders are ok
-            fit_encoder
-            or ord_encoder is None
-            or (
-                # condition 1: the ordinal encoder has been fitted and needs to
-                # be reducible to its passthrough remainder
-                all(
-                    len(columns) == 0
-                    for name, _, columns in ord_encoder.transformers_
-                    if name != "remainder"
-                )
-                # condition 2: X needs to line up with what the encoder was fitted on
-                # condition 2.1: encoder needs to have the same input feature shape
-                and getattr(ord_encoder, "n_features_in_", None) == X.shape[1]
-                # condition 2.2: either no fitted feature names, or they match 1:1
-                and (
-                    getattr(ord_encoder, "feature_names_in_", None) is None
-                    or not all(isinstance(col, str) for col in X.columns)
-                    # compared as plain lists to be dtype-insensitive:
-                    or list(X.columns) == list(ord_encoder.feature_names_in_)  # ty: ignore[unresolved-attribute]
-                )
-            )
-        )
-    )
-
-
-def _to_numpy_may_alias(X: pd.DataFrame) -> bool:
-    """Whether ``X.to_numpy()`` can hand back a view of the frame's own buffer.
-
-    A single-block frame is handed out as that block: read-only under copy-on-write,
-    writeable and aliasing whatever the frame was built from without it (pandas < 3),
-    which for a numeric ndarray input is the caller's own array. Anything wider has
-    to be materialised into a new array first, so what comes back is private.
-
-    Defensively ``True`` when the block internals are unavailable, so an unrecognised
-    layout is copied rather than handed out.
-    """
-    blocks = getattr(getattr(X, "_mgr", None), "blocks", None)
-    return blocks is None or len(blocks) <= 1
-
-
-def _owned_float64_values(X: pd.DataFrame) -> np.ndarray:
-    """`X`'s values as a writeable float64 array that the caller owns.
-
-    One full-size allocation, whichever pandas is installed. What it cannot be is
-    `to_numpy`'s result handed straight back, for a different reason per shape:
-
-    * A single-block frame is handed out as that block, so `to_numpy` allocates
-      nothing at all. That one is copied -- see `_to_numpy_may_alias`.
-    * A frame of many blocks pandas 3 materialises into a private array, which could
-      be taken as it is. Earlier pandas instead consolidates the frame *in place*
-      first and returns a view of the block it just built: taking that would write
-      through into the frame, and copying it costs a second full-size buffer on top
-      of the consolidation. Measured at 200,000 x 300 float64, that pair peaks at
-      twice the frame's size on pandas 1.4 against once on pandas 3.
-
-    So a many-block frame is assembled column by column into an array preallocated
-    here, which nothing else has ever referenced and which costs one buffer on every
-    version. It also leaves the frame's own blocks alone, where `to_numpy` would
-    consolidate them out from under a caller still holding it.
-
-    Column-major because that is what the encoder path has always returned -- its
-    `hstack` builds an F-ordered array and the closing `astype` preserves layout --
-    and downstream preprocessing is column-wise. Pinning the order here keeps this a
-    change of cost only, not of what callers receive.
-    """
-    if _to_numpy_may_alias(X):
-        return np.array(X.to_numpy(dtype=np.float64, copy=False), order="F", copy=True)
-
-    out = np.empty(X.shape, dtype=np.float64, order="F")
-    for position in range(X.shape[1]):
-        # Positional throughout: a duplicate column name makes `X[label]` a frame.
-        out[:, position] = X.iloc[:, position].to_numpy(dtype=np.float64, copy=False)
-    return out
-
-
-def _can_write_encoded_columns(X: pd.DataFrame, selected: list[Any]) -> bool:
-    """Whether the encoded array can be assembled column by column.
-
-    Two things have to hold. Every column the encoder does *not* take must already be
-    plain float64, so writing it into a float64 output is a copy and not a conversion
-    that could differ from the one `ColumnTransformer` would have done -- notably an
-    `object` column, which the encoder's dtype selector skips and the old path carried
-    through as objects until the closing cast. And the column names must be unique,
-    since each column is placed by name.
-    """
-    if X.columns.has_duplicates:
-        return False
-    taken = set(selected)
-    return all(
-        dtype == _FLOAT64
-        for column, dtype in zip(X.columns, X.dtypes, strict=True)
-        if column not in taken
-    )
-
-
-def _encode_into_preallocated(
-    X: pd.DataFrame,
-    ord_encoder: OrderPreservingColumnTransformer,
-    selected: list[Any],
-) -> np.ndarray:
-    """Assemble the encoded array by writing each column straight to its final place.
-
-    `ColumnTransformer` gets the same result in three full-size arrays: one per
-    transformer, a second from stacking them, and a third from the gather
-    `_preserve_order` needs to undo the stacking's column order. A mixed-column clean
-    reaches its RAM peak twice inside that -- once in the stack, once in the gather --
-    which is why removing either one alone changes nothing. Writing into the output
-    costs one array, plus the block of codes the encoder returns.
-
-    Column order is the frame's own, so no reordering is needed afterwards, and the
-    layout is column-major to match what the stack used to produce.
-    """
-    positions = {column: index for index, column in enumerate(X.columns)}
-    taken = set(selected)
-    out = np.empty(X.shape, dtype=np.float64, order="F")
-
-    if selected:
-        # One call rather than one per column: the encoder validates against the
-        # column count it was fitted on, so its codes come as a single block.
-        codes = ord_encoder.named_transformers_["encoder"].transform(X[selected])
-        out[:, [positions[column] for column in selected]] = codes
-        del codes
-
-    # Per column, so no full-width temporary is built for the passthrough half; each
-    # write is a copy out of the frame's block, which `_can_write_encoded_columns` has
-    # established is already float64.
-    for column, index in positions.items():
-        if column not in taken:
-            out[:, index] = X[column].to_numpy(dtype=np.float64, copy=False)
-    return out
-
-
-def _apply_ordinal_encoder(
-    X: pd.DataFrame,
-    ord_encoder: OrderPreservingColumnTransformer | None,
-    *,
-    fit_encoder: bool,
-) -> np.ndarray:
-    """Run the ordinal-encoding step, or skip it where it cannot change anything.
-
-    Every branch returns an array the caller owns, which is what lets it write the
-    placeholder and +/-inf cells in place and cast to float64 with ``copy=False``.
-    Three of the four allocate outright -- the copy, the preallocated output, the
-    encoder's own hstack. The fourth, `X.to_numpy()`, does not: for a single-block
-    frame pandas hands back the block itself, read-only under copy-on-write and
-    aliasing the caller's ndarray without it.
-
-    What keeps that branch honest is the identity check above: it takes every frame
-    whose columns are all plain float64, so the frames that reach `to_numpy()` are
-    never float64 throughout and the caller's `astype` has real work to do, which
-    allocates. Widen `_encoding_is_identity` to accept a dtype it does not convert --
-    a nullable ``Float64``, say -- and a view starts escaping. The caller asserts on
-    it rather than leaving that to be noticed downstream.
-    """
-    if _encoding_is_identity(X, ord_encoder, fit_encoder=fit_encoder):
-        if fit_encoder and ord_encoder is not None:
-            # Fitting still has to happen -- the caller keeps the encoder for
-            # predict -- but with no column selected it learns nothing from the
-            # values, so a single row settles the column bookkeeping and spares us
-            # the transform this branch exists to avoid.
-            ord_encoder.fit(X.iloc[:1])
-        return _owned_float64_values(X)
-    if fit_encoder and ord_encoder is not None:
-        # `ColumnTransformer.fit` is implemented as `fit_transform`, so fitting on the
-        # whole frame would run the very transform the assembly below replaces. Fit on
-        # one row for the column bookkeeping instead -- widths and output indices do
-        # not depend on the row count for a one-to-one encoder -- and then teach the
-        # inner encoder its categories from every row.
-        ord_encoder.fit(X.iloc[:1])
-        selected = _encoder_selection(ord_encoder)
-        if not _can_write_encoded_columns(X, selected):
-            # Bail before learning any categories: `fit_transform` learns them again
-            # from scratch, so doing it first would be a wasted pass over the data.
-            # Only the one-row fit above is lost, which costs no pass at all.
-            return ord_encoder.fit_transform(X)
-        if selected:
-            ord_encoder.named_transformers_["encoder"].fit(X[selected])
-        return _encode_into_preallocated(X, ord_encoder, selected)
-    if ord_encoder is not None:
-        # Left on sklearn deliberately. `transform` also validates the frame against
-        # the one seen at fit -- column count, names, order -- and the assembly above
-        # does not, so using it here would trade a real check for memory the wrapper
-        # has already validated by other means.
-        return ord_encoder.transform(X)
-    return X.to_numpy()
-
-
 def process_text_na_dataframe(
     X: pd.DataFrame,
     placeholder: str = NA_PLACEHOLDER,
@@ -718,12 +501,24 @@ def process_text_na_dataframe(
             X = X.copy()
         X[string_cols] = X[string_cols].fillna(placeholder)
 
-    X_encoded = _apply_ordinal_encoder(X, ord_encoder, fit_encoder=fit_encoder)
+    if ord_encoder is None:
+        # No encoding step at all, so the frame's own values are the output. Copied
+        # where `to_numpy` may hand back one of the frame's blocks rather than a private
+        # array, since the writes below are the caller's to make; taken as it is
+        # otherwise, which costs the one full-size buffer either way.
+        X_encoded = X.to_numpy()
+        if to_numpy_may_alias(X):
+            X_encoded = X_encoded.copy(order="K")
+    elif fit_encoder:
+        X_encoded = ord_encoder.fit_transform(X)
+    else:
+        X_encoded = ord_encoder.transform(X)
+
     # Everything below writes into this array and then hands it to the caller, so it
     # has to be one no one else holds. Read-only means pandas handed back a view of a
-    # frame's block instead: see `_apply_ordinal_encoder` for how that is kept from
-    # happening, and note that on pandas 2 such a view is writeable and would pass
-    # this while quietly writing through to whatever the frame was built from.
+    # frame's block instead, and note that on pandas 2 such a view is writeable and
+    # would pass this while quietly writing through to whatever the frame was built
+    # from.
     assert X_encoded.flags.writeable, (
         "the ordinal-encoding step returned an array it does not own"
     )
