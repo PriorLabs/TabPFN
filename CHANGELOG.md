@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [8.5.0] - 2026-08-27
+
+### Breaking Changes
+
+- Cache the decoder keys instead of the train embeddings. ` get_embeddings(model, X_test, data_source="train")` is not supported with cached infernce anymore. ([#1189](https://github.com/PriorLabs/TabPFN/pull/1189))
+- `tabpfn.model_loading.download_all_models()` now raises an exception if one or more of the models fails to download. It will still download all possible models before raising the exception. ([#1195](https://github.com/PriorLabs/TabPFN/pull/1195))
+
+### Added
+
+- `fit()` now recognizes a date-like string column internally, though nothing yet expands it into calendar features: it is still read as a plain category or text. We also added `InferenceConfig.MIN_CARDINALITY_FOR_TEXT`, to differentiate between category-vs-text and category-vs-number decisions; they default to the same value, since we are still not handling text. ([#1205](https://github.com/PriorLabs/TabPFN/pull/1205))
+
+### Changed
+
+- Reduced peak host memory during preprocessing: the ensemble preprocessor no longer rebuilds the feature matrix in steps that cannot change it, taking transient RSS from 42.7 GB to 12.0 GB (-72%), and wall time with it, on a 666,667 x 2,000 float64 fit. Preprocessed outputs are unchanged. ([#1186](https://github.com/PriorLabs/TabPFN/pull/1186))
+- Reduced peak host memory during preprocessing for tables with categorical columns: the reshape and ordinal-encoding steps no longer rebuild the feature matrix to reorder it or to encode part of it, taking transient RSS from 3.33 GB to 2.80 GB (-16%) on a 333,333 x 400 half-categorical fit. Preprocessed outputs are unchanged. ([#1187](https://github.com/PriorLabs/TabPFN/pull/1187))
+- Speed up modality detection on large string columns. Deciding whether a column holds numbers or dates now stops at the first value that does not parse within a 1024-row prefix, instead of parsing every row first. Detection of a 1-million-row free-text column drops from roughly 14 seconds to under 20 milliseconds; the answers are unchanged. ([#1208](https://github.com/PriorLabs/TabPFN/pull/1208))
+
+### Fixed
+
+- Fix an "illegal memory access" crash in the backward pass when fine-tuning on large batches: FlashAttention's backward indexes its workspace with 32-bit integers, so the batch is now chunked to keep each call inside that range. ([#1184](https://github.com/PriorLabs/TabPFN/pull/1184))
+- Fix `fit_mode="fit_with_cache"` raising `TypeError: forward() missing 1 required positional argument: 'task_type'` for architectures whose forward pass takes a `task_type`: the KV cache build now forwards it, like the prediction paths already did. ([#1197](https://github.com/PriorLabs/TabPFN/pull/1197))
+- `fit()` no longer crashes the interpreter outright on a table whose text column holds a hash-like value such as `"8e2569614270f3d8b9e7038efac9f116"`. Modality detection asked `pandas.to_numeric` whether a column was numeric; below pandas 3.0 that function has a signed 32-bit integer overflow in its scientific-notation parser and segfaults on a string whose exponent lands in `[2**31, 2**32)` ([pandas#63650](https://github.com/pandas-dev/pandas/issues/63650), fixed upstream in pandas 3.0). A segfault cannot be caught with `try`/`except`, so below pandas 3.0 the check now reads one value at a time with Python's built-in `float`, which does not share the bug. On pandas 3.0 and later the check is unchanged. ([#1203](https://github.com/PriorLabs/TabPFN/pull/1203))
+- Fix `TabPFNRegressor` rejecting a checkpoint whose config also describes a classification head: the criterion now follows the task the estimator is built for rather than being inferred from `max_num_classes`. Loading a regression checkpoint into `TabPFNClassifier` now raises instead of silently building an unused bar distribution. ([#1204](https://github.com/PriorLabs/TabPFN/pull/1204))
+
+
 ## [8.4.0] - 2026-08-19
 
 ### Added
