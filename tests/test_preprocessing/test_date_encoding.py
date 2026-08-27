@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.base import get_embeddings
 from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import expand_date_features
@@ -286,3 +287,32 @@ def test__predict_proba_batched__use_dates__reapplies_encoder_on_worker() -> Non
     proba = clf.predict_proba_batched([X], [y], [X[:5]])
     assert proba.shape == (1, 5, 2)
     assert np.isfinite(proba).all()
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__get_embeddings__use_dates__expands_before_the_ordinal_encoder(
+    estimator_cls: type,
+) -> None:
+    """`get_embeddings` has its own predict-input path, separate from
+    `predict`/`predict_proba` -- it must also expand dates first, or the
+    ordinal encoder sees a column count it was never fitted with.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
+                "%Y-%m-%d"
+            ),
+        }
+    )
+    y = _classification_or_regression_target(estimator_cls, rng, n)
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"USE_DATES": True}
+    )
+    model.fit(X, y)
+
+    embeddings = get_embeddings(model, X, data_source="test")
+    assert np.isfinite(embeddings).all()

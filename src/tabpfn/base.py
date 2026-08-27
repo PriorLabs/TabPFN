@@ -36,6 +36,7 @@ from tabpfn.model_loading import (
     resolve_model_version,
 )
 from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.date_encoding import encode_multimodal_data
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
@@ -511,6 +512,9 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     X = ensure_compatible_predict_input_sklearn(X, model)
+    X, _, _ = encode_multimodal_data(
+        X, feature_schema=None, fitted=model.date_encoders_
+    )
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
     X = model.ordinal_encoder_.transform(X)
 
