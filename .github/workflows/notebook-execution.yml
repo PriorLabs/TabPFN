@@ -1,0 +1,142 @@
+name: Nightly notebook execution check
+
+# Runs every cell of the demo notebook against both backends, on the
+# checked-out TabPFN rather than the released one, and checks the headline
+# metrics it prints still clear their floors.
+#
+# The notebook installs its own dependencies. Seeding the venv with an
+# editable install of this checkout first is what keeps them: `uv pip install
+# tabpfn` audits an already-satisfied requirement instead of pulling PyPI's
+# wheel over the top.
+#
+# Runs daily on a cron, on manual dispatch, and on pull requests that touch
+# the notebook or this workflow. Scheduled failures open or comment on a
+# tracking issue, since a cron failure notifies nobody by default.
+
+on:
+  schedule:
+    - cron: 41 5 * * *   # 05:41 UTC daily, before the install check
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - examples/notebooks/TabPFN_Demo_Local.ipynb
+      - tests/test_notebook_execution.py
+      - .github/workflows/notebook-execution.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  execute:
+    name: Run the demo notebook (${{ matrix.backend }} backend)
+    # Forks cannot read TABPFN_TOKEN, and every cell needs it.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04-4core-gpu
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [local, client]
+
+    env:
+      TABPFN_TOKEN: ${{ secrets.TABPFN_TOKEN }}
+      TABPFN_DEMO_BACKEND: ${{ matrix.backend }}
+      RUN_NOTEBOOK_EXECUTION_CHECK: "1"
+      # No display on the runner, so every plotting cell needs a headless
+      # matplotlib backend.
+      MPLBACKEND: Agg
+      HF_HUB_DISABLE_XET: "1"
+      VIRTUAL_ENV: ${{ github.workspace }}/.notebook-venv
+      NOTEBOOK_EXECUTION_OUT: ${{ github.workspace }}/executed.ipynb
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4.3.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@eac588ad8def6316056a12d4907a9d4d84ff7a3b # v7.3.0
+        with:
+          enable-cache: true
+
+      # The notebook's own `!uv pip install` cells write into $VIRTUAL_ENV, so
+      # the kernel and those cells must share one environment.
+      - name: Create the notebook environment
+        run: |
+          uv venv --python 3.12 "$VIRTUAL_ENV"
+          uv pip install -e .
+          uv pip install ipykernel nbclient nbformat pytest
+
+      - name: Run the notebook
+        shell: bash
+        run: |
+          set -o pipefail
+          "$VIRTUAL_ENV/bin/python" -m pytest \
+            --noconftest tests/test_notebook_execution.py -v 2>&1 \
+            | tee pytest_output.txt
+
+      - name: Upload the executed notebook
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: executed-notebook-${{ matrix.backend }}
+          path: executed.ipynb
+          if-no-files-found: ignore
+
+      - name: Open or update tracking issue on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          BACKEND: ${{ matrix.backend }}
+        with:
+          script: |
+            // Both matrix cells may file concurrently. The worst case is a
+            // duplicate issue on the same nightly — acceptable, the
+            // maintainer closes one.
+            const fs = require("fs");
+            let failedLines = "(no FAILED lines parsed; see logs)";
+            try {
+              const text = fs.readFileSync("pytest_output.txt", "utf-8");
+              const lines = text.split("\n").filter(l => l.startsWith("FAILED "));
+              if (lines.length > 0) failedLines = lines.join("\n");
+            } catch (e) { /* output file missing — fall through to default */ }
+
+            // Per-backend title so each backend owns its own tracking issue
+            // and can be closed independently when fixed.
+            const title =
+              `Nightly: demo notebook failed (${process.env.BACKEND} backend)`;
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: ["nightly-failure"],
+            });
+            const runUrl =
+              `${context.serverUrl}/${context.repo.owner}/` +
+              `${context.repo.repo}/actions/runs/${context.runId}`;
+            const body =
+              `Run: ${runUrl}\n` +
+              `Backend: ${process.env.BACKEND}\n\n` +
+              `\`\`\`\n${failedLines}\n\`\`\`\n\n` +
+              `The executed notebook is attached to the run as an artifact.`;
+            const existing = issues.find(i => i.title === title);
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ["nightly-failure"],
+              });
+            }
