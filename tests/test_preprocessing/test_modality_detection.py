@@ -749,7 +749,7 @@ class TestWarnOnDates:
             _warn_on_dates(["signed_on"])
         message = str(record[0].message)
         assert "'signed_on'" in message
-        assert "USE_DATES" in message
+        assert "TRANSFORM_DATES" in message
         assert "categorical_features_indices" in message
 
     def test__no_demoted_dates__does_not_warn(self) -> None:
@@ -978,7 +978,7 @@ class TestDateLikeColumnDetection:
         self,
         X: pd.DataFrame,
         *,
-        use_dates: bool = False,
+        transform_dates: bool = False,
         declared: list[int] | None = None,
     ) -> FeatureSchema:
         return detect_feature_modalities(
@@ -989,7 +989,7 @@ class TestDateLikeColumnDetection:
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
-            use_dates=use_dates,
+            transform_dates=transform_dates,
         )
 
     def _dates(self, n_unique: int) -> list[str]:
@@ -1019,7 +1019,7 @@ class TestDateLikeColumnDetection:
         # High cardinality, so it now reads as free text instead -- that warning
         # is expected here, unlike the "no warnings at all" cases below.
         with pytest.warns(UserWarning, match="look like free text"):
-            schema = self._detect(X, use_dates=True)
+            schema = self._detect(X, transform_dates=True)
         assert schema.features[1].modality is not FeatureModality.DATE
 
     def test__month_and_day_without_a_year__is_not_a_date(self) -> None:
@@ -1031,7 +1031,7 @@ class TestDateLikeColumnDetection:
         X = pd.DataFrame({"num": self._numeric_column(), "date": values})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            schema = self._detect(X, use_dates=True)
+            schema = self._detect(X, transform_dates=True)
         assert schema.features[1].modality is not FeatureModality.DATE
 
     def test__one_underspecified_value_among_full_dates__is_not_a_date(self) -> None:
@@ -1041,7 +1041,7 @@ class TestDateLikeColumnDetection:
         values = self._dates(60)
         values[0] = "12:00"
         X = pd.DataFrame({"num": self._numeric_column(), "date": values})
-        schema = self._detect(X, use_dates=True)
+        schema = self._detect(X, transform_dates=True)
         assert schema.features[1].modality is not FeatureModality.DATE
 
     def test__strict_iso_dates__skip_the_expensive_per_value_check(
@@ -1059,23 +1059,23 @@ class TestDateLikeColumnDetection:
         values = pd.Series(self._dates(60))
         assert _underspecified_date_values(values) == set()
 
-    def test__use_dates__high_cardinality_date__stays_date_and_does_not_warn(
+    def test__transform_dates__high_cardinality_date__stays_date_and_does_not_warn(
         self,
     ) -> None:
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            schema = self._detect(X, use_dates=True)
+            schema = self._detect(X, transform_dates=True)
         assert schema.features[1].modality is FeatureModality.DATE
 
-    def test__use_dates__low_cardinality_date__is_still_expanded(self) -> None:
-        """`_demote_dates` never runs once `use_dates` is on, low-cardinality
+    def test__transform_dates__low_cardinality_date__is_still_expanded(self) -> None:
+        """`_demote_dates` never runs once `transform_dates` is on, low-cardinality
         or not: every detected date is left for the caller to expand.
         """
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            schema = self._detect(X, use_dates=True)
+            schema = self._detect(X, transform_dates=True)
         assert schema.features[1].modality is FeatureModality.DATE
 
     def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:

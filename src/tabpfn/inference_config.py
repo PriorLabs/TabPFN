@@ -81,7 +81,7 @@ class InferenceConfig:
     follow-up that adds an actual text-encoding capability is expected to raise
     this default independently."""
 
-    USE_DATES: bool = False
+    TRANSFORM_DATES: bool = False
     """Whether a detected date column is expanded into calendar features via
     `skrub.DatetimeEncoder`, instead of read as a plain category or text."""
 

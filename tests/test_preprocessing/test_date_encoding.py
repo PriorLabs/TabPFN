@@ -248,7 +248,7 @@ def _classification_or_regression_target(
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_predict__use_dates__expands_date_and_predicts(
+def test__fit_predict__transform_dates__expands_date_and_predicts(
     estimator_cls: type,
 ) -> None:
     n = 60
@@ -264,7 +264,7 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
     y = _classification_or_regression_target(estimator_cls, rng, n)
 
     model = estimator_cls(
-        n_estimators=1, device="cpu", inference_config={"USE_DATES": True}
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
     )
     with warnings.catch_warnings():
         warnings.simplefilter("error")
@@ -280,9 +280,9 @@ def test__fit_predict__use_dates__expands_date_and_predicts(
     assert np.isfinite(out).all()
 
 
-def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -> None:
+def test__fit__declared_categorical_date__transform_dates_has_no_effect() -> None:
     """A date column declared categorical must stay excluded from
-    `DatetimeEncoder` -- `USE_DATES` must not override that intent.
+    `DatetimeEncoder` -- `TRANSFORM_DATES` must not override that intent.
     """
     n = 60
     rng = np.random.default_rng(0)
@@ -300,7 +300,7 @@ def test__fit__declared_categorical__is_not_date_encoded_even_with_use_dates() -
         n_estimators=1,
         device="cpu",
         categorical_features_indices=[1],
-        inference_config={"USE_DATES": True},
+        inference_config={"TRANSFORM_DATES": True},
     )
     model.fit(X, y)
 
@@ -335,7 +335,7 @@ def test__predict__date_expander_attribute_missing__does_not_crash(
     assert np.isfinite(out).all()
 
 
-def test__predict_proba_batched__use_dates__reapplies_encoder_on_worker() -> None:
+def test__predict_proba_batched__transform_dates__reapplies_encoder_on_worker() -> None:
     """The ensemble-worker predict path also reapplies the fitted date encoder,
     not just the direct-`self` path.
     """
@@ -352,7 +352,7 @@ def test__predict_proba_batched__use_dates__reapplies_encoder_on_worker() -> Non
     y = rng.integers(0, 2, size=n)
 
     clf = TabPFNClassifier(
-        n_estimators=1, device="cpu", inference_config={"USE_DATES": True}
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
     )
     proba = clf.predict_proba_batched([X], [y], [X[:5]])
     assert proba.shape == (1, 5, 2)
@@ -360,7 +360,7 @@ def test__predict_proba_batched__use_dates__reapplies_encoder_on_worker() -> Non
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__get_embeddings__use_dates__expands_before_the_ordinal_encoder(
+def test__get_embeddings__transform_dates__expands_before_the_ordinal_encoder(
     estimator_cls: type,
 ) -> None:
     """`get_embeddings` has its own predict-input path, separate from
@@ -380,7 +380,7 @@ def test__get_embeddings__use_dates__expands_before_the_ordinal_encoder(
     y = _classification_or_regression_target(estimator_cls, rng, n)
 
     model = estimator_cls(
-        n_estimators=1, device="cpu", inference_config={"USE_DATES": True}
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
     )
     model.fit(X, y)
 

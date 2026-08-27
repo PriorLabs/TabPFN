@@ -193,7 +193,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     """The column transformer used to preprocess categorical data to be numeric."""
 
     date_expander_: DateFeatureExpander
-    """Expands `DATE`-modality columns into numbers, if `USE_DATES` is on."""
+    """Expands `DATE`-modality columns into numbers, if `TRANSFORM_DATES` is on."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -740,7 +740,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
-            use_dates=self.inference_config_.USE_DATES,
+            transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
         date_expander = DateFeatureExpander()
         X, feature_schema = date_expander.fit_transform(

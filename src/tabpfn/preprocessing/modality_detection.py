@@ -44,7 +44,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
-    use_dates: bool = False,
+    transform_dates: bool = False,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -64,7 +64,7 @@ def detect_feature_modalities(
         min_cardinality_for_text: Unique-value count above which a candidate
             string column (not parsed as a number or date) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
-        use_dates: Whether a detected date column is left as `DATE` for the
+        transform_dates: Whether a detected date column is left as `DATE` for the
             caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`.
 
     Returns:
@@ -90,7 +90,7 @@ def detect_feature_modalities(
     # Before dates are demoted, so a date isn't yet TEXT and is never counted here.
     _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
 
-    if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
+    if not transform_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
             feature_schema,
             X,
@@ -110,7 +110,7 @@ def _demote_dates(
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
-    Only called when `use_dates` is off, so every detected date is demoted,
+    Only called when `transform_dates` is off, so every detected date is demoted,
     via the same cardinality rule `_classify_string_like_column` already
     applies to a same-shaped non-date string.
 
@@ -200,7 +200,7 @@ def _warn_on_dates(demoted_date_columns: list[str]) -> None:
     warnings.warn(
         f"These columns hold dates, which are read as plain categories or "
         f"text: {_format_names_for_warning(demoted_date_columns)}.\n"
-        'Raise `inference_config={"USE_DATES": True}` to expand them into '
+        'Raise `inference_config={"TRANSFORM_DATES": True}` to expand them into '
         "calendar features instead. To silence this for a column that should "
         "stay a plain category or text, pass its index in "
         "`categorical_features_indices`.",

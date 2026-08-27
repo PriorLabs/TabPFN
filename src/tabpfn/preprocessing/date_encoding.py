@@ -2,7 +2,7 @@
 
 """Expand a detected `DATE` column into calendar features via `skrub.DatetimeEncoder`.
 
-Only reached when `USE_DATES` is on.
+Only reached when `TRANSFORM_DATES` is on.
 """
 
 from __future__ import annotations
@@ -117,7 +117,7 @@ class DateFeatureExpander:
             provided_categorical_indices: Indices declared categorical by the
                 caller. Detection tags a date-like column `DATE` regardless of
                 this declaration, so it must be excluded here instead, or the
-                declaration would have no effect once `USE_DATES` is on.
+                declaration would have no effect once `TRANSFORM_DATES` is on.
 
         Returns:
             The (possibly wider) data and the updated schema.
@@ -130,7 +130,7 @@ class DateFeatureExpander:
             # column, a column left tagged DATE has no safe fallback --
             # clean_data doesn't recognize it and would silently ordinal-code
             # the raw strings. Demote it exactly like `_demote_dates` already
-            # does when USE_DATES is off, since the declaration means the
+            # does when TRANSFORM_DATES is off, since the declaration means the
             # same thing here.
             features = list(feature_schema.features)
             for index in declared_dates:
