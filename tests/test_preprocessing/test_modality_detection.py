@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
+from tabpfn.preprocessing import modality_detection
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -22,6 +23,7 @@ from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
     _detect_feature_modality,
+    _underspecified_date_values,
     _warn_on_dates,
     _warn_on_texts,
     detect_feature_modalities,
@@ -825,6 +827,21 @@ class TestDateLikeColumnDetection:
         X = pd.DataFrame({"num": self._numeric_column(), "date": values})
         schema = self._detect(X, use_dates=True)
         assert schema.features[1].modality is not FeatureModality.DATE
+
+    def test__strict_iso_dates__skip_the_expensive_per_value_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Performance guard: the exact per-value check is expensive (two full
+        `dateutil` parses each), so a column of plain ISO dates -- unambiguous
+        by construction -- must never reach it.
+        """
+
+        def _fail(_value: object) -> bool:
+            raise AssertionError("must not be called for strict ISO dates")
+
+        monkeypatch.setattr(modality_detection, "_is_fully_specified_date_value", _fail)
+        values = pd.Series(self._dates(60))
+        assert _underspecified_date_values(values) == set()
 
     def test__use_dates__high_cardinality_date__stays_date_and_does_not_warn(
         self,

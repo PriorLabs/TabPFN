@@ -17,7 +17,7 @@ from tabpfn.preprocessing.datamodel import (
     FeatureSchema,
     make_names_unique,
 )
-from tabpfn.preprocessing.modality_detection import _is_fully_specified_date_value
+from tabpfn.preprocessing.modality_detection import _underspecified_date_values
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -63,10 +63,7 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     already screened for this, but a predict-time value can still drift.
     """
     parsed = pd.to_datetime(column, errors="coerce", format="mixed")
-    non_null = column.dropna()
-    underspecified = {
-        v for v in non_null.unique() if not _is_fully_specified_date_value(v)
-    }
+    underspecified = _underspecified_date_values(column.dropna())
     if underspecified:
         parsed[column.isin(underspecified)] = pd.NaT
     return parsed

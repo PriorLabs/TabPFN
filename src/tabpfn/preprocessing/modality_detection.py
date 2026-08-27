@@ -7,6 +7,7 @@ from __future__ import annotations
 import dataclasses
 import datetime
 import math
+import re
 import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
@@ -320,7 +321,8 @@ def _is_fully_specified_date_value(value: object) -> bool:
     `pd.to_datetime` defaults a missing part to today's date (or, on some
     pandas versions, a fixed epoch) instead of raising, so a bare time like
     "12:00" silently becomes today's date: not a real calendar signal, and not
-    reproducible across days.
+    reproducible across days. Expensive (two full `dateutil` parses), so
+    `_underspecified_date_values` only calls this on values that need it.
     """
     try:
         return dateutil_parser.parse(
@@ -328,6 +330,24 @@ def _is_fully_specified_date_value(value: object) -> bool:
         ) == dateutil_parser.parse(value, default=_UNDERSPECIFIED_CHECK_DEFAULT_B)
     except (ValueError, OverflowError, TypeError):
         return False
+
+
+# Matches only unambiguous ISO 8601 dates/datetimes: year, month, and day are
+# all mandatory, fixed-width fields, so a match can't have had any of them
+# defaulted -- `_is_fully_specified_date_value` never needs to run on it.
+_STRICT_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$")
+
+
+def _underspecified_date_values(values: pd.Series) -> set:
+    """The values in `values` that would need a year/month/day filled in.
+
+    A value in strict ISO 8601 form settles this for free, cheaply and for
+    every value at once: only the rest -- every non-ISO date, which includes
+    every genuinely underspecified value -- pays for the exact, per-value
+    `_is_fully_specified_date_value` check.
+    """
+    candidates = values[~values.str.match(_STRICT_ISO_DATE)].unique()
+    return {v for v in candidates if not _is_fully_specified_date_value(v)}
 
 
 def _is_date_like_pandas_series(s: pd.Series) -> bool:
@@ -352,7 +372,7 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
         return False
     if not parsed.notna().all():
         return False
-    return all(_is_fully_specified_date_value(v) for v in non_null.unique())
+    return not _underspecified_date_values(non_null)
 
 
 def _detect_numeric_as_categorical(
