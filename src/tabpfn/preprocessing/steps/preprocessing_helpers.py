@@ -192,9 +192,9 @@ class EfficientColumnTransformer(ColumnTransformer):
     @property
     def _is_one_to_one(self) -> bool:
         """Whether at most one transformer is configured, and it is one-to-one."""
-        # read off the specification rather than a fitted state, so a transformer this
-        # rejects never sees the one-row fit below -- which for one that needs many
-        # rows, a quantile transform say, would crash instead of falling back
+        # Being one-to-one does not make the probing one-row `transformer.fit` correct,
+        # but the fast path refits on every row, so nothing the probe learned survives
+        # into the output.
         named = [t for name, t, _ in self.transformers if name != "remainder"]
         return len(named) <= 1 and all(
             isinstance(transformer, OneToOneFeatureMixin) for transformer in named
