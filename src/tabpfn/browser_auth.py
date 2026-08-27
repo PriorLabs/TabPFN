@@ -613,7 +613,7 @@ def ensure_license_accepted(hf_repo_id: str) -> Literal[True]:  # noqa: C901
             "model weights for local inference, but browser login is\n"
             "disabled (TABPFN_NO_BROWSER is set).\n\n"
             "Set the TABPFN_TOKEN environment variable with a valid API key\n"
-            "obtained from https://ux.priorlabs.ai"
+            "obtained from https://platform.priorlabs.ai"
         )
 
     token = try_browser_login(gui_url, hf_repo_id=hf_repo_id)
