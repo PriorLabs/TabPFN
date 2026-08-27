@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from skrub import DatetimeEncoder
 
+from tabpfn.preprocessing.clean import PANDAS_SUPPORTS_MIXED_DATE_FORMAT
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
@@ -54,16 +55,22 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     """Parse to datetime, tolerant of per-row format differences.
 
     format="mixed": a format inferred from one value would otherwise silently
-    coerce a later, differently-shaped but valid date to NaT. A value needing
-    a defaulted year/month/day (e.g. a bare time) is masked to NaT the same
-    way, instead of silently taking on today's date.
+    coerce a later, differently-shaped but valid date to NaT. Only on pandas
+    >= 2.0, where it exists and works -- below it, "mixed" is a literal
+    (nonsensical) strftime directive; see `_is_date_like_pandas_series`.
 
+    A value needing a defaulted year/month/day (e.g. a bare time) is masked to
+    NaT the same way, instead of silently taking on today's date.
     Inference-only in practice: at fit time this never actually masks
     anything, since `_is_date_like_pandas_series` already rejected the whole
     column unless every value here was fully specified. It only fires for a
     value that drifts into being underspecified after fitting.
     """
-    parsed = pd.to_datetime(column, errors="coerce", format="mixed")
+    parsed = pd.to_datetime(
+        column,
+        errors="coerce",
+        **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
+    )
     underspecified = _underspecified_date_values(column.dropna())
     if underspecified:
         parsed[column.isin(underspecified)] = pd.NaT

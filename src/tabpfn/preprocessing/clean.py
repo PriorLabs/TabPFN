@@ -43,6 +43,10 @@ PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
 _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
+# format="mixed" was added in pandas 2.0. Below it, "mixed" is read as a literal
+# strftime directive matching nothing, so every value silently coerces to NaT
+# instead of raising -- a much worse failure than just not having the feature.
+PANDAS_SUPPORTS_MIXED_DATE_FORMAT = Version(pd.__version__) >= Version("2.0.0")
 
 _FLOAT64 = np.dtype(np.float64)
 

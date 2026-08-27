@@ -16,7 +16,7 @@ import pandas as pd
 from dateutil import parser as dateutil_parser
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.clean import PANDAS_BELOW_3
+from tabpfn.preprocessing.clean import PANDAS_BELOW_3, PANDAS_SUPPORTS_MIXED_DATE_FORMAT
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -385,8 +385,14 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
             # parsing value by value. This is only a probe, so that is noise.
             warnings.simplefilter("ignore")
             # format="mixed": otherwise a format inferred from an early value
-            # silently coerces a later, differently-shaped but valid date to NaT.
-            parsed = pd.to_datetime(non_null, errors="coerce", format="mixed")
+            # silently coerces a later, differently-shaped but valid date to
+            # NaT. Only on pandas >= 2.0, where it exists and works -- below
+            # it, "mixed" is a literal (nonsensical) strftime directive.
+            parsed = pd.to_datetime(
+                non_null,
+                errors="coerce",
+                **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
+            )
     except (TypeError, ValueError):
         return False
     if not parsed.notna().all():

@@ -928,6 +928,25 @@ class TestDateLikeColumnDetection:
             schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.TEXT
 
+    def test__mixed_formats__not_a_date_below_pandas_2(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """format="mixed" needs pandas >= 2.0 to work at all (below it,
+        "mixed" is a literal, nonsensical strftime directive) -- so it's only
+        passed when `PANDAS_SUPPORTS_MIXED_DATE_FORMAT` is set, simulated here
+        rather than actually installing an old pandas.
+        """
+        monkeypatch.setattr(
+            modality_detection, "PANDAS_SUPPORTS_MIXED_DATE_FORMAT", False
+        )
+        values = self._dates(60)
+        values[0] = "2020-06-15 13:45:30"
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+
+        schema = self._detect(X)
+
+        assert schema.features[1].modality is not FeatureModality.DATE
+
     def test__declared_categorical_date_column__declaration_has_no_effect(
         self,
     ) -> None:
