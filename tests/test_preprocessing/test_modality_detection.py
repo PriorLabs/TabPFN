@@ -506,7 +506,7 @@ class TestWarnOnTexts:
         assert INPUT_FEATURE_PREFIX not in message
         # The message must state all remedies.
         assert "numeric dtype" in message
-        assert "https://github.com/PriorLabs/tabpfn-client" in message
+        assert "USE_TEXT" in message
         assert "categorical_features_indices" in message
 
     def test__declared_cat_indices__are_not_reported(self) -> None:
@@ -562,7 +562,11 @@ class TestDetectFeatureModalitiesWarnsOnText:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
     def _detect(
-        self, X: pd.DataFrame, declared: list[int] | None = None
+        self,
+        X: pd.DataFrame,
+        declared: list[int] | None = None,
+        *,
+        use_text: bool = False,
     ) -> FeatureSchema:
         """Run modality detection over a frame, as `fit()` does."""
         return detect_feature_modalities(
@@ -573,6 +577,7 @@ class TestDetectFeatureModalitiesWarnsOnText:
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
+            use_text=use_text,
         )
 
     def test__free_text_column__warns(self) -> None:
@@ -587,6 +592,20 @@ class TestDetectFeatureModalitiesWarnsOnText:
             self._detect(X)
 
         assert "'review'" in str(record[0].message)
+
+    def test__use_text__free_text_column__does_not_warn(self) -> None:
+        X = pd.DataFrame(
+            {
+                "num": self._numeric_column(),
+                "review": [f"review {i}, a fairly long sentence" for i in range(200)],
+            }
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, use_text=True)
+
+        assert schema.features[1].modality is FeatureModality.TEXT
 
     def test__ordinary_columns__do_not_warn(self) -> None:
         """Neither low-cardinality strings nor fully numeric strings are TEXT.

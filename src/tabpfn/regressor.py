@@ -81,15 +81,12 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import (
-    FittedDatetimeEncoder,
-    encode_multimodal_data,
-)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.multimodal_encoding import encode_multimodal_data
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -119,9 +116,11 @@ if TYPE_CHECKING:
     from tabpfn.constants import MemorySavingMode, XType, YType
     from tabpfn.inference import InferenceEngine
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.date_encoding import FittedDatetimeEncoder
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
+    from tabpfn.preprocessing.string_encoding import FittedStringEncoder
 
     try:
         from sklearn.base import Tags
@@ -236,6 +235,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     date_encoders_: dict[int, FittedDatetimeEncoder]
     """Date encoders by column index, if `USE_DATES` is on and dates are found."""
+
+    text_encoders_: dict[int, FittedStringEncoder]
+    """Text encoders by column index, if `USE_TEXT` is on and text is found."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -888,8 +890,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
             use_dates=self.inference_config_.USE_DATES,
+            use_text=self.inference_config_.USE_TEXT,
         )
-        X, feature_schema, date_encoders = encode_multimodal_data(X, feature_schema)
+        X, feature_schema, date_encoders, text_encoders = encode_multimodal_data(
+            X, feature_schema, use_text=self.inference_config_.USE_TEXT
+        )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
@@ -898,6 +903,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.date_encoders_ = date_encoders
+        self.text_encoders_ = text_encoders
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1499,8 +1505,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
-        X, _, _ = encode_multimodal_data(
-            X, feature_schema=None, fitted=self.date_encoders_
+        X, _, _, _ = encode_multimodal_data(
+            X,
+            feature_schema=None,
+            date_fitted=self.date_encoders_,
+            text_fitted=self.text_encoders_,
         )
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
@@ -1728,8 +1737,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test, feature_schema=None, fitted=worker.date_encoders_
+            X_test, _, _, _ = encode_multimodal_data(  # noqa: PLW2901
+                X_test,
+                feature_schema=None,
+                date_fitted=worker.date_encoders_,
+                text_fitted=worker.text_encoders_,
             )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,

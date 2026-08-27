@@ -79,16 +79,13 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import (
-    FittedDatetimeEncoder,
-    encode_multimodal_data,
-)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.multimodal_encoding import encode_multimodal_data
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -113,9 +110,11 @@ if TYPE_CHECKING:
     )
     from tabpfn.constants import MemorySavingMode
     from tabpfn.inference_config import InferenceConfig
+    from tabpfn.preprocessing.date_encoding import FittedDatetimeEncoder
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
+    from tabpfn.preprocessing.string_encoding import FittedStringEncoder
 
     try:
         from sklearn.base import Tags
@@ -197,6 +196,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     date_encoders_: dict[int, FittedDatetimeEncoder]
     """Date encoders by column index, if `USE_DATES` is on and dates are found."""
+
+    text_encoders_: dict[int, FittedStringEncoder]
+    """Text encoders by column index, if `USE_TEXT` is on and text is found."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -744,8 +746,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
             min_cardinality_for_text=self.inference_config_.MIN_CARDINALITY_FOR_TEXT,
             use_dates=self.inference_config_.USE_DATES,
+            use_text=self.inference_config_.USE_TEXT,
         )
-        X, feature_schema, date_encoders = encode_multimodal_data(X, feature_schema)
+        X, feature_schema, date_encoders, text_encoders = encode_multimodal_data(
+            X, feature_schema, use_text=self.inference_config_.USE_TEXT
+        )
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
@@ -754,6 +759,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.date_encoders_ = date_encoders
+        self.text_encoders_ = text_encoders
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
@@ -1106,8 +1112,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test, _, _ = encode_multimodal_data(  # noqa: PLW2901
-                X_test, feature_schema=None, fitted=worker.date_encoders_
+            X_test, _, _, _ = encode_multimodal_data(  # noqa: PLW2901
+                X_test,
+                feature_schema=None,
+                date_fitted=worker.date_encoders_,
+                text_fitted=worker.text_encoders_,
             )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
@@ -1398,8 +1407,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X = ensure_compatible_predict_input_sklearn(X, self)
-            X, _, _ = encode_multimodal_data(
-                X, feature_schema=None, fitted=self.date_encoders_
+            X, _, _, _ = encode_multimodal_data(
+                X,
+                feature_schema=None,
+                date_fitted=self.date_encoders_,
+                text_fitted=self.text_encoders_,
             )
             X = fix_dtypes(
                 X,

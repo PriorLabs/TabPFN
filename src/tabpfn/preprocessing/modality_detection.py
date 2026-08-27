@@ -42,6 +42,7 @@ def detect_feature_modalities(
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
     use_dates: bool = False,
+    use_text: bool = False,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -63,6 +64,8 @@ def detect_feature_modalities(
             `CATEGORICAL` -- independent of the two thresholds above.
         use_dates: Whether a detected date column is left as `DATE` for the
             caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`.
+        use_text: Whether a detected text column is left for the caller to
+            expand, rather than warned about as read-as-a-plain-category.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -85,7 +88,10 @@ def detect_feature_modalities(
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
     # Before dates are demoted, so a date isn't yet TEXT and is never counted here.
-    _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
+    if not use_text:
+        _warn_on_texts(
+            feature_schema, declared_cat_indices=provided_categorical_indices
+        )
 
     if not use_dates and feature_schema.indices_for(FeatureModality.DATE):
         feature_schema, demoted_date_columns = _demote_dates(
@@ -141,7 +147,8 @@ def _warn_on_texts(
     """Warn when input columns look like free text rather than categoricals.
 
     Called before `_demote_dates`, while a date is still tagged `DATE` rather
-    than `TEXT`, so it's never counted here.
+    than `TEXT`, so it's never counted here. Skipped entirely when `USE_TEXT`
+    is on, since the column is being encoded, not silently read as-is.
 
     Args:
         feature_schema: The schema before any `DATE` column has been demoted.
@@ -165,9 +172,8 @@ def _warn_on_texts(
         "If such a column holds numbers stored as strings, convert it to a numeric "
         "dtype. If it is a category rather than text, raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '
-        "distinct values. If it holds genuine text, this package has no text "
-        "handling -- consider the tabpfn-client API, which embeds text natively: "
-        "https://github.com/PriorLabs/tabpfn-client \n"
+        "distinct values. If it holds genuine text, raise "
+        '`inference_config={"USE_TEXT": True}` to encode it via TF-IDF instead.\n'
         "To silence this for a column that is genuinely a high-cardinality category, "
         "pass its index in `categorical_features_indices`.",
         UserWarning,
