@@ -82,8 +82,11 @@ class InferenceConfig:
     this default independently."""
 
     TRANSFORM_DATES: bool = False
-    """Whether a detected date column is expanded into calendar features via
-    `skrub.DatetimeEncoder`, instead of read as a plain category or text."""
+    """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
+    or `period`) is expanded into calendar features via `skrub.DatetimeEncoder`,
+    instead of read as a plain category or text. Only a real datetime dtype
+    counts -- a string column that merely looks like a date (e.g. "2020-01-01")
+    is always read as a plain category or text, regardless of this flag."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.

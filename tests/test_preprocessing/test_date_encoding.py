@@ -302,9 +302,7 @@ def test__fit_predict__transform_dates__expands_date_and_predicts(
     X = pd.DataFrame(
         {
             "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
         }
     )
     y = _classification_or_regression_target(estimator_cls, rng, n)
@@ -335,9 +333,7 @@ def test__fit__declared_categorical_date__transform_dates_has_no_effect() -> Non
     X = pd.DataFrame(
         {
             "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
         }
     )
     y = rng.integers(0, 2, size=n)
@@ -390,11 +386,9 @@ def test__predict_proba_batched__transform_dates__reapplies_encoder_on_worker() 
     X = pd.DataFrame(
         {
             "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
         }
-    ).to_numpy(dtype=object)
+    )
     y = rng.integers(0, 2, size=n)
 
     clf = TabPFNClassifier(
@@ -418,9 +412,7 @@ def test__get_embeddings__transform_dates__expands_before_the_ordinal_encoder(
     X = pd.DataFrame(
         {
             "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
         }
     )
     y = _classification_or_regression_target(estimator_cls, rng, n)
@@ -447,9 +439,7 @@ def test__get_embeddings__transform_dates__categorical_indices_shift_with_expans
     rng = np.random.default_rng(0)
     X = pd.DataFrame(
         {
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D").strftime(
-                "%Y-%m-%d"
-            ),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="D"),
             "num": rng.normal(size=n),
             "cat": rng.integers(0, 3, size=n),
         }

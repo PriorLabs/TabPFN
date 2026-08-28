@@ -8,17 +8,18 @@ Only reached when `TRANSFORM_DATES` is on.
 from __future__ import annotations
 
 import dataclasses
+import warnings
 from typing import TYPE_CHECKING
 
 import pandas as pd
 from skrub import DatetimeEncoder
 
+from tabpfn.preprocessing.clean import PANDAS_SUPPORTS_ISO8601_FORMAT
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
     make_names_unique,
 )
-from tabpfn.preprocessing.modality_detection import parse_date_series
 
 if TYPE_CHECKING:
     import numpy as np
@@ -38,6 +39,49 @@ def _make_datetime_encoder() -> DatetimeEncoder:
         add_day_of_year=True,
         periodic_encoding="circular",
     )
+
+
+def _parse_dates(column: pd.Series) -> pd.Series:
+    """Parse to datetime, never raising.
+
+    A `DATE` column only ever gets here after `normalize_temporal_columns`
+    rendered it from a genuine datetime dtype into ISO 8601 text -- uniformly,
+    since one dtype (and so one timezone) covers the whole column. `ISO8601`
+    format handles that rendering exactly, including a column mixing
+    precisions (a date-only "2020-01-01" beside a full "2020-06-15
+    13:45:30"), which the plain, single-inferred-format parse this replaced
+    cannot: it infers one shape from the first value and silently drops any
+    other shape to `NaT`.
+
+    Still never raises, for a predict-time column that no longer matches what
+    fit saw (e.g. it arrived as a genuine datetime dtype at fit but drifted to
+    plain, malformed strings at predict): a crash is a worse outcome than a
+    degraded (NaN) calendar feature for a column fit already accepted.
+    `pd.to_datetime` can also silently succeed with an inconsistent per-value
+    result (e.g. mixed UTC offsets, without a uniform dtype behind them)
+    instead of raising -- caught here by checking the result is actually
+    `datetime64`, not just checking for an exception.
+
+    `ISO8601` needs pandas >= 2.0 (see `PANDAS_SUPPORTS_ISO8601_FORMAT`);
+    below it, this falls back to a plain, single-inferred-format parse, which
+    cannot lose the main case that matters there -- a column rendered from a
+    genuine datetime dtype with everything at the exact same precision.
+    """
+    try:
+        with warnings.catch_warnings():
+            # Emitted when pandas cannot infer one format and falls back to
+            # parsing value by value -- expected for a drifted column, so noise.
+            warnings.simplefilter("ignore")
+            parsed = pd.to_datetime(
+                column,
+                errors="coerce",
+                **({"format": "ISO8601"} if PANDAS_SUPPORTS_ISO8601_FORMAT else {}),
+            )
+    except (TypeError, ValueError):
+        parsed = None
+    if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
+        return pd.Series(pd.NaT, index=column.index, dtype="datetime64[ns]")
+    return parsed
 
 
 class DateFeatureExpander:
@@ -172,7 +216,7 @@ class DateFeatureExpander:
         columns.
         """
         encoder = _make_datetime_encoder()
-        raw_encoded = pd.DataFrame(encoder.fit_transform(parse_date_series(column)))
+        raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
         output_names = make_names_unique(
             list(raw_encoded.columns), existing=existing_names
         )
@@ -188,7 +232,7 @@ class DateFeatureExpander:
         fitted: DateFeatureExpander._FittedColumn,
     ) -> pd.DataFrame:
         """Reapply an already-fitted encoder to one column."""
-        encoded = fitted.encoder.transform(parse_date_series(column))
+        encoded = fitted.encoder.transform(_parse_dates(column))
         return pd.DataFrame(encoded).set_axis(fitted.output_names, axis=1)
 
 
