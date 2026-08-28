@@ -13,17 +13,14 @@ from typing import TYPE_CHECKING
 import pandas as pd
 from skrub import DatetimeEncoder
 
-from tabpfn.preprocessing.clean import PANDAS_SUPPORTS_MIXED_DATE_FORMAT
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
     make_names_unique,
 )
-from tabpfn.preprocessing.modality_detection import _underspecified_date_values
+from tabpfn.preprocessing.modality_detection import parse_date_series
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     import numpy as np
 
 
@@ -41,32 +38,6 @@ def _make_datetime_encoder() -> DatetimeEncoder:
         add_day_of_year=True,
         periodic_encoding="circular",
     )
-
-
-def _parse_dates(column: pd.Series) -> pd.Series:
-    """Parse to datetime, tolerant of per-row format differences.
-
-    format="mixed": a format inferred from one value would otherwise silently
-    coerce a later, differently-shaped but valid date to NaT. Only on pandas
-    >= 2.0, where it exists and works -- below it, "mixed" is a literal
-    (nonsensical) strftime directive; see `_is_date_like_pandas_series`.
-
-    A value needing a defaulted year/month/day (e.g. a bare time) is masked to
-    NaT the same way, instead of silently taking on today's date.
-    Inference-only in practice: at fit time this never actually masks
-    anything, since `_is_date_like_pandas_series` already rejected the whole
-    column unless every value here was fully specified. It only fires for a
-    value that drifts into being underspecified after fitting.
-    """
-    parsed = pd.to_datetime(
-        column,
-        errors="coerce",
-        **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
-    )
-    underspecified = _underspecified_date_values(column.dropna())
-    if underspecified:
-        parsed[column.isin(underspecified)] = pd.NaT
-    return parsed
 
 
 class DateFeatureExpander:
@@ -106,39 +77,22 @@ class DateFeatureExpander:
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
-        *,
-        provided_categorical_indices: Sequence[int] | None = None,
     ) -> tuple[np.ndarray, FeatureSchema]:
         """Fit a new encoder per `DATE` column and expand it into numbers.
+
+        Every `DATE` column is expanded, with no exceptions to weigh: whether a
+        column is one is settled by the time the schema arrives, including the
+        caller's `categorical_features_indices`, which stops a column being
+        called a date in the first place rather than being re-litigated here.
 
         Args:
             X: The data, before any dtype fixing.
             feature_schema: The schema to fit against.
-            provided_categorical_indices: Indices declared categorical by the
-                caller. Detection tags a date-like column `DATE` regardless of
-                this declaration, so it must be excluded here instead, or the
-                declaration would have no effect once `TRANSFORM_DATES` is on.
 
         Returns:
             The (possibly wider) data and the updated schema.
         """
-        declared = set(provided_categorical_indices or ())
-        date_indices = feature_schema.indices_for(FeatureModality.DATE)
-        declared_dates = [i for i in date_indices if i in declared]
-        if declared_dates:
-            # A declared date can't just be skipped: unlike a genuine TEXT
-            # column, a column left tagged DATE has no safe fallback --
-            # clean_data doesn't recognize it and would silently ordinal-code
-            # the raw strings. Demote it exactly like `_demote_dates` already
-            # does when TRANSFORM_DATES is off, since the declaration means the
-            # same thing here.
-            features = list(feature_schema.features)
-            for index in declared_dates:
-                features[index] = dataclasses.replace(
-                    features[index], modality=FeatureModality.CATEGORICAL
-                )
-            feature_schema = FeatureSchema(features=features)
-        to_expand = sorted(i for i in date_indices if i not in declared)
+        to_expand = feature_schema.indices_for(FeatureModality.DATE)
         self._fitted = {}
         if not to_expand:
             return X, feature_schema
@@ -218,7 +172,7 @@ class DateFeatureExpander:
         columns.
         """
         encoder = _make_datetime_encoder()
-        raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
+        raw_encoded = pd.DataFrame(encoder.fit_transform(parse_date_series(column)))
         output_names = make_names_unique(
             list(raw_encoded.columns), existing=existing_names
         )
@@ -234,7 +188,7 @@ class DateFeatureExpander:
         fitted: DateFeatureExpander._FittedColumn,
     ) -> pd.DataFrame:
         """Reapply an already-fitted encoder to one column."""
-        encoded = fitted.encoder.transform(_parse_dates(column))
+        encoded = fitted.encoder.transform(parse_date_series(column))
         return pd.DataFrame(encoded).set_axis(fitted.output_names, axis=1)
 
 

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import datetime
 import warnings
 from typing import Any
 
@@ -15,7 +16,7 @@ from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import modality_detection
 from tabpfn.preprocessing.clean import (
     PANDAS_BELOW_3,
-    PANDAS_SUPPORTS_MIXED_DATE_FORMAT,
+    PANDAS_SUPPORTS_ISO8601_FORMAT,
 )
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
@@ -26,6 +27,7 @@ from tabpfn.preprocessing.datamodel import (
 from tabpfn.preprocessing.modality_detection import (
     _EARLY_EXIT_PREFIX_ROWS,
     _MAX_TEXT_COLUMNS_IN_WARNING,
+    _STRICT_ISO_DATE,
     _detect_feature_modality,
     _is_date_like_pandas_series,
     _is_numeric_or_missing_for_old_pandas,
@@ -491,19 +493,25 @@ def _reference_is_date_like(s: pd.Series) -> bool:
     non_null = s.dropna()
     if non_null.empty:
         return False
+    all_iso = bool(non_null.astype(str).str.match(_STRICT_ISO_DATE).all())
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             parsed = pd.to_datetime(
                 non_null,
                 errors="coerce",
-                **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
+                **(
+                    {"format": "ISO8601"}
+                    if all_iso and PANDAS_SUPPORTS_ISO8601_FORMAT
+                    else {}
+                ),
             )
     except (TypeError, ValueError):
         return False
     if not parsed.notna().all():
         return False
-    return not _underspecified_date_values(non_null)
+    # ISO states year, month and day by construction, so nothing can be defaulted.
+    return all_iso or not _underspecified_date_values(non_null)
 
 
 def _reference_is_numeric(s: pd.Series) -> bool:
@@ -1059,6 +1067,87 @@ class TestDateLikeColumnDetection:
         values = pd.Series(self._dates(60))
         assert _underspecified_date_values(values) == set()
 
+    def test__non_iso_dates__check_once_per_layout_not_once_per_value(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Performance guard, the non-ISO counterpart of the ISO one above.
+
+        The exact check costs two `dateutil` parses, so a column of one non-ISO
+        date format must pay for it once, not once per distinct date.
+        """
+        calls: list[object] = []
+        real = modality_detection._is_fully_specified_date_value
+
+        def counting(value: object) -> bool:
+            calls.append(value)
+            return real(value)
+
+        monkeypatch.setattr(
+            modality_detection, "_is_fully_specified_date_value", counting
+        )
+        values = pd.Series(
+            pd.date_range("2020-01-01", periods=300).strftime("%d/%m/%Y")
+        )
+        assert _underspecified_date_values(values) == set()
+        assert len(calls) == 1
+
+    @pytest.mark.parametrize(
+        "group",
+        [
+            # Same layout once digits are masked, opposite answers -- these are
+            # what pin the layout key down. "2020" is a bare year, "20200102" a
+            # full date, so digit *count* has to survive the masking.
+            ["2020", "20200102"],
+            ["1-2-3", "2020-1-2"],
+            ["12/2020", "1/2"],
+            ["12:00", "12:00:00"],
+            # Ordinary spreads across formats, separators and junk.
+            ["2020-01-01", "2020-06-15 13:45:30"],
+            ["01/02/2020", "31/12/1999"],
+            ["May 5", "May 5, 2020"],
+            ["5 May 2020", "Jan 5, 2020"],
+            ["2024-02-29", "29.02.2024"],
+            ["", "junk", "3.5"],
+            ["2020-01-01T00:00:00+02:00", "2020-01-01T00:00:00Z"],
+        ],
+    )
+    def test__layout_key__agrees_with_checking_every_value(self, group: list) -> None:
+        """The layout key is an optimization, so it must never change an answer.
+
+        Compared against the exact per-value definition it replaces, over the
+        shapes most likely to collide under digit masking.
+        """
+
+        def exact(values: pd.Series) -> set:
+            return {
+                v
+                for v in values.unique()
+                if not modality_detection._is_fully_specified_date_value(v)
+            }
+
+        for combo in (group, list(reversed(group)), group * 3):
+            values = pd.Series(combo, dtype=object)
+            assert _underspecified_date_values(values) == exact(values), combo
+
+    @pytest.mark.parametrize(
+        ("label", "values"),
+        [
+            ("bytes", [b"a", b"b"] * 30),
+            ("date objects", list(pd.date_range("2020-01-01", periods=60).date)),
+            ("floats", [1.5, 2.5] * 30),
+            ("mixed", ["2020-01-01", 3.5, b"x", datetime.date(2020, 1, 2)] * 15),
+        ],
+    )
+    def test__layout_keying__survives_any_column_dtype(
+        self, label: str, values: list
+    ) -> None:
+        """Regression: the per-layout reduction used to be a `groupby` over the
+        values, which pandas cannot aggregate for every dtype a column may hold
+        -- bytes raised there. Only the layouts are ever grouped, and those are
+        text whatever the values are.
+        """
+        assert isinstance(_underspecified_date_values(pd.Series(values)), set), label
+
     def test__transform_dates__high_cardinality_date__stays_date_and_does_not_warn(
         self,
     ) -> None:
@@ -1073,6 +1162,51 @@ class TestDateLikeColumnDetection:
         or not: every detected date is left for the caller to expand.
         """
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, transform_dates=True)
+        assert schema.features[1].modality is FeatureModality.DATE
+
+    def test__column_of_date_objects__is_recognized_without_crashing(self) -> None:
+        """Regression: the ISO fast path reached for `.str`, which a column of
+        `datetime.date` objects -- what `.dt.date`, parquet and most DB drivers
+        hand back for a DATE column -- does not have.
+        """
+        values = pd.date_range("2020-01-01", periods=self.n_rows).date.tolist()
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        with pytest.warns(UserWarning, match="hold dates"):
+            schema = self._detect(X)
+        assert schema.features[1].modality is not FeatureModality.DATE
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            schema = self._detect(X, transform_dates=True)
+        assert schema.features[1].modality is FeatureModality.DATE
+
+    @pytest.mark.parametrize("stray", [3.5, 3, True])
+    def test__one_non_date_among_date_strings__is_not_a_date(
+        self, stray: object
+    ) -> None:
+        """Regression: for a mixed column the ISO fast path answered NaN on the
+        non-string, and `~NaN` raised. A stray value that is not a spelled-out
+        date disqualifies the column, like any other non-date value -- note
+        `pd.to_datetime` alone would not catch these, since it happily reads a
+        bare number as an offset from the epoch.
+        """
+        values: list[object] = list(self._dates(60))
+        values[0] = stray
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            schema = self._detect(X, transform_dates=True)
+        assert schema.features[1].modality is not FeatureModality.DATE
+
+    def test__date_object_among_date_strings__is_still_a_date(self) -> None:
+        """The mixed column above, but with a stray that is a real date: being
+        a `datetime.date` rather than a string is not itself a disqualification.
+        """
+        values: list[object] = list(self._dates(60))
+        values[0] = datetime.date(2019, 5, 4)
+        X = pd.DataFrame({"num": self._numeric_column(), "date": values})
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             schema = self._detect(X, transform_dates=True)
@@ -1136,12 +1270,10 @@ class TestDateLikeColumnDetection:
     ) -> None:
         """format="mixed" needs pandas >= 2.0 to work at all (below it,
         "mixed" is a literal, nonsensical strftime directive) -- so it's only
-        passed when `PANDAS_SUPPORTS_MIXED_DATE_FORMAT` is set, simulated here
+        passed when `PANDAS_SUPPORTS_ISO8601_FORMAT` is set, simulated here
         rather than actually installing an old pandas.
         """
-        monkeypatch.setattr(
-            modality_detection, "PANDAS_SUPPORTS_MIXED_DATE_FORMAT", False
-        )
+        monkeypatch.setattr(modality_detection, "PANDAS_SUPPORTS_ISO8601_FORMAT", False)
         values = self._dates(60)
         values[0] = "2020-06-15 13:45:30"
         X = pd.DataFrame({"num": self._numeric_column(), "date": values})
@@ -1150,11 +1282,11 @@ class TestDateLikeColumnDetection:
 
         assert schema.features[1].modality is not FeatureModality.DATE
 
-    def test__declared_categorical_date_column__declaration_has_no_effect(
+    def test__declared_categorical_date_column__lands_on_cardinality_alone(
         self,
     ) -> None:
-        """A declared-categorical date gets no special treatment once demoted,
-        exactly like a declared-categorical non-date string already doesn't
+        """Once the declaration has ruled `DATE` out, a declared-categorical
+        date lands exactly where a declared-categorical non-date string does
         (see `test__declared_categorical_columns__do_not_warn`): only
         `min_cardinality_for_text` decides, `max_unique_for_category` is not
         even consulted, even though it would have saved this column.
@@ -1170,6 +1302,37 @@ class TestDateLikeColumnDetection:
             min_cardinality_for_text=30,
         )
         assert schema.features[1].modality is FeatureModality.TEXT
+
+    @pytest.mark.parametrize("transform_dates", [False, True])
+    @pytest.mark.parametrize("n_unique", [3, 60])
+    def test__declared_categorical_date__is_never_a_date(
+        self, n_unique: int, *, transform_dates: bool
+    ) -> None:
+        """Declaring a column categorical settles it: it is not a date.
+
+        Decided here rather than downstream, so it holds identically whether
+        `TRANSFORM_DATES` is on or off -- the two used to disagree, the expander
+        forcing `CATEGORICAL` while `_demote_dates` went by cardinality.
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(n_unique)})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            schema = self._detect(X, transform_dates=transform_dates, declared=[1])
+        assert schema.features[1].modality is not FeatureModality.DATE
+        expected = (
+            FeatureModality.CATEGORICAL if n_unique <= 30 else FeatureModality.TEXT
+        )
+        assert schema.features[1].modality is expected
+
+    def test__declared_categorical_date__is_never_warned_about(self) -> None:
+        """No warning has anything to say: the column is not read as a date at
+        all, so there is no demotion to report, on either code path.
+        """
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
+        for transform_dates in (False, True):
+            with warnings.catch_warnings():
+                warnings.simplefilter("error")
+                self._detect(X, transform_dates=transform_dates, declared=[1])
 
     def test__declared_categorical_date_column__is_not_reported_in_warning(
         self,

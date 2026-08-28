@@ -101,23 +101,29 @@ def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
     ]
 
 
-def test__fit__declared_categorical_column__is_excluded_from_expansion() -> None:
-    """A column declared categorical still classifies `DATE` (detection
-    ignores the declaration), so `fit_transform` must exclude it and demote it
-    to `CATEGORICAL` itself -- leaving it tagged `DATE` would reach
-    `clean_data`, which has no notion of `DATE` and would silently corrupt it.
-    """
-    X = _numeric_and_date_frame(_dates())
-    schema = _numeric_and_date_schema()
+def test__fit__every_date_column__is_expanded_unconditionally() -> None:
+    """The expander weighs nothing: a `DATE` column is one to expand, full stop.
 
-    expander = DateFeatureExpander()
-    X_out, schema_out = expander.fit_transform(
-        X, schema, provided_categorical_indices=[1]
+    Which columns count as dates -- including the caller's
+    `categorical_features_indices`, which stops a column being called a date at
+    all -- is settled in `detect_feature_modalities` before the schema gets
+    here. See `TestDateLikeColumnDetection` for that half.
+    """
+    X = np.column_stack(
+        [np.array(_dates(), dtype=object), np.array(_dates(), dtype=object)]
+    )
+    schema = FeatureSchema(
+        features=[
+            Feature(name="input_a", modality=FeatureModality.DATE),
+            Feature(name="input_b", modality=FeatureModality.DATE),
+        ]
     )
 
-    assert X_out is X
-    assert expander.expanded_indices == []
-    assert schema_out.features[1].modality is FeatureModality.CATEGORICAL
+    expander = DateFeatureExpander()
+    _, schema_out = expander.fit_transform(X, schema)
+
+    assert expander.expanded_indices == [0, 1]
+    assert schema_out.indices_for(FeatureModality.DATE) == []
 
 
 def test__fit__output_names_avoid_collision_with_existing_columns() -> None:
@@ -223,6 +229,45 @@ def test__predict__underspecified_value__becomes_nan_not_todays_date() -> None:
     assert np.isnan(X_test_out[3, 1:].astype(float)).all()
     other_rows = [i for i in range(N) if i != 3]
     assert np.isfinite(X_test_out[other_rows][:, 1:].astype(float)).all()
+
+
+@pytest.mark.parametrize(
+    ("label", "column"),
+    [
+        # `to_datetime` refuses this column outright rather than per value, so
+        # `errors="coerce"` does not cover it and it used to raise at predict.
+        (
+            "mixed utc offsets",
+            [
+                f"2020-01-0{i % 9 + 1}T00:00:00" + ("+02:00" if i % 2 else "-05:00")
+                for i in range(N)
+            ],
+        ),
+        # Not strings at all, so the ISO fast path had no `.str` to reach for.
+        ("numbers", list(range(N))),
+        ("bare times", ["12:00:00"] * N),
+        ("garbage", [f"junk{i}" for i in range(N)]),
+    ],
+)
+def test__predict__column_detection_would_reject__is_nan_not_an_error(
+    label: str, column: list
+) -> None:
+    """Fit and predict must agree on what a date is.
+
+    Detection turns a column down at fit time by returning False; expansion
+    meets the same column at predict time, on data detection never saw, and has
+    no such option. Both go through one parse so that a column detection would
+    have rejected comes back all-NaT here -- degraded calendar features -- and
+    never as an exception from a column that fit accepted.
+    """
+    expander = DateFeatureExpander()
+    expander.fit_transform(
+        _numeric_and_date_frame(_dates()), _numeric_and_date_schema()
+    )
+
+    X_test_out = expander.transform(_numeric_and_date_frame(column))
+
+    assert np.isnan(X_test_out[:, 1:].astype(float)).all(), label
 
 
 def test__mixed_date_and_datetime_string_formats__all_parse() -> None:

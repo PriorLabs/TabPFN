@@ -743,11 +743,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
         date_expander = DateFeatureExpander()
-        X, feature_schema = date_expander.fit_transform(
-            X,
-            feature_schema,
-            provided_categorical_indices=self.categorical_features_indices,
-        )
+        X, feature_schema = date_expander.fit_transform(X, feature_schema)
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,

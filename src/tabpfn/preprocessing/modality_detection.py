@@ -16,7 +16,7 @@ import pandas as pd
 from dateutil import parser as dateutil_parser
 
 from tabpfn.errors import TabPFNUserError
-from tabpfn.preprocessing.clean import PANDAS_BELOW_3, PANDAS_SUPPORTS_MIXED_DATE_FORMAT
+from tabpfn.preprocessing.clean import PANDAS_BELOW_3, PANDAS_SUPPORTS_ISO8601_FORMAT
 from tabpfn.preprocessing.datamodel import (
     INPUT_FEATURE_PREFIX,
     Feature,
@@ -95,7 +95,6 @@ def detect_feature_modalities(
             feature_schema,
             X,
             min_cardinality_for_text=min_cardinality_for_text,
-            declared_cat_indices=provided_categorical_indices,
         )
         _warn_on_dates(demoted_date_columns)
     return feature_schema
@@ -106,7 +105,6 @@ def _demote_dates(
     X: np.ndarray,
     *,
     min_cardinality_for_text: int,
-    declared_cat_indices: Sequence[int] | None = None,
 ) -> tuple[FeatureSchema, list[str]]:
     """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
 
@@ -114,13 +112,13 @@ def _demote_dates(
     via the same cardinality rule `_classify_string_like_column` already
     applies to a same-shaped non-date string.
 
+    Every column here is one nothing else claimed: a declared categorical never
+    reaches `DATE` in the first place, so there is no declaration to respect,
+    and every demoted column is one worth warning about.
+
     Returns:
-        The updated schema, and the demoted column names to warn about --
-        excluding any declared categorical, since that declaration already
-        states the intent the warning would otherwise nag about, matching
-        `_warn_on_texts`.
+        The updated schema, and the demoted column names to warn about.
     """
-    declared = set(declared_cat_indices or ())
     features = list(feature_schema.features)
     demoted_columns = []
     for index in feature_schema.indices_for(FeatureModality.DATE):
@@ -130,10 +128,7 @@ def _demote_dates(
         else:
             demoted = FeatureModality.TEXT
         features[index] = dataclasses.replace(features[index], modality=demoted)
-        if index not in declared:
-            demoted_columns.append(
-                features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
-            )
+        demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
     return FeatureSchema(features=features), demoted_columns
 
 
@@ -261,10 +256,19 @@ def _detect_feature_modality(
     )
     if is_string_like:
         return _classify_string_like_column(
-            s, n_unique=n_unique, min_cardinality_for_text=min_cardinality_for_text
+            s,
+            n_unique=n_unique,
+            min_cardinality_for_text=min_cardinality_for_text,
+            reported_categorical=reported_categorical,
         )
     raise TabPFNUserError(
-        f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
+        f"Column {s.name!r} has dtype {s.dtype}, which cannot be read as numbers, "
+        f"categories, text or dates (it holds {s.nunique(dropna=False)} distinct "
+        f"values).\n"
+        "Convert it to something this can read: a numeric dtype for a quantity, "
+        "a string/category dtype for a label, or a datetime dtype for a point in "
+        "time (e.g. `df[col] = pd.to_datetime(df[col])`, or `.dt.to_timestamp()` "
+        "for a period)."
     )
 
 
@@ -273,14 +277,21 @@ def _classify_string_like_column(
     *,
     n_unique: int,
     min_cardinality_for_text: int,
+    reported_categorical: bool,
 ) -> FeatureModality:
-    """Classify a string/categorical-dtype column as CATEGORICAL, TEXT, or DATE."""
-    if _is_date_like_pandas_series(s):
+    """Classify a string/categorical-dtype column as CATEGORICAL, TEXT, or DATE.
+
+    A declared categorical is never `DATE`: the caller has said what the column
+    is, so there is nothing left to detect, and reading it as a date anyway
+    would take it somewhere the declaration rules out -- expanded into calendar
+    features rather than held as categories. It is left to the cardinality rule
+    below, landing exactly where a declared same-shaped non-date string lands.
+    """
+    if not reported_categorical and _is_date_like_pandas_series(s):
         return FeatureModality.DATE
-    elif n_unique <= min_cardinality_for_text:  # noqa: RET505
+    if n_unique <= min_cardinality_for_text:
         return FeatureModality.CATEGORICAL
-    else:
-        return FeatureModality.TEXT
+    return FeatureModality.TEXT
 
 
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
@@ -364,17 +375,58 @@ def _is_fully_specified_date_value(value: object) -> bool:
 # defaulted -- `_is_fully_specified_date_value` never needs to run on it.
 _STRICT_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?)?$")
 
+#: Masks each digit of a value, one for one, to leave its layout. Per digit and
+#: not per run: the run lengths are the whole point, since width is what tells a
+#: bare year ("2020") from a compact date ("20200102").
+_ANY_DIGIT = re.compile(r"\d")
+
 
 def _underspecified_date_values(values: pd.Series) -> set:
     """The values in `values` that would need a year/month/day filled in.
 
-    A value in strict ISO 8601 form settles this for free, cheaply and for
-    every value at once: only the rest -- every non-ISO date, which includes
-    every genuinely underspecified value -- pays for the exact, per-value
-    `_is_fully_specified_date_value` check.
+    Two rounds of skipping the expensive `_is_fully_specified_date_value`, which
+    costs two full `dateutil` parses. A value in strict ISO 8601 form settles it
+    for free, cheaply and for every value at once. The rest -- every non-ISO
+    date, which includes every genuinely underspecified value -- is checked once
+    per distinct *layout* rather than once per distinct value: whether a value
+    states its own year, month and day is a property of how many digits sit
+    where and what separates them, not of the digits themselves, so masking the
+    digits groups values that must share an answer. A column of one date format
+    therefore costs one check no matter how many distinct dates it holds.
+
+    `astype(str)` because `values` need not hold strings: a column of
+    `datetime.date` objects has no `.str` accessor at all, and a single
+    non-string among strings leaves `.str.match` answering NaN, which `~` then
+    chokes on. Rendering only decides which values skip the expensive check, and
+    it decides correctly -- a `datetime.date` renders as ISO, and is indeed
+    fully specified. The check itself still sees the original value, so a
+    non-date that merely survived `to_datetime` (a stray number, say) still
+    fails it and disqualifies the column.
     """
-    candidates = values[~values.str.match(_STRICT_ISO_DATE)].unique()
-    return {v for v in candidates if not _is_fully_specified_date_value(v)}
+    as_text = values.astype(str)
+    is_iso = as_text.str.match(_STRICT_ISO_DATE).to_numpy(dtype=bool)
+    if is_iso.all():
+        return set()
+
+    # Plain arrays, not Series, so grouping and masking stay positional and do
+    # not depend on `values` carrying a unique index.
+    rest = values[~is_iso].to_numpy()
+    layouts = as_text[~is_iso].str.replace(_ANY_DIGIT, "9", regex=True).to_numpy()
+    # The first value of each layout, taken by masking rather than by grouping:
+    # a `groupby` here reduces over `values`, whose dtype is the caller's and
+    # need not be one pandas can aggregate (bytes, for one). `duplicated` only
+    # ever looks at `layouts`, which is text whatever `values` holds.
+    first_of_layout = ~pd.Index(layouts).duplicated()
+    underspecified_layouts = {
+        layout
+        for layout, value in zip(
+            layouts[first_of_layout], rest[first_of_layout], strict=True
+        )
+        if not _is_fully_specified_date_value(value)
+    }
+    if not underspecified_layouts:
+        return set()
+    return set(pd.unique(rest[pd.Index(layouts).isin(underspecified_layouts)]))
 
 
 def _is_date_like_pandas_series(s: pd.Series) -> bool:
@@ -385,8 +437,8 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     reclassified here. One underspecified value (e.g. a bare time like
     "12:00") disqualifies the whole column from DATE -- it's read as an
     ordinary category or text instead, exactly like any non-date string.
-    Nothing is masked or dropped at this stage; see `_parse_dates` for the
-    narrower, per-value case this doesn't cover.
+    Nothing is masked or dropped at this stage: `parse_date_series` masks, but
+    here its result is only counted, so one `NaT` rejects the whole column.
 
     A prefix rejects the column before the whole of it is parsed, which is exact
     rather than approximate: one unparseable value settles the answer, and a text
@@ -405,31 +457,87 @@ def _is_date_like_pandas_series(s: pd.Series) -> bool:
     return _all_parse_as_dates(non_null)
 
 
+def _all_strict_iso(values: pd.Series) -> bool:
+    """Whether every value in `values` renders as strict ISO 8601."""
+    if values.empty:
+        return False
+    return bool(values.astype(str).str.match(_STRICT_ISO_DATE).all())
+
+
+def _to_datetime(s: pd.Series, *, iso: bool) -> pd.Series:
+    """`pd.to_datetime` that answers `NaT` rather than raising, ever."""
+    try:
+        with warnings.catch_warnings():
+            # `to_datetime` warns when it cannot infer a format and falls back to
+            # parsing value by value. Expected here, so that is noise.
+            warnings.simplefilter("ignore")
+            return pd.to_datetime(
+                s,
+                errors="coerce",
+                **(
+                    {"format": "ISO8601"}
+                    if iso and PANDAS_SUPPORTS_ISO8601_FORMAT
+                    else {}
+                ),
+            )
+    except (TypeError, ValueError):
+        # `errors="coerce"` covers a value `to_datetime` cannot read, but not a
+        # column it refuses outright -- mixed UTC offsets, which it will not
+        # reconcile into a single column at any per-value granularity. Nothing
+        # is salvageable, so the whole column comes back missing.
+        return pd.Series(pd.NaT, index=s.index, dtype="datetime64[ns]")
+
+
+def parse_date_series(s: pd.Series) -> pd.Series:
+    """Parse `s` to datetimes, leaving anything but a fully-specified date `NaT`.
+
+    The one parse that both date detection and date expansion go through, so
+    the two cannot disagree about what a date is. That matters because they run
+    at different times: detection decides at fit time that a column is a date,
+    expansion re-parses it at predict time on data detection never saw. Any
+    input the detector would have turned down comes back as `NaT` here rather
+    than raising, so predict degrades to missing calendar features instead of
+    crashing on a column it accepted at fit.
+
+    Two parsing modes, and deliberately no third:
+
+    - Strict ISO 8601, when every value is. One vectorized pass reads the whole
+      column whatever mix of precisions it holds ("2020-01-01" beside
+      "2020-01-01 12:00:00"), cannot mis-read a value, and needs no
+      underspecified check at all -- ISO states year, month and day by
+      construction.
+    - Otherwise a single format, inferred by pandas from the first value and
+      applied to every value. Consistent by construction: either one format
+      reads the whole column, or the values it cannot read become `NaT` and the
+      column is not treated as a date at all.
+
+    Notably *not* `format="mixed"`, which resolves each value independently.
+    That reads more columns, but it reads some of them wrongly and silently: in
+    a day-first column like "01/02/2020, 13/05/2020" it takes the first value as
+    month-first and the second as day-first, since only the second rules the
+    other order out. A column half in one convention and half in the other is
+    worse than a column declined, and far more expensive -- per-value parsing
+    costs around 15x a single format on the same data.
+    """
+    non_null = s.dropna()
+    if _all_strict_iso(non_null):
+        return _to_datetime(s, iso=True)
+    parsed = _to_datetime(s, iso=False)
+    # A value needing a defaulted year/month/day (e.g. a bare time) is masked
+    # the same way, instead of silently taking on today's date.
+    underspecified = _underspecified_date_values(non_null)
+    if underspecified:
+        parsed = parsed.mask(s.isin(underspecified))
+    return parsed
+
+
 def _all_parse_as_dates(s: pd.Series) -> bool:
     """Whether every value in `s` parses as a date; vacuously true when empty.
 
     An empty result matters for the prefix call: a head that is entirely missing
     says nothing about the column, so it must fall through rather than reject.
     """
-    try:
-        with warnings.catch_warnings():
-            # `to_datetime` warns when it cannot infer a format and falls back to
-            # parsing value by value. This is only a probe, so that is noise.
-            warnings.simplefilter("ignore")
-            # format="mixed": otherwise a format inferred from an early value
-            # silently coerces a later, differently-shaped but valid date to
-            # NaT. Only on pandas >= 2.0, where it exists and works -- below
-            # it, "mixed" is a literal (nonsensical) strftime directive.
-            parsed = pd.to_datetime(
-                s,
-                errors="coerce",
-                **({"format": "mixed"} if PANDAS_SUPPORTS_MIXED_DATE_FORMAT else {}),
-            )
-    except (TypeError, ValueError):
-        return False
-    if not parsed.notna().all():
-        return False
-    return not _underspecified_date_values(s)
+    return bool(parse_date_series(s).notna().all())
 
 
 def _detect_numeric_as_categorical(
