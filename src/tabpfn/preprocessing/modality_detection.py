@@ -44,6 +44,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    provided_date_indices: Sequence[int] | None = None,
     transform_dates: bool = False,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
@@ -57,6 +58,10 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
+        provided_date_indices: Indices already known to be dates, because they
+            arrived as a datetime dtype rather than as strings that might parse
+            as one. Tagged `DATE` outright: there is nothing for the string
+            heuristics to guess at, and skipping them also skips their cost.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -73,18 +78,25 @@ def detect_feature_modalities(
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
+    reported_dates = set(provided_date_indices or ())
     for i, index in enumerate(range(X.shape[1])):
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
         feature_name = unique_feature_names[i]
-        feat_modality = _detect_feature_modality(
-            s=pd.Series(X_slice, name=feature_name),
-            reported_categorical=reported_categorical,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
-            min_cardinality_for_text=min_cardinality_for_text,
-            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        )
+        if index in reported_dates and not reported_categorical:
+            # A datetime dtype says outright what the string heuristics below
+            # can only guess at, so they are not consulted -- unless the caller
+            # also declared the column categorical, which overrides either way.
+            feat_modality = FeatureModality.DATE
+        else:
+            feat_modality = _detect_feature_modality(
+                s=pd.Series(X_slice, name=feature_name),
+                reported_categorical=reported_categorical,
+                max_unique_for_category=max_unique_for_category,
+                min_unique_for_numerical=min_unique_for_numerical,
+                min_cardinality_for_text=min_cardinality_for_text,
+                big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+            )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
     # Before dates are demoted, so a date isn't yet TEXT and is never counted here.

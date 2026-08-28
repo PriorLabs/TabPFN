@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -21,6 +22,7 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     fix_dtypes,
+    normalize_temporal_columns,
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
@@ -1159,15 +1161,45 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
 
 
-def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
-    """Documents a known, pre-existing bug rather than fixing it here.
+@pytest.mark.parametrize(
+    ("label", "column"),
+    [
+        ("datetime64", pd.date_range("2020-01-01", periods=50)),
+        ("tz aware", pd.date_range("2020-01-01", periods=50, tz="UTC")),
+        ("period", pd.date_range("2020-01-01", periods=50).to_period("M")),
+        ("timedelta", pd.to_timedelta(np.arange(50), unit="D")),
+    ],
+)
+def test__classifier_fit__native_temporal_column__is_read_not_rejected(
+    label: str, column: pd.Index
+) -> None:
+    """Regression: a native temporal column beside another dtype used to crash.
 
-    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
-    converts the whole frame to one numpy array, and numpy has no dtype that unifies
-    `datetime64` with a numeric or string column. A fix would need to convert such a
-    column to a string (or otherwise numpy-unifiable type) before validation, which
-    is lossy for `datetime64[ns]` (no string format captures full nanosecond
-    precision) and is deferred to a follow-up rather than solved in this PR.
+    `validate_data` converts the whole frame to one numpy array, and numpy has
+    no dtype that unifies `datetime64` with a numeric or string column, so the
+    frame could not even be assembled. `normalize_temporal_columns` recasts the
+    column before validation ever sees it.
+    """
+    n = 50
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame({"num": rng.normal(size=n), "signed_on": column})
+    y = rng.integers(0, 2, n)
+
+    clf = TabPFNClassifier(n_estimators=1, device="cpu")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        clf.fit(X, y)
+        assert clf.predict(X).shape == (n,), label
+
+
+@pytest.mark.parametrize("transform_dates", [False, True])
+def test__classifier_fit__native_datetime_column__is_recognized_as_a_date(
+    *, transform_dates: bool
+) -> None:
+    """A datetime dtype is a date outright -- no string heuristic has to agree.
+
+    With `TRANSFORM_DATES` off it is demoted like any other detected date, and
+    named in that warning; with it on, it expands into calendar features.
     """
     n = 50
     rng = np.random.default_rng(0)
@@ -1176,6 +1208,151 @@ def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
     )
     y = rng.integers(0, 2, n)
 
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
-        clf.fit(X, y)
+    clf = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"TRANSFORM_DATES": transform_dates},
+    )
+    if transform_dates:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            clf.fit(X, y)
+        names = clf.inferred_feature_schema_.feature_names
+        assert len(names) > 2
+        assert any(name.startswith("input_signed_on_") for name in names)
+    else:
+        with pytest.warns(UserWarning, match="hold dates"):
+            clf.fit(X, y)
+
+
+class TestNormalizeTemporalColumns:
+    """`normalize_temporal_columns`, which runs before sklearn's validation."""
+
+    def test__no_temporal_columns__is_a_noop(self) -> None:
+        X = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
+        out, indices = normalize_temporal_columns(X)
+        assert out is X
+        assert indices == []
+
+    def test__not_a_dataframe__is_a_noop(self) -> None:
+        X = np.array([[1.0, 2.0]])
+        out, indices = normalize_temporal_columns(X)
+        assert out is X
+        assert indices == []
+
+    @pytest.mark.parametrize(
+        ("label", "column", "expected_first"),
+        [
+            ("datetime64", pd.date_range("2020-01-01", periods=3), "2020-01-01"),
+            (
+                "tz aware",
+                pd.date_range("2020-01-01", periods=3, tz="UTC"),
+                "2020-01-01 00:00:00+00:00",
+            ),
+            (
+                "with time",
+                pd.date_range("2020-01-01 13:45", periods=3, freq="D"),
+                "2020-01-01 13:45:00",
+            ),
+            (
+                "period",
+                pd.date_range("2020-01-01", periods=3).to_period("M"),
+                "2020-01-01",
+            ),
+        ],
+    )
+    def test__date_columns__render_as_text_and_are_reported(
+        self, label: str, column: pd.Index, expected_first: str
+    ) -> None:
+        X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
+        out, indices = normalize_temporal_columns(X)
+        assert indices == [1], label
+        assert out.iloc[0, 1] == expected_first, label
+        # The frame now holds a dtype numpy can put beside a float, which is the
+        # whole point of running before validation.
+        assert out.to_numpy(dtype=object).shape == (3, 2)
+
+    def test__missing_stays_missing__not_the_string_nat(self) -> None:
+        """`astype(str)` alone writes NaT out as the literal "NaT".
+
+        Which NA marker lands there is the dtype's business -- `None` under
+        object dtype, `nan` under the pandas 3 `str` dtype -- so this asserts
+        that it reads as missing, not that it is any particular one.
+        """
+        column = pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))
+        out, _ = normalize_temporal_columns(pd.DataFrame({"d": column}))
+        assert out["d"].isna().tolist() == [False, True, False]
+        assert not (out["d"] == "NaT").any()
+
+    def test__timedelta__becomes_seconds_and_is_not_called_a_date(self) -> None:
+        """A duration is a quantity, not a point on a calendar."""
+        X = pd.DataFrame({"d": pd.to_timedelta([1, 2, 3], unit="D")})
+        out, indices = normalize_temporal_columns(X)
+        assert indices == []
+        assert out["d"].tolist() == [86400.0, 172800.0, 259200.0]
+
+    def test__input_frame_is_not_mutated(self) -> None:
+        X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
+        before = X.dtypes.tolist()
+        normalize_temporal_columns(X)
+        assert X.dtypes.tolist() == before
+
+    def test__duplicate_column_labels__are_replaced_by_position(self) -> None:
+        """The labels are the caller's, so they can repeat -- the same case
+        `build_input_feature_names` exists for. Replacing by label would be
+        ambiguous, so replacement is positional.
+        """
+        X = pd.concat(
+            [
+                pd.Series([1.0, 2.0, 3.0]),
+                pd.Series(pd.date_range("2020-01-01", periods=3)),
+                pd.Series([4.0, 5.0, 6.0]),
+            ],
+            axis=1,
+        )
+        X.columns = ["same", "same", "same"]
+
+        out, indices = normalize_temporal_columns(X)
+
+        assert indices == [1]
+        assert out.iloc[0, 1] == "2020-01-01"
+        # The columns either side are untouched, which is what would break if a
+        # label were used to find the one to replace.
+        assert out.iloc[:, 0].tolist() == [1.0, 2.0, 3.0]
+        assert out.iloc[:, 2].tolist() == [4.0, 5.0, 6.0]
+        assert list(out.columns) == ["same", "same", "same"]
+
+    def test__non_unique_index__is_preserved(self) -> None:
+        """Replacement must not depend on the index being unique or ordered."""
+        X = pd.DataFrame(
+            {"n": [1.0, 2.0, 3.0], "d": pd.date_range("2020-01-01", periods=3)},
+            index=[7, 7, 2],
+        )
+
+        out, indices = normalize_temporal_columns(X)
+
+        assert indices == [1]
+        assert list(out.index) == [7, 7, 2]
+        assert out.iloc[0, 1] == "2020-01-01"
+
+    def test__values_of_the_input_frame_are_not_written_through(self) -> None:
+        """The copy is shallow, so this pins that no value is written through it."""
+        X = pd.DataFrame({"n": [1.0, 2.0], "d": pd.date_range("2020-01-01", periods=2)})
+        before = X.copy(deep=True)
+
+        normalize_temporal_columns(X)
+
+        pd.testing.assert_frame_equal(X, before)
+
+    def test__rendering_twice__is_a_noop_the_second_time(self) -> None:
+        """Predict re-renders whatever it is handed, including a frame that fit
+        already rendered, so the second pass must find nothing left to do.
+        """
+        X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
+
+        once, first_indices = normalize_temporal_columns(X)
+        twice, second_indices = normalize_temporal_columns(once)
+
+        assert first_indices == [0]
+        assert second_indices == []
+        assert twice is once

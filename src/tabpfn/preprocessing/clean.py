@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Any, Literal
 
+    from tabpfn.constants import XType
     from tabpfn.preprocessing.steps.preprocessing_helpers import (
         OrderPreservingColumnTransformer,
     )
@@ -190,6 +191,114 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     return _cast_columns(X, cols, "float64")
 
 
+def _is_datetime_like_dtype(dtype: Any) -> bool:
+    """Whether `dtype` holds points in time: `datetime64`, tz-aware, or `period`."""
+    return pd.api.types.is_datetime64_any_dtype(dtype) or isinstance(
+        dtype, pd.PeriodDtype
+    )
+
+
+def normalize_temporal_columns(X: XType) -> tuple[XType, list[int]]:
+    """Recast every temporal column to a dtype numpy can hold, and say which are dates.
+
+    Runs *before* sklearn's ``validate_data``, which is where a temporal column
+    otherwise dies: numpy has no dtype that holds ``datetime64`` beside
+    ``float64``, so the common case of a date column next to numeric ones cannot
+    even be assembled into the array the rest of the pipeline works on. Alone it
+    fares no better -- ``fix_dtypes`` rejects the ``datetime64`` array outright.
+
+    A point in time (``datetime64``, tz-aware, or ``period``) becomes text, and
+    its position is reported so detection can tag it ``DATE`` without having to
+    guess. Text rather than ``object``-of-``Timestamp`` because only text
+    survives both routes out of here: a date read as a plain high-cardinality
+    category -- what happens whenever ``TRANSFORM_DATES`` is off -- is
+    ordinal-encoded, and that encoding cannot cast a ``Timestamp`` to a number.
+    Rendering also costs less than boxing (0.03s against 0.07s for 200k rows),
+    and lands the column in exactly the ISO 8601 form the date parser reads
+    fastest.
+
+    A duration (``timedelta64``) becomes its length in seconds and is *not*
+    reported: it is a quantity with no calendar in it, so the number is the
+    whole of its meaning.
+
+    Missing stays missing: ``astype(str)`` would otherwise write ``NaT`` out as
+    the literal string ``"NaT"``, a value that then reads as an ordinary
+    category.
+
+    Returns:
+        The frame with those columns recast, and the positions of the date ones.
+        Both unchanged and empty for anything that is not a `DataFrame`, and for
+        a `DataFrame` holding no temporal column.
+    """
+    if not isinstance(X, pd.DataFrame):
+        return X, []
+    dtypes = list(X.dtypes)
+    date_indices = [
+        i for i, dtype in enumerate(dtypes) if _is_datetime_like_dtype(dtype)
+    ]
+    duration_indices = [
+        i for i, dtype in enumerate(dtypes) if pd.api.types.is_timedelta64_dtype(dtype)
+    ]
+    if not date_indices and not duration_indices:
+        return X, []
+
+    recast: dict[int, np.ndarray] = {}
+    for position in date_indices:
+        column = X.iloc[:, position]
+        if isinstance(column.dtype, pd.PeriodDtype):
+            # A period is a span, not an instant; its start is the instant that
+            # orders identically, which is all the calendar features need.
+            column = column.dt.to_timestamp()
+        recast[position] = column.astype(str).where(column.notna(), None).to_numpy()
+    for position in duration_indices:
+        recast[position] = X.iloc[:, position].dt.total_seconds().to_numpy()
+    return _replace_columns_positionally(X, recast), date_indices
+
+
+def _replace_columns_positionally(
+    X: pd.DataFrame,
+    replacements: dict[int, np.ndarray],
+) -> pd.DataFrame:
+    """Return `X` with the given column positions replaced, leaving `X` untouched.
+
+    Positional, and via a temporary integer column axis rather than
+    ``isetitem``: the labels are the caller's, so they can repeat (the same
+    duplicate-name case ``build_input_feature_names`` exists for), which makes
+    assignment by label ambiguous -- and ``isetitem`` only arrived in pandas
+    1.5, below this package's floor. Numbering the axis makes every label unique
+    and equal to its own position, so a plain assignment is unambiguous, and the
+    caller's labels go back afterwards.
+
+    The copy is shallow and the frame handed in is never written through: each
+    assignment replaces a whole column rather than any value inside one.
+    """
+    out = X.copy(deep=False)
+    original_columns = out.columns
+    out.columns = pd.RangeIndex(out.shape[1])
+    for position, values in replacements.items():
+        out[position] = values
+    out.columns = original_columns
+    return out
+
+
+def _unsupported_array_dtype_error(dtype: Any) -> ValueError:
+    """The error for a numpy dtype `fix_dtypes` has no route for."""
+    if dtype.kind in STRING_DTYPE_KINDS:
+        return ValueError(f"String dtypes are not supported. Got dtype: {dtype}")
+    if dtype.kind in TEMPORAL_DTYPE_KINDS:
+        # `normalize_temporal_columns` recasts these, but per column and so only
+        # for a DataFrame; a bare temporal array never passed through it. Say
+        # what to do about it rather than name the dtype and stop.
+        return ValueError(
+            f"Temporal dtypes are not supported directly. Got dtype: {dtype}. "
+            "Pass the data as a pandas DataFrame instead, where a datetime column "
+            "is read as a date and, with "
+            '`inference_config={"TRANSFORM_DATES": True}`, expanded into calendar '
+            "features."
+        )
+    return ValueError(f"Invalid dtype for X: {dtype}")
+
+
 def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
@@ -208,12 +317,8 @@ def fix_dtypes(  # noqa: D103
             # of columns and rows to determine the dtypes.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
-        elif X.dtype.kind in STRING_DTYPE_KINDS:
-            raise ValueError(
-                f"String dtypes are not supported. Got dtype: {X.dtype}",
-            )
         else:
-            raise ValueError(f"Invalid dtype for X: {X.dtype}")
+            raise _unsupported_array_dtype_error(X.dtype)
     else:
         raise ValueError(f"Invalid type for X: {type(X)}")
 

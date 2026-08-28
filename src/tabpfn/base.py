@@ -35,7 +35,7 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.clean import fix_dtypes, normalize_temporal_columns
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.date_encoding import apply_date_expansion
 from tabpfn.utils import (
@@ -512,6 +512,7 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
+    X = normalize_temporal_columns(X)[0]
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = apply_date_expansion(X, model)
     # Not model.categorical_features_indices: those are raw, pre-expansion
