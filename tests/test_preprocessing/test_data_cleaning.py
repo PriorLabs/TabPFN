@@ -345,7 +345,10 @@ class TestTagFeaturesAndSanitizeData:
         )
         assert isinstance(X_out, np.ndarray)
         assert X_out.shape == input_data.shape
-        assert X_out.dtype == np.float64
+        # Numeric, rather than float64 specifically: a numeric ndarray with nothing
+        # to encode is handed back at its own dtype, and the widening to float64
+        # happens in the copy the preprocessing pipeline takes before its steps run.
+        assert X_out.dtype.kind in "biuf"
         assert ord_encoder is not None
 
     @pytest.mark.parametrize(
@@ -742,11 +745,14 @@ def test__process_text_na_dataframe__string_against_numeric_fit_categories() -> 
 
 # --- all-numeric fast path ------------------------------------------------------
 #
-# A numeric ndarray with no categorical columns has nothing to ordinally encode, so
-# `clean_data` converts it straight to float64 instead of building the intermediate
-# DataFrame and copying it back out. These pin the properties that shortcut has to
-# keep: same values, same layout, an owned array, and an encoder that is fitted
-# exactly as the general path leaves it.
+# A numeric ndarray with no categorical columns has nothing to ordinally encode and
+# no dtype to infer, so `clean_data` hands it straight back instead of building an
+# intermediate DataFrame and copying it out into a float64 table of its own. The
+# widening happens later, in the copy `PreprocessingPipeline._process_steps` takes
+# before the steps mutate anything, so that table exists once rather than twice.
+# These pin what the shortcut owes: the same values, an encoder fitted exactly as
+# the general path leaves it, and -- since the array handed back is the caller's --
+# that nothing downstream writes into it.
 
 
 def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSchema:
@@ -765,10 +771,19 @@ def _numeric_schema(n_cols: int, cat_indices: tuple[int, ...] = ()) -> FeatureSc
 
 @pytest.mark.parametrize("dtype", ["float32", "float64", "int64", "bool", "float16"])
 @pytest.mark.parametrize("passthrough_inf", [False, True])
-def test__clean_data__numeric_array_converts_without_intermediate_copy(
+def test__clean_data__numeric_array_is_handed_back_untouched(
     dtype: str, *, passthrough_inf: bool
 ) -> None:
-    """The shortcut returns exactly the float64 cast of its input."""
+    """The shortcut neither copies nor casts: cleaning such an array is a no-op.
+
+    The float64 table the steps read is made by
+    `PreprocessingPipeline._process_steps`, which copies before the steps mutate
+    it. Making one here as well would keep a second full-size table alive for the
+    whole of `fit` -- 10.67 GB of it on the profiled shape, under everything else
+    fit does. What that leaves is a contract: nobody writes into the array handed
+    back, since it is the caller's own
+    (`test__fit_predict__do_not_write_into_the_callers_array`).
+    """
     rng = np.random.default_rng(0)
     X = (rng.standard_normal((20, 4)) * 3).astype(dtype)
 
@@ -776,12 +791,8 @@ def test__clean_data__numeric_array_converts_without_intermediate_copy(
         X=X, feature_schema=_numeric_schema(4), passthrough_inf=passthrough_inf
     )
 
-    np.testing.assert_array_equal(out, X.astype(np.float64))
-    assert out.dtype == np.float64
+    assert out is X
     assert schema.num_columns == 4
-    # Owned and writeable: callers mutate the cleaned array in place downstream.
-    assert not np.shares_memory(out, X)
-    assert out.flags.writeable
     # Nothing was selected for encoding, so the encoder learned no categories.
     assert not hasattr(encoder.named_transformers_["encoder"], "categories_")
     assert encoder.n_features_in_ == 4
@@ -822,8 +833,9 @@ def test__clean_data__numeric_shortcut_matches_the_encoder_path() -> None:
     # the original small integers, so the two agree everywhere.
     assert encoder.named_transformers_["encoder"].categories_[0].size == 4
     np.testing.assert_array_equal(shortcut, general)
-    assert shortcut.dtype == general.dtype
-    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
+    # Only the values have to agree. The shortcut hands the caller's array back,
+    # so its dtype and layout are the caller's, while the general path builds its
+    # own float64 frame and gets pandas' column-major one.
 
 
 def test__fix_dtypes__numeric_array_stays_consolidated() -> None:
@@ -1203,10 +1215,10 @@ def test__clean_data_transform__matches_the_general_path_on_numeric_input() -> N
     )
 
     np.testing.assert_array_equal(shortcut, general)
-    assert shortcut.dtype == general.dtype == np.float64
-    assert shortcut.flags.f_contiguous == general.flags.f_contiguous
-    assert shortcut.flags.writeable
-    assert not np.shares_memory(shortcut, X)
+    assert general.dtype == np.float64
+    # The shortcut hands the caller's array straight back rather than casting it;
+    # the widening happens in the copy the pipeline takes before the steps run.
+    assert shortcut is X
 
 
 def test__clean_data_transform__still_encodes_a_text_column_fit_as_strings() -> None:
@@ -1243,3 +1255,44 @@ def test__clean_data_transform__still_encodes_a_text_column_fit_as_strings() -> 
 
     # Encoded against the fit categories, so the codes are not the raw numbers.
     assert not np.array_equal(out[:, 1], X_pred[:, 1])
+
+
+def test__fit_predict__do_not_write_into_the_callers_array() -> None:
+    """Neither fit nor predict may change the array they were handed.
+
+    `clean_data` hands a numeric array back uncopied, so the array the wrapper
+    carries through `fit` *is* the caller's. What keeps that safe is the copy
+    `PreprocessingPipeline._process_steps` takes before any step mutates
+    anything -- and this is the test that says so, rather than the copy
+    `clean_data` used to make on the way past.
+    """
+    rng = np.random.default_rng(0)
+    X = rng.standard_normal((80, 5)).astype(np.float32)
+    X[2, 3] = np.nan
+    y = rng.integers(0, 2, 80)
+    before = X.copy()
+
+    model = TabPFNClassifier(n_estimators=2, device="cpu", random_state=0).fit(X, y)
+    model.predict_proba(X)
+
+    np.testing.assert_array_equal(X, before)
+
+
+def test__fit_predict__a_float32_input_predicts_as_its_float64_equal() -> None:
+    """The input's dtype does not reach the steps, so it cannot change the output.
+
+    `clean_data` no longer widens, but the pipeline's copy does, and widening a
+    float32 value to float64 is exact. So the same table offered at either
+    precision has to come out the same, bit for bit -- which is what makes the
+    move of the cast a memory change rather than a numerical one.
+    """
+    rng = np.random.default_rng(0)
+    X32 = rng.standard_normal((80, 5)).astype(np.float32)
+    X64 = X32.astype(np.float64)
+    y = rng.integers(0, 2, 80)
+
+    def proba(X: np.ndarray) -> np.ndarray:
+        model = TabPFNClassifier(n_estimators=2, device="cpu", random_state=0)
+        return model.fit(X, y).predict_proba(X)
+
+    np.testing.assert_array_equal(proba(X32), proba(X64))

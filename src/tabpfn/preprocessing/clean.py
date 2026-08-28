@@ -122,20 +122,6 @@ def _encoder_selects_nothing(
     return ord_encoder is None or not ord_encoder.selected_columns()
 
 
-def _cast_to_float64_table(X: np.ndarray) -> np.ndarray:
-    """Convert `X` to the float64 table the rest of the wrapper expects.
-
-    One allocation, straight into the array that is returned. Going through
-    pandas instead would wrap `X` in a float64 frame that is then copied back
-    out, holding two full-size buffers to produce one -- 5.33 GB of avoidable
-    transient on a 333,333 x 2,000 predict.
-
-    F order because that is what a single-block frame's `to_numpy` hands back,
-    and column-major is what the per-column steps downstream read.
-    """
-    return np.array(X, dtype=np.float64, order="F", copy=True)
-
-
 def clean_data_transform(
     X: np.ndarray | pd.DataFrame,
     *,
@@ -163,7 +149,7 @@ def clean_data_transform(
         # `passthrough_inf` makes no difference here: it records the +/-inf cells,
         # NaNs them so the encoder does not choke, and writes them back at the same
         # positions afterwards -- an exact round trip when nothing is encoded.
-        return _cast_to_float64_table(X)
+        return X
 
     return process_text_na_dataframe(
         X=fix_dtypes(X=X, cat_indices=cat_indices),
@@ -204,7 +190,7 @@ def clean_data(
         # single row: with no column selected it learns nothing from the values,
         # only the column bookkeeping.
         ord_encoder.fit(fix_dtypes(X=X[:1], cat_indices=cat_indices))
-        return _cast_to_float64_table(X), ord_encoder, feature_schema
+        return X, ord_encoder, feature_schema
 
     # Will convert inferred categorical indices to category dtype,
     # to be picked up by the ord_encoder, as well

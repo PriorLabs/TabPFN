@@ -452,7 +452,16 @@ class PreprocessingPipeline:
         """
         # Single copy to preserve immutability for the caller, avoiding N copies
         # inside the loop for steps that target specific modalities.
-        X = X.copy() if isinstance(X, np.ndarray) else X.clone()
+        #
+        # It is also where the float64 table is made. `clean_data` hands a numeric
+        # input back at its own dtype rather than casting it, so this is the only
+        # full-size float64 array the run holds; the widening is exact, so the steps
+        # below see the values they always saw.
+        X = (
+            X.astype(np.float64, order="C", copy=True)
+            if isinstance(X, np.ndarray)
+            else X.clone()
+        )
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
