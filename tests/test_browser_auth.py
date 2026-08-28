@@ -550,7 +550,9 @@ class TestHeadlessInteractiveLogin:
             "tabpfn.browser_auth._headless_cbreak_loop",
             return_value="jwt-val",
         ) as mock_cbreak:
-            result = headless_login("https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+            result = headless_login(
+                "https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+            )
         assert result == "jwt-val"
         assert "tabpfn_2_6" in mock_cbreak.call_args[0][0]
 
