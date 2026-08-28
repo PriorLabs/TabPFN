@@ -93,7 +93,7 @@ Choose the right TabPFN implementation for your needs:
 - **[TabPFN (this repo)](https://github.com/priorlabs/tabpfn)**
   Core implementation for fast and local inference with PyTorch and CUDA support.
 
-- **[TabPFN UX](https://ux.priorlabs.ai)**
+- **[TabPFN UX](https://platform.priorlabs.ai)**
   No-code graphical interface to explore TabPFN capabilities—ideal for business users and prototyping.
 
 ## License
@@ -228,9 +228,9 @@ TabPFN requires **Python 3.10+** due to newer language features. Compatible vers
 <details>
 <summary><b>Q: How do I get access to TabPFN-2.5 / TabPFN-2.6 / TabPFN-3?</b></summary>
 
-On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://ux.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
+On first use, TabPFN will automatically open a browser window where you can log in via [PriorLabs](https://platform.priorlabs.ai) and accept the license terms. Your authentication token is cached locally so you only need to do this once.
 
-**For headless / CI environments** where a browser is not available, visit [https://ux.priorlabs.ai](https://ux.priorlabs.ai), go to the **License** tab to accept the license, and then set the `TABPFN_TOKEN` environment variable with a token obtained from your account.
+**For headless / CI environments** where a browser is not available, visit [https://platform.priorlabs.ai](https://platform.priorlabs.ai), go to the **License** tab to accept the license, and then set the `TABPFN_TOKEN` environment variable with a token obtained from your account.
 
 If access via the browser-based flow is not an option for you, please contact us at [`sales@priorlabs.ai`](mailto:sales@priorlabs.ai).
 
@@ -283,7 +283,7 @@ Try the following:
 TabPFN uses Pydantic settings for configuration, supporting environment variables and `.env` files:
 
 **Authentication:**
-- `TABPFN_TOKEN`: Provide a PriorLabs authentication token directly (useful for headless/CI environments). Obtain one from [https://ux.priorlabs.ai](https://ux.priorlabs.ai).
+- `TABPFN_TOKEN`: Provide a PriorLabs authentication token directly (useful for headless/CI environments). Obtain one from [https://platform.priorlabs.ai](https://platform.priorlabs.ai).
 - `TABPFN_NO_BROWSER`: Set to disable automatic browser-based login (e.g. in environments where opening a browser is undesirable).
 
 **Model Configuration:**

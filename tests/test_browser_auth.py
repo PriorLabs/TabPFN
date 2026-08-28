@@ -444,7 +444,7 @@ class TestHeadlessCbreakLoop:
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():
-            result = cbreak_loop("https://ux.priorlabs.ai/login?hf_repo_id=tabpfn_2_6")
+            result = cbreak_loop("https://platform.priorlabs.ai/login?hf_repo_id=tabpfn_2_6")
 
         assert result == "eyJhbGciOiJIUzI1NiJ9"
 
@@ -459,10 +459,10 @@ class TestHeadlessCbreakLoop:
             self._patch_termios(),
             patch("tabpfn.browser_auth._copy_osc52") as mock_osc52,
         ):
-            result = cbreak_loop("https://ux.priorlabs.ai/login")
+            result = cbreak_loop("https://platform.priorlabs.ai/login")
 
         assert result == "mytok"
-        mock_osc52.assert_called_once_with("https://ux.priorlabs.ai/login")
+        mock_osc52.assert_called_once_with("https://platform.priorlabs.ai/login")
 
     def test_eof_returns_none(self, monkeypatch: pytest.MonkeyPatch):
         """EOF on first read returns None."""
@@ -471,7 +471,7 @@ class TestHeadlessCbreakLoop:
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():
-            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+            assert cbreak_loop("https://platform.priorlabs.ai/login") is None
 
     def test_ctrl_c_returns_none(self, monkeypatch: pytest.MonkeyPatch):
         """Ctrl+C character returns None."""
@@ -480,7 +480,7 @@ class TestHeadlessCbreakLoop:
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():
-            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+            assert cbreak_loop("https://platform.priorlabs.ai/login") is None
 
     def test_keyboard_interrupt_returns_none(self, monkeypatch: pytest.MonkeyPatch):
         """KeyboardInterrupt during read returns None."""
@@ -490,7 +490,7 @@ class TestHeadlessCbreakLoop:
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():
-            assert cbreak_loop("https://ux.priorlabs.ai/login") is None
+            assert cbreak_loop("https://platform.priorlabs.ai/login") is None
 
     def test_backspace_erases_char(self, monkeypatch: pytest.MonkeyPatch):
         """Backspace removes the previous character."""
@@ -500,7 +500,7 @@ class TestHeadlessCbreakLoop:
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
 
         with self._patch_termios():
-            assert cbreak_loop("https://ux.priorlabs.ai/login") == "ac"
+            assert cbreak_loop("https://platform.priorlabs.ai/login") == "ac"
 
 
 class TestHeadlessReadlineLoop:
@@ -515,14 +515,14 @@ class TestHeadlessReadlineLoop:
         readline_loop = self._import_readline_loop()
         fake = io.StringIO("my-tok-val\n")
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
-        assert readline_loop("https://ux.priorlabs.ai/login") == "my-tok-val"
+        assert readline_loop("https://platform.priorlabs.ai/login") == "my-tok-val"
 
     def test_copy_then_token(self, monkeypatch: pytest.MonkeyPatch):
         readline_loop = self._import_readline_loop()
         fake = io.StringIO("c\nmy-tok-val\n")
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
         with patch("tabpfn.browser_auth._copy_osc52") as mock_osc52:
-            result = readline_loop("https://ux.priorlabs.ai/login")
+            result = readline_loop("https://platform.priorlabs.ai/login")
         assert result == "my-tok-val"
         mock_osc52.assert_called_once()
 
@@ -530,7 +530,7 @@ class TestHeadlessReadlineLoop:
         readline_loop = self._import_readline_loop()
         fake = io.StringIO("")
         monkeypatch.setattr("tabpfn.browser_auth.sys.stdin", fake)
-        assert readline_loop("https://ux.priorlabs.ai/login") is None
+        assert readline_loop("https://platform.priorlabs.ai/login") is None
 
 
 class TestHeadlessInteractiveLogin:
@@ -550,7 +550,9 @@ class TestHeadlessInteractiveLogin:
             "tabpfn.browser_auth._headless_cbreak_loop",
             return_value="jwt-val",
         ) as mock_cbreak:
-            result = headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+            result = headless_login(
+                "https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+            )
         assert result == "jwt-val"
         assert "tabpfn_2_6" in mock_cbreak.call_args[0][0]
 
@@ -573,7 +575,7 @@ class TestHeadlessInteractiveLogin:
                 return_value="jwt-val",
             ) as mock_readline,
         ):
-            result = headless_login("https://ux.priorlabs.ai")
+            result = headless_login("https://platform.priorlabs.ai")
         assert result == "jwt-val"
         mock_readline.assert_called_once()
 
@@ -583,7 +585,7 @@ class TestHeadlessInteractiveLogin:
             patch("tabpfn.browser_auth._headless_cbreak_loop", return_value=None),
             patch("tabpfn.browser_auth._headless_readline_loop", return_value=None),
         ):
-            headless_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+            headless_login("https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6")
         captured = capsys.readouterr()
         assert "hf_repo_id=tabpfn_2_6" in captured.out
 
@@ -604,7 +606,7 @@ class TestTryBrowserLoginRouting:
         try_login = self._import_try_login()
         with patch("tabpfn.browser_auth.sys.stdin") as mock_stdin:
             mock_stdin.isatty.return_value = False
-            assert try_login("https://ux.priorlabs.ai") is None
+            assert try_login("https://platform.priorlabs.ai") is None
 
     def test_headless_routes_to_headless_login(self):
         """TTY + no display → delegates to _headless_interactive_login."""
@@ -618,11 +620,11 @@ class TestTryBrowserLoginRouting:
             ) as mock_headless,
         ):
             mock_stdin.isatty.return_value = True
-            result = try_login("https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6")
+            result = try_login("https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6")
 
         assert result == "headless-jwt"
         mock_headless.assert_called_once_with(
-            "https://ux.priorlabs.ai", hf_repo_id="tabpfn_2_6"
+            "https://platform.priorlabs.ai", hf_repo_id="tabpfn_2_6"
         )
 
     def test_graphical_opens_browser(self):
@@ -635,7 +637,7 @@ class TestTryBrowserLoginRouting:
             patch("tabpfn.browser_auth._poll_for_token", return_value="browser-jwt"),
         ):
             mock_stdin.isatty.return_value = True
-            result = try_login("https://ux.priorlabs.ai")
+            result = try_login("https://platform.priorlabs.ai")
 
         assert result == "browser-jwt"
         mock_browser.assert_called_once()
