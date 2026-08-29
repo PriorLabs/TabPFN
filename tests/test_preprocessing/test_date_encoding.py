@@ -13,6 +13,7 @@ import pytest
 import tabpfn.base
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
+from tabpfn.preprocessing import date_encoding
 from tabpfn.preprocessing.clean import clean_data
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import DateFeatureExpander
@@ -260,6 +261,38 @@ def test__predict__column_detection_would_reject__is_nan_not_an_error(
     have rejected comes back all-NaT here -- degraded calendar features -- and
     never as an exception from a column that fit accepted.
     """
+    expander = DateFeatureExpander()
+    expander.fit_transform(
+        _numeric_and_date_frame(_dates()), _numeric_and_date_schema()
+    )
+
+    X_test_out = expander.transform(_numeric_and_date_frame(column))
+
+    assert np.isnan(X_test_out[:, 1:].astype(float)).all(), label
+
+
+@pytest.mark.parametrize(
+    ("label", "column"),
+    [
+        ("numbers", list(range(N))),
+        ("bare times", ["12:00:00"] * N),
+        ("garbage", [f"junk{i}" for i in range(N)]),
+    ],
+)
+def test__predict__column_detection_would_reject__is_nan_below_pandas_2(
+    monkeypatch: pytest.MonkeyPatch, label: str, column: list
+) -> None:
+    """The same guard as above, without `format="ISO8601"` (pandas < 2.0).
+
+    Simulated rather than actually installing an old pandas. Regression:
+    without an explicit format, `pd.to_datetime` is far more lenient than with
+    it -- it reads a plain number as nanoseconds since the epoch and fills in
+    today's date for a bare time, instead of rejecting either (this broke CI's
+    `lowest-direct` pandas job, which pins pandas < 2.0, right after the ISO
+    fast path was dropped in favor of `format="ISO8601"`). What catches these
+    regardless of pandas version is `_LOOKS_LIKE_AN_ISO_DATE`.
+    """
+    monkeypatch.setattr(date_encoding, "PANDAS_SUPPORTS_ISO8601_FORMAT", False)
     expander = DateFeatureExpander()
     expander.fit_transform(
         _numeric_and_date_frame(_dates()), _numeric_and_date_schema()

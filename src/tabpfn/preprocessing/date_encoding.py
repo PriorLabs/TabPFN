@@ -8,6 +8,7 @@ Only reached when `TRANSFORM_DATES` is on.
 from __future__ import annotations
 
 import dataclasses
+import re
 import warnings
 from typing import TYPE_CHECKING
 
@@ -23,6 +24,17 @@ from tabpfn.preprocessing.datamodel import (
 
 if TYPE_CHECKING:
     import numpy as np
+
+#: The year-month-day prefix every value `normalize_temporal_columns` renders
+#: starts with, whatever precision follows it (date-only, with time, with an
+#: offset, ...). Anything not shaped like this at predict time did not come
+#: from a genuine datetime dtype -- e.g. a bare time or a plain number -- and
+#: `pd.to_datetime` can default or misinterpret those into a plausible-looking
+#: but wrong value (a bare time silently becomes today's date; a small integer
+#: becomes a near-1970 timestamp, read as nanoseconds since the epoch) instead
+#: of raising, especially without `format="ISO8601"` (pandas < 2.0). Checked
+#: before parsing decides anything, so it holds regardless of pandas version.
+_LOOKS_LIKE_AN_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def _make_datetime_encoder() -> DatetimeEncoder:
@@ -56,10 +68,15 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     Still never raises, for a predict-time column that no longer matches what
     fit saw (e.g. it arrived as a genuine datetime dtype at fit but drifted to
     plain, malformed strings at predict): a crash is a worse outcome than a
-    degraded (NaN) calendar feature for a column fit already accepted.
+    degraded (NaN) calendar feature for a column fit already accepted. Every
+    value is checked against `_LOOKS_LIKE_AN_ISO_DATE` and masked to `NaT` if
+    it fails, since `pd.to_datetime` can otherwise turn a drifted value (a
+    bare time, a plain number) into a plausible-looking but wrong date instead
+    of rejecting it -- most likely without `format="ISO8601"` (pandas < 2.0),
+    but checked unconditionally rather than trusted to only matter there.
     `pd.to_datetime` can also silently succeed with an inconsistent per-value
     result (e.g. mixed UTC offsets, without a uniform dtype behind them)
-    instead of raising -- caught here by checking the result is actually
+    instead of raising -- caught by checking the result is actually
     `datetime64`, not just checking for an exception.
 
     `ISO8601` needs pandas >= 2.0 (see `PANDAS_SUPPORTS_ISO8601_FORMAT`);
@@ -81,7 +98,8 @@ def _parse_dates(column: pd.Series) -> pd.Series:
         parsed = None
     if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
         return pd.Series(pd.NaT, index=column.index, dtype="datetime64[ns]")
-    return parsed
+    looks_like_a_date = column.astype(str).str.match(_LOOKS_LIKE_AN_ISO_DATE)
+    return parsed.mask(~looks_like_a_date.to_numpy())
 
 
 class DateFeatureExpander:
