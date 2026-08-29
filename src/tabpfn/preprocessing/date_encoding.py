@@ -99,7 +99,22 @@ def _parse_dates(column: pd.Series) -> pd.Series:
     if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
         return pd.Series(pd.NaT, index=column.index, dtype="datetime64[ns]")
     looks_like_a_date = column.astype(str).str.match(_LOOKS_LIKE_AN_ISO_DATE)
-    return parsed.mask(~looks_like_a_date.to_numpy())
+    return parsed.mask(~_as_plain_bool_array(looks_like_a_date))
+
+
+def _as_plain_bool_array(matched: pd.Series) -> np.ndarray:
+    """A `.str.match` result, as a plain (non-nullable) boolean numpy array.
+
+    `.str.match` can answer `pd.NA` for a missing value rather than `False`
+    (e.g. on a nullable `"string"`-dtype column -- which `column.astype(str)`
+    produces on some pandas versions for a column already stored that way),
+    and a bare `.to_numpy()` cannot convert that: `Series.mask` then raises on
+    the resulting `object` array ("Boolean array expected for the condition,
+    not object"). A missing value already parsed to `NaT` regardless, so
+    treating it as "not date-shaped" (`na_value=False`) is correct here, not
+    just a crash workaround.
+    """
+    return matched.to_numpy(dtype=bool, na_value=False)
 
 
 class DateFeatureExpander:

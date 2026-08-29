@@ -303,6 +303,54 @@ def test__predict__column_detection_would_reject__is_nan_below_pandas_2(
     assert np.isnan(X_test_out[:, 1:].astype(float)).all(), label
 
 
+def test__as_plain_bool_array__nullable_boolean_with_missing__does_not_crash() -> None:
+    """Regression: `.str.match` can answer `pd.NA` for a missing value rather
+    than `False` (e.g. `column.astype(str)` in `_parse_dates` produces a
+    nullable `"string"` dtype, on some pandas versions, for a column already
+    stored that way), and a bare `.to_numpy()` on that result cannot convert
+    it -- `Series.mask` then raised on the resulting `object` array ("Boolean
+    array expected for the condition, not object"). Built directly with
+    `dtype="boolean"` since the installed pandas version does not reach this
+    through `_parse_dates`'s own `column.astype(str)` call on a plain column.
+    """
+    matched = pd.Series([True, pd.NA, False], dtype="boolean")
+
+    result = date_encoding._as_plain_bool_array(matched)
+
+    assert result.dtype == bool
+    assert result.tolist() == [True, False, False]
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_predict__native_datetime_column_with_missing_value__does_not_crash(
+    estimator_cls: type,
+) -> None:
+    """Regression: a genuine `datetime64` column with a `NaT` must not crash
+    `fit`/`predict` under `TRANSFORM_DATES=True` -- the missing row's calendar
+    features degrade to `NaN`, like any other missing value.
+    """
+    n = 60
+    rng = np.random.default_rng(0)
+    dates = pd.Series(pd.date_range("2020-01-01", periods=n, freq="D"))
+    dates.iloc[3] = pd.NaT
+    X = pd.DataFrame({"num": rng.normal(size=n), "signed_on": dates})
+    y = _classification_or_regression_target(estimator_cls, rng, n)
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        model.fit(X, y)
+        out = (
+            model.predict_proba(X)
+            if estimator_cls is TabPFNClassifier
+            else model.predict(X)
+        )
+
+    assert np.isfinite(out).all()
+
+
 def test__mixed_date_and_datetime_string_formats__all_parse() -> None:
     """Regression: naive `pd.to_datetime` infers a format from an early value
     and silently coerces a later, differently-shaped but valid value to NaT.
