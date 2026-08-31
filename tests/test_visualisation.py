@@ -30,7 +30,12 @@ def test_regression_distribution_example_saves_plot(tmp_path: Path) -> None:
 
     module = _load_example_module()
     output_path = tmp_path / "regression_distribution.png"
-    module.main(output_path=str(output_path), show=False)
+    # This test only checks that a plot gets saved -- device coverage is
+    # exercised elsewhere (test_regressor_interface.py). Pinned to CPU since
+    # MPS on GitHub's macOS runners has a flaky, unrealistically low memory
+    # ceiling (`RuntimeError: MPS backend out of memory`, ~5 MiB) unrelated to
+    # this example.
+    module.main(output_path=str(output_path), show=False, device="cpu")
 
     assert output_path.exists()
     assert output_path.stat().st_size > 0

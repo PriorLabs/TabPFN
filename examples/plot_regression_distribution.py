@@ -15,7 +15,10 @@ from tabpfn.visualisation import plot_regression_distribution
 
 
 def main(
-    output_path: str = "regression_distribution.png", *, show: bool = True
+    output_path: str = "regression_distribution.png",
+    *,
+    show: bool = True,
+    device: str = "auto",
 ) -> None:
     """Fit a regressor and plot the predicted distribution for three test points."""
     X, y = load_diabetes(return_X_y=True)
@@ -23,7 +26,7 @@ def main(
         X, y, test_size=0.2, random_state=0
     )
 
-    reg = TabPFNRegressor(n_estimators=4)
+    reg = TabPFNRegressor(n_estimators=4, device=device)
     reg.fit(X_train, y_train)
 
     # Pick the test points with the lowest, median and highest predicted target, so the
