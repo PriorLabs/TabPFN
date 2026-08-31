@@ -7,10 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- The softmax temperature is now part of the inference config (`InferenceConfig.SOFTMAX_TEMPERATURE`), so a checkpoint can ship the temperature it was trained for instead of the interface hard-coding one for every model. The `softmax_temperature` argument of `TabPFNClassifier`/`TabPFNRegressor` now defaults to `"auto"`, meaning "use what the checkpoint declares"; passing a float still overrides it for every model, as before. Behavior is unchanged for existing checkpoints: none of them carry the new field, so they fall back to the field's default of `0.9`, which is the value the interface used to apply. Ensembling checkpoints that declare different temperatures now raises, naming the temperatures involved, and asks for one to be passed explicitly; the whole ensemble then uses it.
-
 ## [8.5.0] - 2026-08-27
 
 ### Breaking Changes
