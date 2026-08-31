@@ -925,16 +925,6 @@ def _get_lightgbm_model_cls(task_type: Literal["classifier", "regressor"]) -> ty
     )
 
 
-def _as_float64(X: np.ndarray) -> np.ndarray:
-    """Widen `X` to float64, without copying one that is float64 already.
-
-    The importance model bins each feature from the values it is handed, so the
-    ranking it produces depends on their dtype. `clean_data` no longer casts, so
-    widen here instead and keep the ranking the one a float64 table produced.
-    """
-    return np.asarray(X, dtype=np.float64)
-
-
 def _collect_importance_orderings(
     X: np.ndarray,
     y: np.ndarray,
@@ -954,7 +944,9 @@ def _collect_importance_orderings(
     n_samples = len(X)
 
     if n_samples <= max_samples:
-        ordering = fit_ordering_fn(_as_float64(X), y)
+        # The importance model bins each feature from the values it is handed,
+        # but `clean_data` no longer casts: not a no-op
+        ordering = fit_ordering_fn(np.asarray(X, dtype=np.float64), y)
         return [ordering] * n_estimators
 
     from sklearn.model_selection import train_test_split  # noqa: PLC0415
@@ -969,7 +961,9 @@ def _collect_importance_orderings(
             stratify=stratify,
             random_state=int(rng.integers(0, np.iinfo(np.int32).max)),
         )
-        orderings.append(fit_ordering_fn(_as_float64(X[idx]), y[idx]))
+        # The importance model bins each feature from the values it is handed,
+        # but `clean_data` no longer casts: not a no-op
+        orderings.append(fit_ordering_fn(np.asarray(X[idx], dtype=np.float64), y[idx]))
     return [orderings[i % n_subsamples] for i in range(n_estimators)]
 
 
