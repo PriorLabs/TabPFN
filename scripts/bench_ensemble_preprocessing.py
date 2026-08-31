@@ -137,6 +137,7 @@ from bench_clean_data import (
     run_grid,
     timing_as_dict,
     train_rows_for,
+    values_fingerprint,
     verify_reference_ran_the_reference,
 )
 from torch.utils.benchmark import Measurement, Timer
@@ -352,7 +353,7 @@ def build_ensemble_inputs(spec: dict[str, Any]) -> EnsembleInputs:
         inference_config=inference_config,
         n_classes=label_metadata.n_classes,
         raw_fingerprint=raw_fingerprint,
-        cleaned_fingerprint=fingerprint(X_train),
+        cleaned_fingerprint=values_fingerprint(X_train),
         n_categorical=len(feature_schema.indices_for(FeatureModality.CATEGORICAL)),
     )
 
@@ -1016,6 +1017,12 @@ def check_input_fingerprints(
     receives. It can drift without the generated table drifting at all -- a change to
     `clean_data` is enough -- which under `--reference` means the two sides are not
     measuring the same input and no difference between them can be attributed.
+
+    Its *values* are what is checked, not its dtype: `clean_data` hands a numeric
+    input back at its own precision, so a run and its reference can hold the same
+    table as float32 and as float64 and still be measuring the same input. The
+    generated table is held to the stricter `fingerprint`, since both sides have to
+    have been handed the identical array for any of this to mean anything.
     """
     was = recorded["input"]
     problems = []

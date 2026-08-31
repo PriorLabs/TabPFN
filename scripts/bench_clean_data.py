@@ -554,6 +554,32 @@ def fingerprint(X: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def values_fingerprint(X: np.ndarray) -> str:
+    """Digest of an array's values as the steps read them, ignoring its container.
+
+    `fingerprint` digests the dtype alongside the bytes, which is what the
+    *generated* table needs: both sides of a comparison must have been given the
+    identical array. It is too strict for `clean_data`'s output. A numeric input is
+    handed back at its own precision now, so a run and its reference can hold the
+    same values as float32 and as float64 and still be measuring the same input --
+    the pipeline widens either to float64 before a step sees it. So digest that
+    widening, and let the container differ.
+    """
+    digest = hashlib.sha256()
+    digest.update(f"{X.shape}|{SEED}".encode())
+    flat = X.ravel()
+    if X.dtype == object:
+        for edge in (
+            flat[:FINGERPRINT_OBJECT_ELEMENTS],
+            flat[-FINGERPRINT_OBJECT_ELEMENTS:],
+        ):
+            digest.update("|".join(map(repr, edge.tolist())).encode())
+    else:
+        digest.update(flat[:FINGERPRINT_ELEMENTS].astype(np.float64).tobytes())
+        digest.update(flat[-FINGERPRINT_ELEMENTS:].astype(np.float64).tobytes())
+    return digest.hexdigest()
+
+
 def describe_input_size(X: np.ndarray) -> str:
     """`X`'s footprint, flagging what an object array's `nbytes` leaves out."""
     if X.dtype == object:
@@ -848,12 +874,21 @@ def compare_array(
 
     problems = []
     if baseline.dtype != X_cleaned.dtype:
-        problems.append(f"cleaned array dtype {X_cleaned.dtype} != {baseline.dtype}")
+        # Not a failure on its own. `clean_data` hands a numeric input back at the
+        # input's own dtype rather than casting it, so a baseline recorded when it
+        # cast holds float64 where this run holds float32 -- the same values in a
+        # narrower container. What must not move is the values, and they are
+        # compared below at float64, which is what the steps read either way: a
+        # narrowing that actually lost precision shows up there as a difference.
+        print(
+            f"  note: cleaned array dtype {X_cleaned.dtype} != recorded "
+            f"{baseline.dtype}; comparing values at float64."
+        )
 
     for start in range(0, X_cleaned.shape[0], chunk_rows):
         stop = min(start + chunk_rows, X_cleaned.shape[0])
-        recorded = np.asarray(baseline[start:stop])
-        current = X_cleaned[start:stop]
+        recorded = np.asarray(baseline[start:stop], dtype=np.float64)
+        current = X_cleaned[start:stop].astype(np.float64, copy=False)
         if np.array_equal(recorded, current, equal_nan=True):
             continue
         differing = ~((recorded == current) | (np.isnan(recorded) & np.isnan(current)))
@@ -1983,6 +2018,10 @@ def main(args: argparse.Namespace) -> None:
         print("Outputs are identical to the recorded ones.")
 
     pending = write_outputs(out_dir, X_cleaned, ord_encoder, out_schema)
+    # Recorded because it is no longer fixed: `clean_data` hands a numeric input
+    # back at the input's own dtype, so this says which container the measured
+    # numbers were produced in.
+    cleaned_dtype = str(X_cleaned.dtype)
     # Drop the output before timing, so the repeats run at the footprint the
     # measured call ran at rather than carrying an extra copy of it.
     del output, X_cleaned, ord_encoder, out_schema
@@ -2024,6 +2063,7 @@ def main(args: argparse.Namespace) -> None:
                 {
                     "schema_version": SCHEMA_VERSION,
                     "input": {**spec, "fingerprint": input_fingerprint},
+                    "output": {"dtype": cleaned_dtype},
                     "environment": environment,
                     "config": {
                         "sample_interval_ms": args.sample_interval_ms,
