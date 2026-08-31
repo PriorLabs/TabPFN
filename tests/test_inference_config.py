@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import io
+import warnings
 from dataclasses import asdict, replace
 
 import numpy as np
@@ -69,7 +70,10 @@ def test__override_with_user_input__config_override__replaces_entire_config() ->
         PREPROCESS_TRANSFORMS=[PreprocessorConfig(name="adaptive")],
         POLYNOMIAL_FEATURES="all",
     )
-    new_config = config.override_with_user_input_and_resolve_auto(override_config)
+    with pytest.warns(
+        FutureWarning, match="deprecated and will be removed in a future version"
+    ):
+        new_config = config.override_with_user_input_and_resolve_auto(override_config)
     assert new_config is not config
     assert new_config != config
     assert new_config == override_config
@@ -494,3 +498,124 @@ def test__regressor_softmax_temperature__checkpoints_disagree__raises() -> None:
     reg = TabPFNRegressor(model_path=[base, other], device="cpu", n_estimators=2)
     with pytest.raises(ValueError, match="different softmax temperatures"):
         reg.fit(X, y)
+
+
+# =============================================================================
+# Deprecation of the `InferenceConfig` object form of `inference_config`
+# =============================================================================
+
+
+def test__inference_config_object__warns_that_it_replaces_the_checkpoint_config(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The object form is the one that silently discards checkpoint values."""
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs(),
+        device="cpu",
+        inference_config=InferenceConfig.get_default("multiclass", ModelVersion.V2_5),
+    )
+
+    with pytest.warns(
+        FutureWarning, match="deprecated and will be removed in a future version"
+    ):
+        clf.fit(X, y)
+
+
+def test__inference_config_dict__does_not_warn(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The recommended form is not deprecated."""
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs(),
+        device="cpu",
+        inference_config={"POLYNOMIAL_FEATURES": "all"},
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        clf.fit(X, y)
+
+
+def test__no_inference_config__does_not_warn(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    clf = TabPFNClassifier(model_path=_classifier_specs(), device="cpu")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        clf.fit(X, y)
+
+
+def test__inference_config_object__still_replaces_the_whole_config(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Deprecated, not yet changed: the object still wins over the checkpoint.
+
+    The checkpoint's `MAX_NUMBER_OF_FEATURES` and `SOFTMAX_TEMPERATURE` are both
+    replaced, even though the config passed in mentions neither.
+    """
+    X, y = classification_data
+    specs = _classifier_specs(0.42)
+    specs.inference_config = replace(
+        specs.inference_config, MAX_NUMBER_OF_FEATURES=1234
+    )
+    user_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", inference_config=user_config)
+    with pytest.warns(FutureWarning):
+        clf.fit(X, y)
+
+    resolved = clf.get_inference_config()
+    assert resolved.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE
+    assert resolved.MAX_NUMBER_OF_FEATURES == user_config.MAX_NUMBER_OF_FEATURES != 1234
+
+
+def test__inference_config_dict__keeps_every_field_it_does_not_name(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The migration the warning recommends: a dict leaves the checkpoint alone."""
+    X, y = classification_data
+    specs = _classifier_specs(0.42)
+    specs.inference_config = replace(
+        specs.inference_config, MAX_NUMBER_OF_FEATURES=1234
+    )
+
+    clf = TabPFNClassifier(
+        model_path=specs, device="cpu", inference_config={"POLYNOMIAL_FEATURES": "all"}
+    )
+    clf.fit(X, y)
+
+    resolved = clf.get_inference_config()
+    assert resolved.POLYNOMIAL_FEATURES == "all"
+    assert resolved.SOFTMAX_TEMPERATURE == 0.42
+    assert resolved.MAX_NUMBER_OF_FEATURES == 1234
+
+
+def test__asdict_of_a_config__reproduces_the_object_form(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """The escape hatch the warning names, for callers that do want a full replace."""
+    X, y = classification_data
+    specs = _classifier_specs(0.42)
+    user_config = replace(
+        InferenceConfig.get_default("multiclass", ModelVersion.V2_5),
+        POLYNOMIAL_FEATURES="all",
+    )
+
+    from_object = TabPFNClassifier(
+        model_path=specs, device="cpu", inference_config=user_config
+    )
+    with pytest.warns(FutureWarning):
+        from_object.fit(X, y)
+
+    from_dict = TabPFNClassifier(
+        model_path=specs, device="cpu", inference_config=asdict(user_config)
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        from_dict.fit(X, y)
+
+    assert from_dict.get_inference_config() == from_object.get_inference_config()
