@@ -452,6 +452,9 @@ def initialize_model_variables_helper(
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
         user_config=user_config,
     )
+    # Applied after the user's `inference_config`, because the `softmax_temperature`
+    # argument wins over it. A no-op when the override came from `user_config`, which
+    # the call above has already applied.
     if softmax_temperature_override is not None:
         inference_config = dataclasses.replace(
             inference_config, SOFTMAX_TEMPERATURE=softmax_temperature_override
