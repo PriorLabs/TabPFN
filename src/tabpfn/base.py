@@ -484,8 +484,8 @@ def _resolve_softmax_temperature_override(
     config_temperature: float | None = None
     if isinstance(user_config, InferenceConfig):
         # A hand-built config replaces the checkpoint's wholesale, temperature
-        # included, so it always names one -- even when the caller never mentioned
-        # the temperature and only got the field default. Passing a config object is
+        # included, so it always names one, even when the caller never mentioned the
+        # temperature and only got the field default. Passing a config object is
         # deprecated for exactly that reason; drop this branch along with it, after
         # which only a dict that spells out SOFTMAX_TEMPERATURE names one.
         config_temperature = user_config.SOFTMAX_TEMPERATURE

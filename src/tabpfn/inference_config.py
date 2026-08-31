@@ -290,11 +290,10 @@ class InferenceConfig:
             warnings.warn(
                 "Passing an `InferenceConfig` object as `inference_config` is "
                 "deprecated and will be removed in a future version. It replaces "
-                "the checkpoint's config as a whole, so every field you did not "
-                "set takes a class "
-                "default rather than the checkpoint-specific value it declares, "
-                "which can silently degrade predictions. Pass a dict naming only "
-                "the settings you want to change instead, e.g. "
+                "the checkpoint's config as a whole, so any field not set on it "
+                "takes a class default rather than the value the checkpoint "
+                "declares, which can silently degrade predictions. Pass a dict "
+                "naming only the settings to change instead, e.g. "
                 '`inference_config={"POLYNOMIAL_FEATURES": "all"}`, which leaves '
                 "every other field at the checkpoint's value. To keep replacing the "
                 "whole config, pass `dataclasses.asdict(config)`.",

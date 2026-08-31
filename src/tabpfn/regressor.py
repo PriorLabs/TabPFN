@@ -514,15 +514,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
                 - If `None`, the checkpoint's own config is used unchanged.
                 - If `dict`, the key-value pairs override the checkpoint's config;
-                  every field you do not name keeps the checkpoint's value. Raises
-                  an error if an unknown key is passed. This is the recommended
-                  form.
+                  any field not named keeps the checkpoint's value. Raises an error
+                  if an unknown key is passed. This is the recommended form.
                 - If `InferenceConfig`, the object replaces the checkpoint's config
-                  as a whole, so fields you did not set take a class default rather
-                  than the checkpoint-specific value. Deprecated — passing one emits
-                  a `FutureWarning` at fit time. Pass a dict of just the settings
-                  you want to change; to keep replacing the whole config, pass
-                  `dataclasses.asdict(config)`.
+                  as a whole, so any field not set on it takes a class default
+                  rather than the value the checkpoint declares. Deprecated —
+                  passing one emits a `FutureWarning` at fit time. Prefer a dict
+                  naming only the settings to change; to keep replacing the whole
+                  config, pass `dataclasses.asdict(config)`.
 
             differentiable_input:
                 If true, preprocessing attempts to be end-to-end differentiable.
