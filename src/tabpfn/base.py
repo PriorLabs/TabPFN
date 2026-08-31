@@ -512,9 +512,9 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
-    X = normalize_temporal_columns(X)[0]
+    X, _, native_dates = normalize_temporal_columns(X)
     X = ensure_compatible_predict_input_sklearn(X, model)
-    X = apply_date_expansion(X, model)
+    X = apply_date_expansion(X, model, native_dates)
     # Not model.categorical_features_indices: those are raw, pre-expansion
     # indices, and date expansion can shift every column after it. The
     # inferred schema already reflects the post-expansion layout, exactly

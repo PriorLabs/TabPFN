@@ -50,10 +50,6 @@ PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
 # casting; from 3.0 copy-on-write makes the keyword a no-op and passing it warns.
 _ASTYPE_KEEPS_UNCAST_COLUMNS = {"copy": False} if PANDAS_BELOW_3 else {}
-# format="ISO8601" was added in pandas 2.0. Below it, "ISO8601" is read as a
-# literal strftime directive matching nothing, so every value silently coerces to
-# NaT instead of raising -- a much worse failure than just not having the feature.
-PANDAS_SUPPORTS_ISO8601_FORMAT = Version(pd.__version__) >= Version("2.0.0")
 
 
 def _cast_columns_share_a_block(
@@ -198,7 +194,9 @@ def _is_datetime_like_dtype(dtype: Any) -> bool:
     )
 
 
-def normalize_temporal_columns(X: XType) -> tuple[XType, list[int]]:
+def normalize_temporal_columns(
+    X: XType,
+) -> tuple[XType, list[int], dict[int, pd.Series]]:
     """Recast every temporal column to a dtype numpy can hold, and say which are dates.
 
     Runs *before* sklearn's ``validate_data``, which is where a temporal column
@@ -207,15 +205,19 @@ def normalize_temporal_columns(X: XType) -> tuple[XType, list[int]]:
     even be assembled into the array the rest of the pipeline works on. Alone it
     fares no better -- ``fix_dtypes`` rejects the ``datetime64`` array outright.
 
-    A point in time (``datetime64``, tz-aware, or ``period``) becomes text, and
-    its position is reported so detection can tag it ``DATE`` without having to
-    guess. Text rather than ``object``-of-``Timestamp`` because only text
-    survives both routes out of here: a date read as a plain high-cardinality
-    category -- what happens whenever ``TRANSFORM_DATES`` is off -- is
-    ordinal-encoded, and that encoding cannot cast a ``Timestamp`` to a number.
-    Rendering also costs less than boxing (0.03s against 0.07s for 200k rows),
-    and lands the column in exactly the ISO 8601 form the date parser reads
-    fastest.
+    A point in time (``datetime64``, tz-aware, or ``period``) becomes text in
+    the returned frame, and its position is reported so detection can tag it
+    ``DATE`` without having to guess. Text rather than ``object``-of-``Timestamp``
+    because only text survives both routes out of here: a date read as a plain
+    high-cardinality category -- what happens whenever ``TRANSFORM_DATES`` is
+    off -- is ordinal-encoded, and that encoding cannot cast a ``Timestamp`` to
+    a number. Rendering also costs less than boxing (0.03s against 0.07s for
+    200k rows).
+
+    The real value survives too, untouched, in the third return: date
+    expansion (`date_encoding.py`) needs the actual point in time, not a
+    re-parse of the text this function renders for validation's sake -- text
+    rendering and value preservation serve two different, unrelated readers.
 
     A duration (``timedelta64``) becomes its length in seconds and is *not*
     reported: it is a quantity with no calendar in it, so the number is the
@@ -226,12 +228,13 @@ def normalize_temporal_columns(X: XType) -> tuple[XType, list[int]]:
     category.
 
     Returns:
-        The frame with those columns recast, and the positions of the date ones.
-        Both unchanged and empty for anything that is not a `DataFrame`, and for
-        a `DataFrame` holding no temporal column.
+        The frame with those columns recast, the positions of the date ones,
+        and the real values at those positions, keyed by position. All three
+        unchanged/empty for anything that is not a `DataFrame`, and for a
+        `DataFrame` holding no temporal column.
     """
     if not isinstance(X, pd.DataFrame):
-        return X, []
+        return X, [], {}
     dtypes = list(X.dtypes)
     date_indices = [
         i for i, dtype in enumerate(dtypes) if _is_datetime_like_dtype(dtype)
@@ -240,19 +243,21 @@ def normalize_temporal_columns(X: XType) -> tuple[XType, list[int]]:
         i for i, dtype in enumerate(dtypes) if pd.api.types.is_timedelta64_dtype(dtype)
     ]
     if not date_indices and not duration_indices:
-        return X, []
+        return X, [], {}
 
     recast: dict[int, np.ndarray] = {}
+    native_dates: dict[int, pd.Series] = {}
     for position in date_indices:
         column = X.iloc[:, position]
         if isinstance(column.dtype, pd.PeriodDtype):
             # A period is a span, not an instant; its start is the instant that
             # orders identically, which is all the calendar features need.
             column = column.dt.to_timestamp()
+        native_dates[position] = column
         recast[position] = column.astype(str).where(column.notna(), None).to_numpy()
     for position in duration_indices:
         recast[position] = X.iloc[:, position].dt.total_seconds().to_numpy()
-    return _replace_columns_positionally(X, recast), date_indices
+    return _replace_columns_positionally(X, recast), date_indices, native_dates
 
 
 def _replace_columns_positionally(

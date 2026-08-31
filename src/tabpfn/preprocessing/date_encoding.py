@@ -8,14 +8,11 @@ Only reached when `TRANSFORM_DATES` is on.
 from __future__ import annotations
 
 import dataclasses
-import re
-import warnings
 from typing import TYPE_CHECKING
 
 import pandas as pd
 from skrub import DatetimeEncoder
 
-from tabpfn.preprocessing.clean import PANDAS_SUPPORTS_ISO8601_FORMAT
 from tabpfn.preprocessing.datamodel import (
     FeatureModality,
     FeatureSchema,
@@ -24,17 +21,6 @@ from tabpfn.preprocessing.datamodel import (
 
 if TYPE_CHECKING:
     import numpy as np
-
-#: The year-month-day prefix every value `normalize_temporal_columns` renders
-#: starts with, whatever precision follows it (date-only, with time, with an
-#: offset, ...). Anything not shaped like this at predict time did not come
-#: from a genuine datetime dtype -- e.g. a bare time or a plain number -- and
-#: `pd.to_datetime` can default or misinterpret those into a plausible-looking
-#: but wrong value (a bare time silently becomes today's date; a small integer
-#: becomes a near-1970 timestamp, read as nanoseconds since the epoch) instead
-#: of raising, especially without `format="ISO8601"` (pandas < 2.0). Checked
-#: before parsing decides anything, so it holds regardless of pandas version.
-_LOOKS_LIKE_AN_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def _make_datetime_encoder() -> DatetimeEncoder:
@@ -53,68 +39,28 @@ def _make_datetime_encoder() -> DatetimeEncoder:
     )
 
 
-def _parse_dates(column: pd.Series) -> pd.Series:
-    """Parse to datetime, never raising.
+def _resolve_column(
+    index: int, name: str, native_dates: dict[int, pd.Series], n_rows: int
+) -> pd.Series:
+    """The real datetime values for a `DATE` column, never a re-parse of them.
 
-    A `DATE` column only ever gets here after `normalize_temporal_columns`
-    rendered it from a genuine datetime dtype into ISO 8601 text -- uniformly,
-    since one dtype (and so one timezone) covers the whole column. `ISO8601`
-    format handles that rendering exactly, including a column mixing
-    precisions (a date-only "2020-01-01" beside a full "2020-06-15
-    13:45:30"), which the plain, single-inferred-format parse this replaced
-    cannot: it infers one shape from the first value and silently drops any
-    other shape to `NaT`.
+    `normalize_temporal_columns` holds the real value of a genuine datetime
+    column aside, by position, before it ever renders anything to text -- so
+    this looks the position up there directly instead of reading (and having
+    to reparse) whatever ended up in `X`'s own slot.
 
-    Still never raises, for a predict-time column that no longer matches what
-    fit saw (e.g. it arrived as a genuine datetime dtype at fit but drifted to
-    plain, malformed strings at predict): a crash is a worse outcome than a
-    degraded (NaN) calendar feature for a column fit already accepted. Every
-    value is checked against `_LOOKS_LIKE_AN_ISO_DATE` and masked to `NaT` if
-    it fails, since `pd.to_datetime` can otherwise turn a drifted value (a
-    bare time, a plain number) into a plausible-looking but wrong date instead
-    of rejecting it -- most likely without `format="ISO8601"` (pandas < 2.0),
-    but checked unconditionally rather than trusted to only matter there.
-    `pd.to_datetime` can also silently succeed with an inconsistent per-value
-    result (e.g. mixed UTC offsets, without a uniform dtype behind them)
-    instead of raising -- caught by checking the result is actually
-    `datetime64`, not just checking for an exception.
-
-    `ISO8601` needs pandas >= 2.0 (see `PANDAS_SUPPORTS_ISO8601_FORMAT`);
-    below it, this falls back to a plain, single-inferred-format parse, which
-    cannot lose the main case that matters there -- a column rendered from a
-    genuine datetime dtype with everything at the exact same precision.
+    A position missing from `native_dates` means the column at that position
+    is not, right now, a genuine datetime dtype -- e.g. it was one at fit time
+    but drifted to something else by predict time. Whatever is actually
+    sitting in `X` at that position is never inspected to guess otherwise:
+    a `DATE` column is one because of its dtype, at fit and at predict alike,
+    so one that has stopped being that dtype degrades to a missing (`NaT`)
+    value here, the same as any other missing value, rather than a
+    best-effort parse of its content.
     """
-    try:
-        with warnings.catch_warnings():
-            # Emitted when pandas cannot infer one format and falls back to
-            # parsing value by value -- expected for a drifted column, so noise.
-            warnings.simplefilter("ignore")
-            parsed = pd.to_datetime(
-                column,
-                errors="coerce",
-                **({"format": "ISO8601"} if PANDAS_SUPPORTS_ISO8601_FORMAT else {}),
-            )
-    except (TypeError, ValueError):
-        parsed = None
-    if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
-        return pd.Series(pd.NaT, index=column.index, dtype="datetime64[ns]")
-    looks_like_a_date = column.astype(str).str.match(_LOOKS_LIKE_AN_ISO_DATE)
-    return parsed.mask(~_as_plain_bool_array(looks_like_a_date))
-
-
-def _as_plain_bool_array(matched: pd.Series) -> np.ndarray:
-    """A `.str.match` result, as a plain (non-nullable) boolean numpy array.
-
-    `.str.match` can answer `pd.NA` for a missing value rather than `False`
-    (e.g. on a nullable `"string"`-dtype column -- which `column.astype(str)`
-    produces on some pandas versions for a column already stored that way),
-    and a bare `.to_numpy()` cannot convert that: `Series.mask` then raises on
-    the resulting `object` array ("Boolean array expected for the condition,
-    not object"). A missing value already parsed to `NaT` regardless, so
-    treating it as "not date-shaped" (`na_value=False`) is correct here, not
-    just a crash workaround.
-    """
-    return matched.to_numpy(dtype=bool, na_value=False)
+    if index in native_dates:
+        return native_dates[index].rename(name).reset_index(drop=True)
+    return pd.Series(pd.NaT, index=range(n_rows), name=name, dtype="datetime64[ns]")
 
 
 class DateFeatureExpander:
@@ -154,6 +100,7 @@ class DateFeatureExpander:
         self,
         X: np.ndarray,
         feature_schema: FeatureSchema,
+        native_dates: dict[int, pd.Series] | None = None,
     ) -> tuple[np.ndarray, FeatureSchema]:
         """Fit a new encoder per `DATE` column and expand it into numbers.
 
@@ -165,6 +112,11 @@ class DateFeatureExpander:
         Args:
             X: The data, before any dtype fixing.
             feature_schema: The schema to fit against.
+            native_dates: The real value behind every `DATE` column, by
+                position, as `normalize_temporal_columns` held it aside.
+                Every index in `feature_schema`'s `DATE` columns is expected
+                to have an entry here -- that schema exists only because
+                `normalize_temporal_columns` reported these same positions.
 
         Returns:
             The (possibly wider) data and the updated schema.
@@ -174,12 +126,13 @@ class DateFeatureExpander:
         if not to_expand:
             return X, feature_schema
 
+        native_dates = native_dates or {}
         frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
         existing_names = list(feature_schema.feature_names)
         encoded_blocks: list[pd.DataFrame] = []
         for index in to_expand:
             name = feature_schema.features[index].name
-            column = frame.iloc[:, index].rename(name)
+            column = _resolve_column(index, name, native_dates, len(frame))
             encoded, fitted_column = self._fit_one_column(column, existing_names)
             existing_names += fitted_column.output_names
             self._fitted[index] = fitted_column
@@ -197,16 +150,30 @@ class DateFeatureExpander:
             )
         return out.to_numpy(), schema
 
-    def transform(self, X: np.ndarray) -> np.ndarray:
+    def transform(
+        self,
+        X: np.ndarray,
+        native_dates: dict[int, pd.Series] | None = None,
+    ) -> np.ndarray:
         """Reapply the encoders fit by `fit_transform`, positionally.
 
         A no-op (returns `X` unchanged) if nothing was fit -- either
         `fit_transform` found no `DATE` columns, or it was never called.
+
+        Args:
+            X: The data, before any dtype fixing.
+            native_dates: The real value behind every currently-genuine-date
+                column, by position, as this predict call's own
+                `normalize_temporal_columns` held it aside. A position fit
+                expanded but missing here means that column is no longer a
+                genuine datetime dtype right now -- degraded (`NaT`) rather
+                than guessed at from whatever is actually in `X` there.
         """
         to_expand = self.expanded_indices
         if not to_expand:
             return X
 
+        native_dates = native_dates or {}
         frame = pd.DataFrame(X, copy=False).reset_index(drop=True)
         encoded_blocks = []
         for index in to_expand:
@@ -214,7 +181,7 @@ class DateFeatureExpander:
             # output labels with the already-fitted ones regardless. Still
             # needs to be a string, not the bare `pd.DataFrame`'s int label --
             # some of skrub's own naming code concatenates onto it directly.
-            column = frame.iloc[:, index].rename(str(index))
+            column = _resolve_column(index, str(index), native_dates, len(frame))
             encoded = self._apply_one_column(column, self._fitted[index])
             encoded_blocks.append(encoded.reset_index(drop=True))
 
@@ -249,7 +216,7 @@ class DateFeatureExpander:
         columns.
         """
         encoder = _make_datetime_encoder()
-        raw_encoded = pd.DataFrame(encoder.fit_transform(_parse_dates(column)))
+        raw_encoded = pd.DataFrame(encoder.fit_transform(column))
         output_names = make_names_unique(
             list(raw_encoded.columns), existing=existing_names
         )
@@ -265,11 +232,15 @@ class DateFeatureExpander:
         fitted: DateFeatureExpander._FittedColumn,
     ) -> pd.DataFrame:
         """Reapply an already-fitted encoder to one column."""
-        encoded = fitted.encoder.transform(_parse_dates(column))
+        encoded = fitted.encoder.transform(column)
         return pd.DataFrame(encoded).set_axis(fitted.output_names, axis=1)
 
 
-def apply_date_expansion(X: np.ndarray, source: object) -> np.ndarray:
+def apply_date_expansion(
+    X: np.ndarray,
+    source: object,
+    native_dates: dict[int, pd.Series] | None = None,
+) -> np.ndarray:
     """Reapply `source`'s fitted `date_expander_` at predict time, if any.
 
     `source` (a fitted estimator or ensemble worker) may never have set
@@ -277,4 +248,4 @@ def apply_date_expansion(X: np.ndarray, source: object) -> np.ndarray:
     that would, exactly like the pre-existing `ordinal_encoder_` guard.
     """
     date_expander = getattr(source, "date_expander_", None)
-    return X if date_expander is None else date_expander.transform(X)
+    return X if date_expander is None else date_expander.transform(X, native_dates)

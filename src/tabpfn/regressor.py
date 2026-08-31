@@ -109,6 +109,7 @@ from tabpfn.validation import (
 
 if TYPE_CHECKING:
     import numpy.typing as npt
+    import pandas as pd
     from sklearn.pipeline import Pipeline
     from torch.types import _dtype
 
@@ -867,7 +868,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         # Datetime columns are rendered first: sklearn's validation cannot
         # assemble a `datetime64` column beside a numeric one into a single
         # array, so they would not survive the call below to be detected at all.
-        X, datetime_indices = normalize_temporal_columns(X)
+        X, datetime_indices, native_dates = normalize_temporal_columns(X)
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
             y,
@@ -896,7 +897,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
         date_expander = DateFeatureExpander()
-        X, feature_schema = date_expander.fit_transform(X, feature_schema)
+        X, feature_schema = date_expander.fit_transform(X, feature_schema, native_dates)
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
@@ -1301,7 +1302,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X = normalize_temporal_columns(X)[0]
+        X, _, native_dates = normalize_temporal_columns(X)
         X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
@@ -1318,7 +1319,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         if hasattr(self, "is_constant_target_") and self.is_constant_target_:
             return self._handle_constant_target(X.shape[0], output_type, quantiles)
 
-        logits = self._compute_aggregated_logits(X)
+        logits = self._compute_aggregated_logits(X, native_dates)
 
         # Determine and return intended output type
         logit_to_output = partial(
@@ -1466,11 +1467,15 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            X_holdout_NhF = normalize_temporal_columns(X_holdout_NhF)[0]  # noqa: PLW2901
+            X_holdout_NhF, _, holdout_native_dates = normalize_temporal_columns(  # noqa: PLW2901
+                X_holdout_NhF
+            )
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
             )
-            logits_NhB = tuning_regressor._compute_aggregated_logits(X_holdout_NhF)
+            logits_NhB = tuning_regressor._compute_aggregated_logits(
+                X_holdout_NhF, holdout_native_dates
+            )
 
             # `raw_space_bardist_` undoes this fold's normalisation, so the targets
             # are scored in their original units and need no transformation --
@@ -1485,7 +1490,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         return holdout_folds
 
-    def _compute_aggregated_logits(self, X: XType) -> torch.Tensor:
+    def _compute_aggregated_logits(
+        self,
+        X: XType,
+        native_dates: dict[int, pd.Series] | None = None,
+    ) -> torch.Tensor:
         """Run the ensemble and aggregate it into one log-probability tensor.
 
         Each estimator's bucket probabilities are translated onto the
@@ -1502,13 +1511,16 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Args:
             X: The validated input data.
+            native_dates: The real value behind every currently-genuine-date
+                column, as the caller's own `normalize_temporal_columns` held
+                it aside, for `apply_date_expansion` to use.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
             `znorm_space_bardist_` buckets, with the calibrated
             `ensemble_softmax_temperature_` applied.
         """
-        X = apply_date_expansion(X, self)
+        X = apply_date_expansion(X, self, native_dates)
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
@@ -1734,9 +1746,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            X_test = normalize_temporal_columns(X_test)[0]  # noqa: PLW2901
+            X_test, _, native_dates = normalize_temporal_columns(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test = apply_date_expansion(X_test, worker)  # noqa: PLW2901
+            X_test = apply_date_expansion(X_test, worker, native_dates)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(

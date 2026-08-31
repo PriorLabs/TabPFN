@@ -1230,13 +1230,13 @@ class TestNormalizeTemporalColumns:
 
     def test__no_temporal_columns__is_a_noop(self) -> None:
         X = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
         assert out is X
         assert indices == []
 
     def test__not_a_dataframe__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0]])
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
         assert out is X
         assert indices == []
 
@@ -1265,12 +1265,40 @@ class TestNormalizeTemporalColumns:
         self, label: str, column: pd.Index, expected_first: str
     ) -> None:
         X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
         assert indices == [1], label
         assert out.iloc[0, 1] == expected_first, label
         # The frame now holds a dtype numpy can put beside a float, which is the
         # whole point of running before validation.
         assert out.to_numpy(dtype=object).shape == (3, 2)
+
+    @pytest.mark.parametrize(
+        "column",
+        [
+            pytest.param(pd.date_range("2020-01-01", periods=3), id="datetime64"),
+            pytest.param(
+                pd.date_range("2020-01-01", periods=3, tz="UTC"), id="tz aware"
+            ),
+            pytest.param(
+                pd.date_range("2020-01-01", periods=3).to_period("M"), id="period"
+            ),
+        ],
+    )
+    def test__date_columns__native_dates_holds_the_real_value(
+        self, column: pd.Index
+    ) -> None:
+        """Date expansion (`date_encoding.py`) reads the real point in time
+        from here directly, never a re-parse of the text this function
+        renders into the frame for validation's sake.
+        """
+        X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
+        _, _, native_dates = normalize_temporal_columns(X)
+        expected = pd.Series(column)
+        if isinstance(expected.dtype, pd.PeriodDtype):
+            # A period is a span, not an instant; its start is the instant
+            # that orders identically, which is all the calendar features need.
+            expected = expected.dt.to_timestamp()
+        pd.testing.assert_series_equal(native_dates[1], expected, check_names=False)
 
     def test__missing_stays_missing__not_the_string_nat(self) -> None:
         """`astype(str)` alone writes NaT out as the literal "NaT".
@@ -1280,14 +1308,14 @@ class TestNormalizeTemporalColumns:
         that it reads as missing, not that it is any particular one.
         """
         column = pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))
-        out, _ = normalize_temporal_columns(pd.DataFrame({"d": column}))
+        out, _, _ = normalize_temporal_columns(pd.DataFrame({"d": column}))
         assert out["d"].isna().tolist() == [False, True, False]
         assert not (out["d"] == "NaT").any()
 
     def test__timedelta__becomes_seconds_and_is_not_called_a_date(self) -> None:
         """A duration is a quantity, not a point on a calendar."""
         X = pd.DataFrame({"d": pd.to_timedelta([1, 2, 3], unit="D")})
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
         assert indices == []
         assert out["d"].tolist() == [86400.0, 172800.0, 259200.0]
 
@@ -1312,7 +1340,7 @@ class TestNormalizeTemporalColumns:
         )
         X.columns = ["same", "same", "same"]
 
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
 
         assert indices == [1]
         assert out.iloc[0, 1] == "2020-01-01"
@@ -1329,7 +1357,7 @@ class TestNormalizeTemporalColumns:
             index=[7, 7, 2],
         )
 
-        out, indices = normalize_temporal_columns(X)
+        out, indices, _ = normalize_temporal_columns(X)
 
         assert indices == [1]
         assert list(out.index) == [7, 7, 2]
@@ -1350,8 +1378,8 @@ class TestNormalizeTemporalColumns:
         """
         X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
 
-        once, first_indices = normalize_temporal_columns(X)
-        twice, second_indices = normalize_temporal_columns(once)
+        once, first_indices, _ = normalize_temporal_columns(X)
+        twice, second_indices, _ = normalize_temporal_columns(once)
 
         assert first_indices == [0]
         assert second_indices == []

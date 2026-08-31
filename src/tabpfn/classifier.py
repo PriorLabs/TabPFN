@@ -727,7 +727,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         # sklearn's validation cannot assemble a `datetime64` column beside a
         # numeric one into a single array, so they would not survive the call
         # below to be detected at all.
-        X, datetime_indices = normalize_temporal_columns(X)
+        X, datetime_indices, native_dates = normalize_temporal_columns(X)
         X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
@@ -752,7 +752,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             transform_dates=self.inference_config_.TRANSFORM_DATES,
         )
         date_expander = DateFeatureExpander()
-        X, feature_schema = date_expander.fit_transform(X, feature_schema)
+        X, feature_schema = date_expander.fit_transform(X, feature_schema, native_dates)
         X, ordinal_encoder, feature_schema = clean_data(
             X=X,
             feature_schema=feature_schema,
@@ -1112,9 +1112,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test = normalize_temporal_columns(X_test)[0]  # noqa: PLW2901
+            X_test, _, native_dates = normalize_temporal_columns(X_test)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test = apply_date_expansion(X_test, worker)  # noqa: PLW2901
+            X_test = apply_date_expansion(X_test, worker, native_dates)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
@@ -1403,9 +1403,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = normalize_temporal_columns(X)[0]
+            X, _, native_dates = normalize_temporal_columns(X)
             X = ensure_compatible_predict_input_sklearn(X, self)
-            X = apply_date_expansion(X, self)
+            X = apply_date_expansion(X, self, native_dates)
             X = fix_dtypes(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(
