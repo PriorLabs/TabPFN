@@ -26,7 +26,6 @@ from tabpfn.preprocessing.modality_detection import (
     _detect_feature_modality,
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
-    _warn_on_dates,
     _warn_on_texts,
     detect_feature_modalities,
 )
@@ -640,23 +639,6 @@ class TestWarnOnTexts:
         assert f"'t{_MAX_TEXT_COLUMNS_IN_WARNING}'" not in message
 
 
-class TestWarnOnDates:
-    """Schema-level unit tests for `_warn_on_dates`."""
-
-    def test__demoted_dates__warn_with_column_names_and_remedies(self) -> None:
-        with pytest.warns(UserWarning, match="hold dates") as record:
-            _warn_on_dates(["signed_on"])
-        message = str(record[0].message)
-        assert "'signed_on'" in message
-        assert "TRANSFORM_DATES" in message
-        assert "categorical_features_indices" in message
-
-    def test__no_demoted_dates__does_not_warn(self) -> None:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            _warn_on_dates([])
-
-
 class TestDetectFeatureModalitiesWarnsOnText:
     """`detect_feature_modalities` emits the text warning over real columns.
 
@@ -858,152 +840,64 @@ def test__category_and_text_thresholds__move_independently() -> None:
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
 
-class TestDateColumnDetection:
-    """`detect_feature_modalities` tagging a column `DATE` via `provided_date_indices`.
+def test__string_column_that_looks_like_a_date__is_not_a_date() -> None:
+    """No content-based date guessing: a date-shaped string is an ordinary
+    string, classified by cardinality like any other, warned about (if at
+    all) as free text.
 
-    `DATE` is never guessed from string content: a column is only ever `DATE`
-    because the caller already knows it arrived as a genuine datetime dtype
-    (`normalize_temporal_columns` in `clean.py` reports these positions from a
-    real `datetime64`/tz-aware/`period` column, before this function ever
-    runs). A string that merely *looks* like a date is just an ordinary
-    string, classified by cardinality like any other -- see
-    `test__string_column_that_looks_like_a_date__is_not_a_date` below, and
-    `tests/test_preprocessing/test_data_cleaning.py::TestNormalizeTemporalColumns`
-    /`test__classifier_fit__native_datetime_column__is_recognized_as_a_date`
-    for the dtype-detection half this module trusts as an input.
-
-    Nothing expands a date into calendar features yet at this layer, so a
-    tagged date is always demoted to whichever of CATEGORICAL/TEXT its
-    cardinality implies -- exactly the modality a non-date string of the same
-    shape would get -- unless `transform_dates` is on. The only observable
-    difference recognizing it makes is the warning: a demoted date is named
-    as a date, not reported as generic free text.
+    Detecting a genuine datetime dtype, and expanding or text-rendering it,
+    happens entirely upstream now (`resolve_date_columns`, date_encoding.py)
+    -- `detect_feature_modalities` never learns a column was ever a date; see
+    `tests/test_preprocessing/test_date_encoding.py` for that half.
     """
-
+    rng = np.random.default_rng(0)
     n_rows = 200
-
-    def _numeric_column(self) -> np.ndarray:
-        return np.random.default_rng(0).normal(size=self.n_rows)
-
-    def _detect(
-        self,
-        X: pd.DataFrame,
-        *,
-        transform_dates: bool = False,
-        declared: list[int] | None = None,
-        date_indices: list[int] | None = None,
-    ) -> FeatureSchema:
-        return detect_feature_modalities(
+    pool = pd.date_range("2020-01-01", periods=60).strftime("%Y-%m-%d")
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n_rows),
+            "date": [pool[i % 60] for i in range(n_rows)],
+        }
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        schema = detect_feature_modalities(
             X=X.to_numpy(dtype=object),
             feature_names=list(X.columns),
-            provided_categorical_indices=declared,
-            provided_date_indices=date_indices,
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
             min_cardinality_for_text=30,
-            transform_dates=transform_dates,
         )
+    assert schema.features[1].modality is FeatureModality.TEXT
+    assert [w for w in caught if "look like free text" in str(w.message)]
 
-    def _dates(self, n_unique: int) -> list[str]:
-        pool = pd.date_range("2020-01-01", periods=n_unique).strftime("%Y-%m-%d")
-        return [pool[i % n_unique] for i in range(self.n_rows)]
 
-    def test__string_column_that_looks_like_a_date__is_not_a_date(self) -> None:
-        """No content-based guessing: a date-shaped string is an ordinary string,
-        warned about (if at all) as free text, never as a date.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            schema = self._detect(X)  # no provided_date_indices
-        assert schema.features[1].modality is FeatureModality.TEXT
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-        assert [w for w in caught if "look like free text" in str(w.message)]
+def test__provided_numerical_indices__forces_numerical_even_at_low_cardinality() -> (
+    None
+):
+    """A column `resolve_date_columns` already expanded (e.g. `year`, which
+    can have few distinct values in a small dataset) must not be
+    miscategorized by the generic cardinality heuristic below -- it is tagged
+    `NUMERICAL` outright.
+    """
+    rng = np.random.default_rng(0)
+    n_rows = 200
+    # Only 3 distinct years: a same-shaped ordinary numeric column would be
+    # CATEGORICAL under these thresholds, confirmed by the second call below.
+    year = rng.integers(2020, 2023, size=n_rows).astype(float)
+    X = np.column_stack([rng.normal(size=n_rows), year])
+    kwargs = {
+        "X": X,
+        "feature_names": ["num", "year"],
+        "min_samples_for_inference": 100,
+        "max_unique_for_category": 30,
+        "min_unique_for_numerical": 4,
+        "min_cardinality_for_text": 30,
+    }
 
-    def test__reported_date__high_cardinality__is_text_when_not_transformed(
-        self,
-    ) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X, date_indices=[1])
-        assert schema.features[1].modality is FeatureModality.TEXT
+    schema = detect_feature_modalities(**kwargs, provided_numerical_indices=[1])
+    assert schema.features[1].modality is FeatureModality.NUMERICAL
 
-    def test__reported_date__low_cardinality__is_categorical_when_not_transformed(
-        self,
-    ) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
-        with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X, date_indices=[1])
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
-
-    @pytest.mark.parametrize("n_unique", [3, 60])
-    def test__reported_date__transform_dates__stays_date_and_does_not_warn(
-        self, n_unique: int
-    ) -> None:
-        """`_demote_dates` never runs once `transform_dates` is on, low-cardinality
-        or not: every reported date is left for the caller to expand.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(n_unique)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(X, date_indices=[1], transform_dates=True)
-        assert schema.features[1].modality is FeatureModality.DATE
-
-    def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
-        """The date warning fires; the free-text warning must not repeat it."""
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._detect(X, date_indices=[1])
-        date_warnings = [w for w in caught if "hold dates" in str(w.message)]
-        text_warnings = [w for w in caught if "look like free text" in str(w.message)]
-        assert len(date_warnings) == 1
-        assert not text_warnings
-
-    @pytest.mark.parametrize("transform_dates", [False, True])
-    @pytest.mark.parametrize("n_unique", [3, 60])
-    def test__declared_categorical_date__is_never_a_date(
-        self, n_unique: int, *, transform_dates: bool
-    ) -> None:
-        """Declaring a column categorical settles it: it is not a date, even
-        though the caller also reported it as one -- a datetime dtype only
-        says what the column *could* be read as, and the declaration overrides
-        that either way, identically whether `TRANSFORM_DATES` is on or off.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(n_unique)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = self._detect(
-                X, date_indices=[1], transform_dates=transform_dates, declared=[1]
-            )
-        assert schema.features[1].modality is not FeatureModality.DATE
-        expected = (
-            FeatureModality.CATEGORICAL if n_unique <= 30 else FeatureModality.TEXT
-        )
-        assert schema.features[1].modality is expected
-
-    def test__declared_categorical_date_column__is_not_reported_in_warning(
-        self,
-    ) -> None:
-        """The declaration doesn't change the demotion target of the other
-        (undeclared) reported date, but it does silence the warning for its
-        own column, like a declared-categorical text column already does.
-        """
-        X = pd.DataFrame(
-            {
-                "num": self._numeric_column(),
-                "declared": self._dates(60),
-                "undeclared": self._dates(60),
-            }
-        )
-        with pytest.warns(UserWarning, match="hold dates") as record:
-            schema = self._detect(X, date_indices=[1, 2], declared=[1])
-        message = str(record[0].message)
-        assert "'undeclared'" in message
-        assert "'declared'" not in message
-        assert schema.features[1].modality is FeatureModality.TEXT
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            self._detect(X, date_indices=[1, 2], declared=[1, 2])
+    schema_without = detect_feature_modalities(**kwargs)
+    assert schema_without.features[1].modality is FeatureModality.CATEGORICAL

@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for validation.ensure_compatible_fit_inputs function."""
+"""Tests for the fit-input validation functions in validation.py."""
 
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ from tabpfn.preprocessing import (
 from tabpfn.preprocessing.clean import (
     _is_single_float_block,
     fix_dtypes,
-    normalize_temporal_columns,
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
@@ -30,7 +29,12 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.validation import (
+    capture_input_shape,
+    ensure_compatible_fit_inputs_sklearn,
+    original_target_name,
+    validate_dataset_size,
+)
 
 
 @pytest.fixture
@@ -71,203 +75,146 @@ def _get_schema(
 
 
 class TestEnsureCompatibleFitInputsBasic:
-    """Tests for basic input handling."""
+    """Tests for basic input handling: `capture_input_shape` +
+    `ensure_compatible_fit_inputs_sklearn` + `original_target_name`, the
+    pieces the old `ensure_compatible_fit_inputs` umbrella used to combine.
+    """
 
     def test__ensure_compatible_fit_inputs__numpy_arrays(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that numpy arrays are accepted and converted correctly."""
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        original_y_name = original_target_name(y)
+        capture_input_shape(X, estimator=classifier, reset=True)
+        X, y = ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert n_features == 2
-        assert feature_names is None
+        assert classifier.n_features_in_ == 2
+        assert getattr(classifier, "feature_names_in_", None) is None
         assert original_y_name is None
 
     def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that pandas DataFrames preserve column names."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
-        y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        capture_input_shape(X, estimator=classifier, reset=True)
 
-        assert list(feature_names) == ["feature_a", "feature_b"]  # type: ignore
+        assert list(classifier.feature_names_in_) == ["feature_a", "feature_b"]
 
-    def test__ensure_compatible_fit_inputs__pandas_series_y(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+    def test__ensure_compatible_fit_inputs__pandas_series_y(self) -> None:
         """Test that pandas Series y preserves its name."""
-        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
-
-        assert original_y_name == "target_column"
+        assert original_target_name(y) == "target_column"
 
 
-class TestEnsureCompatibleFitInputsValidation:
-    """Tests for input validation and error handling."""
+class TestValidateDatasetSize:
+    """Tests for `validate_dataset_size`'s pretraining-limit checks."""
 
-    def test__ensure_compatible_fit_inputs__too_many_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__too_many_features__raises(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that exceeding max features raises an error."""
         X = np.random.default_rng(42).random((5, 10))
         y = np.array([0, 1, 0, 1, 0])
 
         with pytest.raises(TabPFNValidationError, match="Number of features"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
+            validate_dataset_size(
+                X=X,
+                y=y,
                 max_num_samples=10_000,
                 max_num_features=5,  # Less than 10 features
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
 
-    def test__ensure_compatible_fit_inputs__too_many_samples(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__too_many_samples__raises(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that exceeding max samples raises an error."""
         X = np.random.default_rng(42).random((100, 2))
         y = np.array([0, 1] * 50)
 
         with pytest.raises(TabPFNValidationError, match="Number of samples"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
+            validate_dataset_size(
+                X=X,
+                y=y,
                 max_num_samples=50,  # Less than 100 samples
                 max_num_features=500,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
 
-    def test__ensure_compatible_fit_inputs__ignore_limits(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__ignore_limits__bypasses_size_checks(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that ignore_pretraining_limits bypasses size checks."""
         X = np.random.default_rng(42).random((100, 10))
         y = np.array([0, 1] * 50)
 
         # Should not raise even though limits are exceeded
-        X, *_ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
+        validate_dataset_size(
+            X=X,
+            y=y,
             max_num_samples=50,
             max_num_features=5,
             ignore_pretraining_limits=True,
             devices=cpu_devices,
         )
 
-        assert X.shape == (100, 10)
+    def test__mismatched_lengths__raises(self) -> None:
+        """Test that mismatched X and y lengths raise an error."""
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        y = np.array([0, 1])  # Only 2 elements, X has 3 rows
 
-    def test__ensure_compatible_fit_inputs__too_few_samples(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+        with pytest.raises(TabPFNValidationError, match="do not match"):
+            validate_dataset_size(
+                X=X,
+                y=y,
+                max_num_samples=10_000,
+                max_num_features=500,
+                ignore_pretraining_limits=False,
+                devices=(torch.device("cpu"),),
+            )
+
+
+class TestEnsureCompatibleFitInputsSklearnValidation:
+    """Tests for `ensure_compatible_fit_inputs_sklearn`'s value checks."""
+
+    def test__too_few_samples__raises(self, classifier: TabPFNClassifier) -> None:
         """Test that providing only one sample raises an error."""
         X = np.array([[1.0, 2.0]])
         y = np.array([0])
 
         with pytest.raises(TabPFNValidationError, match="sample"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
+            ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
-    def test__ensure_compatible_fit_inputs__mismatched_lengths(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
-        """Test that mismatched X and y lengths raise an error."""
-        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-        y = np.array([0, 1])  # Only 2 elements, X has 3 rows
-
-        with pytest.raises(TabPFNValidationError):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
-
-    def test__ensure_compatible_fit_inputs__no_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+    def test__no_features__raises(self, classifier: TabPFNClassifier) -> None:
         """Test that providing zero features raises an error."""
         X = np.array([[], [], []])
         y = np.array([0, 1, 0])
 
         with pytest.raises(TabPFNValidationError, match="feature"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
+            ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
 
 class TestEnsureCompatibleFitInputsWithNaN:
     """Tests for handling NaN values."""
 
     def test__ensure_compatible_fit_inputs__nan_in_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that NaN values in X are accepted."""
         X = np.array([[1.0, np.nan], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, *_ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        X, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
         assert np.isnan(X[0, 1])
 
@@ -1177,8 +1124,8 @@ def test__classifier_fit__native_temporal_column__is_read_not_rejected(
 
     `validate_data` converts the whole frame to one numpy array, and numpy has
     no dtype that unifies `datetime64` with a numeric or string column, so the
-    frame could not even be assembled. `normalize_temporal_columns` recasts the
-    column before validation ever sees it.
+    frame could not even be assembled. `resolve_date_columns` (date_encoding.py)
+    recasts the column before validation ever sees it.
     """
     n = 50
     rng = np.random.default_rng(0)
@@ -1223,164 +1170,3 @@ def test__classifier_fit__native_datetime_column__is_recognized_as_a_date(
     else:
         with pytest.warns(UserWarning, match="hold dates"):
             clf.fit(X, y)
-
-
-class TestNormalizeTemporalColumns:
-    """`normalize_temporal_columns`, which runs before sklearn's validation."""
-
-    def test__no_temporal_columns__is_a_noop(self) -> None:
-        X = pd.DataFrame({"a": [1.0, 2.0], "b": ["x", "y"]})
-        out, indices, _ = normalize_temporal_columns(X)
-        assert out is X
-        assert indices == []
-
-    def test__not_a_dataframe__is_a_noop(self) -> None:
-        X = np.array([[1.0, 2.0]])
-        out, indices, _ = normalize_temporal_columns(X)
-        assert out is X
-        assert indices == []
-
-    @pytest.mark.parametrize(
-        ("label", "column", "expected_first"),
-        [
-            ("datetime64", pd.date_range("2020-01-01", periods=3), "2020-01-01"),
-            (
-                "tz aware",
-                pd.date_range("2020-01-01", periods=3, tz="UTC"),
-                "2020-01-01 00:00:00+00:00",
-            ),
-            (
-                "with time",
-                pd.date_range("2020-01-01 13:45", periods=3, freq="D"),
-                "2020-01-01 13:45:00",
-            ),
-            (
-                "period",
-                pd.date_range("2020-01-01", periods=3).to_period("M"),
-                "2020-01-01",
-            ),
-        ],
-    )
-    def test__date_columns__render_as_text_and_are_reported(
-        self, label: str, column: pd.Index, expected_first: str
-    ) -> None:
-        X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
-        out, indices, _ = normalize_temporal_columns(X)
-        assert indices == [1], label
-        assert out.iloc[0, 1] == expected_first, label
-        # The frame now holds a dtype numpy can put beside a float, which is the
-        # whole point of running before validation.
-        assert out.to_numpy(dtype=object).shape == (3, 2)
-
-    @pytest.mark.parametrize(
-        "column",
-        [
-            pytest.param(pd.date_range("2020-01-01", periods=3), id="datetime64"),
-            pytest.param(
-                pd.date_range("2020-01-01", periods=3, tz="UTC"), id="tz aware"
-            ),
-            pytest.param(
-                pd.date_range("2020-01-01", periods=3).to_period("M"), id="period"
-            ),
-        ],
-    )
-    def test__date_columns__native_dates_holds_the_real_value(
-        self, column: pd.Index
-    ) -> None:
-        """Date expansion (`date_encoding.py`) reads the real point in time
-        from here directly, never a re-parse of the text this function
-        renders into the frame for validation's sake.
-        """
-        X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
-        _, _, native_dates = normalize_temporal_columns(X)
-        expected = pd.Series(column)
-        if isinstance(expected.dtype, pd.PeriodDtype):
-            # A period is a span, not an instant; its start is the instant
-            # that orders identically, which is all the calendar features need.
-            expected = expected.dt.to_timestamp()
-        pd.testing.assert_series_equal(native_dates[1], expected, check_names=False)
-
-    def test__missing_stays_missing__not_the_string_nat(self) -> None:
-        """`astype(str)` alone writes NaT out as the literal "NaT".
-
-        Which NA marker lands there is the dtype's business -- `None` under
-        object dtype, `nan` under the pandas 3 `str` dtype -- so this asserts
-        that it reads as missing, not that it is any particular one.
-        """
-        column = pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))
-        out, _, _ = normalize_temporal_columns(pd.DataFrame({"d": column}))
-        assert out["d"].isna().tolist() == [False, True, False]
-        assert not (out["d"] == "NaT").any()
-
-    def test__timedelta__becomes_seconds_and_is_not_called_a_date(self) -> None:
-        """A duration is a quantity, not a point on a calendar."""
-        X = pd.DataFrame({"d": pd.to_timedelta([1, 2, 3], unit="D")})
-        out, indices, _ = normalize_temporal_columns(X)
-        assert indices == []
-        assert out["d"].tolist() == [86400.0, 172800.0, 259200.0]
-
-    def test__input_frame_is_not_mutated(self) -> None:
-        X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
-        before = X.dtypes.tolist()
-        normalize_temporal_columns(X)
-        assert X.dtypes.tolist() == before
-
-    def test__duplicate_column_labels__are_replaced_by_position(self) -> None:
-        """The labels are the caller's, so they can repeat -- the same case
-        `build_input_feature_names` exists for. Replacing by label would be
-        ambiguous, so replacement is positional.
-        """
-        X = pd.concat(
-            [
-                pd.Series([1.0, 2.0, 3.0]),
-                pd.Series(pd.date_range("2020-01-01", periods=3)),
-                pd.Series([4.0, 5.0, 6.0]),
-            ],
-            axis=1,
-        )
-        X.columns = ["same", "same", "same"]
-
-        out, indices, _ = normalize_temporal_columns(X)
-
-        assert indices == [1]
-        assert out.iloc[0, 1] == "2020-01-01"
-        # The columns either side are untouched, which is what would break if a
-        # label were used to find the one to replace.
-        assert out.iloc[:, 0].tolist() == [1.0, 2.0, 3.0]
-        assert out.iloc[:, 2].tolist() == [4.0, 5.0, 6.0]
-        assert list(out.columns) == ["same", "same", "same"]
-
-    def test__non_unique_index__is_preserved(self) -> None:
-        """Replacement must not depend on the index being unique or ordered."""
-        X = pd.DataFrame(
-            {"n": [1.0, 2.0, 3.0], "d": pd.date_range("2020-01-01", periods=3)},
-            index=[7, 7, 2],
-        )
-
-        out, indices, _ = normalize_temporal_columns(X)
-
-        assert indices == [1]
-        assert list(out.index) == [7, 7, 2]
-        assert out.iloc[0, 1] == "2020-01-01"
-
-    def test__values_of_the_input_frame_are_not_written_through(self) -> None:
-        """The copy is shallow, so this pins that no value is written through it."""
-        X = pd.DataFrame({"n": [1.0, 2.0], "d": pd.date_range("2020-01-01", periods=2)})
-        before = X.copy(deep=True)
-
-        normalize_temporal_columns(X)
-
-        pd.testing.assert_frame_equal(X, before)
-
-    def test__rendering_twice__is_a_noop_the_second_time(self) -> None:
-        """Predict re-renders whatever it is handed, including a frame that fit
-        already rendered, so the second pass must find nothing left to do.
-        """
-        X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
-
-        once, first_indices, _ = normalize_temporal_columns(X)
-        twice, second_indices, _ = normalize_temporal_columns(once)
-
-        assert first_indices == [0]
-        assert second_indices == []
-        assert twice is once

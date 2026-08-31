@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import math
 import warnings
 from collections.abc import Sequence
@@ -41,8 +40,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
-    provided_date_indices: Sequence[int] | None = None,
-    transform_dates: bool = False,
+    provided_numerical_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -55,10 +53,13 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
-        provided_date_indices: Indices already known to be dates, because they
-            arrived as a datetime dtype rather than as strings that might parse
-            as one. Tagged `DATE` outright: there is nothing for the string
-            heuristics to guess at, and skipping them also skips their cost.
+        provided_numerical_indices: Indices already known to be numerical --
+            e.g. the calendar features `resolve_date_columns` (date_encoding.py)
+            expanded a date column into, before this function ever ran. Tagged
+            `NUMERICAL` outright, skipping the cardinality heuristic below:
+            a low-cardinality calendar feature (e.g. `year`, in a dataset
+            spanning few distinct years) must not be miscategorized as
+            `CATEGORICAL` just because a same-shaped ordinary column would be.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -66,8 +67,6 @@ def detect_feature_modalities(
         min_cardinality_for_text: Unique-value count above which a candidate
             string column (not parsed as a number) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
-        transform_dates: Whether a detected date column is left as `DATE` for the
-            caller to expand, rather than demoted to `CATEGORICAL`/`TEXT`.
 
     Returns:
         The inferred `FeatureSchema`.
@@ -75,16 +74,13 @@ def detect_feature_modalities(
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
-    reported_dates = set(provided_date_indices or ())
+    reported_numerical = set(provided_numerical_indices or ())
     for i, index in enumerate(range(X.shape[1])):
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
         feature_name = unique_feature_names[i]
-        if index in reported_dates and not reported_categorical:
-            # A datetime dtype says outright what the string heuristics below
-            # can only guess at, so they are not consulted -- unless the caller
-            # also declared the column categorical, which overrides either way.
-            feat_modality = FeatureModality.DATE
+        if index in reported_numerical and not reported_categorical:
+            feat_modality = FeatureModality.NUMERICAL
         else:
             feat_modality = _detect_feature_modality(
                 s=pd.Series(X_slice, name=feature_name),
@@ -96,49 +92,8 @@ def detect_feature_modalities(
             )
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
-    # Before dates are demoted, so a date isn't yet TEXT and is never counted here.
     _warn_on_texts(feature_schema, declared_cat_indices=provided_categorical_indices)
-
-    if not transform_dates and feature_schema.indices_for(FeatureModality.DATE):
-        feature_schema, demoted_date_columns = _demote_dates(
-            feature_schema,
-            X,
-            min_cardinality_for_text=min_cardinality_for_text,
-        )
-        _warn_on_dates(demoted_date_columns)
     return feature_schema
-
-
-def _demote_dates(
-    feature_schema: FeatureSchema,
-    X: np.ndarray,
-    *,
-    min_cardinality_for_text: int,
-) -> tuple[FeatureSchema, list[str]]:
-    """Demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
-
-    Only called when `transform_dates` is off, so every detected date is demoted,
-    via the same cardinality rule `_classify_string_like_column` already
-    applies to a same-shaped non-date string.
-
-    Every column here is one nothing else claimed: a declared categorical never
-    reaches `DATE` in the first place, so there is no declaration to respect,
-    and every demoted column is one worth warning about.
-
-    Returns:
-        The updated schema, and the demoted column names to warn about.
-    """
-    features = list(feature_schema.features)
-    demoted_columns = []
-    for index in feature_schema.indices_for(FeatureModality.DATE):
-        n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        if n_unique <= min_cardinality_for_text:
-            demoted = FeatureModality.CATEGORICAL
-        else:
-            demoted = FeatureModality.TEXT
-        features[index] = dataclasses.replace(features[index], modality=demoted)
-        demoted_columns.append(features[index].name.removeprefix(INPUT_FEATURE_PREFIX))
-    return FeatureSchema(features=features), demoted_columns
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -157,11 +112,8 @@ def _warn_on_texts(
 ) -> None:
     """Warn when input columns look like free text rather than categoricals.
 
-    Called before `_demote_dates`, while a date is still tagged `DATE` rather
-    than `TEXT`, so it's never counted here.
-
     Args:
-        feature_schema: The schema before any `DATE` column has been demoted.
+        feature_schema: The inferred schema.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
@@ -194,25 +146,6 @@ def _warn_on_texts(
     )
 
 
-def _warn_on_dates(demoted_date_columns: list[str]) -> None:
-    """Warn about dates `_demote_dates` demoted to a plain category or text.
-
-    Empty whenever every demoted date was declared categorical.
-    """
-    if not demoted_date_columns:
-        return
-    warnings.warn(
-        f"These columns hold dates, which are read as plain categories or "
-        f"text: {_format_names_for_warning(demoted_date_columns)}.\n"
-        'Raise `inference_config={"TRANSFORM_DATES": True}` to expand them into '
-        "calendar features instead. To silence this for a column that should "
-        "stay a plain category or text, pass its index in "
-        "`categorical_features_indices`.",
-        UserWarning,
-        stacklevel=6,
-    )
-
-
 def _detect_feature_modality(
     s: pd.Series,
     *,
@@ -222,7 +155,13 @@ def _detect_feature_modality(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    """Decide a single column's modality; see `_demote_dates` for DATE."""
+    """Decide a single column's modality.
+
+    A date column never reaches here: `detect_feature_modalities` tags it
+    `NUMERICAL` outright via `provided_numerical_indices` if it was expanded,
+    or lets it fall through to this same heuristic as an ordinary string
+    otherwise (`resolve_date_columns` already rendered it to text).
+    """
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.
@@ -285,11 +224,11 @@ def _classify_string_like_column(
 ) -> FeatureModality:
     """Classify a string/categorical-dtype column as CATEGORICAL or TEXT.
 
-    No content-based date guessing here: `DATE` is only ever assigned via
-    `provided_date_indices`, i.e. a column that arrived as a genuine datetime
-    dtype (see `detect_feature_modalities`). A string that merely looks like a
-    date -- "2020-01-01" -- is just an ordinary string, classified by
-    cardinality like any other.
+    No content-based date guessing here: a column is only ever a date because
+    it arrived as a genuine datetime dtype, resolved by `resolve_date_columns`
+    (date_encoding.py) before this module ever runs. A string that merely
+    looks like a date -- "2020-01-01" -- is just an ordinary string,
+    classified by cardinality like any other.
     """
     if n_unique <= min_cardinality_for_text:
         return FeatureModality.CATEGORICAL

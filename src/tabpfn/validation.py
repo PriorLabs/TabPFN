@@ -11,7 +11,7 @@ from __future__ import annotations
 import typing
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import torch
@@ -19,95 +19,64 @@ from sklearn.base import is_classifier
 from sklearn.utils.multiclass import check_classification_targets
 
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.misc._sklearn_compat import check_array, check_X_y, validate_data
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
     import numpy as np
-    import numpy.typing as npt
     import torch
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
 
-    T = TypeVar("T")
+
+def original_target_name(y: YType) -> str | None:
+    """The name of `y`, if it was passed as a `pandas.Series`, else `None`."""
+    return str(y.name) if isinstance(y, pd.Series) else None
 
 
-def ensure_compatible_fit_inputs(
+def capture_input_shape(
     X: XType,
-    y: YType,
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
-    max_num_samples: int,
-    max_num_features: int,
-    ignore_pretraining_limits: bool,
-    ensure_y_numeric: bool = False,
-    devices: tuple[torch.device, ...],
-    max_cpu_samples: int = 1000,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
-    """Validate and convert inputs to standardized format.
+    reset: bool,
+) -> None:
+    """Set (`reset=True`) or check (`reset=False`) `feature_names_in_`/`n_features_in_`.
 
-    Args:
-        X: The input data.
-        y: The target data.
-        estimator: The estimator to validate the data for.
-        max_num_samples: The maximum number of samples to allow.
-        max_num_features: The maximum number of features to allow.
-        ignore_pretraining_limits: Whether to ignore the pretraining limits.
-        ensure_y_numeric: Whether to ensure the target data is numeric, e.g. for
-            regression tasks.
-        devices: The devices to use for the input data.
-        max_cpu_samples: Sample count above which CPU inference raises by default.
-
-    Returns:
-        A tuple of five elements:
-        - the validated input data X as np.ndarray,
-        - target data y as np.ndarray,
-        - feature names as npt.NDArray[Any] | None,
-        - number of features as int
-        - target name if the input was a Series, otherwise None
+    Call on the raw input, before date resolution (`resolve_date_columns`,
+    date_encoding.py) or value validation run: those two attributes must
+    describe what the caller actually passed to `fit`/`predict`, not
+    TabPFN's internal (possibly wider, post-date-expansion) representation.
+    `skip_check_array=True` means only the input's shape and column labels
+    are inspected here, never its values, so this is safe to call on `X`
+    that still holds a genuine `datetime64` column, unlike the rest of
+    validation.
     """
-    # Preserve the name of the target data, if it exists.
-    original_y_name: str | None = str(y.name) if isinstance(y, pd.Series) else None
-
-    # Rely on sklearn's validation to return feature names to be consistent
-    # with sklearn interfaces.
-    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
-        X,
-        y,
-        estimator=estimator,
-        ensure_y_numeric=ensure_y_numeric,
-    )
-    validate_dataset_size(
-        X=X,
-        y=y,
-        max_num_samples=max_num_samples,
-        max_num_features=max_num_features,
-        max_cpu_samples=max_cpu_samples,
-        devices=devices,
-        ignore_pretraining_limits=ignore_pretraining_limits,
-    )
-    return X, y, feature_names_in, n_features_in, original_y_name
+    try:
+        validate_data(estimator, X=X, reset=reset, skip_check_array=True)
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
 
 
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
-    """Validate and convert the input data for prediction.
+    """Validate the values of an already-shape-checked, already-date-resolved
+    predict input, converting it to a plain array.
 
-    Note that this also changes the type of X to np.ndarray.
+    `capture_input_shape` must already have run (on the raw, pre-resolution
+    input) to check `n_features_in_`/`feature_names_in_` consistency -- this
+    only checks values (dtype coercion, NaN/Inf), via `check_array` directly
+    rather than `validate_data`, so it never re-touches those two attributes
+    from the shape of the (possibly wider) `X` handed to it here.
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
-        result = validate_data(
-            estimator,
-            X=X,
-            # NOTE: Important that reset is False, i.e. doesn't reset estimator
-            reset=False,
-            # Parameters to `check_X_y()`
+        result = check_array(
+            X,
             accept_sparse=False,
             dtype=None,
             ensure_all_finite=False
@@ -132,11 +101,11 @@ def validate_dataset_size(
 ) -> None:
     """Validate the dataset size."""
     if len(X) != len(y):
-        raise ValueError(
+        raise TabPFNValidationError(
             f"Number of samples in X ({len(X)}) and y ({len(y)}) do not match.",
         )
     if len(X.shape) != 2:
-        raise ValueError(
+        raise TabPFNValidationError(
             f"The input data X is not a 2D array. Got shape: {X.shape}",
         )
     num_samples, num_features = X.shape
@@ -161,29 +130,32 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
-    """Validate the input data for fitting with standard input.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate the values of already-shape-checked, already-date-resolved
+    fit inputs, converting them to plain arrays.
 
-    Note that this also changes the type of X and y to np.ndarray.
+    `capture_input_shape` must already have run (on the raw, pre-resolution
+    `X`) to set `feature_names_in_`/`n_features_in_` -- this only checks
+    values (dtype coercion, NaN/Inf, minimum samples, classification
+    targets), via `check_X_y` directly rather than `validate_data`, so it
+    never re-touches those two attributes from the shape of the (possibly
+    wider) `X` handed to it here.
 
     Args:
-        X: The input data.
+        X: The input data, already resolved (`resolve_date_columns`).
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
 
     Returns:
-        A tuple of the validated input data X, target data y, feature names,
-        and number of features.
+        The validated input data X and target data y.
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
-        X, y = validate_data(
-            estimator,
-            X=X,
-            y=y,
-            # Parameters to `check_X_y()`
+        X, y = check_X_y(
+            X,
+            y,
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
             ensure_all_finite=False
@@ -223,10 +195,7 @@ def ensure_compatible_fit_inputs_sklearn(
             )
         raise TabPFNValidationError(e_str) from e
 
-    # NOTE: Theoretically we don't need to return the feature names and number,
-    # but it makes it clearer in the calling code that these variables now exist
-    # and can be set on the estimator.
-    return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
+    return X, y
 
 
 def validate_num_classes(
