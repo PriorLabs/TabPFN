@@ -333,7 +333,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 If `"auto"` (the default), the temperature is taken from the
                 checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
                 every checkpoint released up to and including v8.5.0. Passing a float
-                overrides the checkpoint for every model in the ensemble.
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of

@@ -98,9 +98,10 @@ class InferenceConfig:
     ones released with v8.5.0) keep their original behavior. Newer checkpoints are
     expected to store their own value and must do so explicitly.
 
-    `TabPFNClassifier(softmax_temperature=...)` overrides this for every model in the
-    ensemble. Left at its default of `"auto"`, the value comes from the checkpoint,
-    and an ensemble whose checkpoints declare different temperatures is rejected."""
+    Setting this here overrides the checkpoint for every model in the ensemble, as
+    does `TabPFNClassifier(softmax_temperature=...)`; naming a temperature both ways
+    at once is rejected. With neither, the value comes from the checkpoint, and an
+    ensemble whose checkpoints declare different temperatures is rejected too."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.

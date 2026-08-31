@@ -452,9 +452,9 @@ def initialize_model_variables_helper(
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
         user_config=user_config,
     )
-    # Applied after the user's `inference_config`, because the `softmax_temperature`
-    # argument wins over it. A no-op when the override came from `user_config`, which
-    # the call above has already applied.
+    # Only the `softmax_temperature` argument still has to be applied here; an
+    # override that came from `user_config` was applied by the call above, and the two
+    # cannot both be given.
     if softmax_temperature_override is not None:
         inference_config = dataclasses.replace(
             inference_config, SOFTMAX_TEMPERATURE=softmax_temperature_override
@@ -473,20 +473,33 @@ def _resolve_softmax_temperature_override(
 ) -> float | None:
     """Return the temperature the user asked for, or None if they asked for none.
 
-    The `softmax_temperature` argument of the estimator wins over an explicit
-    `inference_config`, which in turn wins over what the checkpoint declares.
-    """
-    if softmax_temperature != "auto":
-        return float(softmax_temperature)
+    A temperature named either way wins over what the checkpoint declares. Naming it
+    both ways is rejected rather than resolved, since the winner would not be
+    apparent from the call.
 
+    Raises:
+        ValueError: If the temperature is given as the `softmax_temperature` argument
+            and through `inference_config` at the same time.
+    """
+    config_temperature: float | None = None
     if isinstance(user_config, InferenceConfig):
         # A hand-built config replaces the checkpoint's wholesale, temperature
-        # included.
-        return user_config.SOFTMAX_TEMPERATURE
-    if isinstance(user_config, dict) and "SOFTMAX_TEMPERATURE" in user_config:
-        return float(user_config["SOFTMAX_TEMPERATURE"])
+        # included, so it always names one.
+        config_temperature = user_config.SOFTMAX_TEMPERATURE
+    elif isinstance(user_config, dict) and "SOFTMAX_TEMPERATURE" in user_config:
+        config_temperature = float(user_config["SOFTMAX_TEMPERATURE"])
 
-    return None
+    if softmax_temperature == "auto":
+        return config_temperature
+
+    if config_temperature is not None:
+        raise ValueError(
+            f"The softmax temperature was given twice: "
+            f"`softmax_temperature={softmax_temperature}` and "
+            f"`inference_config` with SOFTMAX_TEMPERATURE={config_temperature}. "
+            f"Pass it one way or the other, so which one applies is unambiguous."
+        )
+    return float(softmax_temperature)
 
 
 def resolved_softmax_temperature(

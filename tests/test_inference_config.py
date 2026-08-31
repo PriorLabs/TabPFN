@@ -323,19 +323,48 @@ def test__classifier_softmax_temperature__inference_config__overrides_checkpoint
     assert clf.softmax_temperature_ == 1.5
 
 
-def test__classifier_softmax_temperature__argument_wins_over_inference_config(
+@pytest.mark.parametrize(
+    "inference_config",
+    [
+        {"SOFTMAX_TEMPERATURE": 0.7},
+        InferenceConfig.get_default("multiclass", ModelVersion.V2_5),
+    ],
+)
+def test__classifier_softmax_temperature__named_twice__raises(
     classification_data: tuple[np.ndarray, np.ndarray],
+    inference_config: dict | InferenceConfig,
 ) -> None:
+    """Which of the two would win is not apparent from the call, so neither does.
+
+    A hand-built `InferenceConfig` always carries a temperature, so passing one
+    counts as naming it.
+    """
     X, y = classification_data
     clf = TabPFNClassifier(
         model_path=_classifier_specs(0.42),
         device="cpu",
         softmax_temperature=1.5,
-        inference_config={"SOFTMAX_TEMPERATURE": 0.7},
+        inference_config=inference_config,
+    )
+    with pytest.raises(ValueError, match="softmax temperature was given twice"):
+        clf.fit(X, y)
+
+
+def test__classifier_softmax_temperature__inference_config_without_it__is_allowed(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    """Only naming the temperature clashes, not passing an `inference_config`."""
+    X, y = classification_data
+    clf = TabPFNClassifier(
+        model_path=_classifier_specs(0.42),
+        device="cpu",
+        softmax_temperature=1.5,
+        inference_config={"POLYNOMIAL_FEATURES": "all"},
     )
     clf.fit(X, y)
 
     assert clf.softmax_temperature_ == 1.5
+    assert clf.get_inference_config().POLYNOMIAL_FEATURES == "all"
 
 
 def test__classifier_softmax_temperature__reaches_the_predictions(

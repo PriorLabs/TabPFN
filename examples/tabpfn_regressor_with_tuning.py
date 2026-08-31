@@ -2,7 +2,7 @@
 """Example of calibrating the predictive distribution of a TabPFNRegressor.
 
 `TabPFNRegressor` sharpens every ensemble member's bucket logits by the
-`softmax_temperature` its checkpoint declares (0.9 for the current models).
+`softmax_temperature` its checkpoint declares.
 Passing `tuning_config={"calibrate_temperature": True}`
 allows tuning the sharpness of the ensemble distribution logits:
 log(sum(TabPFNRegressor_i.predict(X))/ensemble_softmax_temperature_).
