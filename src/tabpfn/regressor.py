@@ -85,7 +85,10 @@ from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.preprocessing.modality_detection import (
+    detect_feature_modalities,
+    resolve_datetime_columns,
+)
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -856,6 +859,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
+        # Must run before validation: a real datetime64 column crashes it
+        # otherwise (see `resolve_datetime_columns`).
+        X, provided_date_indices = resolve_datetime_columns(
+            X, categorical_features_indices=self.categorical_features_indices
+        )
+
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
             y,
@@ -876,6 +885,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
+            provided_date_indices=provided_date_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -1284,6 +1294,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
+        X, _ = resolve_datetime_columns(
+            X, categorical_features_indices=self.categorical_features_indices
+        )
         X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
@@ -1448,6 +1461,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
+            X_holdout_NhF, _ = resolve_datetime_columns(  # noqa: PLW2901
+                X_holdout_NhF,
+                categorical_features_indices=tuning_regressor.categorical_features_indices,
+            )
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
             )
@@ -1714,6 +1731,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
+            X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
+                X_test, categorical_features_indices=worker.categorical_features_indices
+            )
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,

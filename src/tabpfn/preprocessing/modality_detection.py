@@ -10,6 +10,7 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
@@ -23,13 +24,68 @@ from tabpfn.preprocessing.datamodel import (
 )
 
 if TYPE_CHECKING:
-    import numpy as np
+    from tabpfn.constants import XType
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
 #: Cap on how many column names the likely-text warning lists, so a wide frame of
 #: text columns does not produce an unreadable multi-kilobyte message.
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
+
+
+def resolve_datetime_columns(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+) -> tuple[XType, list[int]]:
+    """Cast genuine `datetime64` columns to numeric, and report their indices.
+
+    Must run before `ensure_compatible_fit_inputs`: a `datetime64` dtype has no
+    common numpy dtype with a plain numeric/bool/string column (only with
+    `object`), so `check_array`'s `np.result_type` over the raw column dtypes
+    crashes outright otherwise (a real, previously-unfixed bug -- see
+    `test__classifier_fit__native_datetime_column__known_unfixed_crash`).
+    Casting to nanoseconds since the epoch, as `float64` so a missing date
+    stays `NaN` rather than becoming a huge sentinel integer, is exact enough
+    for any realistic datetime column and unifies fine with any other numeric
+    dtype, so validation proceeds normally afterward.
+
+    A column already declared categorical is left untouched -- the user's
+    declared intent for it wins over treating it as a date.
+
+    Returns the (possibly cast) `X` and the indices of the columns cast, so the
+    caller can tag them `DATE` via `detect_feature_modalities`'s
+    `provided_date_indices`, instead of them silently reading as an ordinary
+    numeric column.
+    """
+    if not isinstance(X, pd.DataFrame):
+        return X, []
+    declared = set(categorical_features_indices or ())
+    date_indices = [
+        i
+        for i, dtype in enumerate(X.dtypes)
+        if pd.api.types.is_datetime64_any_dtype(dtype) and i not in declared
+    ]
+    if not date_indices:
+        return X, []
+
+    date_set = set(date_indices)
+    columns = []
+    for i, name in enumerate(X.columns):
+        if i not in date_set:
+            columns.append(X.iloc[:, i])
+            continue
+        column = X.iloc[:, i]
+        is_missing = column.isna().to_numpy()
+        as_ns = column.astype("int64").astype("float64")
+        as_ns[is_missing] = np.nan
+        columns.append(pd.Series(as_ns, name=name, index=X.index))
+    # `.iloc[:, i] = ...` would try to preserve the column's existing datetime64
+    # storage and reject the cast; rebuilding column-by-column changes its dtype
+    # instead. Positional, so duplicate column labels are handled correctly.
+    resolved = pd.concat(columns, axis=1)
+    resolved.columns = X.columns
+    return resolved, date_indices
 
 
 def detect_feature_modalities(
@@ -41,6 +97,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
+    provided_date_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -53,12 +110,15 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
+        provided_date_indices: Indices already known to hold a real `datetime64`
+            dtype before validation (see `resolve_datetime_columns`); tagged
+            `DATE` outright, without running the heuristics below.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
         min_unique_for_numerical: Min unique values for a feature to be numerical.
         min_cardinality_for_text: Unique-value count above which a candidate
-            string column (not parsed as a number or date) is `TEXT` rather than
+            string column (not parsed as a number) is `TEXT` rather than
             `CATEGORICAL` -- independent of the two thresholds above.
 
     Returns:
@@ -67,10 +127,14 @@ def detect_feature_modalities(
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
+    date_indices = set(provided_date_indices or ())
     for i, index in enumerate(range(X.shape[1])):
+        feature_name = unique_feature_names[i]
+        if index in date_indices:
+            features.append(Feature(name=feature_name, modality=FeatureModality.DATE))
+            continue
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
-        feature_name = unique_feature_names[i]
         feat_modality = _detect_feature_modality(
             s=pd.Series(X_slice, name=feature_name),
             reported_categorical=reported_categorical,
@@ -214,7 +278,7 @@ def _detect_feature_modality(
     min_cardinality_for_text: int,
     big_enough_n_to_infer_cat: bool,
 ) -> FeatureModality:
-    """Decide a single column's modality; see `_demote_dates_for_now` for DATE."""
+    """Decide a single column's modality via heuristics."""
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
     # min_cardinality_for_text is included since it can exceed the other two.
@@ -256,27 +320,14 @@ def _detect_feature_modality(
         s.dtype, pd.CategoricalDtype
     )
     if is_string_like:
-        return _classify_string_like_column(
-            s, n_unique=n_unique, min_cardinality_for_text=min_cardinality_for_text
+        return (
+            FeatureModality.CATEGORICAL
+            if n_unique <= min_cardinality_for_text
+            else FeatureModality.TEXT
         )
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )
-
-
-def _classify_string_like_column(
-    s: pd.Series,
-    *,
-    n_unique: int,
-    min_cardinality_for_text: int,
-) -> FeatureModality:
-    """Classify a string/categorical-dtype column as CATEGORICAL, TEXT, or DATE."""
-    if _is_date_like_pandas_series(s):
-        return FeatureModality.DATE
-    elif n_unique <= min_cardinality_for_text:  # noqa: RET505
-        return FeatureModality.CATEGORICAL
-    else:
-        return FeatureModality.TEXT
 
 
 def _is_numeric_pandas_series(s: pd.Series) -> bool:
@@ -285,8 +336,9 @@ def _is_numeric_pandas_series(s: pd.Series) -> bool:
     if PANDAS_BELOW_3:
         return all(_is_numeric_or_missing_for_old_pandas(value) for value in s)
     # The generator above stops at the first non-numeric value; `pd.to_numeric`
-    # coerces the whole column first, so reject on a prefix instead. See
-    # `_is_date_like_pandas_series` for why this cannot change the answer.
+    # coerces the whole column first, so reject on a prefix instead: one
+    # non-numeric value anywhere settles the answer, so a prefix that already
+    # fails proves the full column does too.
     if len(s) > _EARLY_EXIT_PREFIX_ROWS and not _all_numeric_or_missing(
         s.iloc[:_EARLY_EXIT_PREFIX_ROWS]
     ):
@@ -328,47 +380,6 @@ def _is_numeric_or_missing_for_old_pandas(value: object) -> bool:
     # A finite literal too large for a float64, e.g. "1e400". Only a spelled-out
     # infinity counts as numeric.
     return not (math.isinf(parsed) and "inf" not in value.lower())
-
-
-def _is_date_like_pandas_series(s: pd.Series) -> bool:
-    """Whether every non-null value in `s` parses as a date.
-
-    All-or-nothing, like `_is_numeric_pandas_series`. Only reached after the
-    numeric check fails, so a numeric-looking date (e.g. `"20240101"`) is never
-    reclassified here.
-
-    A prefix rejects the column before the whole of it is parsed, which is exact
-    rather than approximate: one unparseable value settles the answer, and a text
-    column fails on its first. A clean prefix proves nothing, so it falls through
-    to the full parse. The prefix has to be the head specifically, since
-    `to_datetime` infers a format from the first non-null value and applies it to
-    every other one; a head starts at that same value, a sample need not.
-    """
-    if len(s) > _EARLY_EXIT_PREFIX_ROWS and not _all_parse_as_dates(
-        s.iloc[:_EARLY_EXIT_PREFIX_ROWS].dropna()
-    ):
-        return False
-    non_null = s.dropna()
-    if non_null.empty:
-        return False
-    return _all_parse_as_dates(non_null)
-
-
-def _all_parse_as_dates(s: pd.Series) -> bool:
-    """Whether every value in `s` parses as a date; vacuously true when empty.
-
-    An empty result matters for the prefix call: a head that is entirely missing
-    says nothing about the column, so it must fall through rather than reject.
-    """
-    try:
-        with warnings.catch_warnings():
-            # `to_datetime` warns when it cannot infer a format and falls back to
-            # parsing value by value. This is only a probe, so that is noise.
-            warnings.simplefilter("ignore")
-            parsed = pd.to_datetime(s, errors="coerce")
-    except (TypeError, ValueError):
-        return False
-    return bool(parsed.notna().all())
 
 
 def _detect_numeric_as_categorical(
