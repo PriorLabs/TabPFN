@@ -58,6 +58,7 @@ from tabpfn.inference import (
     InferenceEngineBatchedNoPreprocessing,
     _maybe_run_gpu_preprocessing,
 )
+from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE
 from tabpfn.inference_tuning import (
     RegressorEvalMetrics,
     RegressorTuningConfig,
@@ -238,13 +239,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     time, after the per-estimator `softmax_temperature`. This is `1.0`, a no-op, when
     no temperature calibration is done."""
 
+    softmax_temperature_: float
+    """The resolved per-estimator `softmax_temperature`, i.e. the temperature of the
+    first model. See `softmax_temperatures_` for ensembles whose models declare
+    different temperatures."""
+
+    softmax_temperatures_: list[float]
+    """The softmax temperature of each loaded model, index-aligned with `models_`.
+    Each estimator is scaled by the temperature of the model it ran on, so checkpoints
+    declaring different temperatures can be ensembled. Every entry is the same value
+    unless multiple checkpoints with differing temperatures are loaded."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
         model_path: str
         | Path
@@ -324,6 +336,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 confidence of the model's predictions. Lower values make the model's
                 predictions more confident. This is only applied when predicting during
                 a post-processing step. Set `softmax_temperature=1.0` for no effect.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -578,7 +595,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -586,7 +602,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -594,7 +609,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -602,7 +616,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -1825,6 +1838,29 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         assert all(r is not None for r in results)
         return typing.cast("list[RegressionResultType]", results)
 
+    def _temperature_for_config(
+        self,
+        config: RegressorEnsembleConfig | list[RegressorEnsembleConfig],
+    ) -> float:
+        """The softmax temperature of the model that produced this output.
+
+        All configs of one batched forward share a model (the batched engine rejects
+        mixing them), so the first one identifies the whole output.
+        """
+        temperatures = getattr(self, "softmax_temperatures_", None)
+        if temperatures is None:
+            # Estimators pickled before the temperature was resolved during model
+            # initialization still carry it as a plain argument.
+            temperature = self.softmax_temperature
+            return (
+                DEFAULT_SOFTMAX_TEMPERATURE
+                if temperature == "auto"
+                else float(temperature)
+            )
+
+        single_config = config[0] if isinstance(config, list) else config
+        return temperatures[single_config._model_index]
+
     def _translate_batched_logits(
         self,
         *,
@@ -1839,8 +1875,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         (estimator, dataset) pair of the fused forward.
         """
         out_d = output.float()
-        if self.softmax_temperature != 1:
-            out_d = out_d / self.softmax_temperature
+        temperature = self._temperature_for_config(config)
+        if temperature != 1:
+            out_d = out_d / temperature
         if config.target_transform is None:
             borders_t = std_borders.copy()
             logit_cancel_mask = None
@@ -1955,8 +1992,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
-            if self.softmax_temperature != 1:
-                output = output / self.softmax_temperature  # noqa: PLW2901
+            temperature = self._temperature_for_config(config)
+            if temperature != 1:
+                output = output / temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement

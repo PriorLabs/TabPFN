@@ -17,7 +17,7 @@ import urllib.request
 import warnings
 import zipfile
 from collections import OrderedDict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
@@ -595,6 +595,7 @@ def load_model_criterion_config(
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
     list[ArchitectureConfig],
     InferenceConfig,
+    list[float],
 ]: ...
 
 
@@ -612,6 +613,7 @@ def load_model_criterion_config(
     FullSupportBarDistribution,
     list[ArchitectureConfig],
     InferenceConfig,
+    list[float],
 ]: ...
 
 
@@ -628,11 +630,13 @@ def load_model_criterion_config(
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     list[ArchitectureConfig],
     InferenceConfig,
+    list[float],
 ]:
     """Load the model(s), criterion(s), and config(s) from the given path.
 
     If multiple model paths are provided, then all models must use the same criterion
-    and inference config.
+    and inference config, with the exception of the softmax temperature, which may
+    differ per model and is returned separately.
 
     Args:
         model_path: The path to the model, or list of paths if multiple models should be
@@ -649,7 +653,8 @@ def load_model_criterion_config(
 
     Returns:
         list of models, the criterion, list of architecture configs, the inference
-        config
+        config, and the softmax temperature of each model (index-aligned with the
+        list of models)
     """
     model_version = ModelVersion(version)
     (
@@ -727,7 +732,9 @@ def load_model_criterion_config(
 
     first_inference_config = inference_configs[0]
     for inference_config in inference_configs[1:]:
-        if inference_config != first_inference_config:
+        if not inference_config.equals_ignoring_softmax_temperature(
+            first_inference_config
+        ):
             raise ValueError(
                 f"Config 1: {first_inference_config}\n"
                 f"Config 2: {inference_config}\n"
@@ -735,7 +742,17 @@ def load_model_criterion_config(
                 "supported. See above."
             )
 
-    return loaded_models, first_criterion, architecture_configs, first_inference_config
+    # The temperature is the one field models are allowed to disagree on, so it is
+    # kept per model rather than collapsed onto the first config.
+    softmax_temperatures = [cfg.SOFTMAX_TEMPERATURE for cfg in inference_configs]
+
+    return (
+        loaded_models,
+        first_criterion,
+        architecture_configs,
+        first_inference_config,
+        softmax_temperatures,
+    )
 
 
 def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
@@ -1123,13 +1140,19 @@ def save_tabpfn_model(
         znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
 
     configs = model.configs_
-    inference_config = getattr(model, "inference_config_", None)
+    inference_config = model.inference_config_
+    # `inference_config_` only carries the first model's temperature; each checkpoint
+    # is written with the temperature of the model it holds.
+    softmax_temperatures = getattr(model, "softmax_temperatures_", None) or [
+        inference_config.SOFTMAX_TEMPERATURE
+    ] * len(models)
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 
-    for ens_model, config, path in zip(
+    for ens_model, config, path, softmax_temperature in zip(
         models,
         configs,
         save_paths,
+        softmax_temperatures,
         strict=True,
     ):
         model_state = ens_model.state_dict()
@@ -1147,10 +1170,10 @@ def save_tabpfn_model(
             "state_dict": state_dict,
             "config": asdict(config),
             "architecture_name": architecture_name,
-            "inference_config": asdict(model.inference_config_),
+            "inference_config": asdict(
+                replace(inference_config, SOFTMAX_TEMPERATURE=softmax_temperature)
+            ),
         }
-        if inference_config is not None:
-            checkpoint["inference_config"] = asdict(inference_config)
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)

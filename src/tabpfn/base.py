@@ -30,7 +30,7 @@ from tabpfn.inference import (
     InferenceEngineExplicitKVCache,
     InferenceEngineOnDemand,
 )
-from tabpfn.inference_config import cpu_sample_limit
+from tabpfn.inference_config import InferenceConfig, cpu_sample_limit
 from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
@@ -48,7 +48,6 @@ if TYPE_CHECKING:
     from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
     from tabpfn.classifier import TabPFNClassifier
     from tabpfn.constants import MemorySavingMode
-    from tabpfn.inference_config import InferenceConfig
     from tabpfn.preprocessing.ensemble import TabPFNEnsemblePreprocessor
     from tabpfn.regressor import TabPFNRegressor
 
@@ -104,6 +103,7 @@ def initialize_tabpfn_model(
     list[ArchitectureConfig],
     FullSupportBarDistribution | None,
     InferenceConfig,
+    list[float],
 ]:
     """Initializes a TabPFN model based on the provided configuration.
 
@@ -120,7 +120,8 @@ def initialize_tabpfn_model(
         a list of models,
         a list of architecture configs (associated with each model),
         if regression, the bar distribution, otherwise None,
-        the inference config
+        the inference config,
+        the softmax temperature of each model (index-aligned with the list of models)
     """
     if isinstance(model_path, RegressorModelSpecs) and which == "regressor":
         return (
@@ -128,6 +129,7 @@ def initialize_tabpfn_model(
             [model_path.architecture_config],
             model_path.norm_criterion,
             model_path.inference_config,
+            [model_path.inference_config.SOFTMAX_TEMPERATURE],
         )
 
     if isinstance(model_path, ClassifierModelSpecs) and which == "classifier":
@@ -136,6 +138,7 @@ def initialize_tabpfn_model(
             [model_path.architecture_config],
             None,
             model_path.inference_config,
+            [model_path.inference_config.SOFTMAX_TEMPERATURE],
         )
 
     if (
@@ -149,6 +152,7 @@ def initialize_tabpfn_model(
             [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             model_path[0].norm_criterion,  # pyright: ignore[reportAttributeAccessIssue]
             model_path[0].inference_config,
+            [spec.inference_config.SOFTMAX_TEMPERATURE for spec in model_path],
         )
 
     if (
@@ -162,6 +166,7 @@ def initialize_tabpfn_model(
             [spec.architecture_config for spec in model_path],  # pyright: ignore[reportAttributeAccessIssue]
             None,
             model_path[0].inference_config,
+            [spec.inference_config.SOFTMAX_TEMPERATURE for spec in model_path],
         )
 
     if (
@@ -183,7 +188,7 @@ def initialize_tabpfn_model(
         download_if_not_exists = True
 
         if which == "classifier":
-            models, _, architecture_configs, inference_config = (
+            models, _, architecture_configs, inference_config, softmax_temperatures = (
                 load_model_criterion_config(
                     model_path=model_path,  # pyright: ignore[reportArgumentType]
                     # The classifier's bar distribution is not used
@@ -196,23 +201,33 @@ def initialize_tabpfn_model(
             )
             norm_criterion = None
         else:
-            models, bardist, architecture_configs, inference_config = (
-                load_model_criterion_config(
-                    model_path=model_path,  # pyright: ignore[reportArgumentType]
-                    # The regressor's bar distribution is required
-                    check_bar_distribution_criterion=True,
-                    cache_trainset_representation=(fit_mode == "fit_with_cache"),
-                    estimator_type="regressor",
-                    version=version.value,
-                    download_if_not_exists=download_if_not_exists,
-                )
+            (
+                models,
+                bardist,
+                architecture_configs,
+                inference_config,
+                softmax_temperatures,
+            ) = load_model_criterion_config(
+                model_path=model_path,  # pyright: ignore[reportArgumentType]
+                # The regressor's bar distribution is required
+                check_bar_distribution_criterion=True,
+                cache_trainset_representation=(fit_mode == "fit_with_cache"),
+                estimator_type="regressor",
+                version=version.value,
+                download_if_not_exists=download_if_not_exists,
             )
             norm_criterion = bardist
 
         inference_config = dataclasses.replace(
             inference_config, MAX_CPU_SAMPLES=cpu_sample_limit(version)
         )
-        return models, architecture_configs, norm_criterion, inference_config
+        return (
+            models,
+            architecture_configs,
+            norm_criterion,
+            inference_config,
+            softmax_temperatures,
+        )
 
     raise TypeError(
         "Received ModelSpecs via 'model_path', but 'which' parameter is set to '"
@@ -226,8 +241,13 @@ def initialize_tabpfn_model(
 def _assert_inference_configs_equal(
     model_specs: list[ClassifierModelSpecs] | list[RegressorModelSpecs],
 ) -> None:
+    # The softmax temperature is excluded: models are allowed to disagree on it and
+    # each estimator is scaled by its own model's value.
     if not all(
-        spec.inference_config == model_specs[0].inference_config for spec in model_specs
+        spec.inference_config.equals_ignoring_softmax_temperature(
+            model_specs[0].inference_config
+        )
+        for spec in model_specs
     ):
         raise ValueError("All models must have the same inference config")
 
@@ -405,12 +425,16 @@ def initialize_model_variables_helper(
         a tuple (byte_size, rng), where byte_size is the number of bytes in the selected
         dtype, and rng is a NumPy random Generator for use during inference.
     """
-    models, architecture_configs, maybe_bardist, inference_config = (
-        initialize_tabpfn_model(
-            model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
-            which=model_type,
-            fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
-        )
+    (
+        models,
+        architecture_configs,
+        maybe_bardist,
+        inference_config,
+        softmax_temperatures,
+    ) = initialize_tabpfn_model(
+        model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
+        which=model_type,
+        fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
     )
     calling_instance.models_ = models
     calling_instance.configs_ = architecture_configs
@@ -419,13 +443,52 @@ def initialize_model_variables_helper(
 
     byte_size = estimator_to_device(calling_instance, calling_instance.device)
 
+    user_config = calling_instance.inference_config
     inference_config = inference_config.override_with_user_input_and_resolve_auto(
-        user_config=calling_instance.inference_config,
+        user_config=user_config,
     )
 
+    softmax_temperature_override = _resolve_softmax_temperature_override(
+        softmax_temperature=calling_instance.softmax_temperature,
+        user_config=user_config,
+        overridden_config=inference_config,
+    )
+    if softmax_temperature_override is not None:
+        softmax_temperatures = [softmax_temperature_override] * len(models)
+        inference_config = dataclasses.replace(
+            inference_config, SOFTMAX_TEMPERATURE=softmax_temperature_override
+        )
+
     calling_instance.inference_config_ = inference_config
+    calling_instance.softmax_temperatures_ = softmax_temperatures
+    calling_instance.softmax_temperature_ = softmax_temperatures[0]
 
     return byte_size
+
+
+def _resolve_softmax_temperature_override(
+    *,
+    softmax_temperature: float | Literal["auto"],
+    user_config: dict | InferenceConfig | None,
+    overridden_config: InferenceConfig,
+) -> float | None:
+    """Return the temperature to apply to every model, or None to keep per-model ones.
+
+    The `softmax_temperature` argument of the estimator wins over an explicit
+    `inference_config`, which in turn wins over what the checkpoints declare. Only
+    when neither is given does each model keep the temperature from its own
+    checkpoint.
+    """
+    if softmax_temperature != "auto":
+        return float(softmax_temperature)
+
+    user_set_temperature = isinstance(user_config, InferenceConfig) or (
+        isinstance(user_config, dict) and "SOFTMAX_TEMPERATURE" in user_config
+    )
+    if user_set_temperature:
+        return overridden_config.SOFTMAX_TEMPERATURE
+
+    return None
 
 
 def estimator_to_device(

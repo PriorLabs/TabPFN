@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, overload
@@ -27,7 +27,7 @@ from tabpfn.architectures.interface import (
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
 from tabpfn.constants import ModelVersion
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE, InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
 
 
@@ -182,7 +182,7 @@ def test__load_v2_checkpoint__returns_v2_preprocessings(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    _, _, _, inference_config = model_loading.load_model_criterion_config(
+    _, _, _, inference_config, _ = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -245,7 +245,7 @@ def test__load_v2_5_classification_ckpt__returns_v2_5_preprocessing(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    _, _, _, inference_config = model_loading.load_model_criterion_config(
+    _, _, _, inference_config, _ = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -289,7 +289,7 @@ def test__load_v2_5_regression_ckpt__returns_v2_5_preprocessing(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    _, _, _, inference_config = model_loading.load_model_criterion_config(
+    _, _, _, inference_config, _ = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -351,7 +351,7 @@ def test__load_v3_classification_ckpt__returns_inference_config_from_checkpoint(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    _, _, _, loaded_inference_config = model_loading.load_model_criterion_config(
+    _, _, _, loaded_inference_config, _ = model_loading.load_model_criterion_config(
         model_path=[checkpoint_path, checkpoint_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -378,7 +378,7 @@ def test__load_v3_regression_ckpt__returns_bar_distribution_from_model_borders(
     checkpoint_path = tmp_path / "checkpoint.ckpt"
     torch.save(checkpoint, checkpoint_path)
 
-    _, criterion, _, loaded_inference_config = (
+    _, criterion, _, loaded_inference_config, _ = (
         model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=True,
@@ -413,7 +413,7 @@ def test__load_multitask_ckpt__criterion_follows_the_requested_task(
     torch.save(checkpoint, checkpoint_path)
 
     def load(estimator_type: Literal["regressor", "classifier"]) -> object:
-        _, criterion, _, _ = model_loading.load_model_criterion_config(
+        _, criterion, _, _, _ = model_loading.load_model_criterion_config(
             model_path=[checkpoint_path],
             check_bar_distribution_criterion=estimator_type == "regressor",
             cache_trainset_representation=False,
@@ -488,7 +488,7 @@ def test__load_checkpoints_with_inference_configs__returns_inference_config(
     checkpoint_2_path = tmp_path / "checkpoint2.ckpt"
     torch.save(checkpoint_2, checkpoint_2_path)
 
-    loaded_models, _, _, loaded_config = model_loading.load_model_criterion_config(
+    loaded_models, _, _, loaded_config, _ = model_loading.load_model_criterion_config(
         model_path=[checkpoint_1_path, checkpoint_2_path],
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -607,7 +607,7 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
         # Use the same model path for all threads to test locking
         shared_checkpoint_path: Path = tmp_path / "shared_model.ckpt"
 
-        _, _, _, _ = model_loading.load_model_criterion_config(
+        _, _, _, _, _ = model_loading.load_model_criterion_config(
             model_path=shared_checkpoint_path,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
@@ -636,3 +636,110 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
         f"Expected at most 1 concurrent download, got {download_attempts}. "
         "The file lock is not working correctly."
     )
+
+
+def test__load_ckpts_with_differing_softmax_temperatures__keeps_one_per_model(
+    tmp_path: Path,
+) -> None:
+    """The temperature is the one config field checkpoints may disagree on.
+
+    Everything else still has to match, so a genuine mismatch keeps raising.
+    """
+    inference_config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    paths = []
+    for i, temperature in enumerate([0.9, 1.0]):
+        checkpoint = _build_small_v3_checkpoint(
+            replace(inference_config, SOFTMAX_TEMPERATURE=temperature),
+            max_num_classes=10,
+        )
+        path = tmp_path / f"checkpoint_{i}.ckpt"
+        torch.save(checkpoint, path)
+        paths.append(path)
+
+    _, _, _, loaded_config, softmax_temperatures = (
+        model_loading.load_model_criterion_config(
+            model_path=paths,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            estimator_type="classifier",
+            version="v3",
+            download_if_not_exists=False,
+        )
+    )
+
+    assert softmax_temperatures == [0.9, 1.0]
+    assert loaded_config.SOFTMAX_TEMPERATURE == 0.9
+
+
+def test__load_ckpts_differing_beyond_softmax_temperature__raises(
+    tmp_path: Path,
+) -> None:
+    inference_config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    paths = []
+    for i, config in enumerate(
+        [
+            replace(inference_config, SOFTMAX_TEMPERATURE=0.9),
+            replace(
+                inference_config, SOFTMAX_TEMPERATURE=1.0, POLYNOMIAL_FEATURES="all"
+            ),
+        ]
+    ):
+        path = tmp_path / f"checkpoint_{i}.ckpt"
+        torch.save(_build_small_v3_checkpoint(config, max_num_classes=10), path)
+        paths.append(path)
+
+    with pytest.raises(ValueError, match="Inference configs for different models"):
+        model_loading.load_model_criterion_config(
+            model_path=paths,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            estimator_type="classifier",
+            version="v3",
+            download_if_not_exists=False,
+        )
+
+
+def test__load_ckpt_without_softmax_temperature__uses_legacy_default(
+    tmp_path: Path,
+) -> None:
+    """Every checkpoint released so far lacks the key and must stay at 0.9."""
+    checkpoint = _build_small_v3_checkpoint(
+        InferenceConfig(PREPROCESS_TRANSFORMS=[]), max_num_classes=10
+    )
+    del checkpoint["inference_config"]["SOFTMAX_TEMPERATURE"]
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    _, _, _, inference_config, softmax_temperatures = (
+        model_loading.load_model_criterion_config(
+            model_path=checkpoint_path,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            estimator_type="classifier",
+            version="v3",
+            download_if_not_exists=False,
+        )
+    )
+
+    assert inference_config.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE == 0.9
+    assert softmax_temperatures == [0.9]
+
+
+def test__save_tabpfn_model__stores_each_model_s_own_softmax_temperature(
+    tmp_path: Path,
+) -> None:
+    config = TabPFNV3Config(max_num_classes=10, num_buckets=100)
+    inference_config = InferenceConfig.get_default("multiclass", ModelVersion.V2_5)
+    estimator = SimpleNamespace(
+        models_=[torch.nn.Linear(1, 1), torch.nn.Linear(1, 1)],
+        configs_=[config, config],
+        inference_config_=inference_config,
+        softmax_temperatures_=[0.9, 1.0],
+    )
+    paths = [tmp_path / "checkpoint_0.ckpt", tmp_path / "checkpoint_1.ckpt"]
+
+    model_loading.save_tabpfn_model(estimator, paths)
+
+    for path, expected in zip(paths, [0.9, 1.0], strict=True):
+        checkpoint = torch.load(path, map_location="cpu", weights_only=False)
+        assert checkpoint["inference_config"]["SOFTMAX_TEMPERATURE"] == expected

@@ -19,6 +19,12 @@ from tabpfn.preprocessing import (
     v2_regressor_preprocessor_configs,
 )
 
+DEFAULT_SOFTMAX_TEMPERATURE = 0.9
+"""The softmax temperature of every checkpoint released before the temperature became
+part of the inference config. Also the value used when the temperature cannot be
+resolved from a checkpoint at all. Do not change this, see
+`InferenceConfig.SOFTMAX_TEMPERATURE`."""
+
 
 # By default Pydantic dataclasses will ignore unrecognised config items, extra="forbid"
 # will raise an exception instead.
@@ -80,6 +86,20 @@ class InferenceConfig:
     two into a separate field does not itself change any default behavior. A
     follow-up that adds an actual text-encoding capability is expected to raise
     this default independently."""
+
+    SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
+    """The temperature applied to the model's logits at predict time. Lower values
+    make the predictions more confident, `1.0` is a no-op.
+
+    The default is the value that shipped as the `softmax_temperature` argument of
+    `TabPFNClassifier`/`TabPFNRegressor` before this became a config field, so
+    checkpoints that predate the field (which is all of them up to and including the
+    ones released with v8.5.0) keep their original behavior. Newer checkpoints are
+    expected to store their own value and must do so explicitly.
+
+    `TabPFNClassifier(softmax_temperature=...)` overrides this for every model in the
+    ensemble. Left at its default of `"auto"`, each model uses the value from its own
+    checkpoint, so checkpoints with different temperatures can be ensembled."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
@@ -270,6 +290,18 @@ class InferenceConfig:
             f"{user_config=}\nUnknown user config provided, see config above."
         )
 
+    def equals_ignoring_softmax_temperature(self, other: InferenceConfig) -> bool:
+        """Whether this config and `other` agree on every field but the temperature.
+
+        Models in a multi-checkpoint ensemble may declare different softmax
+        temperatures -- each estimator is scaled by its own model's value -- so that
+        field is excluded when checking that the rest of the configs line up.
+        """
+        neutral = 1.0
+        return dataclasses.replace(
+            self, SOFTMAX_TEMPERATURE=neutral
+        ) == dataclasses.replace(other, SOFTMAX_TEMPERATURE=neutral)
+
     def get_resolved_outlier_removal_std(
         self,
         estimator_type: Literal["regressor", "classifier"],
@@ -319,6 +351,9 @@ def cpu_sample_limit(model_version: ModelVersion) -> int:
 
 
 def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # SOFTMAX_TEMPERATURE is deliberately not listed here: these models predate the
+    # field, so they take the class default, which is the temperature they have
+    # always been run with.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
@@ -344,6 +379,7 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
 
 
 def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # See the note in `_get_v2_config` about SOFTMAX_TEMPERATURE.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
