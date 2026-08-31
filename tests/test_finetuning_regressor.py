@@ -518,4 +518,15 @@ def test_regressor_dataset_and_collator_batches_type(
         assert batch.X_query_raw.shape[0] == 1
         assert batch.y_query_raw.shape[0] == 1
         assert batch.y_query.shape[0] == 1
+
+        # The frame relating the two bar distributions. `fit_from_preprocessed`
+        # never sees the target, so the regressor can only get it from here, and
+        # the forward pass needs it to map an estimator's borders back.
+        assert batch.y_train_std > 0.0
+        np.testing.assert_allclose(
+            batch.raw_space_bardist.borders.cpu().numpy(),
+            batch.znorm_space_bardist.borders.cpu().numpy() * batch.y_train_std
+            + batch.y_train_mean,
+            rtol=1e-5,
+        )
         break

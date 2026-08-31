@@ -1365,6 +1365,72 @@ def test__predict_batched__uses_fitted_target_transforms() -> None:
         np.testing.assert_allclose(batched[i], ref.predict(X_tests[i]), atol=1e-4)
 
 
+def test__predict_batched__datasets_with_different_target_scales() -> None:
+    """Each dataset's borders must be mapped back in its own target frame.
+
+    The worker is refitted per dataset, so its own `y_train_mean_`/`y_train_std_`
+    only ever hold the last dataset's. Targets that differ by six orders of
+    magnitude make a leaked frame impossible to miss.
+    """
+    X, y = _mk_reg_dataset(0)
+    scales = [1e-3, 1.0, 1e6]
+    X_list = [X] * len(scales)
+    y_list = [y * scale for scale in scales]
+    X_tests = [X[:5]] * len(scales)
+
+    kwargs = {
+        "n_estimators": 4,
+        "device": "cpu",
+        "random_state": 42,
+        "inference_precision": torch.float32,
+    }
+    batched = TabPFNRegressor(**kwargs).predict_batched(X_list, y_list, X_tests)
+
+    for i, scale in enumerate(scales):
+        ref = TabPFNRegressor(**kwargs)
+        ref.fit(X_list[i], y_list[i])
+        np.testing.assert_allclose(
+            batched[i], ref.predict(X_tests[i]), rtol=1e-4, atol=1e-6 * scale
+        )
+
+
+def test__fit__member_target_is_the_znormalized_target() -> None:
+    """A member without a target transform standardizes the target itself.
+
+    Bit-for-bit what the regressor used to compute before the preprocessing, so
+    moving the standardization into the members changed no model input.
+    """
+    X, y = _mk_reg_dataset(0)
+    reg = TabPFNRegressor(
+        n_estimators=1,
+        device="cpu",
+        random_state=42,
+        inference_config={"REGRESSION_Y_PREPROCESS_TRANSFORMS": (None,)},
+    )
+    reg.fit(X, y)
+
+    member_y = np.asarray(reg.executor_.ensemble_members[0].y_train)
+
+    assert np.array_equal(member_y, (y - np.mean(y)) / (np.std(y) + 1e-20))
+
+
+def test__fit__target_frame_is_independent_of_the_target_units() -> None:
+    """`y_train_mean_`/`y_train_std_` define the frame, and only that.
+
+    They no longer preprocess the target, so a rescaled target must produce a
+    correspondingly rescaled frame and an unchanged model input.
+    """
+    X, y = _mk_reg_dataset(0)
+    members = []
+    for scale in (1.0, 1e6):
+        reg = TabPFNRegressor(n_estimators=1, device="cpu", random_state=42)
+        reg.fit(X, y * scale)
+        assert reg.y_train_mean_ == pytest.approx(np.mean(y) * scale, rel=1e-9)
+        members.append(np.asarray(reg.executor_.ensemble_members[0].y_train))
+
+    np.testing.assert_allclose(members[0], members[1], rtol=1e-5)
+
+
 @pytest.mark.parametrize("device", devices)
 def test__predict_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
