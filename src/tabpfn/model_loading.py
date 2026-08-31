@@ -17,7 +17,7 @@ import urllib.request
 import warnings
 import zipfile
 from collections import OrderedDict
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass
 from enum import Enum
 from importlib import import_module
 from pathlib import Path
@@ -36,7 +36,10 @@ from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import (
+    InferenceConfig,
+    raise_if_softmax_temperatures_differ,
+)
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -590,12 +593,12 @@ def load_model_criterion_config(
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
     list[ArchitectureConfig],
     InferenceConfig,
-    list[float],
 ]: ...
 
 
@@ -608,12 +611,12 @@ def load_model_criterion_config(
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     FullSupportBarDistribution,
     list[ArchitectureConfig],
     InferenceConfig,
-    list[float],
 ]: ...
 
 
@@ -625,18 +628,18 @@ def load_model_criterion_config(
     estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
     list[ArchitectureConfig],
     InferenceConfig,
-    list[float],
 ]:
     """Load the model(s), criterion(s), and config(s) from the given path.
 
     If multiple model paths are provided, then all models must use the same criterion
-    and inference config, with the exception of the softmax temperature, which may
-    differ per model and is returned separately.
+    and inference config. They may only disagree on the softmax temperature if
+    `softmax_temperature_override` says which temperature to use instead.
 
     Args:
         model_path: The path to the model, or list of paths if multiple models should be
@@ -650,11 +653,14 @@ def load_model_criterion_config(
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
+        softmax_temperature_override: The temperature the caller will apply to every
+            model, or None if they did not ask for one. Only used to decide whether
+            checkpoints are allowed to disagree on their temperature; the override
+            itself is applied by the caller.
 
     Returns:
         list of models, the criterion, list of architecture configs, the inference
-        config, and the softmax temperature of each model (index-aligned with the
-        list of models)
+        config
     """
     model_version = ModelVersion(version)
     (
@@ -732,6 +738,8 @@ def load_model_criterion_config(
 
     first_inference_config = inference_configs[0]
     for inference_config in inference_configs[1:]:
+        # A temperature mismatch is reported separately below, as the user can fix
+        # that one by naming a temperature.
         if not inference_config.equals_ignoring_softmax_temperature(
             first_inference_config
         ):
@@ -741,18 +749,11 @@ def load_model_criterion_config(
                 "Inference configs for different models are different, which is not "
                 "supported. See above."
             )
-
-    # The temperature is the one field models are allowed to disagree on, so it is
-    # kept per model rather than collapsed onto the first config.
-    softmax_temperatures = [cfg.SOFTMAX_TEMPERATURE for cfg in inference_configs]
-
-    return (
-        loaded_models,
-        first_criterion,
-        architecture_configs,
-        first_inference_config,
-        softmax_temperatures,
+    raise_if_softmax_temperatures_differ(
+        inference_configs, softmax_temperature_override=softmax_temperature_override
     )
+
+    return loaded_models, first_criterion, architecture_configs, first_inference_config
 
 
 def _resolve_model_version(model_path: ModelPath | None) -> ModelVersion:
@@ -1140,19 +1141,13 @@ def save_tabpfn_model(
         znorm_space_bardist = model.znorm_space_bardist_  # type: ignore
 
     configs = model.configs_
-    inference_config = model.inference_config_
-    # `inference_config_` only carries the first model's temperature; each checkpoint
-    # is written with the temperature of the model it holds.
-    softmax_temperatures = getattr(model, "softmax_temperatures_", None) or [
-        inference_config.SOFTMAX_TEMPERATURE
-    ] * len(models)
+    inference_config = getattr(model, "inference_config_", None)
     save_paths = save_path if isinstance(save_path, list) else [save_path]
 
-    for ens_model, config, path, softmax_temperature in zip(
+    for ens_model, config, path in zip(
         models,
         configs,
         save_paths,
-        softmax_temperatures,
         strict=True,
     ):
         model_state = ens_model.state_dict()
@@ -1170,10 +1165,10 @@ def save_tabpfn_model(
             "state_dict": state_dict,
             "config": asdict(config),
             "architecture_name": architecture_name,
-            "inference_config": asdict(
-                replace(inference_config, SOFTMAX_TEMPERATURE=softmax_temperature)
-            ),
+            "inference_config": asdict(model.inference_config_),
         }
+        if inference_config is not None:
+            checkpoint["inference_config"] = asdict(inference_config)
 
         if additional_fields is not None:
             checkpoint.update(additional_fields)

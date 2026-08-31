@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Literal
 
@@ -98,8 +99,8 @@ class InferenceConfig:
     expected to store their own value and must do so explicitly.
 
     `TabPFNClassifier(softmax_temperature=...)` overrides this for every model in the
-    ensemble. Left at its default of `"auto"`, each model uses the value from its own
-    checkpoint, so checkpoints with different temperatures can be ensembled."""
+    ensemble. Left at its default of `"auto"`, the value comes from the checkpoint,
+    and an ensemble whose checkpoints declare different temperatures is rejected."""
 
     OUTLIER_REMOVAL_STD: float | None | Literal["auto"] = "auto"
     """The number of standard deviations from the mean to consider a sample an outlier.
@@ -293,9 +294,9 @@ class InferenceConfig:
     def equals_ignoring_softmax_temperature(self, other: InferenceConfig) -> bool:
         """Whether this config and `other` agree on every field but the temperature.
 
-        Models in a multi-checkpoint ensemble may declare different softmax
-        temperatures -- each estimator is scaled by its own model's value -- so that
-        field is excluded when checking that the rest of the configs line up.
+        A temperature mismatch between the checkpoints of one ensemble gets its own
+        error (see `raise_if_softmax_temperatures_differ`), since the user can
+        resolve it by naming a temperature; any other mismatch is unfixable.
         """
         neutral = 1.0
         return dataclasses.replace(
@@ -342,6 +343,35 @@ class InferenceConfig:
             f"No inference config is configured for {model_version=}. "
             "Please make sure you are using a correct model checkpoint that contains "
             "the inference config."
+        )
+
+
+def raise_if_softmax_temperatures_differ(
+    inference_configs: Sequence[InferenceConfig],
+    *,
+    softmax_temperature_override: float | None,
+) -> None:
+    """Reject an ensemble whose checkpoints disagree on the softmax temperature.
+
+    One temperature is applied to the whole ensemble, so there is nothing sensible
+    to do with two of them. The user can say which one to use, and then the
+    checkpoints no longer have to agree.
+
+    Args:
+        inference_configs: The config of each model in the ensemble.
+        softmax_temperature_override: The temperature the user asked for, applied to
+            every model, or None if they did not ask for one.
+    """
+    if softmax_temperature_override is not None:
+        return
+
+    temperatures = sorted({config.SOFTMAX_TEMPERATURE for config in inference_configs})
+    if len(temperatures) > 1:
+        raise ValueError(
+            f"The given model checkpoints declare different softmax temperatures "
+            f"({temperatures}), and one temperature is applied to the whole "
+            f"ensemble. Pick the one to use for all of them and pass it explicitly, "
+            f"e.g. `TabPFNClassifier(softmax_temperature={temperatures[0]}, ...)`."
         )
 
 

@@ -1007,7 +1007,7 @@ def test_classifier_with_text_and_na() -> None:
 
 def test_initialize_model_variables_classifier_sets_required_attributes() -> None:
     # 1) Standalone initializer
-    models, architecture_configs, norm_criterion, inference_config, _ = (
+    models, architecture_configs, norm_criterion, inference_config = (
         initialize_tabpfn_model(
             model_path="auto",
             which="classifier",

@@ -879,7 +879,7 @@ def test_constant_target(
 
 def test_initialize_model_variables_regressor_sets_required_attributes() -> None:
     # 1) Standalone initializer
-    model, architecture_configs, norm_criterion, inference_config, _ = (
+    model, architecture_configs, norm_criterion, inference_config = (
         initialize_tabpfn_model(
             model_path="auto",
             which="regressor",

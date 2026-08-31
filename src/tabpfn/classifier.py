@@ -40,6 +40,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     PROBABILITY_EPSILON_ROUND_ZERO,
@@ -55,7 +56,6 @@ from tabpfn.inference import (
     InferenceEngineCachePreprocessing,
     _maybe_run_gpu_preprocessing,
 )
-from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE
 from tabpfn.inference_tuning import (
     ClassifierEvalMetrics,
     ClassifierTuningConfig,
@@ -201,20 +201,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     softmax_temperature_: float
     """The softmax temperature used for prediction. This is the resolved
-    `softmax_temperature`, i.e. the temperature of the first model when no temperature
-    tuning is done. See `softmax_temperatures_` for ensembles whose models declare
-    different temperatures."""
-
-    softmax_temperatures_: list[float]
-    """The softmax temperature of each loaded model, index-aligned with `models_`.
-    Each estimator is scaled by the temperature of the model it ran on, so
-    checkpoints declaring different temperatures can be ensembled. Every entry is the
-    same value unless multiple checkpoints with differing temperatures are loaded.
-
-    `tuning_config` fits a single temperature for the whole ensemble, so it reads and
-    writes `softmax_temperature_`: calibration replaces every entry here with the
-    calibrated value, and threshold tuning scores its holdout with
-    `softmax_temperature_` alone."""
+    `softmax_temperature`, i.e. the one the checkpoint declares when no temperature
+    tuning is done."""
 
     ensemble_configs_: list[ClassifierEnsembleConfig]
     """The ensemble configurations used during fit.
@@ -1307,11 +1295,8 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 holdout_y_true=holdout_y_true,
             )
             # The calibrated temperature is fitted on this dataset and replaces
-            # whatever the checkpoints declared, for every model in the ensemble.
+            # whatever the checkpoint declared.
             self.softmax_temperature_ = calibrated_softmax_temperature
-            self.softmax_temperatures_ = [calibrated_softmax_temperature] * len(
-                self.softmax_temperatures_
-            )
 
         if tuning_config_resolved.tune_decision_thresholds:
             holdout_probas = (
@@ -1575,55 +1560,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         probas = probas / np.maximum(self.tuned_classification_thresholds_, 1e-8)
         return probas / probas.sum(axis=1, keepdims=True)
 
-    def _resolved_softmax_temperature(self) -> float:
-        """The temperature to apply when no per-estimator temperature is known.
-
-        Falls back to the unresolved argument for estimators pickled before
-        `softmax_temperature_` was set during model initialization, and to the
-        default temperature of the checkpoints predating `SOFTMAX_TEMPERATURE` when
-        even that is unset (`"auto"` on an estimator that was never initialized).
-        """
-        temp = getattr(self, "softmax_temperature_", self.softmax_temperature)
-        return DEFAULT_SOFTMAX_TEMPERATURE if temp == "auto" else temp
-
-    def _temperature_per_estimator(
-        self, model_indices: Sequence[int]
-    ) -> float | torch.Tensor:
-        """The temperature of each estimator, in the order the outputs were stacked.
-
-        Args:
-            model_indices: The index into `models_` of the model each estimator ran
-                on.
-
-        Returns:
-            A single float unless the loaded checkpoints declare different
-            temperatures, in which case one temperature per estimator.
-        """
-        temperatures = getattr(self, "softmax_temperatures_", None)
-        if temperatures is None or len(set(temperatures)) <= 1:
-            return self._resolved_softmax_temperature()
-        return torch.tensor([temperatures[index] for index in model_indices])
-
-    def _apply_temperature(
-        self,
-        logits: torch.Tensor,
-        temperature: float | torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        """Scales logits by the softmax temperature.
-
-        Args:
-            logits: The logits to scale.
-            temperature: The temperature to use. If None, the estimator's resolved
-                temperature is used. A tensor scales each estimator in dim 0 by its
-                own model's temperature.
-        """
-        temp = (
-            self._resolved_softmax_temperature() if temperature is None else temperature
-        )
-        if isinstance(temp, torch.Tensor):
-            temp = temp.to(device=logits.device, dtype=logits.dtype)
-            temp = temp.view(-1, *([1] * (logits.ndim - 1)))
-            return logits / temp
+    def _apply_temperature(self, logits: torch.Tensor) -> torch.Tensor:
+        """Scales logits by the softmax temperature."""
+        temp = resolved_softmax_temperature(self)
         if temp != 1.0:
             return logits / temp
         return logits
@@ -1647,7 +1586,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self,
         raw_logits: np.ndarray | torch.Tensor,
         *,
-        softmax_temperature: float | torch.Tensor | None = None,
+        softmax_temperature: float | None = None,
         average_before_softmax: bool | None = None,
         balance_probabilities: bool | None = None,
     ) -> torch.Tensor:
@@ -1657,8 +1596,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             raw_logits: Logits with shape (n_estimators, n_samples, n_classes) or
                 (n_samples, n_classes). If the logits have three dimensions, they are
                 averaged across the estimator dimension (dim=0).
-            softmax_temperature: Optional override for temperature scaling. A tensor
-                scales each estimator in dim 0 by its own model's temperature.
+            softmax_temperature: Optional override for temperature scaling.
             average_before_softmax: Optional override for averaging order.
             balance_probabilities: Optional override for probability balancing.
 
@@ -1671,7 +1609,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             else torch.from_numpy(np.asarray(raw_logits))
         )
         used_temperature = (
-            self._resolved_softmax_temperature()
+            resolved_softmax_temperature(self)
             if softmax_temperature is None
             else softmax_temperature
         )
@@ -1688,10 +1626,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         steps: list[Callable[[torch.Tensor], torch.Tensor]] = []
 
-        if isinstance(used_temperature, torch.Tensor) or used_temperature != 1.0:
+        if used_temperature != 1.0:
 
             def apply_temp(t: torch.Tensor) -> torch.Tensor:
-                return self._apply_temperature(t, used_temperature)
+                return t / used_temperature
 
             steps.append(apply_temp)
 
@@ -1805,7 +1743,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
 
         outputs = []
-        estimator_model_indices: list[int] = []
         for output, config in tqdm(
             self.executor_.iter_outputs(
                 X,
@@ -1858,24 +1795,18 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
                     output_batch.append(processed_output[:, i, use_perm])
 
-            # All configs of one batched forward share a model (the batched engine
-            # rejects mixing them), so the first one identifies the whole output.
-            estimator_model_indices.append(config_list[0]._model_index)
             outputs.append(torch.stack(output_batch, dim=1))
 
         # --- Post-processing ---
         stacked_outputs = torch.stack(outputs)
-        temperature = self._temperature_per_estimator(estimator_model_indices)
 
         if return_logits:
-            temp_scaled = self._apply_temperature(stacked_outputs, temperature)
+            temp_scaled = self._apply_temperature(stacked_outputs)
             output = self._average_across_estimators(temp_scaled)
         elif return_raw_logits:
             output = stacked_outputs
         else:
-            output = self.logits_to_probabilities(
-                stacked_outputs, softmax_temperature=temperature
-            )
+            output = self.logits_to_probabilities(stacked_outputs)
 
         # --- Final output shaping ---
         # Standard inference squeezes the singleton batch dim; batched inference

@@ -293,7 +293,6 @@ def test__classifier_softmax_temperature__auto__taken_from_checkpoint(
 
     assert clf.softmax_temperature == "auto"
     assert clf.softmax_temperature_ == 0.42
-    assert clf.softmax_temperatures_ == [0.42]
     assert clf.get_inference_config().SOFTMAX_TEMPERATURE == 0.42
 
 
@@ -307,7 +306,6 @@ def test__classifier_softmax_temperature__explicit__overrides_checkpoint(
     clf.fit(X, y)
 
     assert clf.softmax_temperature_ == 1.5
-    assert clf.softmax_temperatures_ == [1.5]
     assert clf.get_inference_config().SOFTMAX_TEMPERATURE == 1.5
 
 
@@ -323,7 +321,6 @@ def test__classifier_softmax_temperature__inference_config__overrides_checkpoint
     clf.fit(X, y)
 
     assert clf.softmax_temperature_ == 1.5
-    assert clf.softmax_temperatures_ == [1.5]
 
 
 def test__classifier_softmax_temperature__argument_wins_over_inference_config(
@@ -339,102 +336,74 @@ def test__classifier_softmax_temperature__argument_wins_over_inference_config(
     clf.fit(X, y)
 
     assert clf.softmax_temperature_ == 1.5
-    assert clf.softmax_temperatures_ == [1.5]
 
 
-def test__classifier_softmax_temperature__differing_checkpoints__kept_per_model(
+def test__classifier_softmax_temperature__reaches_the_predictions(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """Checkpoints declaring different temperatures can be ensembled.
-
-    The rest of the inference config still has to match; only the temperature is
-    allowed to differ, and each model keeps its own.
-    """
+    """The temperature a checkpoint declares must behave like passing that value."""
     X, y = classification_data
-    specs = [_classifier_specs(0.5), _classifier_specs(1.2)]
+    base = _make_classifier_specs()
 
-    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2)
-    clf.fit(X, y)
-
-    assert clf.softmax_temperatures_ == [0.5, 1.2]
-    assert clf.softmax_temperature_ == 0.5
-    assert clf.predict_proba(X).shape == (X.shape[0], 3)
-
-
-def test__classifier_softmax_temperature__per_model__changes_predictions(
-    classification_data: tuple[np.ndarray, np.ndarray],
-) -> None:
-    """A single model's temperature has to reach the predictions of the ensemble."""
-    X, y = classification_data
-    base = [_classifier_specs(1.0), _classifier_specs(1.0)]
-
-    def probas_for(second_model_temperature: float) -> np.ndarray:
+    def probas_for(specs: ClassifierModelSpecs, **kwargs: object) -> np.ndarray:
         clf = TabPFNClassifier(
-            model_path=[base[0], _with_temperature(base[1], second_model_temperature)],
-            device="cpu",
-            n_estimators=2,
-            random_state=0,
+            model_path=specs, device="cpu", n_estimators=2, random_state=0, **kwargs
         )
         clf.fit(X, y)
         return clf.predict_proba(X)
 
-    unchanged = probas_for(1.0)
-    sharpened = probas_for(0.3)
+    from_checkpoint = probas_for(_with_temperature(base, 0.3))
+    from_argument = probas_for(base, softmax_temperature=0.3)
+    untouched = probas_for(_with_temperature(base, 1.0))
 
-    assert not np.allclose(unchanged, sharpened)
+    np.testing.assert_allclose(from_checkpoint, from_argument)
+    assert not np.allclose(from_checkpoint, untouched)
 
 
-def test__classifier_softmax_temperature__equal_per_model__matches_argument(
+def test__classifier_softmax_temperature__checkpoints_disagree__raises(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """Checkpoints that agree must behave exactly like passing that temperature."""
+    """One temperature is applied to the whole ensemble, so two of them is an error."""
     X, y = classification_data
-    base = [_classifier_specs(1.0), _classifier_specs(1.0)]
+    specs = [_classifier_specs(0.5), _classifier_specs(1.2)]
 
-    from_checkpoints = TabPFNClassifier(
-        model_path=[_with_temperature(spec, 0.7) for spec in base],
-        device="cpu",
-        n_estimators=2,
-        random_state=0,
-    )
-    from_checkpoints.fit(X, y)
-
-    from_argument = TabPFNClassifier(
-        model_path=base,
-        device="cpu",
-        n_estimators=2,
-        random_state=0,
-        softmax_temperature=0.7,
-    )
-    from_argument.fit(X, y)
-
-    np.testing.assert_allclose(
-        from_checkpoints.predict_proba(X), from_argument.predict_proba(X)
-    )
+    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2)
+    with pytest.raises(ValueError, match="different softmax temperatures"):
+        clf.fit(X, y)
 
 
-def test__logits_to_probabilities__temperature_per_estimator__scales_each_estimator(
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"softmax_temperature": 0.7},
+        {"inference_config": {"SOFTMAX_TEMPERATURE": 0.7}},
+    ],
+)
+def test__classifier_softmax_temperature__disagreeing_checkpoints_and_override__is_used(
     classification_data: tuple[np.ndarray, np.ndarray],
+    kwargs: dict,
 ) -> None:
-    """The per-estimator temperature tensor scales dim 0 of the raw logits."""
+    """Naming a temperature is what the error tells the user to do, so it must work."""
     X, y = classification_data
-    clf = TabPFNClassifier(
-        model_path=_classifier_specs(), device="cpu", n_estimators=2, random_state=0
-    )
+    specs = [_classifier_specs(0.5), _classifier_specs(1.2)]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2, **kwargs)
     clf.fit(X, y)
 
-    raw_logits = torch.from_numpy(clf.predict_raw_logits(X)).float()
-    temperatures = torch.tensor([0.5, 2.0])
+    assert clf.softmax_temperature_ == 0.7
+    assert clf.predict_proba(X).shape == (X.shape[0], 3)
 
-    probas = clf.logits_to_probabilities(raw_logits, softmax_temperature=temperatures)
 
-    expected = torch.stack(
-        [
-            torch.softmax(raw_logits[i] / temperatures[i], dim=-1)
-            for i in range(raw_logits.shape[0])
-        ]
-    ).mean(dim=0)
-    torch.testing.assert_close(probas, expected)
+def test__classifier_softmax_temperature__checkpoints_agree__is_used(
+    classification_data: tuple[np.ndarray, np.ndarray],
+) -> None:
+    X, y = classification_data
+    specs = [_classifier_specs(0.5), _classifier_specs(0.5)]
+
+    clf = TabPFNClassifier(model_path=specs, device="cpu", n_estimators=2)
+    clf.fit(X, y)
+
+    assert clf.softmax_temperature_ == 0.5
 
 
 def test__regressor_softmax_temperature__auto__taken_from_checkpoint() -> None:
@@ -449,31 +418,50 @@ def test__regressor_softmax_temperature__auto__taken_from_checkpoint() -> None:
 
     assert reg.softmax_temperature == "auto"
     assert reg.softmax_temperature_ == 0.42
-    assert reg.softmax_temperatures_ == [0.42]
 
 
-def test__regressor_softmax_temperature__per_model__changes_predictions() -> None:
+def test__regressor_softmax_temperature__reaches_the_predictions() -> None:
+    """The temperature a checkpoint declares must behave like passing that value."""
     X, y = sklearn.datasets.make_regression(
         n_samples=30, n_features=4, noise=10.0, random_state=0
     )
     base = _make_regressor_specs(max_num_classes=0)
 
-    def predictions_for(second_model_temperature: float) -> np.ndarray:
-        second = RegressorModelSpecs(
+    def predictions_for(temperature: float, **kwargs: object) -> np.ndarray:
+        specs = RegressorModelSpecs(
             model=base.model,
             architecture_config=base.architecture_config,
             inference_config=replace(
-                base.inference_config, SOFTMAX_TEMPERATURE=second_model_temperature
+                base.inference_config, SOFTMAX_TEMPERATURE=temperature
             ),
             norm_criterion=base.norm_criterion,
         )
         reg = TabPFNRegressor(
-            model_path=[base, second], device="cpu", n_estimators=2, random_state=0
+            model_path=specs, device="cpu", n_estimators=2, random_state=0, **kwargs
         )
         reg.fit(X, y)
         return reg.predict(X)
 
-    unchanged = predictions_for(base.inference_config.SOFTMAX_TEMPERATURE)
-    sharpened = predictions_for(0.3)
+    from_checkpoint = predictions_for(0.3)
+    from_argument = predictions_for(1.0, softmax_temperature=0.3)
+    untouched = predictions_for(1.0)
 
-    assert not np.allclose(unchanged, sharpened)
+    np.testing.assert_allclose(from_checkpoint, from_argument)
+    assert not np.allclose(from_checkpoint, untouched)
+
+
+def test__regressor_softmax_temperature__checkpoints_disagree__raises() -> None:
+    X, y = sklearn.datasets.make_regression(
+        n_samples=30, n_features=4, noise=10.0, random_state=0
+    )
+    base = _make_regressor_specs(max_num_classes=0)
+    other = RegressorModelSpecs(
+        model=base.model,
+        architecture_config=base.architecture_config,
+        inference_config=replace(base.inference_config, SOFTMAX_TEMPERATURE=1.2),
+        norm_criterion=base.norm_criterion,
+    )
+
+    reg = TabPFNRegressor(model_path=[base, other], device="cpu", n_estimators=2)
+    with pytest.raises(ValueError, match="different softmax temperatures"):
+        reg.fit(X, y)
