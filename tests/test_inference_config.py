@@ -505,7 +505,7 @@ def test__regressor_softmax_temperature__checkpoints_disagree__raises() -> None:
 # =============================================================================
 
 
-def test__inference_config_object__warns_that_it_replaces_the_checkpoint_config(
+def test__inference_config__object_form__warns_it_is_deprecated(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """The object form is the one that silently discards checkpoint values."""
@@ -522,7 +522,7 @@ def test__inference_config_object__warns_that_it_replaces_the_checkpoint_config(
         clf.fit(X, y)
 
 
-def test__inference_config_dict__does_not_warn(
+def test__inference_config__dict_form__does_not_warn(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """The recommended form is not deprecated."""
@@ -538,7 +538,7 @@ def test__inference_config_dict__does_not_warn(
         clf.fit(X, y)
 
 
-def test__no_inference_config__does_not_warn(
+def test__inference_config__not_given__does_not_warn(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
     X, y = classification_data
@@ -549,14 +549,10 @@ def test__no_inference_config__does_not_warn(
         clf.fit(X, y)
 
 
-def test__inference_config_object__still_replaces_the_whole_config(
+def test__inference_config__object_form__still_replaces_the_whole_config(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
-    """Deprecated, not yet changed: the object still wins over the checkpoint.
-
-    The checkpoint's `MAX_NUMBER_OF_FEATURES` and `SOFTMAX_TEMPERATURE` are both
-    replaced, even though the config passed in mentions neither.
-    """
+    """Deprecated, not yet changed: the object still wins over the checkpoint."""
     X, y = classification_data
     specs = _classifier_specs(0.42)
     specs.inference_config = replace(
@@ -573,7 +569,7 @@ def test__inference_config_object__still_replaces_the_whole_config(
     assert resolved.MAX_NUMBER_OF_FEATURES == user_config.MAX_NUMBER_OF_FEATURES != 1234
 
 
-def test__inference_config_dict__keeps_every_field_it_does_not_name(
+def test__inference_config__dict_form__keeps_the_fields_it_does_not_name(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """The migration the warning recommends: a dict leaves the checkpoint alone."""
@@ -594,7 +590,7 @@ def test__inference_config_dict__keeps_every_field_it_does_not_name(
     assert resolved.MAX_NUMBER_OF_FEATURES == 1234
 
 
-def test__asdict_of_a_config__reproduces_the_object_form(
+def test__inference_config__asdict_of_a_config__matches_the_object_form(
     classification_data: tuple[np.ndarray, np.ndarray],
 ) -> None:
     """The escape hatch the warning names, for callers that do want a full replace."""

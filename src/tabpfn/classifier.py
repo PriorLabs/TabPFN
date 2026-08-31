@@ -485,16 +485,12 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
                 behavior of the model interface.
                 See [tabpfn.inference_config.InferenceConfig][] for details and options.
 
-                - If `None`, the checkpoint's own config is used unchanged.
-                - If `dict`, the key-value pairs override the checkpoint's config;
-                  any field not named keeps the checkpoint's value. Raises an error
-                  if an unknown key is passed. This is the recommended form.
+                - If `None`, the default InferenceConfig is used.
+                - If `dict`, the key-value pairs are used to update the default
+                  `InferenceConfig`. Raises an error if an unknown key is passed.
                 - If `InferenceConfig`, the object replaces the checkpoint's config
                   as a whole, so any field not set on it takes a class default
-                  rather than the value the checkpoint declares. Deprecated —
-                  passing one emits a `FutureWarning` at fit time. Prefer a dict
-                  naming only the settings to change; to keep replacing the whole
-                  config, pass `dataclasses.asdict(config)`.
+                  rather than the value the checkpoint declares. Deprecated.
 
             differentiable_input:
                 If true, the preprocessing will be adapted to be end-to-end

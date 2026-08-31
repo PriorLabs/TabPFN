@@ -280,8 +280,7 @@ class InferenceConfig:
                 If a dictionary, then the keys must match attributes of
                     `InferenceConfig` and will be used to override these attributes.
                 If an `InferenceConfig` object, then the whole config is overridden with
-                    the values from the user config. Deprecated; see the
-                    `FutureWarning` this raises.
+                    the values from the user config. Deprecated.
                 If None, then a copy of this config is returned with no fields changed.
         """
         if user_config is None:
