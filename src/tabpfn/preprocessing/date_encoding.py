@@ -26,6 +26,7 @@ import warnings
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
+from sklearn.utils.validation import _num_features
 from skrub import DatetimeEncoder
 
 if TYPE_CHECKING:
@@ -197,9 +198,7 @@ def resolve_date_columns(
         was not numerically expanded.
     """
     if not isinstance(X, pd.DataFrame):
-        return DateResolution(
-            X=X, fitted={}, old_to_new_index=_old_to_new_index(X.shape[1], [])
-        )
+        return DateResolution(X=X, fitted={}, old_to_new_index=_identity_mapping(X))
 
     dtypes = list(X.dtypes)
     date_indices = [
@@ -365,6 +364,21 @@ def _assemble(
     remaining = frame.iloc[:, keep].reset_index(drop=True)
     ordered_blocks = [expanded_blocks[i] for i in sorted(expanded_blocks)]
     return pd.concat([remaining, *ordered_blocks], axis=1)
+
+
+def _identity_mapping(X: XType) -> dict[int, int]:
+    """Every column's old-to-new index, unchanged, for a non-`DataFrame` `X`.
+
+    Empty if `X`'s column count can't even be determined (e.g. a 1D array):
+    nothing here can be a date column either way, and downstream value
+    validation (`check_array`/`check_X_y`) rejects such an `X` with its own,
+    clearer message before anything would ever consult this mapping.
+    """
+    try:
+        num_columns = _num_features(X)
+    except TypeError:
+        return {}
+    return _old_to_new_index(num_columns, [])
 
 
 def _old_to_new_index(num_columns: int, to_expand: list[int]) -> dict[int, int]:

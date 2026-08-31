@@ -730,20 +730,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         """Initialize the model for standard input."""
         original_y_name = original_target_name(y)
 
-        # feature_names_in_/n_features_in_ and the dataset-size limits must
-        # describe what the caller actually passed in, not TabPFN's internal
-        # (possibly wider, post-date-expansion) representation -- captured
-        # and checked here, on the raw input, before date resolution runs.
+        # feature_names_in_/n_features_in_ must describe what the caller
+        # actually passed in, not TabPFN's internal (possibly wider,
+        # post-date-expansion) representation -- captured here, on the raw
+        # input, before date resolution runs.
         capture_input_shape(X, estimator=self, reset=True)
-        validate_dataset_size(
-            X=X,
-            y=y,
-            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
-            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
-            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
-            devices=self.devices_,
-            ignore_pretraining_limits=self.ignore_pretraining_limits,
-        )
 
         # Expand or text-render every date column. Runs before the value
         # validation below: sklearn's array machinery cannot assemble a
@@ -756,6 +747,19 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         X, y = ensure_compatible_fit_inputs_sklearn(
             resolution.X, y, estimator=self, ensure_y_numeric=False
+        )
+        # Only reached once X/y are already sklearn-validated, proper arrays:
+        # sparse/list/None/etc. inputs sklearn's own compatibility checks feed
+        # in must fail with *its* well-defined message, not a bare
+        # AttributeError/TypeError from `len(X)`/`X.shape` here.
+        validate_dataset_size(
+            X=X,
+            y=y,
+            max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
+            max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
+            max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
+            devices=self.devices_,
+            ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
         feature_schema = detect_feature_modalities(

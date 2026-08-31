@@ -17,9 +17,10 @@ import pandas as pd
 import torch
 from sklearn.base import is_classifier
 from sklearn.utils.multiclass import check_classification_targets
+from sklearn.utils.validation import _num_features
 
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.misc._sklearn_compat import check_array, check_X_y, validate_data
+from tabpfn.misc._sklearn_compat import _check_feature_names, check_array, check_X_y
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
 from tabpfn.settings import settings
 
@@ -48,15 +49,34 @@ def capture_input_shape(
     date_encoding.py) or value validation run: those two attributes must
     describe what the caller actually passed to `fit`/`predict`, not
     TabPFN's internal (possibly wider, post-date-expansion) representation.
-    `skip_check_array=True` means only the input's shape and column labels
-    are inspected here, never its values, so this is safe to call on `X`
-    that still holds a genuine `datetime64` column, unlike the rest of
-    validation.
+    Only the input's shape and column labels are inspected here, never its
+    values, so this is safe to call on `X` that still holds a genuine
+    `datetime64` column, unlike the rest of validation.
+
+    An `X` whose column count can't be determined at all (e.g. a 1D array)
+    is left unchecked here rather than raising: value validation downstream
+    (`check_array`/`check_X_y`) already has a clearer, sklearn-standard
+    message for that (e.g. "Reshape your data ..."), and it would be the one
+    to fire if this function ran `check_array` itself instead of skipping it.
     """
     try:
-        validate_data(estimator, X=X, reset=reset, skip_check_array=True)
+        _check_feature_names(estimator, X, reset=reset)
     except (ValueError, TypeError) as e:
         raise TabPFNValidationError(str(e)) from e
+
+    try:
+        n_features = _num_features(X)
+    except TypeError:
+        return
+
+    if reset:
+        estimator.n_features_in_ = n_features
+        return
+    if hasattr(estimator, "n_features_in_") and n_features != estimator.n_features_in_:
+        raise TabPFNValidationError(
+            f"X has {n_features} features, but {estimator.__class__.__name__} "
+            f"is expecting {estimator.n_features_in_} features as input."
+        )
 
 
 def ensure_compatible_predict_input_sklearn(
