@@ -85,6 +85,14 @@ from tabpfn.preprocessing.ensemble import (
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
+from tabpfn.shared_pool import (
+    DEFAULT_CONTEXT_CHUNK_SIZE,
+    model_for_member,
+    require_full_pool_members,
+    require_shared_pool_support,
+    score_member,
+    validate_context_indices,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -957,6 +965,142 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
 
         return self
+
+    def predict_proba_with_shared_pool(
+        self,
+        X_train: XType,
+        y_train: YType,
+        X_test: XType,
+        context_indices: np.ndarray,
+        *,
+        chunk_size: int = DEFAULT_CONTEXT_CHUNK_SIZE,
+    ) -> np.ndarray:
+        """Score per-row contexts over a pool, fitting the pool in the same call.
+
+        Convenience wrapper over ``fit`` + ``predict_proba_from_shared_pool``,
+        matching the shape of ``predict_proba_batched``: the fit runs on an
+        internal clone, so ``self`` is unchanged on return and any prior fit
+        is preserved.
+
+        Prefer ``fit`` + ``predict_proba_from_shared_pool`` when scoring one
+        pool against several different index sets, since this form refits the
+        pool on every call.
+
+        Args:
+            X_train: The pool every context draws from.
+            y_train: Pool labels.
+            X_test: Test features, one row per context.
+            context_indices: ``(n_test, k)`` or ``(n_estimators, n_test, k)`` pool
+                indices.
+            chunk_size: Contexts scored per fused forward.
+
+        Returns:
+            Probabilities of shape ``(n_test, n_classes)``.
+        """
+        worker = clone(self)
+        worker.fit(X_train, y_train)
+        return worker.predict_proba_from_shared_pool(
+            X_test, context_indices, chunk_size=chunk_size
+        )
+
+    def predict_proba_from_shared_pool(
+        self,
+        X_test: XType,
+        context_indices: np.ndarray,
+        *,
+        chunk_size: int = DEFAULT_CONTEXT_CHUNK_SIZE,
+    ) -> np.ndarray:
+        """Predict with a different context per test row, drawn from the fitted pool.
+
+        Call ``fit(X_pool, y_pool)`` first; ``context_indices[i]`` then names the pool
+        rows test row ``i`` attends over. All rows need the same context size, since
+        the contexts are stacked on the model's batch dimension.
+
+        The pool is embedded once per ensemble member and each context is assembled by
+        gathering row embeddings, instead of re-running the pre-ICL stages for every
+        context. This requires a TabPFN-v3 model.
+
+        ``classes_`` comes from the pool, so a context that happens to contain no rows
+        of some class still scores against the full class set.
+
+        Args:
+            X_test: Test features, one row per context.
+            context_indices: Pool indices, either ``(n_test, k)`` to give every
+                ensemble member the same context per test row, or
+                ``(n_estimators, n_test, k)`` to vary the context by member as well.
+            chunk_size: Contexts scored per fused forward.
+
+        Returns:
+            Probabilities of shape ``(n_test, n_classes)``.
+
+        Raises:
+            SharedPoolError: If the model is not v3, the estimator carries per-dataset
+                state that cannot apply across contexts, or the indices are invalid.
+        """
+        check_is_fitted(self)
+
+        X_test = ensure_compatible_predict_input_sklearn(X_test, self)
+        X_test = fix_dtypes(
+            X_test,
+            cat_indices=self.inferred_feature_schema_.indices_for(
+                FeatureModality.CATEGORICAL
+            ),
+        )
+        X_test = process_text_na_dataframe(
+            X=X_test,
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
+        )
+
+        members = self.executor_.ensemble_members
+        n_pool = require_full_pool_members(self, members)
+        indices = validate_context_indices(
+            context_indices,
+            n_pool=n_pool,
+            n_test=len(np.asarray(X_test)),
+            n_estimators=len(members),
+        )
+        device = self.devices_[0]
+        require_shared_pool_support(
+            self, model_for_member(self.executor_, members[0], device)
+        )
+
+        per_estimator = []
+        for position, member in enumerate(members):
+            model = model_for_member(self.executor_, member, device)
+            # (1, n_test, n_classes) -> (n_test, n_classes): one query per context.
+            logits = score_member(
+                model,
+                member,
+                X_test,
+                indices[position],
+                device=device,
+                autocast=self.use_autocast_,
+                chunk_size=chunk_size,
+            )[0].float()
+            per_estimator.append(self._undo_class_permutation(logits, member.config))
+
+        stacked = torch.stack(per_estimator)
+        probabilities = self.logits_to_probabilities(stacked)
+        return probabilities.detach().cpu().numpy()
+
+    def _undo_class_permutation(
+        self,
+        logits: torch.Tensor,
+        config: ClassifierEnsembleConfig,
+    ) -> torch.Tensor:
+        """Map one estimator's class axis back onto ``classes_`` order.
+
+        Members may shuffle the class labels they were fitted with, so their outputs
+        have to be un-shuffled before they can be averaged together.
+        """
+        if config.class_permutation is None:
+            return logits[:, : self.n_classes_]
+        if len(config.class_permutation) != self.n_classes_:
+            use_perm = np.arange(self.n_classes_)
+            use_perm[: len(config.class_permutation)] = config.class_permutation
+        else:
+            use_perm = config.class_permutation
+        return logits[:, use_perm]
 
     def predict_proba_batched(
         self,

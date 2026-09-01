@@ -263,6 +263,33 @@ class TabPFNV3Cache(KVCache):
         )
 
 
+@dataclasses.dataclass(frozen=True)
+class PoolStats:
+    """Stage-0-2 statistics fitted once on a shared training pool.
+
+    These are the only pre-ICL quantities that depend on *which* rows form the
+    training set: the standard-scaler statistics (which also carry the imputation
+    means) and the distribution embedder's inducing hidden states. Holding them
+    fixed makes every row's stage-0-2 embedding a function of that row alone, so
+    pool rows can be embedded once and gathered per context.
+
+    Attributes:
+        scaler_cache: Fitted standard-scaler statistics (``mean``, ``std``).
+        inducing_hidden: Per-block inducing hidden states from the distribution
+            embedder, each of shape ``(B*C, n_ind, E)``.
+    """
+
+    scaler_cache: dict[str, torch.Tensor]
+    inducing_hidden: list[torch.Tensor]
+
+    def to(self, device: torch.device | str) -> PoolStats:
+        """Move all held tensors to the given device."""
+        return PoolStats(
+            scaler_cache={k: v.to(device) for k, v in self.scaler_cache.items()},
+            inducing_hidden=[h.to(device) for h in self.inducing_hidden],
+        )
+
+
 def get_cache_size(
     *,
     n_train: int,
@@ -1826,6 +1853,7 @@ class TabPFNV3(Architecture):
         kv_cache: TabPFNV3Cache | None = None,
         return_kv_cache: bool = False,
         x_is_test_only: bool = False,
+        precomputed_stage012: torch.Tensor | None = None,
     ) -> (
         torch.Tensor
         | dict[str, torch.Tensor]
@@ -1839,15 +1867,26 @@ class TabPFNV3(Architecture):
         train labels — the decoder reads ``y[:num_train]`` for the
         many-class head. Outside the cache path, ``x`` is always the full
         dataset and this flag is ignored.
+
+        ``precomputed_stage012`` supplies the stage-0-2 output ``x_BRiClE``
+        directly and skips those stages, so ``x`` is unused and may be None. The
+        rows must already be ordered train-then-test, matching what stages 0-2
+        would have produced for the same batch. This is the entry point for
+        shared-pool inference, where the context rows are gathered from a pool
+        embedded once (see :meth:`embed_rows`).
         """
         del task_type
         del categorical_inds
         if isinstance(x, dict):
             x = x["main"]
+        if x is None and precomputed_stage012 is None:
+            raise ValueError("x may only be None when precomputed_stage012 is given.")
         if isinstance(y, dict):
             y = y["main"]
         if y is None:
-            y = torch.zeros(0, device=x.device, dtype=x.dtype)
+            ref = x if x is not None else precomputed_stage012
+            assert ref is not None
+            y = torch.zeros(0, device=ref.device, dtype=ref.dtype)
         if y.dim() == 3 and y.shape[-1] == 1:
             y = y.squeeze(-1)
 
@@ -1878,22 +1917,38 @@ class TabPFNV3(Architecture):
                     f"target. Expected target values between 0 and {self.n_out - 1}, "
                     f"but got values greater than {self.n_out - 1}."
                 )
-        x_RiBC = x
-        B = x_RiBC.shape[1]
         num_train = y.shape[0]
-        if performance_options.enable_torch_compile:
-            torch._dynamo.mark_dynamic(x_RiBC, index=0)
-            torch._dynamo.mark_dynamic(x_RiBC, index=1)
-            torch._dynamo.mark_dynamic(x_RiBC, index=2)
+        if precomputed_stage012 is not None:
+            if return_kv_cache:
+                raise ValueError(
+                    "return_kv_cache is not supported with precomputed_stage012: the "
+                    "cache stores stage-0-2 statistics this path never computed."
+                )
+            # Stage 3 adds the target embedding into the train rows in place, and
+            # ``flatten(-2)`` below is a view, so writing through it would corrupt
+            # the caller's tensor. On the normal path that tensor is freshly
+            # produced by stages 0-2 and owned here; a supplied one is not.
+            x_BRiClE = precomputed_stage012.clone()
+            B = x_BRiClE.shape[0]
+            inducing_hidden = None
+            scaler_stats: dict[str, torch.Tensor] = {}
+        else:
+            x_RiBC = x
+            assert x_RiBC is not None
+            B = x_RiBC.shape[1]
+            if performance_options.enable_torch_compile:
+                torch._dynamo.mark_dynamic(x_RiBC, index=0)
+                torch._dynamo.mark_dynamic(x_RiBC, index=1)
+                torch._dynamo.mark_dynamic(x_RiBC, index=2)
 
-        x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
-            x_RiBC,
-            y,
-            performance_options=performance_options,
-            return_inducing_hidden=return_kv_cache,
-            kv_cache=kv_cache,
-            x_is_test_only=x_is_test_only,
-        )
+            x_BRiClE, inducing_hidden, scaler_stats = self._stages_0_to_2(
+                x_RiBC,
+                y,
+                performance_options=performance_options,
+                return_inducing_hidden=return_kv_cache,
+                kv_cache=kv_cache,
+                x_is_test_only=x_is_test_only,
+            )
 
         # ---- Stage 3: ICL ----
         x_BRiD = x_BRiClE.flatten(-2)
@@ -2044,6 +2099,99 @@ class TabPFNV3(Architecture):
     @override
     def get_supported_kv_cache_precisions(self) -> tuple[str, ...]:
         return ("auto", "int8", "fp8")
+
+    def embed_pool(
+        self,
+        x_RiBC: torch.Tensor,
+        y: torch.Tensor,
+        *,
+        performance_options: PerformanceOptions | None = None,
+    ) -> tuple[torch.Tensor, PoolStats]:
+        """Run stages 0-2 over a whole training pool and keep its statistics.
+
+        Every supplied row is treated as a training row, so the scaler statistics
+        and the inducing hidden states are fitted on all of them. Rows are chunked
+        by ``inference_row_chunk_size`` internally.
+
+        Args:
+            x_RiBC: Pool rows, shape ``(n_pool, B, C)``. ``B`` is normally 1: one
+                pool shared by every context.
+            y: Pool labels, shape ``(n_pool, B)`` or ``(n_pool,)``.
+            performance_options: Defaults to the architecture's own options.
+
+        Returns:
+            ``(pool_embeddings, pool_stats)`` where ``pool_embeddings`` has shape
+            ``(B, n_pool, Cl, E)`` and is safe to index along dim 1 to build a
+            context.
+        """
+        if performance_options is None:
+            performance_options = self.get_default_performance_options()
+        if y.dim() == 3 and y.shape[-1] == 1:
+            y = y.squeeze(-1)
+
+        pool_emb, inducing_hidden, scaler_stats = self._stages_0_to_2(
+            x_RiBC,
+            y,
+            performance_options=performance_options,
+            return_inducing_hidden=True,
+            kv_cache=None,
+            x_is_test_only=False,
+        )
+        if inducing_hidden is None:
+            raise RuntimeError(
+                "Stages 0-2 returned no inducing hidden states; the pool cannot be "
+                "reused without them."
+            )
+        return pool_emb, PoolStats(
+            scaler_cache={k: v.detach() for k, v in scaler_stats.items()},
+            inducing_hidden=[h.detach() for h in inducing_hidden],
+        )
+
+    def embed_rows(
+        self,
+        x_RiBC: torch.Tensor,
+        pool_stats: PoolStats,
+        *,
+        performance_options: PerformanceOptions | None = None,
+    ) -> torch.Tensor:
+        """Run stages 0-2 on arbitrary rows using a pool's fitted statistics.
+
+        No row receives a target embedding, so the result depends only on the row
+        itself. Use it for query rows, whose embeddings are therefore independent
+        of the context they will later be scored against.
+
+        Args:
+            x_RiBC: Rows to embed, shape ``(n_rows, B, C)``.
+            pool_stats: Statistics from :meth:`embed_pool`.
+            performance_options: Defaults to the architecture's own options.
+
+        Returns:
+            Embeddings of shape ``(B, n_rows, Cl, E)``.
+        """
+        if performance_options is None:
+            performance_options = self.get_default_performance_options()
+
+        # The inducing states are stored with batch and columns folded together, so
+        # they only fit rows presented with the same batch size the pool used.
+        pool_batch = pool_stats.inducing_hidden[0].shape[0] // x_RiBC.shape[2]
+        if pool_batch != x_RiBC.shape[1]:
+            raise ValueError(
+                f"Rows have batch size {x_RiBC.shape[1]} but the pool statistics were "
+                f"fitted with batch size {pool_batch}. Pass rows as "
+                f"(n_rows, {pool_batch}, n_columns)."
+            )
+
+        empty_y = torch.zeros(0, device=x_RiBC.device, dtype=x_RiBC.dtype)
+        embeddings, _, _ = self._stages_0_to_2(
+            x_RiBC,
+            empty_y,
+            performance_options=performance_options,
+            return_inducing_hidden=False,
+            kv_cache=None,
+            x_is_test_only=False,
+            pool_stats=pool_stats,
+        )
+        return embeddings
 
     def _prepare_y(
         self,
@@ -2242,6 +2390,7 @@ class TabPFNV3(Architecture):
         return_inducing_hidden: bool,
         kv_cache: TabPFNV3Cache | None,
         x_is_test_only: bool,
+        pool_stats: PoolStats | None = None,
     ) -> tuple[torch.Tensor, list[torch.Tensor] | None, dict[str, torch.Tensor]]:
         """Stages 0-2: feature embedding, distribution embedding, column aggregation.
 
@@ -2263,10 +2412,18 @@ class TabPFNV3(Architecture):
         force_recompute_layer = performance_options.force_recompute_layer
         save_peak_memory_factor = performance_options.save_peak_memory_factor
 
-        if kv_cache is not None and not kv_cache.is_empty():
+        if pool_stats is not None:
+            # Shared-pool path: every supplied row is embedded with the pool's
+            # statistics and none carries a y embedding, so the result is a pure
+            # function of the row. That is what makes the embeddings gatherable.
+            rows_RiBC = x_RiBC
+            scaler_cache = pool_stats.scaler_cache
+            precomputed_hidden: list[torch.Tensor] | None = pool_stats.inducing_hidden
+            effective_num_train = 0
+        elif kv_cache is not None and not kv_cache.is_empty():
             rows_RiBC = x_RiBC if x_is_test_only else x_RiBC[num_train:]
             scaler_cache = kv_cache.scaler_cache
-            precomputed_hidden: list[torch.Tensor] | None = kv_cache.inducing_hidden
+            precomputed_hidden = kv_cache.inducing_hidden
             effective_num_train = 0
         else:
             rows_RiBC = x_RiBC

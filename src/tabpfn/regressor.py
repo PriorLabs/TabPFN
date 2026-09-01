@@ -89,6 +89,14 @@ from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
+from tabpfn.shared_pool import (
+    DEFAULT_CONTEXT_CHUNK_SIZE,
+    model_for_member,
+    require_full_pool_members,
+    require_shared_pool_support,
+    score_member,
+    validate_context_indices,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     convert_batch_of_cat_ix_to_schema,
@@ -1571,6 +1579,160 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             logits = logits / temperature
 
         return logits
+
+    def predict_with_shared_pool(
+        self,
+        X_train: XType,
+        y_train: YType,
+        X_test: XType,
+        context_indices: np.ndarray,
+        *,
+        output_type: OutputType = "mean",
+        quantiles: list[float] | None = None,
+        chunk_size: int = DEFAULT_CONTEXT_CHUNK_SIZE,
+    ) -> RegressionResultType:
+        """Score per-row contexts over a pool, fitting the pool in the same call.
+
+        Convenience wrapper over ``fit`` + ``predict_from_shared_pool``,
+        matching the shape of ``predict_batched``: the fit runs on an
+        internal clone, so ``self`` is unchanged on return and any prior fit
+        is preserved.
+
+        Prefer ``fit`` + ``predict_from_shared_pool`` when scoring one
+        pool against several different index sets, since this form refits the
+        pool on every call.
+
+        Args:
+            X_train: The pool every context draws from.
+            y_train: Pool targets.
+            X_test: Test features, one row per context.
+            context_indices: ``(n_test, k)`` or ``(n_estimators, n_test, k)`` pool
+                indices.
+            output_type: As in :meth:`predict`.
+            quantiles: As in :meth:`predict`.
+            chunk_size: Contexts scored per fused forward.
+
+        Returns:
+            What :meth:`predict` would return for these rows.
+        """
+        worker = clone(self)
+        worker.fit(X_train, y_train)
+        return worker.predict_from_shared_pool(
+            X_test,
+            context_indices,
+            output_type=output_type,
+            quantiles=quantiles,
+            chunk_size=chunk_size,
+        )
+
+    def predict_from_shared_pool(
+        self,
+        X_test: XType,
+        context_indices: np.ndarray,
+        *,
+        output_type: OutputType = "mean",
+        quantiles: list[float] | None = None,
+        chunk_size: int = DEFAULT_CONTEXT_CHUNK_SIZE,
+    ) -> RegressionResultType:
+        """Predict with a different context per test row, drawn from the fitted pool.
+
+        Call ``fit(X_pool, y_pool)`` first; ``context_indices[i]`` then names the pool
+        rows test row ``i`` attends over. All rows need the same context size, since
+        the contexts are stacked on the model's batch dimension.
+
+        The pool is embedded once per ensemble member and each context is assembled by
+        gathering row embeddings, instead of re-running the pre-ICL stages for every
+        context. This requires a TabPFN-v3 model.
+
+        Args:
+            X_test: Test features, one row per context.
+            context_indices: Pool indices, either ``(n_test, k)`` to give every
+                ensemble member the same context per test row, or
+                ``(n_estimators, n_test, k)`` to vary the context by member as well.
+            output_type: As in :meth:`predict`.
+            quantiles: As in :meth:`predict`.
+            chunk_size: Contexts scored per fused forward.
+
+        Returns:
+            What :meth:`predict` would return for these rows.
+
+        Raises:
+            SharedPoolError: If the model is not v3, the estimator carries per-dataset
+                state that cannot apply across contexts, or the indices are invalid.
+
+        Note:
+            The target standardisation and every pre-ICL statistic come from the pool
+            rather than from each context. That is what makes the embeddings
+            gatherable: the target is folded into the pool rows during stages 0-2, so
+            a per-context scaling would make a row's embedding depend on the context
+            it lands in.
+        """
+        check_is_fitted(self)
+        if self.is_constant_target_:
+            return self._handle_constant_target(
+                len(np.asarray(X_test)), output_type, quantiles
+            )
+
+        X_test = ensure_compatible_predict_input_sklearn(X_test, self)
+        X_test = fix_dtypes(
+            X_test,
+            cat_indices=self.inferred_feature_schema_.indices_for(
+                FeatureModality.CATEGORICAL
+            ),
+        )
+        X_test = process_text_na_dataframe(
+            X=X_test,
+            ord_encoder=getattr(self, "ordinal_encoder_", None),
+            passthrough_inf=self.inference_config_.PASSTHROUGH_INF,
+        )
+
+        members = self.executor_.ensemble_members
+        n_pool = require_full_pool_members(self, members)
+        indices = validate_context_indices(
+            context_indices,
+            n_pool=n_pool,
+            n_test=len(np.asarray(X_test)),
+            n_estimators=len(members),
+        )
+        device = self.devices_[0]
+        require_shared_pool_support(
+            self, model_for_member(self.executor_, members[0], device)
+        )
+
+        znorm_borders = self.znorm_space_bardist_.borders.clone()
+        std_borders = znorm_borders.cpu().numpy()
+
+        accumulated: torch.Tensor | None = None
+        for position, member in enumerate(members):
+            model = model_for_member(self.executor_, member, device)
+            # (1, n_test, n_buckets) -> (n_test, n_buckets): one query row per context.
+            output = score_member(
+                model,
+                member,
+                X_test,
+                indices[position],
+                device=device,
+                autocast=self.use_autocast_,
+                chunk_size=chunk_size,
+            )[0]
+            contribution = self._translate_batched_logits(
+                output=output,
+                config=member.config,
+                znorm_borders=znorm_borders,
+                std_borders=std_borders,
+            )
+            accumulated = (
+                contribution if accumulated is None else accumulated + contribution
+            )
+
+        assert accumulated is not None
+        return self._decode_batched_dataset(
+            accumulated_logits=accumulated,
+            n_estimators=len(members),
+            raw_space_bardist=self.raw_space_bardist_,
+            output_type=output_type,
+            quantiles=quantiles,
+        )
 
     def predict_batched(  # noqa: C901, PLR0912
         self,
