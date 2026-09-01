@@ -182,8 +182,9 @@ class DateConversion:
         categorical_indices: The caller's declared categorical indices, moved to
             where those columns ended up.
         numerical_indices: Positions holding calendar-expansion output. Numbers
-            by construction, so they bypass the cardinality heuristics that
-            would read a cyclical month pair spanning two months as a category.
+            by construction, so they bypass the cardinality heuristics; see
+            `detect_feature_modalities`'s `provided_numerical_indices` for why
+            a computed feature must not be read as a category.
     """
 
     X: XType

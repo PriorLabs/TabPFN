@@ -55,8 +55,14 @@ def detect_feature_modalities(
         provided_categorical_indices: User-provided indices considered categorical.
         provided_numerical_indices: Indices known to hold numbers by construction,
             e.g. calendar features (see `date_encoding.DateTransformer`). They
-            skip the cardinality heuristics, which would otherwise read a
-            cyclical month pair spanning two months as a category.
+            skip the cardinality heuristics, which read a column of fewer than
+            `min_unique_for_numerical` distinct values as categorical: a fair
+            rule for a column of measurements, but wrong for a computed one,
+            whose unseen values at predict time are ordinal-encoded to `NaN`
+            (see `EncodeCategoricalFeaturesStep`). A date column narrow enough
+            to yield a two-valued cyclical month pair is also narrow enough that
+            predicting a third month is ordinary, and that feature would go
+            missing on exactly the rows carrying the new information.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.

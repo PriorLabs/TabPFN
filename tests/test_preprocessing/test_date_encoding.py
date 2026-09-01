@@ -242,8 +242,13 @@ class TestExpansion:
         assert conversion.X.notna().all().all()
 
     def test__expanded_output__is_reported_numerical(self) -> None:
-        """Positions the caller passes to `detect_feature_modalities`, so a
-        cyclical pair spanning two months is not read as a category.
+        """Positions the caller passes to `detect_feature_modalities`.
+
+        A narrow training window gives a cyclical pair few enough distinct values
+        to look categorical, and the ensemble members that ordinal-encode a
+        category turn a value unseen at fit into `NaN`. A third month at predict
+        time is ordinary for such a window, so the feature would go missing on
+        exactly the rows carrying the new information.
         """
         X = _frame(pd.date_range("2020-01-01", periods=3))
 
