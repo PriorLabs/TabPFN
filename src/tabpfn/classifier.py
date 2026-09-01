@@ -77,8 +77,16 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_classification_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import (
+    fix_dtypes,
+    process_text_na_dataframe,
+)
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.date_encoding import (
+    FittedDateColumns,
+    fitted_date_columns_of,
+    resolve_date_columns,
+)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -92,8 +100,10 @@ from tabpfn.utils import (
     infer_random_state,
 )
 from tabpfn.validation import (
-    ensure_compatible_fit_inputs,
+    capture_input_shape,
+    ensure_compatible_fit_inputs_sklearn,
     ensure_compatible_predict_input_sklearn,
+    original_target_name,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -190,6 +200,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    date_expander_: FittedDateColumns
+    """Expands `DATE`-modality columns into numbers, if `TRANSFORM_DATES` is on."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -715,23 +728,50 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
-        # Data validation and cleaning
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        original_y_name = original_target_name(y)
+
+        # feature_names_in_/n_features_in_ must describe what the caller
+        # actually passed in, not TabPFN's internal (possibly wider,
+        # post-date-expansion) representation -- captured here, on the raw
+        # input, before date resolution runs.
+        capture_input_shape(X, estimator=self, reset=True)
+
+        # Expand or text-render every date column. Runs before the value
+        # validation below: sklearn's array machinery cannot assemble a
+        # `datetime64` column beside a numeric one into one array, so a
+        # genuine datetime column would not survive that call otherwise.
+        resolution = resolve_date_columns(
             X,
-            y,
-            estimator=self,
+            transform_dates=self.inference_config_.TRANSFORM_DATES,
+            categorical_features_indices=self.categorical_features_indices or (),
+        )
+        X, y = ensure_compatible_fit_inputs_sklearn(
+            resolution.X, y, estimator=self, ensure_y_numeric=False
+        )
+        # Only reached once X/y are already sklearn-validated, proper arrays:
+        # sparse/list/None/etc. inputs sklearn's own compatibility checks feed
+        # in must fail with *its* well-defined message, not a bare
+        # AttributeError/TypeError from `len(X)`/`X.shape` here.
+        validate_dataset_size(
+            X=X,
+            y=y,
             max_num_samples=self.inference_config_.MAX_NUMBER_OF_SAMPLES,
             max_num_features=self.inference_config_.MAX_NUMBER_OF_FEATURES,
             max_cpu_samples=self.inference_config_.MAX_CPU_SAMPLES,
-            ignore_pretraining_limits=self.ignore_pretraining_limits,
-            ensure_y_numeric=False,
             devices=self.devices_,
+            ignore_pretraining_limits=self.ignore_pretraining_limits,
         )
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=feature_names,
-            provided_categorical_indices=self.categorical_features_indices,
+            feature_names=resolution.merged_feature_names(
+                getattr(self, "feature_names_in_", None)
+            ),
+            provided_categorical_indices=[
+                resolution.old_to_new_index[i]
+                for i in (self.categorical_features_indices or ())
+            ],
+            provided_numerical_indices=resolution.expanded_new_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -744,8 +784,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
+        self.date_expander_ = FittedDateColumns(resolution.fitted)
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -1095,7 +1134,13 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            capture_input_shape(X_test, estimator=worker, reset=False)
+            resolution = resolve_date_columns(
+                X_test, fitted=fitted_date_columns_of(worker)
+            )
+            X_test = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
+                resolution.X, worker
+            )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
@@ -1384,7 +1429,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = ensure_compatible_predict_input_sklearn(X, self)
+            capture_input_shape(X, estimator=self, reset=False)
+            resolution = resolve_date_columns(X, fitted=fitted_date_columns_of(self))
+            X = ensure_compatible_predict_input_sklearn(resolution.X, self)
             X = fix_dtypes(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(

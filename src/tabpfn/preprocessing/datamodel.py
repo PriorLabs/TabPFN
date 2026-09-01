@@ -100,6 +100,11 @@ class FeatureModality(str, Enum):
     CATEGORICAL = "categorical"
     TEXT = "text"
     CONSTANT = "constant"
+    #: Never assigned: `resolve_date_columns` (date_encoding.py) resolves every
+    #: temporal column -- expanding it to `NUMERICAL` features or rendering it
+    #: to text -- before a `FeatureSchema` exists, so nothing is ever tagged a
+    #: date at this layer. Kept rather than removed to avoid a value going away
+    #: from underneath any external code matching on this enum.
     DATE = "date"
 
 

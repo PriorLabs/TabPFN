@@ -41,6 +41,9 @@ NUMERIC_DTYPE_KINDS = "?bBiufm"
 FAST_CONVERTIBLE_DTYPE_KINDS = "?bBiuf"
 OBJECT_DTYPE_KINDS = "OV"
 STRING_DTYPE_KINDS = "SaU"
+#: datetime64 and timedelta64. Note "m" is also in NUMERIC_DTYPE_KINDS, which is
+#: checked first, so only "M" actually reaches the branch keyed on this.
+TEMPORAL_DTYPE_KINDS = "Mm"
 UNSUPPORTED_DTYPE_KINDS = "cM"  # Not needed, just for completeness
 PANDAS_BELOW_3 = Version(pd.__version__) < Version("3.0.0")
 # Before 3.0 `astype` copies every column by default, including the ones it is not
@@ -183,6 +186,25 @@ def coerce_nullable_dtypes_to_numpy(X: pd.DataFrame) -> pd.DataFrame:
     return _cast_columns(X, cols, "float64")
 
 
+def _unsupported_array_dtype_error(dtype: Any) -> ValueError:
+    """The error for a numpy dtype `fix_dtypes` has no route for."""
+    if dtype.kind in STRING_DTYPE_KINDS:
+        return ValueError(f"String dtypes are not supported. Got dtype: {dtype}")
+    if dtype.kind in TEMPORAL_DTYPE_KINDS:
+        # `resolve_date_columns` (date_encoding.py) recasts these, but per
+        # column and so only for a DataFrame; a bare temporal array never
+        # passes through it. Say what to do about it rather than name the
+        # dtype and stop.
+        return ValueError(
+            f"Temporal dtypes are not supported directly. Got dtype: {dtype}. "
+            "Pass the data as a pandas DataFrame instead, where a datetime column "
+            "is read as a date and, with "
+            '`inference_config={"TRANSFORM_DATES": True}`, expanded into calendar '
+            "features."
+        )
+    return ValueError(f"Invalid dtype for X: {dtype}")
+
+
 def fix_dtypes(  # noqa: D103
     X: pd.DataFrame | np.ndarray,
     cat_indices: Sequence[int | str] | None,
@@ -201,12 +223,8 @@ def fix_dtypes(  # noqa: D103
             # of columns and rows to determine the dtypes.
             X = pd.DataFrame(X, copy=True)
             convert_dtype = True
-        elif X.dtype.kind in STRING_DTYPE_KINDS:
-            raise ValueError(
-                f"String dtypes are not supported. Got dtype: {X.dtype}",
-            )
         else:
-            raise ValueError(f"Invalid dtype for X: {X.dtype}")
+            raise _unsupported_array_dtype_error(X.dtype)
     else:
         raise ValueError(f"Invalid type for X: {type(X)}")
 

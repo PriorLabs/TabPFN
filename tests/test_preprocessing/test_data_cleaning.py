@@ -1,9 +1,10 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for validation.ensure_compatible_fit_inputs function."""
+"""Tests for the fit-input validation functions in validation.py."""
 
 from __future__ import annotations
 
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -28,7 +29,12 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.validation import (
+    capture_input_shape,
+    ensure_compatible_fit_inputs_sklearn,
+    original_target_name,
+    validate_dataset_size,
+)
 
 
 @pytest.fixture
@@ -69,203 +75,146 @@ def _get_schema(
 
 
 class TestEnsureCompatibleFitInputsBasic:
-    """Tests for basic input handling."""
+    """Tests for basic input handling: `capture_input_shape` +
+    `ensure_compatible_fit_inputs_sklearn` + `original_target_name`, the
+    pieces the old `ensure_compatible_fit_inputs` umbrella used to combine.
+    """
 
     def test__ensure_compatible_fit_inputs__numpy_arrays(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that numpy arrays are accepted and converted correctly."""
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        original_y_name = original_target_name(y)
+        capture_input_shape(X, estimator=classifier, reset=True)
+        X, y = ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert n_features == 2
-        assert feature_names is None
+        assert classifier.n_features_in_ == 2
+        assert getattr(classifier, "feature_names_in_", None) is None
         assert original_y_name is None
 
     def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that pandas DataFrames preserve column names."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
-        y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        capture_input_shape(X, estimator=classifier, reset=True)
 
-        assert list(feature_names) == ["feature_a", "feature_b"]  # type: ignore
+        assert list(classifier.feature_names_in_) == ["feature_a", "feature_b"]
 
-    def test__ensure_compatible_fit_inputs__pandas_series_y(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+    def test__ensure_compatible_fit_inputs__pandas_series_y(self) -> None:
         """Test that pandas Series y preserves its name."""
-        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
-
-        assert original_y_name == "target_column"
+        assert original_target_name(y) == "target_column"
 
 
-class TestEnsureCompatibleFitInputsValidation:
-    """Tests for input validation and error handling."""
+class TestValidateDatasetSize:
+    """Tests for `validate_dataset_size`'s pretraining-limit checks."""
 
-    def test__ensure_compatible_fit_inputs__too_many_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__too_many_features__raises(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that exceeding max features raises an error."""
         X = np.random.default_rng(42).random((5, 10))
         y = np.array([0, 1, 0, 1, 0])
 
         with pytest.raises(TabPFNValidationError, match="Number of features"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
+            validate_dataset_size(
+                X=X,
+                y=y,
                 max_num_samples=10_000,
                 max_num_features=5,  # Less than 10 features
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
 
-    def test__ensure_compatible_fit_inputs__too_many_samples(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__too_many_samples__raises(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that exceeding max samples raises an error."""
         X = np.random.default_rng(42).random((100, 2))
         y = np.array([0, 1] * 50)
 
         with pytest.raises(TabPFNValidationError, match="Number of samples"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
+            validate_dataset_size(
+                X=X,
+                y=y,
                 max_num_samples=50,  # Less than 100 samples
                 max_num_features=500,
                 ignore_pretraining_limits=False,
                 devices=cpu_devices,
             )
 
-    def test__ensure_compatible_fit_inputs__ignore_limits(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__ignore_limits__bypasses_size_checks(
+        self, cpu_devices: tuple[torch.device, ...]
     ) -> None:
         """Test that ignore_pretraining_limits bypasses size checks."""
         X = np.random.default_rng(42).random((100, 10))
         y = np.array([0, 1] * 50)
 
         # Should not raise even though limits are exceeded
-        X, *_ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
+        validate_dataset_size(
+            X=X,
+            y=y,
             max_num_samples=50,
             max_num_features=5,
             ignore_pretraining_limits=True,
             devices=cpu_devices,
         )
 
-        assert X.shape == (100, 10)
+    def test__mismatched_lengths__raises(self) -> None:
+        """Test that mismatched X and y lengths raise an error."""
+        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
+        y = np.array([0, 1])  # Only 2 elements, X has 3 rows
 
-    def test__ensure_compatible_fit_inputs__too_few_samples(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+        with pytest.raises(TabPFNValidationError, match="do not match"):
+            validate_dataset_size(
+                X=X,
+                y=y,
+                max_num_samples=10_000,
+                max_num_features=500,
+                ignore_pretraining_limits=False,
+                devices=(torch.device("cpu"),),
+            )
+
+
+class TestEnsureCompatibleFitInputsSklearnValidation:
+    """Tests for `ensure_compatible_fit_inputs_sklearn`'s value checks."""
+
+    def test__too_few_samples__raises(self, classifier: TabPFNClassifier) -> None:
         """Test that providing only one sample raises an error."""
         X = np.array([[1.0, 2.0]])
         y = np.array([0])
 
         with pytest.raises(TabPFNValidationError, match="sample"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
+            ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
-    def test__ensure_compatible_fit_inputs__mismatched_lengths(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
-        """Test that mismatched X and y lengths raise an error."""
-        X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
-        y = np.array([0, 1])  # Only 2 elements, X has 3 rows
-
-        with pytest.raises(TabPFNValidationError):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
-
-    def test__ensure_compatible_fit_inputs__no_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
-    ) -> None:
+    def test__no_features__raises(self, classifier: TabPFNClassifier) -> None:
         """Test that providing zero features raises an error."""
         X = np.array([[], [], []])
         y = np.array([0, 1, 0])
 
         with pytest.raises(TabPFNValidationError, match="feature"):
-            ensure_compatible_fit_inputs(
-                X,
-                y,
-                estimator=classifier,
-                max_num_samples=10_000,
-                max_num_features=500,
-                ignore_pretraining_limits=False,
-                devices=cpu_devices,
-            )
+            ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
 
 class TestEnsureCompatibleFitInputsWithNaN:
     """Tests for handling NaN values."""
 
     def test__ensure_compatible_fit_inputs__nan_in_features(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+        self, classifier: TabPFNClassifier
     ) -> None:
         """Test that NaN values in X are accepted."""
         X = np.array([[1.0, np.nan], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, *_ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        X, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
         assert np.isnan(X[0, 1])
 
@@ -1159,15 +1108,45 @@ def test__fix_dtypes__duplicate_column_names_are_all_cast() -> None:
     assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
 
 
-def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
-    """Documents a known, pre-existing bug rather than fixing it here.
+@pytest.mark.parametrize(
+    ("label", "column"),
+    [
+        ("datetime64", pd.date_range("2020-01-01", periods=50)),
+        ("tz aware", pd.date_range("2020-01-01", periods=50, tz="UTC")),
+        ("period", pd.date_range("2020-01-01", periods=50).to_period("M")),
+        ("timedelta", pd.to_timedelta(np.arange(50), unit="D")),
+    ],
+)
+def test__classifier_fit__native_temporal_column__is_read_not_rejected(
+    label: str, column: pd.Index
+) -> None:
+    """Regression: a native temporal column beside another dtype used to crash.
 
-    A native `datetime64` column mixed with any other dtype crashes: `validate_data`
-    converts the whole frame to one numpy array, and numpy has no dtype that unifies
-    `datetime64` with a numeric or string column. A fix would need to convert such a
-    column to a string (or otherwise numpy-unifiable type) before validation, which
-    is lossy for `datetime64[ns]` (no string format captures full nanosecond
-    precision) and is deferred to a follow-up rather than solved in this PR.
+    `validate_data` converts the whole frame to one numpy array, and numpy has
+    no dtype that unifies `datetime64` with a numeric or string column, so the
+    frame could not even be assembled. `resolve_date_columns` (date_encoding.py)
+    recasts the column before validation ever sees it.
+    """
+    n = 50
+    rng = np.random.default_rng(0)
+    X = pd.DataFrame({"num": rng.normal(size=n), "signed_on": column})
+    y = rng.integers(0, 2, n)
+
+    clf = TabPFNClassifier(n_estimators=1, device="cpu")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        clf.fit(X, y)
+        assert clf.predict(X).shape == (n,), label
+
+
+@pytest.mark.parametrize("transform_dates", [False, True])
+def test__classifier_fit__native_datetime_column__is_recognized_as_a_date(
+    *, transform_dates: bool
+) -> None:
+    """A datetime dtype is a date outright -- no string heuristic has to agree.
+
+    With `TRANSFORM_DATES` off it is demoted like any other detected date, and
+    named in that warning; with it on, it expands into calendar features.
     """
     n = 50
     rng = np.random.default_rng(0)
@@ -1176,6 +1155,18 @@ def test__classifier_fit__native_datetime_column__known_unfixed_crash() -> None:
     )
     y = rng.integers(0, 2, n)
 
-    clf = TabPFNClassifier(n_estimators=1, device="cpu")
-    with pytest.raises(TabPFNValidationError, match="could not be promoted"):
-        clf.fit(X, y)
+    clf = TabPFNClassifier(
+        n_estimators=1,
+        device="cpu",
+        inference_config={"TRANSFORM_DATES": transform_dates},
+    )
+    if transform_dates:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            clf.fit(X, y)
+        names = clf.inferred_feature_schema_.feature_names
+        assert len(names) > 2
+        assert any(name.startswith("input_signed_on_") for name in names)
+    else:
+        with pytest.warns(UserWarning, match="hold dates"):
+            clf.fit(X, y)

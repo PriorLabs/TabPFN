@@ -36,12 +36,20 @@ from tabpfn.model_loading import (
     resolve_model_version,
 )
 from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.date_encoding import (
+    fitted_date_columns_of,
+    resolve_date_columns,
+)
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
     infer_devices,
 )
-from tabpfn.validation import ensure_compatible_predict_input_sklearn
+from tabpfn.validation import (
+    capture_input_shape,
+    ensure_compatible_predict_input_sklearn,
+)
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
@@ -510,8 +518,19 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
-    X = ensure_compatible_predict_input_sklearn(X, model)
-    X = fix_dtypes(X, cat_indices=model.categorical_features_indices)
+    capture_input_shape(X, estimator=model, reset=False)
+    resolution = resolve_date_columns(X, fitted=fitted_date_columns_of(model))
+    X = ensure_compatible_predict_input_sklearn(resolution.X, model)
+    # Not model.categorical_features_indices: those are raw, pre-expansion
+    # indices, and date expansion can shift every column after it. The
+    # inferred schema already reflects the post-expansion layout, exactly
+    # like the classifier/regressor predict paths use for the same reason.
+    X = fix_dtypes(
+        X,
+        cat_indices=model.inferred_feature_schema_.indices_for(
+            FeatureModality.CATEGORICAL
+        ),
+    )
     X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []
