@@ -104,6 +104,8 @@ def initialize_tabpfn_model(
     which: Literal["classifier", "regressor"],
     fit_mode: Literal["low_memory", "fit_preprocessors", "fit_with_cache"],
     softmax_temperature_override: float | None = None,
+    devices: Sequence[torch.device] | None = None,
+    force_inference_dtype: torch.dtype | None = None,
 ) -> tuple[
     list[Architecture],
     list[ArchitectureConfig],
@@ -124,6 +126,10 @@ def initialize_tabpfn_model(
             model, or None if they did not ask for one. Only used to decide whether
             checkpoints are allowed to disagree on their temperature; the override
             itself is applied by the caller.
+        devices: The devices the caller will place the loaded models on, used to
+            key the built-model cache. None when the caller will not move them.
+        force_inference_dtype: The dtype the caller will cast the loaded models
+            to, also part of the built-model cache key.
 
     Returns:
         a list of models,
@@ -202,6 +208,8 @@ def initialize_tabpfn_model(
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
+                    devices=devices,
+                    force_inference_dtype=force_inference_dtype,
                 )
             )
             norm_criterion = None
@@ -216,6 +224,8 @@ def initialize_tabpfn_model(
                     version=version.value,
                     download_if_not_exists=download_if_not_exists,
                     softmax_temperature_override=softmax_temperature_override,
+                    devices=devices,
+                    force_inference_dtype=force_inference_dtype,
                 )
             )
             norm_criterion = bardist
@@ -434,12 +444,18 @@ def initialize_model_variables_helper(
         user_config=user_config,
     )
 
+    devices = infer_devices(calling_instance.device)
+    _, forced_inference_dtype, _ = determine_precision(
+        calling_instance.inference_precision, devices
+    )
     models, architecture_configs, maybe_bardist, inference_config = (
         initialize_tabpfn_model(
             model_path=calling_instance.model_path,  # pyright: ignore[reportArgumentType]
             which=model_type,
             fit_mode=calling_instance.fit_mode,  # pyright: ignore[reportArgumentType]
             softmax_temperature_override=softmax_temperature_override,
+            devices=devices,
+            force_inference_dtype=forced_inference_dtype,
         )
     )
     calling_instance.models_ = models
