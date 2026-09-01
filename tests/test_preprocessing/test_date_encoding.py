@@ -85,6 +85,38 @@ class TestFitTransform:
         assert pd.api.types.is_numeric_dtype(out["date"])
         assert out["date"].nunique() == 3
 
+    def test__period_column__is_converted(self) -> None:
+        """A period is a span; the instant it starts at orders identically."""
+        X = _frame(pd.period_range("2020-01-01", periods=3, freq="D"))
+
+        with pytest.warns(UserWarning, match="hold dates"):
+            out = DateTransformer().fit_transform(X)
+
+        assert pd.api.types.is_numeric_dtype(out["date"])
+        assert out["date"].nunique() == 3
+
+    def test__duration_column__becomes_seconds(self) -> None:
+        """A duration carries no calendar, so its length is all of its meaning:
+        converted whatever else is going on, and nothing to warn about.
+        """
+        X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = DateTransformer().fit_transform(X)
+
+        np.testing.assert_array_equal(out["date"], [86400.0, 172800.0, 259200.0])
+
+    def test__declared_categorical_duration__is_still_converted(self) -> None:
+        """Unlike a point in time: leaving it alone only crashes validation, and
+        a whole number of seconds ordinal-encodes as a category just as well.
+        """
+        X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
+
+        out = DateTransformer(categorical_indices=[1]).fit_transform(X)
+
+        assert pd.api.types.is_numeric_dtype(out["date"])
+
     def test__duplicate_column_labels__are_converted_positionally(self) -> None:
         """Pandas allows repeated labels, so only position identifies a column."""
         X = pd.DataFrame(
@@ -291,3 +323,37 @@ def test__fit_with_real_datetime_column__warns_at_call_site(
     )
     with pytest.raises(TabPFNValidationError, match="could not be promoted"):
         model.fit(X, y)
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+@pytest.mark.parametrize("dtype", ["period", "duration"])
+def test__fit_with_period_or_duration_column__no_longer_crashes(
+    estimator_cls: type,
+    dtype: str,
+) -> None:
+    """Both used to abort a `fit` outright.
+
+    A `period` column reached modality detection intact and was rejected there
+    ("Unknown dtype: period[D]"); a `timedelta64` column never got that far,
+    since it has no common numpy dtype with the numeric column beside it.
+    """
+    n = 120
+    rng = np.random.default_rng(seed=42)
+    column = (
+        pd.period_range("2020-01-01", periods=n, freq="D")
+        if dtype == "period"
+        else pd.to_timedelta(np.arange(n), unit="D")
+    )
+    X = pd.DataFrame({"num": rng.normal(size=n), "col": column})
+    y = (
+        rng.integers(0, 2, size=n)
+        if estimator_cls is TabPFNClassifier
+        else rng.normal(size=n)
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model = estimator_cls(n_estimators=1, device="cpu").fit(X, y)
+        predictions = model.predict(X)
+
+    assert len(predictions) == n

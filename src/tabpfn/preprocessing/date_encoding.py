@@ -5,7 +5,9 @@
 sklearn's array machinery cannot hold a `datetime64` column beside a numeric one
 in one array (no common dtype exists), so a temporal column has to stop looking
 like one before `check_array`/`check_X_y` run. `DateTransformer` is where that
-happens: a point in time becomes nanoseconds since the epoch.
+happens: a point in time (`datetime64`, tz-aware, or `period`) becomes
+nanoseconds since the epoch, and a duration (`timedelta64`) becomes its length
+in seconds.
 
 Because this runs before detection, `detect_feature_modalities` only ever sees
 the result, and never learns a column was a date at all.
@@ -27,9 +29,22 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 
-def _is_datetime_like_dtype(dtype: Any) -> bool:
-    """Whether `dtype` holds points in time."""
-    return pd.api.types.is_datetime64_any_dtype(dtype)
+def _is_instant_dtype(dtype: Any) -> bool:
+    """Whether `dtype` holds points in time: `datetime64`, tz-aware, or `period`."""
+    return pd.api.types.is_datetime64_any_dtype(dtype) or isinstance(
+        dtype, pd.PeriodDtype
+    )
+
+
+def _as_timestamp(column: pd.Series) -> pd.Series:
+    """The instant a `period` column starts at, or the column unchanged.
+
+    A period is a span, not an instant; its start is the instant that orders
+    identically, which is all the conversion below needs.
+    """
+    if isinstance(column.dtype, pd.PeriodDtype):
+        return column.dt.to_timestamp()
+    return column
 
 
 def _to_nanoseconds(column: pd.Series) -> pd.Series:
@@ -46,6 +61,15 @@ def _to_nanoseconds(column: pd.Series) -> pd.Series:
     as_ns = column.astype("int64").astype("float64")
     as_ns[is_missing] = np.nan
     return as_ns
+
+
+def _to_seconds(column: pd.Series) -> pd.Series:
+    """Cast one `timedelta64` column to its length in seconds.
+
+    A duration carries no calendar, so its length is the whole of its meaning:
+    unlike a point in time, there is nothing an expansion could add later.
+    """
+    return column.dt.total_seconds()
 
 
 def _replace_columns_positionally(
@@ -73,7 +97,11 @@ def _replace_columns_positionally(
 
 
 def _warn_on_dates(column_names: Sequence[str]) -> None:
-    """Warn about date columns read as a plain number rather than a calendar."""
+    """Warn about date columns read as a plain number rather than a calendar.
+
+    Points in time only: a duration's length in seconds loses nothing, so there
+    is nothing to report about it.
+    """
     if not column_names:
         return
     warnings.warn(
@@ -100,8 +128,8 @@ class DateTransformer:
     call `transform` on it at predict time.
 
     Args:
-        categorical_indices: Indices the caller declared categorical. A date
-            column among them is left alone, at fit and at predict alike: the
+        categorical_indices: Indices the caller declared categorical. A point in
+            time among them is left alone, at fit and at predict alike: the
             user's declared intent for it wins over reading it as a date.
     """
 
@@ -137,19 +165,31 @@ class DateTransformer:
         return converted
 
     def _convert(self, X: XType) -> tuple[XType, list[str]]:
-        """The conversion itself, and the names of the columns it converted."""
+        """The conversion itself, and the names of the instants it converted."""
         if not isinstance(X, pd.DataFrame):
             return X, []
-        positions = [
+        dtypes = list(X.dtypes)
+        instants = [
             i
-            for i, dtype in enumerate(X.dtypes)
-            if _is_datetime_like_dtype(dtype) and i not in self._declared_categorical
+            for i, dtype in enumerate(dtypes)
+            if _is_instant_dtype(dtype) and i not in self._declared_categorical
         ]
-        if not positions:
+        # A declared-categorical duration is converted all the same: leaving it
+        # alone only crashes validation, and a whole number of seconds
+        # ordinal-encodes as a category no worse than the duration would.
+        durations = [
+            i
+            for i, dtype in enumerate(dtypes)
+            if pd.api.types.is_timedelta64_dtype(dtype)
+        ]
+        if not instants and not durations:
             return X, []
-        replacements = {i: _to_nanoseconds(X.iloc[:, i]) for i in positions}
+        replacements = {
+            i: _to_nanoseconds(_as_timestamp(X.iloc[:, i])) for i in instants
+        }
+        replacements.update({i: _to_seconds(X.iloc[:, i]) for i in durations})
         converted = _replace_columns_positionally(X, replacements)
-        return converted, [str(X.columns[i]) for i in positions]
+        return converted, [str(X.columns[i]) for i in instants]
 
 
 def apply_date_conversion(X: XType, source: object) -> XType:
