@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from copy import deepcopy
 from typing import Literal
 
@@ -18,6 +19,12 @@ from tabpfn.preprocessing import (
     v2_classifier_preprocessor_configs,
     v2_regressor_preprocessor_configs,
 )
+
+DEFAULT_SOFTMAX_TEMPERATURE = 0.9
+"""The softmax temperature of every checkpoint released before the temperature became
+part of the inference config. Also the value used when the temperature cannot be
+resolved from a checkpoint at all. Do not change this, see
+`InferenceConfig.SOFTMAX_TEMPERATURE`."""
 
 
 # By default Pydantic dataclasses will ignore unrecognised config items, extra="forbid"
@@ -80,6 +87,21 @@ class InferenceConfig:
     two into a separate field does not itself change any default behavior. A
     follow-up that adds an actual text-encoding capability is expected to raise
     this default independently."""
+
+    SOFTMAX_TEMPERATURE: float = DEFAULT_SOFTMAX_TEMPERATURE
+    """The temperature applied to the model's logits at predict time. Lower values
+    make the predictions more confident, `1.0` is a no-op.
+
+    The default is the value that shipped as the `softmax_temperature` argument of
+    `TabPFNClassifier`/`TabPFNRegressor` before this became a config field, so
+    checkpoints that predate the field (which is all of them up to and including the
+    ones released with v8.5.0) keep their original behavior. Newer checkpoints are
+    expected to store their own value and must do so explicitly.
+
+    Setting this here overrides the checkpoint for every model in the ensemble, as
+    does `TabPFNClassifier(softmax_temperature=...)`; naming a temperature both ways
+    at once is rejected. With neither, the value comes from the checkpoint, and an
+    ensemble whose checkpoints declare different temperatures is rejected too."""
 
     TRANSFORM_DATES: bool = False
     """Whether a column holding a genuine datetime dtype (`datetime64`, tz-aware,
@@ -277,6 +299,18 @@ class InferenceConfig:
             f"{user_config=}\nUnknown user config provided, see config above."
         )
 
+    def equals_ignoring_softmax_temperature(self, other: InferenceConfig) -> bool:
+        """Whether this config and `other` agree on every field but the temperature.
+
+        A temperature mismatch between the checkpoints of one ensemble gets its own
+        error (see `raise_if_softmax_temperatures_differ`), since the user can
+        resolve it by naming a temperature; any other mismatch is unfixable.
+        """
+        neutral = 1.0
+        return dataclasses.replace(
+            self, SOFTMAX_TEMPERATURE=neutral
+        ) == dataclasses.replace(other, SOFTMAX_TEMPERATURE=neutral)
+
     def get_resolved_outlier_removal_std(
         self,
         estimator_type: Literal["regressor", "classifier"],
@@ -320,12 +354,44 @@ class InferenceConfig:
         )
 
 
+def raise_if_softmax_temperatures_differ(
+    inference_configs: Sequence[InferenceConfig],
+    *,
+    softmax_temperature_override: float | None,
+) -> None:
+    """Reject an ensemble whose checkpoints disagree on the softmax temperature.
+
+    One temperature is applied to the whole ensemble, so there is nothing sensible
+    to do with two of them. The user can say which one to use, and then the
+    checkpoints no longer have to agree.
+
+    Args:
+        inference_configs: The config of each model in the ensemble.
+        softmax_temperature_override: The temperature the user asked for, applied to
+            every model, or None if they did not ask for one.
+    """
+    if softmax_temperature_override is not None:
+        return
+
+    temperatures = sorted({config.SOFTMAX_TEMPERATURE for config in inference_configs})
+    if len(temperatures) > 1:
+        raise ValueError(
+            f"The given model checkpoints declare different softmax temperatures "
+            f"({temperatures}), and one temperature is applied to the whole "
+            f"ensemble. Pick the one to use for all of them and pass it explicitly, "
+            f"e.g. `TabPFNClassifier(softmax_temperature={temperatures[0]}, ...)`."
+        )
+
+
 def cpu_sample_limit(model_version: ModelVersion) -> int:
     """Max sample count allowed for CPU inference by default, per model version."""
     return 5000 if model_version == ModelVersion.V3 else 1000
 
 
 def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # SOFTMAX_TEMPERATURE is deliberately not listed here: these models predate the
+    # field, so they take the class default, which is the temperature they have
+    # always been run with.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,
@@ -351,6 +417,7 @@ def _get_v2_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceC
 
 
 def _get_v2_5_config(preprocessor_configs: list[PreprocessorConfig]) -> InferenceConfig:
+    # See the note in `_get_v2_config` about SOFTMAX_TEMPERATURE.
     return InferenceConfig(
         MAX_UNIQUE_FOR_CATEGORICAL_FEATURES=30,
         MIN_UNIQUE_FOR_NUMERICAL_FEATURES=4,

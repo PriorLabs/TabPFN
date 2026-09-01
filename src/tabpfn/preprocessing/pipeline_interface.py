@@ -452,7 +452,12 @@ class PreprocessingPipeline:
         """
         # Single copy to preserve immutability for the caller, avoiding N copies
         # inside the loop for steps that target specific modalities.
-        X = X.copy() if isinstance(X, np.ndarray) else X.clone()
+        # Fuse casting with copying for performance.
+        X = (
+            X.astype(np.float64, order="C", copy=True)
+            if isinstance(X, np.ndarray)
+            else X.clone()
+        )
 
         # Record any +/-inf positions and replace them with NaN so the steps
         # (which assume finite/NaN input) can run, then write them back at the
