@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from packaging.version import Version
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -927,6 +928,10 @@ class TestResolveDatetimeColumns:
         expected = [1.5778368e18, 1.5909696e18, 1.6094592e18]
         np.testing.assert_array_equal(out["date"], expected)
 
+    @pytest.mark.skipif(
+        Version(pd.__version__) < Version("2.0.0"),
+        reason="pandas 1 stores every datetime as [ns], so such a date cannot be held",
+    )
     def test__date_outside_the_nanosecond_range__still_converts(self) -> None:
         """Scaling in `float64` rather than casting the column to `[ns]` first,
         which raises `OutOfBoundsDatetime` outside 1678-2262.
