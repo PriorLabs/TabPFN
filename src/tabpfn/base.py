@@ -42,7 +42,7 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.date_encoding import convert_dates
+from tabpfn.preprocessing.datetimes import convert_dates
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,

@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for converting temporal columns before validation runs."""
+"""Tests for reading a point in time as nanoseconds since the epoch."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from packaging.version import Version
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import DateTransformer, convert_dates
+from tabpfn.preprocessing.datetimes import NumericalDateTransformer
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 
 
@@ -23,7 +23,7 @@ def _frame(dates: pd.Series | pd.DatetimeIndex | list) -> pd.DataFrame:
 
 
 class TestFitTransform:
-    """`DateTransformer.fit_transform`: which columns convert, and to what.
+    """`NumericalDateTransformer.fit_transform`: which columns convert, and to what.
 
     Runs on the raw DataFrame, before validation flattens it into one numpy
     array, so a genuine `datetime64` dtype is still visible. Dtype is all it
@@ -34,7 +34,7 @@ class TestFitTransform:
         X = _frame(pd.date_range("2020-01-01", periods=3))
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert pd.api.types.is_numeric_dtype(out["date"])
         # Exact: converting must not collide distinct dates together.
@@ -48,7 +48,7 @@ class TestFitTransform:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert out is X
 
@@ -60,20 +60,20 @@ class TestFitTransform:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            out = DateTransformer(categorical_indices=[1]).fit_transform(X).X
+            out = NumericalDateTransformer(categorical_indices=[1]).fit_transform(X).X
 
         assert out is X
 
     def test__non_dataframe_input__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        assert DateTransformer().fit_transform(X).X is X
+        assert NumericalDateTransformer().fit_transform(X).X is X
 
     def test__missing_date__becomes_nan_not_a_sentinel_int(self) -> None:
         """`NaT.astype('int64')` is a huge sentinel, not `NaN`: must be masked."""
         X = _frame(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert out["date"].isna().tolist() == [False, True, False]
 
@@ -81,7 +81,7 @@ class TestFitTransform:
         X = _frame(pd.date_range("2020-01-01", periods=3, tz="Europe/Berlin"))
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert pd.api.types.is_numeric_dtype(out["date"])
         assert out["date"].nunique() == 3
@@ -91,7 +91,7 @@ class TestFitTransform:
         X = _frame(pd.period_range("2020-01-01", periods=3, freq="D"))
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert pd.api.types.is_numeric_dtype(out["date"])
         assert out["date"].nunique() == 3
@@ -104,7 +104,7 @@ class TestFitTransform:
 
         with warnings.catch_warnings():
             warnings.simplefilter("error")
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         np.testing.assert_array_equal(out["date"], [86400.0, 172800.0, 259200.0])
 
@@ -114,7 +114,7 @@ class TestFitTransform:
         """
         X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
 
-        out = DateTransformer(categorical_indices=[1]).fit_transform(X).X
+        out = NumericalDateTransformer(categorical_indices=[1]).fit_transform(X).X
 
         assert pd.api.types.is_numeric_dtype(out["date"])
 
@@ -126,7 +126,7 @@ class TestFitTransform:
         X.columns = ["same", "same"]
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(X).X
+            out = NumericalDateTransformer().fit_transform(X).X
 
         assert [str(dtype) for dtype in out.dtypes] == ["float64", "float64"]
         np.testing.assert_array_equal(out.iloc[:, 1], X.iloc[:, 1])
@@ -141,7 +141,7 @@ class TestFitTransform:
         )
 
         with pytest.warns(UserWarning, match="hold dates") as record:
-            DateTransformer().fit_transform(X)
+            NumericalDateTransformer().fit_transform(X)
 
         message = str(record[0].message)
         assert "'signed_on'" in message
@@ -165,7 +165,7 @@ class TestResolutionScaling:
         dates = pd.to_datetime(list(self.stamps)).astype(f"datetime64[{unit}]")
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(_frame(dates)).X
+            out = NumericalDateTransformer().fit_transform(_frame(dates)).X
 
         np.testing.assert_array_equal(out["date"], self.expected)
 
@@ -174,7 +174,7 @@ class TestResolutionScaling:
         does not renormalise, so a predict column arriving 1000x off lands far
         outside the fitted distribution.
         """
-        transformer = DateTransformer()
+        transformer = NumericalDateTransformer()
         with pytest.warns(UserWarning, match="hold dates"):
             fitted = transformer.fit_transform(
                 _frame(pd.to_datetime(list(self.stamps)).astype("datetime64[us]"))
@@ -201,7 +201,7 @@ class TestResolutionScaling:
 
         with pytest.warns(UserWarning, match="hold dates"):
             out = (
-                DateTransformer()
+                NumericalDateTransformer()
                 .fit_transform(pd.DataFrame({"num": [1.0, 2.0], "date": dates}))
                 .X
             )
@@ -215,151 +215,17 @@ class TestResolutionScaling:
         dates = pd.to_datetime(list(self.stamps)).tz_localize("UTC")
 
         with pytest.warns(UserWarning, match="hold dates"):
-            out = DateTransformer().fit_transform(_frame(dates)).X
+            out = NumericalDateTransformer().fit_transform(_frame(dates)).X
 
         np.testing.assert_array_equal(out["date"], self.expected)
 
 
-class TestExpansion:
-    """`TRANSFORM_DATES` on: a date becomes calendar features instead of a number."""
-
-    def _expander(self, **kwargs: object) -> DateTransformer:
-        return DateTransformer(transform_dates=True, **kwargs)  # type: ignore[arg-type]
-
-    def test__date_column__becomes_calendar_features(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3, freq="37h"))
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            conversion = self._expander().fit_transform(X)
-
-        assert conversion.X.shape[0] == 3
-        assert conversion.X.shape[1] > X.shape[1]
-        # The kept columns come first, in order, then the expansion.
-        assert conversion.feature_names[0] == "num"
-        assert all(name.startswith("date_") for name in conversion.feature_names[1:])
-        assert "date_year" in conversion.feature_names
-        assert conversion.X.notna().all().all()
-
-    def test__declared_categorical_indices__are_remapped(self) -> None:
-        """The expanded column is gone from where it was, so what came after it
-        has moved down.
-        """
-        X = pd.DataFrame(
-            {
-                "date": pd.date_range("2020-01-01", periods=3),
-                "cat": ["a", "b", "c"],
-            }
-        )
-
-        conversion = self._expander(categorical_indices=[1]).fit_transform(X)
-
-        assert conversion.categorical_indices == [0]
-        assert conversion.feature_names[0] == "cat"
-
-    def test__declared_categorical_date__is_not_expanded(self) -> None:
-        """The user's declared intent still wins, flag or no flag."""
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-
-        conversion = self._expander(categorical_indices=[1]).fit_transform(X)
-
-        assert conversion.X is X
-
-    def test__duration_column__still_becomes_seconds(self) -> None:
-        """A duration has no calendar to expand into, flag or no flag."""
-        X = _frame(pd.to_timedelta([1, 2, 3], unit="D"))
-
-        conversion = self._expander().fit_transform(X)
-
-        np.testing.assert_array_equal(
-            conversion.X["date"], [86400.0, 172800.0, 259200.0]
-        )
-
-    def test__expanded_column__is_not_warned_about(self) -> None:
-        """The warning is about a date read as one plain number; an expanded one
-        is not, so there is nothing to report.
-        """
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            self._expander().fit_transform(X)
-
-        assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__expanded_indices__reports_what_was_expanded(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        transformer = self._expander()
-        assert transformer.expanded_indices == []
-        transformer.fit_transform(X)
-        assert transformer.expanded_indices == [1]
-
-    def test__generated_name_colliding_with_an_existing_column__is_deduped(
-        self,
-    ) -> None:
-        X = pd.DataFrame(
-            {
-                "date_year": [1.0, 2.0, 3.0],
-                "date": pd.date_range("2020-01-01", periods=3),
-            }
-        )
-
-        conversion = self._expander().fit_transform(X)
-
-        assert len(set(conversion.feature_names)) == len(conversion.feature_names)
-        assert "date_year" in conversion.feature_names
-        assert "date_year_1" in conversion.feature_names
-
-
-class TestExpansionAtPredictTime:
-    """`transform` reapplies the encoder fit on the training column, not a new one."""
-
-    def test__same_data__reproduces_the_fitted_columns(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3, freq="37h"))
-        transformer = DateTransformer(transform_dates=True)
-        fitted = transformer.fit_transform(X)
-
-        out = transformer.transform(X)
-
-        assert list(out.columns) == list(fitted.X.columns)
-        np.testing.assert_array_equal(out.to_numpy(), fitted.X.to_numpy())
-
-    def test__predict_data_with_a_time_of_day__keeps_the_fitted_width(self) -> None:
-        """The encoder decides how many features it makes when it is fit: a date-only
-        training column has no hour to encode, and predict cannot add one without
-        making the frame the wrong width for the fitted model.
-        """
-        transformer = DateTransformer(transform_dates=True)
-        fitted = transformer.fit_transform(
-            _frame(pd.date_range("2020-01-01", periods=3))
-        )
-
-        out = transformer.transform(
-            _frame(pd.date_range("2020-01-01 13:45", periods=3, freq="37h"))
-        )
-
-        assert list(out.columns) == list(fitted.X.columns)
-
-    def test__position_that_is_no_longer_a_date__becomes_nan_features(self) -> None:
-        transformer = DateTransformer(transform_dates=True)
-        fitted = transformer.fit_transform(
-            _frame(pd.date_range("2020-01-01", periods=3))
-        )
-
-        out = transformer.transform(_frame(["not", "a", "date"]))
-
-        assert list(out.columns) == list(fitted.X.columns)
-        assert out[fitted.feature_names[1:]].isna().all().all()
-        # The column that was never a date is untouched.
-        assert out["num"].tolist() == [1.0, 2.0, 3.0]
-
-
 class TestTransform:
-    """`DateTransformer.transform`: the predict-time side of the same conversion."""
+    """`NumericalDateTransformer.transform`: the predict-time side of it."""
 
     def test__converts_the_same_way_without_warning(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        transformer = DateTransformer()
+        transformer = NumericalDateTransformer()
         with pytest.warns(UserWarning, match="hold dates"):
             fitted = transformer.fit_transform(X).X
 
@@ -373,7 +239,7 @@ class TestTransform:
         """Which columns are temporal is read from the dtypes again, not frozen at
         fit: an unconverted `datetime64` column would crash validation.
         """
-        transformer = DateTransformer()
+        transformer = NumericalDateTransformer()
         transformer.fit_transform(_frame([1.0, 2.0, 3.0]))
 
         out = transformer.transform(_frame(pd.date_range("2020-01-01", periods=3)))
@@ -382,50 +248,19 @@ class TestTransform:
 
     def test__declared_categorical_date__is_left_alone_at_predict_too(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        assert DateTransformer(categorical_indices=[1]).transform(X) is X
+        assert NumericalDateTransformer(categorical_indices=[1]).transform(X) is X
 
     def test__non_dataframe_input__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        assert DateTransformer().transform(X) is X
-
-
-class TestConvertDates:
-    """`convert_dates`: the predict paths' guard for an unset attribute."""
-
-    class _Source:
-        def __init__(self, **attributes: object) -> None:
-            self.__dict__.update(attributes)
-
-    def test__source_without_a_transformer__still_converts(self) -> None:
-        """`fit_from_preprocessed` never sets `date_transformer_`, exactly like the
-        pre-existing `ordinal_encoder_` guard.
-        """
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        out = convert_dates(X, self._Source(categorical_features_indices=None))
-        assert pd.api.types.is_numeric_dtype(out["date"])
-
-    def test__source_without_a_transformer__honours_declared_categoricals(
-        self,
-    ) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        out = convert_dates(X, self._Source(categorical_features_indices=[1]))
-        assert out is X
-
-    def test__source_with_a_fitted_transformer__uses_it(self) -> None:
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-        source = self._Source(
-            date_transformer_=DateTransformer(categorical_indices=[1]),
-            categorical_features_indices=None,
-        )
-        assert convert_dates(X, source) is X
+        assert NumericalDateTransformer().transform(X) is X
 
 
 class TestConvertedDateClassification:
     """How a converted date column is classified by `detect_feature_modalities`.
 
-    Nothing expands a date into calendar features yet, so it arrives at detection
-    as the plain number `DateTransformer` made of it, and is classified like any
-    other number.
+    Detection only ever sees the conversion's output, so a date read this way
+    arrives as the plain number the transformer made of it, and is classified
+    like any other number.
     """
 
     n_rows = 200
@@ -435,7 +270,7 @@ class TestConvertedDateClassification:
 
     def _detect(self, X: pd.DataFrame) -> FeatureSchema:
         """Convert, then detect, in the order `fit` does it."""
-        converted = DateTransformer().fit_transform(X).X
+        converted = NumericalDateTransformer().fit_transform(X).X
         return detect_feature_modalities(
             X=converted.to_numpy(dtype=object),
             feature_names=list(X.columns),
@@ -564,80 +399,3 @@ def test__fit_with_period_or_duration_column__no_longer_crashes(
         predictions = model.predict(X)
 
     assert len(predictions) == n
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_transform_dates__expands_the_date_column(
-    estimator_cls: type,
-) -> None:
-    """`TRANSFORM_DATES` reaches the transformer, and the wider frame survives
-    the whole fit/predict path: the schema describes the calendar features, and
-    the date warning is gone since the column is no longer one plain number.
-    """
-    n = 150
-    rng = np.random.default_rng(seed=42)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="37h"),
-        }
-    )
-    y = (
-        rng.integers(0, 2, size=n)
-        if estimator_cls is TabPFNClassifier
-        else rng.normal(size=n)
-    )
-
-    model = estimator_cls(
-        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
-    )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", UserWarning)
-        model.fit(X, y)
-    predictions = model.predict(X)
-
-    names = [feature.name for feature in model.inferred_feature_schema_.features]
-    assert len(names) > X.shape[1]
-    assert any(name.endswith("signed_on_year") for name in names)
-    assert any(name.endswith("signed_on_weekday_circular_0") for name in names)
-    assert len(predictions) == n
-
-
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__fit_with_transform_dates__reports_the_caller_s_own_columns(
-    estimator_cls: type,
-) -> None:
-    """Expansion widens the frame internally, which must not leak into the
-    sklearn attributes: they describe what the caller passed, so the error a
-    caller gets for the wrong columns names their columns, not ours.
-    """
-    n = 150
-    rng = np.random.default_rng(seed=42)
-    X = pd.DataFrame(
-        {
-            "num": rng.normal(size=n),
-            "signed_on": pd.date_range("2020-01-01", periods=n, freq="37h"),
-        }
-    )
-    y = (
-        rng.integers(0, 2, size=n)
-        if estimator_cls is TabPFNClassifier
-        else rng.normal(size=n)
-    )
-
-    model = estimator_cls(
-        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
-    ).fit(X, y)
-
-    assert model.n_features_in_ == 2
-    assert list(model.feature_names_in_) == ["num", "signed_on"]
-    # The schema is the internal, expanded view, and stays that way.
-    assert len(model.inferred_feature_schema_.features) > 2
-
-    with pytest.raises(TabPFNValidationError, match="feature names should match"):
-        model.predict(X.assign(extra=1.0))
-    with pytest.raises(TabPFNValidationError, match="feature names should match"):
-        model.predict(X.rename(columns={"num": "nums"}))
-    # Positional input has no names to check, only a width.
-    with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
-        model.predict(np.zeros((10, 3)))

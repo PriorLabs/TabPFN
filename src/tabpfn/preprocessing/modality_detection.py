@@ -101,7 +101,7 @@ def _warn_on_text(
     """Warn about any free-text columns.
 
     A converted date is numeric by the time detection runs (see
-    `date_encoding.DateTransformer`), so it is never reported here.
+    `datetimes.DateTransformer`), so it is never reported here.
 
     Args:
         feature_schema: The schema produced by detection.

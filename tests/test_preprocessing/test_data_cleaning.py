@@ -1177,7 +1177,7 @@ def test__classifier_fit__native_datetime_column__no_longer_crashes() -> None:
     no dtype that unifies `datetime64` with a numeric or string column.
 
     Fixed by `DateTransformer` (see
-    `tests/test_preprocessing/test_date_encoding.py`), which converts such a
+    `tests/test_preprocessing/test_datetimes/`), which converts such a
     column to numeric (nanoseconds since the epoch) before validation runs, so
     it unifies fine with the rest of the frame.
     """
