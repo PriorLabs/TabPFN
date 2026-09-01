@@ -53,10 +53,8 @@ def capture_input_shape(
     safe on an `X` still holding a genuine `datetime64` column, unlike the rest
     of validation.
 
-    An `X` whose column count cannot be determined at all (e.g. a 1D array) is
-    left unchecked rather than rejected here: value validation downstream has
-    sklearn's own clearer message for that ("Reshape your data ..."), and it is
-    the one that should fire.
+    An `X` with no determinable column count (e.g. a 1D array) is left for value
+    validation downstream, whose "Reshape your data ..." is the better message.
     """
     try:
         _check_feature_names(estimator, X, reset=reset)
@@ -312,7 +310,7 @@ def _validate_num_samples_and_features(
         )
     if num_features > max_num_features:
         raise TabPFNValidationError(
-            f"Number of features `{num_features}` in the input data is greater than "
+            f"Number of features `{num_features}` reaching the model is greater than "
             f"the maximum number of features `{max_num_features}` officially "
             "supported by the TabPFN model. Set `ignore_pretraining_limits=True` "
             "to override this error!",

@@ -86,12 +86,25 @@ class TestExpansion:
 
         assert not [w for w in caught if "hold dates" in str(w.message)]
 
+    def test__refit_on_a_frame_with_nothing_to_expand__forgets_the_last_fit(
+        self,
+    ) -> None:
+        """Otherwise `transform` reapplies encoders for the previous input's
+        columns, and comes out a width the new fit never produced.
+        """
+        transformer = SkrubDateTransformer()
+        transformer.fit_transform(_frame(pd.date_range("2020-01-01", periods=3)))
+        transformer.fit_transform(np.zeros((3, 2)))
+
+        assert transformer._expanded_indices == []
+        assert transformer.transform(_frame([1.0, 2.0, 3.0])).shape[1] == 2
+
     def test__expanded_indices__reports_what_was_expanded(self) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
         transformer = self._expander()
-        assert transformer.expanded_indices == []
+        assert transformer._expanded_indices == []
         transformer.fit_transform(X)
-        assert transformer.expanded_indices == [1]
+        assert transformer._expanded_indices == [1]
 
     def test__generated_name_colliding_with_an_existing_column__is_deduped(
         self,

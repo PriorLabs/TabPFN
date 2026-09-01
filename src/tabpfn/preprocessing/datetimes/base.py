@@ -4,15 +4,9 @@
 
 sklearn's array machinery cannot hold a `datetime64` column beside a numeric one
 in one array (no common dtype exists), so a temporal column has to stop looking
-like one before `check_array`/`check_X_y` run. A `DateTransformer` is where that
-happens, and because it runs before detection, `detect_feature_modalities` only
-ever sees the result and never learns a column was a date at all.
-
-Which transformer runs is the whole of the difference between reading a date as
-one number and expanding it into a calendar (`numerical.py`, `skrub_expansion.py`).
-A duration (`timedelta64`) is not part of that choice: it always becomes its
-length in seconds, a quantity with no calendar in it either way, so it is
-converted here.
+like one before `check_array`/`check_X_y` run, which is why this tier exists at
+all. A duration (`timedelta64`) is not part of the numeric-or-calendar choice:
+it always becomes its length in seconds, so it is converted here.
 """
 
 from __future__ import annotations
@@ -23,13 +17,13 @@ from typing import TYPE_CHECKING
 
 import pandas as pd
 
-from tabpfn.preprocessing.datetimes.dtypes import (
+from tabpfn.preprocessing.datetimes.columns import (
     as_timestamp,
     is_instant_dtype,
+    replace_columns_positionally,
     to_nanoseconds,
     to_seconds,
 )
-from tabpfn.preprocessing.datetimes.frames import replace_columns_positionally
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -88,6 +82,7 @@ class DateTransformer(abc.ABC):
             The conversion, including what the caller has to pass on to
             `detect_feature_modalities`.
         """
+        self._reset()
         if not isinstance(X, pd.DataFrame):
             return DateConversion(
                 X=X,
@@ -95,6 +90,13 @@ class DateTransformer(abc.ABC):
                 categorical_indices=self._categorical_indices,
             )
         return self._fit_transform_frame(X)
+
+    def _reset(self) -> None:  # noqa: B027  optional hook, not every subclass fits
+        """Forget what an earlier fit recorded, before this one records anything.
+
+        Here rather than in `_fit_transform_frame`, so that refitting on an input
+        with no columns to convert still clears the last fit.
+        """
 
     def transform(self, X: XType) -> XType:
         """Reapply the conversion `fit_transform` decided on, silently.
@@ -146,7 +148,7 @@ class DateTransformer(abc.ABC):
         replacements.update({i: to_seconds(X.iloc[:, i]) for i in durations})
         return replace_columns_positionally(X, replacements)
 
-    def _conversion(self, converted: pd.DataFrame) -> DateConversion:
+    def _unexpanded(self, converted: pd.DataFrame) -> DateConversion:
         """The result for a frame whose columns are still the caller's own."""
         return DateConversion(
             X=converted,

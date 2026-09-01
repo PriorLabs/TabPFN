@@ -13,8 +13,11 @@ from skrub import DatetimeEncoder
 
 from tabpfn.preprocessing.datamodel import make_names_unique
 from tabpfn.preprocessing.datetimes.base import DateConversion, DateTransformer
-from tabpfn.preprocessing.datetimes.dtypes import as_timestamp, is_instant_dtype
-from tabpfn.preprocessing.datetimes.frames import drop_and_append
+from tabpfn.preprocessing.datetimes.columns import (
+    as_timestamp,
+    drop_and_append,
+    is_instant_dtype,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -47,8 +50,11 @@ class SkrubDateTransformer(DateTransformer):
         super().__init__(categorical_indices=categorical_indices)
         self._fitted: dict[int, FittedDateColumn] = {}
 
+    def _reset(self) -> None:
+        self._fitted = {}
+
     @property
-    def expanded_indices(self) -> list[int]:
+    def _expanded_indices(self) -> list[int]:
         """Input positions that were expanded into calendar features, ascending.
 
         Empty before `fit_transform` runs, and whenever it expanded nothing.
@@ -62,11 +68,10 @@ class SkrubDateTransformer(DateTransformer):
         resolved feature names and the declared categorical indices moved to
         their new positions: everything downstream indexes the wider frame.
         """
-        self._fitted = {}
         to_expand, durations = self._temporal_positions(X)
         converted = self._convert_in_place(X, instants=[], durations=durations)
         if not to_expand:
-            return self._conversion(converted)
+            return self._unexpanded(converted)
 
         # `drop_and_append` concatenates the kept columns against skrub's own
         # (freshly default-indexed) output, so the row index has to be the
@@ -101,7 +106,7 @@ class SkrubDateTransformer(DateTransformer):
         position that held something else at fit has no encoder to go through,
         so it falls back to the plain number the base class makes of it.
         """
-        to_expand = self.expanded_indices
+        to_expand = self._expanded_indices
         instants, durations = self._temporal_positions(X)
         converted = self._convert_in_place(
             X,
@@ -111,7 +116,8 @@ class SkrubDateTransformer(DateTransformer):
         if not to_expand:
             return converted
 
-        # See the identical comment in `_fit_transform_frame`.
+        # `drop_and_append` aligns the kept columns against skrub's own
+        # default-indexed output by position, which needs the default index.
         converted = converted.reset_index(drop=True)
         blocks = [
             self._apply_one(X.iloc[:, position], self._fitted[position])

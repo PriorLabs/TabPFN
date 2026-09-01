@@ -6,7 +6,7 @@ A point in time (`datetime64`, tz-aware, or `period`) either becomes one plain
 number (`NumericalDateTransformer`) or is expanded into calendar features
 (`SkrubDateTransformer`), decided by `TRANSFORM_DATES` through
 `make_date_transformer`. A duration (`timedelta64`) always becomes its length in
-seconds. See `base.py` for why any of it has to happen this early.
+seconds. See `base.py` for why any of it has to happen before validation.
 """
 
 from __future__ import annotations
@@ -15,10 +15,7 @@ from typing import TYPE_CHECKING
 
 from tabpfn.preprocessing.datetimes.base import DateConversion, DateTransformer
 from tabpfn.preprocessing.datetimes.numerical import NumericalDateTransformer
-from tabpfn.preprocessing.datetimes.skrub_expansion import (
-    FittedDateColumn,
-    SkrubDateTransformer,
-)
+from tabpfn.preprocessing.datetimes.skrub_expansion import SkrubDateTransformer
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,7 +25,6 @@ if TYPE_CHECKING:
 __all__ = [
     "DateConversion",
     "DateTransformer",
-    "FittedDateColumn",
     "NumericalDateTransformer",
     "SkrubDateTransformer",
     "convert_dates",

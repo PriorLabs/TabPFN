@@ -36,8 +36,9 @@ def _warn_on_dates(column_names: Sequence[str]) -> None:
         "instead.",
         UserWarning,
         # stacklevel=7 reaches the `estimator.fit(X, y)` call site, counting the
-        # base class's `fit_transform` as well as this subclass's; pinned by the
-        # `warning.filename` asserts in the tests.
+        # base class's `fit_transform` as well as this subclass's body. Any new
+        # frame between the two breaks it; the `warning.filename` assert in
+        # `test_numerical.py` is what catches that.
         stacklevel=7,
     )
 
@@ -61,7 +62,7 @@ class NumericalDateTransformer(DateTransformer):
         instants, durations = self._temporal_positions(X)
         converted = self._convert_in_place(X, instants=instants, durations=durations)
         _warn_on_dates([str(X.columns[i]) for i in instants])
-        return self._conversion(converted)
+        return self._unexpanded(converted)
 
     def _transform_frame(self, X: pd.DataFrame) -> XType:
         instants, durations = self._temporal_positions(X)
