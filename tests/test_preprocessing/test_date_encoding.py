@@ -1,6 +1,6 @@
 #  Copyright (c) Prior Labs GmbH 2026.
 
-"""Tests for `resolve_date_columns`, which resolves every temporal column
+"""Tests for `DateTimeExpander`, which resolves every temporal column
 (expand or render to text) before any validation runs.
 """
 
@@ -11,13 +11,15 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+import torch
+from sklearn.exceptions import NotFittedError
 
 import tabpfn.base
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import get_embeddings
 from tabpfn.preprocessing import date_encoding
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.date_encoding import resolve_date_columns
+from tabpfn.preprocessing.date_encoding import DateTimeExpander
 
 N = 20
 
@@ -39,34 +41,40 @@ def _classification_or_regression_target(
 
 
 # --------------------------------------------------------------------------
-# resolve_date_columns: basic shape / no-op behavior
+# DateTimeExpander: basic shape / no-op behavior
 # --------------------------------------------------------------------------
 
 
 def test__no_temporal_columns__is_a_noop() -> None:
     X = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
-    resolution = resolve_date_columns(X)
-    assert resolution.X is X
-    assert resolution.fitted == {}
-    assert resolution.old_to_new_index == {0: 0, 1: 1}
+    expander = DateTimeExpander().fit(X)
+    assert expander.transform(X) is X
+    assert expander.encoders_ == {}
+    assert expander.output_indices_for([0, 1]) == [0, 1]
 
 
 def test__not_a_dataframe__is_a_noop() -> None:
-    """Regression: `old_to_new_index` must still be the identity mapping here,
-    not empty -- a declared `categorical_features_indices` on a plain-array
-    fit needs it to look itself up.
+    """Regression: `output_indices_for` must still answer the identity here --
+    a declared `categorical_features_indices` on a plain-array fit needs to
+    look itself up.
     """
     X = np.array([[1.0, 2.0]])
-    resolution = resolve_date_columns(X)
-    assert resolution.X is X
-    assert resolution.fitted == {}
-    assert resolution.old_to_new_index == {0: 0, 1: 1}
+    expander = DateTimeExpander().fit(X)
+    assert expander.transform(X) is X
+    assert expander.encoders_ == {}
+    assert expander.output_indices_for([0, 1]) == [0, 1]
+
+
+def test__transform__before_fit__raises() -> None:
+    """It is a transformer: nothing is resolved before the decision is made."""
+    with pytest.raises(NotFittedError):
+        DateTimeExpander().transform(_numeric_and_date_frame(_dates()))
 
 
 def test__input_frame_is_not_mutated() -> None:
     X = _numeric_and_date_frame(_dates())
     before = X.dtypes.tolist()
-    resolve_date_columns(X, transform_dates=True)
+    DateTimeExpander(transform_dates=True).fit(X).transform(X)
     assert X.dtypes.tolist() == before
 
 
@@ -74,7 +82,7 @@ def test__values_of_the_input_frame_are_not_written_through() -> None:
     """The copy is shallow, so this pins that no value is written through it."""
     X = _numeric_and_date_frame(_dates())
     before = X.copy(deep=True)
-    resolve_date_columns(X, transform_dates=True)
+    DateTimeExpander(transform_dates=True).fit(X).transform(X)
     pd.testing.assert_frame_equal(X, before)
 
 
@@ -91,11 +99,12 @@ def test__duplicate_column_labels__are_replaced_by_position() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        resolution = resolve_date_columns(X)  # transform_dates=False: text-render
+        # transform_dates=False: text-render
+        out = DateTimeExpander().fit(X).transform(X)
 
-    assert resolution.X.iloc[0, 1] == "2020-01-01"
-    assert resolution.X.iloc[:, 0].tolist() == [1.0, 2.0, 3.0]
-    assert list(resolution.X.columns) == ["same", "same"]
+    assert out.iloc[0, 1] == "2020-01-01"
+    assert out.iloc[:, 0].tolist() == [1.0, 2.0, 3.0]
+    assert list(out.columns) == ["same", "same"]
 
 
 def test__non_unique_index__is_preserved() -> None:
@@ -106,9 +115,9 @@ def test__non_unique_index__is_preserved() -> None:
     )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        resolution = resolve_date_columns(X)
-    assert list(resolution.X.index) == [7, 7, 2]
-    assert resolution.X.iloc[0, 1] == "2020-01-01"
+        out = DateTimeExpander().fit(X).transform(X)
+    assert list(out.index) == [7, 7, 2]
+    assert out.iloc[0, 1] == "2020-01-01"
 
 
 def test__rendering_twice__is_a_noop_the_second_time() -> None:
@@ -118,10 +127,10 @@ def test__rendering_twice__is_a_noop_the_second_time() -> None:
     X = pd.DataFrame({"d": pd.date_range("2020-01-01", periods=3)})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        once = resolve_date_columns(X)
-        twice = resolve_date_columns(once.X)
-    assert twice.X is once.X
-    assert twice.fitted == {}
+        expander = DateTimeExpander().fit(X)
+        once = expander.transform(X)
+        twice = expander.transform(once)
+    assert twice is once
 
 
 # --------------------------------------------------------------------------
@@ -150,11 +159,13 @@ def test__date_columns__render_as_text_when_not_transformed(
     label: str, column: pd.Index, expected_first: str
 ) -> None:
     X = pd.DataFrame({"n": [1.0, 2.0, 3.0], "d": column})
+    expander = DateTimeExpander()
     with pytest.warns(UserWarning, match="hold dates"):
-        resolution = resolve_date_columns(X)
-    assert resolution.fitted == {}, label
-    assert resolution.X.iloc[0, 1] == expected_first, label
-    assert resolution.X.to_numpy(dtype=object).shape == (3, 2)
+        expander.fit(X)
+    out = expander.transform(X)
+    assert expander.encoders_ == {}, label
+    assert out.iloc[0, 1] == expected_first, label
+    assert out.to_numpy(dtype=object).shape == (3, 2)
 
 
 def test__missing_stays_missing__not_the_string_nat() -> None:
@@ -164,12 +175,14 @@ def test__missing_stays_missing__not_the_string_nat() -> None:
     object dtype, `nan` under the pandas 3 `str` dtype -- so this asserts
     that it reads as missing, not that it is any particular one.
     """
-    column = pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))
+    X = pd.DataFrame(
+        {"d": pd.Series(pd.to_datetime(["2020-01-01", None, "2020-01-03"]))}
+    )
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        resolution = resolve_date_columns(pd.DataFrame({"d": column}))
-    assert resolution.X["d"].isna().tolist() == [False, True, False]
-    assert not (resolution.X["d"] == "NaT").any()
+        out = DateTimeExpander().fit(X).transform(X)
+    assert out["d"].isna().tolist() == [False, True, False]
+    assert not (out["d"] == "NaT").any()
 
 
 def test__timedelta__becomes_seconds_and_is_not_called_a_date() -> None:
@@ -179,9 +192,10 @@ def test__timedelta__becomes_seconds_and_is_not_called_a_date() -> None:
     X = pd.DataFrame({"d": pd.to_timedelta([1, 2, 3], unit="D")})
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        resolution = resolve_date_columns(X, transform_dates=True)
-    assert resolution.fitted == {}
-    assert resolution.X["d"].tolist() == [86400.0, 172800.0, 259200.0]
+        expander = DateTimeExpander(transform_dates=True).fit(X)
+        out = expander.transform(X)
+    assert expander.encoders_ == {}
+    assert out["d"].tolist() == [86400.0, 172800.0, 259200.0]
 
 
 class TestWarnOnDatesHeldAsText:
@@ -201,6 +215,22 @@ class TestWarnOnDatesHeldAsText:
             date_encoding._warn_on_dates_held_as_text([])
 
 
+def test__the_warning_belongs_to_fit__transform_is_silent() -> None:
+    """Which columns are read as text is settled once, by `fit`, so that is
+    where it is reported -- every `transform`, at fit time and at predict time
+    alike, is silent.
+    """
+    X = _numeric_and_date_frame(_dates())
+    expander = DateTimeExpander()
+    with pytest.warns(UserWarning, match="hold dates"):
+        expander.fit(X)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = expander.transform(X)
+        expander.transform(X)
+    assert out.iloc[0, 1] == "2020-01-01"
+
+
 def test__declared_categorical_date_column__is_not_reported_in_warning() -> None:
     """With `transform_dates=False`, every date column is text-rendered
     regardless of the declaration -- but only the undeclared one is named in
@@ -214,16 +244,17 @@ def test__declared_categorical_date_column__is_not_reported_in_warning() -> None
             "undeclared": _dates(),
         }
     )
+    expander = DateTimeExpander(categorical_features_indices=[1])
     with pytest.warns(UserWarning, match="hold dates") as record:
-        resolution = resolve_date_columns(X, categorical_features_indices=[1])
+        expander.fit(X)
     message = str(record[0].message)
     assert "'undeclared'" in message
     assert "'declared'" not in message
-    assert resolution.fitted == {}
+    assert expander.encoders_ == {}
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        resolve_date_columns(X, categorical_features_indices=[1, 2])
+        DateTimeExpander(categorical_features_indices=[1, 2]).fit(X)
 
 
 # --------------------------------------------------------------------------
@@ -236,17 +267,18 @@ def test__fit__expands_and_removes_the_raw_column() -> None:
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        resolution = resolve_date_columns(X, transform_dates=True)
+        expander = DateTimeExpander(transform_dates=True).fit(X)
+        out = expander.transform(X)
 
-    assert list(resolution.fitted) == [1]
-    assert resolution.old_to_new_index == {0: 0}
-    output_names = resolution.fitted[1].output_names
-    assert "signed_on" not in resolution.X.columns
+    assert expander.expanded_input_indices == [1]
+    assert expander.output_indices_for([0]) == [0]
+    output_names = expander.output_names_[1]
+    assert "signed_on" not in out.columns
     assert all(name.startswith("signed_on_") for name in output_names)
-    assert resolution.X.shape == (N, 1 + len(output_names))
+    assert out.shape == (N, 1 + len(output_names))
     # Every expanded feature is real-valued for a fully populated date column.
-    assert np.isfinite(resolution.X[output_names].to_numpy()).all()
-    assert resolution.expanded_new_indices == list(range(1, 1 + len(output_names)))
+    assert np.isfinite(out[output_names].to_numpy()).all()
+    assert expander.expanded_output_indices == list(range(1, 1 + len(output_names)))
 
 
 def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
@@ -255,8 +287,8 @@ def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
     once, later, in `build_input_feature_names`.
     """
     X = _numeric_and_date_frame(_dates())
-    resolution = resolve_date_columns(X, transform_dates=True)
-    assert resolution.fitted[1].output_names == [
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    assert expander.output_names_[1] == [
         "signed_on_year",
         "signed_on_total_seconds",
         "signed_on_day_of_year",
@@ -271,12 +303,13 @@ def test__fit__output_names_are_skrubs_own_descriptive_names() -> None:
 
 def test__fit__multiple_date_columns__each_expand() -> None:
     X = pd.DataFrame({"a": _dates(), "b": _dates()})
-    resolution = resolve_date_columns(X, transform_dates=True)
-    assert list(resolution.fitted) == [0, 1]
-    assert resolution.old_to_new_index == {}
-    assert resolution.X.shape[1] == len(resolution.fitted[0].output_names) + len(
-        resolution.fitted[1].output_names
-    )
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    out = expander.transform(X)
+    assert expander.expanded_input_indices == [0, 1]
+    total_width = len(expander.output_names_[0]) + len(expander.output_names_[1])
+    assert out.shape[1] == total_width
+    # Nothing is kept, so the expanded block starts at position 0.
+    assert expander.expanded_output_indices == list(range(total_width))
 
 
 def test__declared_categorical_date__is_not_expanded_even_with_transform_dates() -> (
@@ -286,26 +319,27 @@ def test__declared_categorical_date__is_not_expanded_even_with_transform_dates()
     regardless of `transform_dates`.
     """
     X = _numeric_and_date_frame(_dates())
-    resolution = resolve_date_columns(
-        X, transform_dates=True, categorical_features_indices=[1]
-    )
-    assert resolution.fitted == {}
-    assert resolution.X.iloc[0, 1] == "2020-01-01"
+    expander = DateTimeExpander(
+        transform_dates=True, categorical_features_indices=[1]
+    ).fit(X)
+    assert expander.encoders_ == {}
+    assert expander.transform(X).iloc[0, 1] == "2020-01-01"
 
 
-def test__merged_feature_names__splices_kept_and_expanded_names() -> None:
+def test__output_feature_names__splices_kept_and_expanded_names() -> None:
     X = _numeric_and_date_frame(_dates())
-    resolution = resolve_date_columns(X, transform_dates=True)
-    merged = resolution.merged_feature_names(["num", "signed_on"])
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    merged = expander.output_feature_names(["num", "signed_on"])
+    assert merged is not None
     assert merged[0] == "num"
-    assert merged[1:] == resolution.fitted[1].output_names
-    assert len(merged) == resolution.X.shape[1]
+    assert merged[1:] == expander.output_names_[1]
+    assert len(merged) == expander.transform(X).shape[1]
 
 
-def test__merged_feature_names__none_in_none_out() -> None:
+def test__output_feature_names__none_in_none_out() -> None:
     X = _numeric_and_date_frame(_dates())
-    resolution = resolve_date_columns(X, transform_dates=True)
-    assert resolution.merged_feature_names(None) is None
+    expander = DateTimeExpander(transform_dates=True).fit(X)
+    assert expander.output_feature_names(None) is None
 
 
 # --------------------------------------------------------------------------
@@ -315,16 +349,33 @@ def test__merged_feature_names__none_in_none_out() -> None:
 
 def test__predict__reapplies_fitted_encoder_positionally() -> None:
     X_fit = _numeric_and_date_frame(_dates())
-    fit_resolution = resolve_date_columns(X_fit, transform_dates=True)
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
+    fit_out = expander.transform(X_fit)
 
-    X_test = _numeric_and_date_frame(_dates())
-    test_resolution = resolve_date_columns(X_test, fitted=fit_resolution.fitted)
+    test_out = expander.transform(_numeric_and_date_frame(_dates()))
 
-    output_names = fit_resolution.fitted[1].output_names
+    output_names = expander.output_names_[1]
     np.testing.assert_array_equal(
-        test_resolution.X[output_names].to_numpy(),
-        fit_resolution.X[output_names].to_numpy(),
+        test_out[output_names].to_numpy(), fit_out[output_names].to_numpy()
     )
+
+
+def test__predict__differently_labelled_date_column__keeps_the_fit_time_names() -> None:
+    """Skrub's `DatetimeEncoder` names its outputs after the label of the
+    column it is handed, and rewrites its own `all_outputs_` on every
+    transform. The expander snapshots those names at fit, so a predict frame
+    that labels the column differently still produces the fitted layout
+    rather than silently renaming the fitted features.
+    """
+    X_fit = _numeric_and_date_frame(_dates())
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
+    fitted_names = list(expander.output_names_[1])
+
+    X_test = _numeric_and_date_frame(_dates()).rename(columns={"signed_on": "renamed"})
+    out = expander.transform(X_test)
+
+    assert list(out.columns) == ["num", *fitted_names]
+    assert expander.output_names_[1] == fitted_names
 
 
 def test__predict__no_native_value_for_a_fitted_date_column__becomes_nan() -> None:
@@ -335,13 +386,11 @@ def test__predict__no_native_value_for_a_fitted_date_column__becomes_nan() -> No
     rather than a best-effort parse of whatever is actually sitting there.
     """
     X_fit = _numeric_and_date_frame(_dates())
-    fit_resolution = resolve_date_columns(X_fit, transform_dates=True)
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
 
-    X_test = _numeric_and_date_frame(["whatever, never inspected"] * N)
-    test_resolution = resolve_date_columns(X_test, fitted=fit_resolution.fitted)
+    out = expander.transform(_numeric_and_date_frame(["whatever, never inspected"] * N))
 
-    output_names = fit_resolution.fitted[1].output_names
-    assert np.isnan(test_resolution.X[output_names].to_numpy()).all()
+    assert np.isnan(out[expander.output_names_[1]].to_numpy()).all()
 
 
 def test__predict__native_value_has_a_missing_row__only_that_row_becomes_nan() -> None:
@@ -349,35 +398,16 @@ def test__predict__native_value_has_a_missing_row__only_that_row_becomes_nan() -
     degrades to NaN and the rest of the column is unaffected.
     """
     X_fit = _numeric_and_date_frame(_dates())
-    fit_resolution = resolve_date_columns(X_fit, transform_dates=True)
+    expander = DateTimeExpander(transform_dates=True).fit(X_fit)
 
     dates_with_a_gap = _dates()
     dates_with_a_gap.iloc[3] = pd.NaT
-    X_test = _numeric_and_date_frame(dates_with_a_gap)
-    test_resolution = resolve_date_columns(X_test, fitted=fit_resolution.fitted)
+    out = expander.transform(_numeric_and_date_frame(dates_with_a_gap))
 
-    output_names = fit_resolution.fitted[1].output_names
-    values = test_resolution.X[output_names].to_numpy()
+    values = out[expander.output_names_[1]].to_numpy()
     assert np.isnan(values[3]).all()
     other_rows = [i for i in range(N) if i != 3]
     assert np.isfinite(values[other_rows]).all()
-
-
-def test__predict__fitted_attribute_missing__is_treated_as_nothing_to_expand() -> None:
-    """`fitted_date_columns_of` answers `{}` for a source that never set
-    `date_expander_` -- treated as predict-time semantics with nothing
-    fitted (text-render only, no warning -- that already fired, if at all,
-    at fit time), never as fit-time semantics (fit new encoders, and warn
-    again).
-    """
-    X = _numeric_and_date_frame(_dates())
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        resolution = resolve_date_columns(
-            X, fitted=date_encoding.fitted_date_columns_of(object())
-        )
-    assert resolution.fitted == {}
-    assert resolution.X.iloc[0, 1] == "2020-01-01"
 
 
 # --------------------------------------------------------------------------
@@ -437,7 +467,7 @@ def test__fit_predict__transform_dates__expands_date_and_predicts(
         model.fit(X, y)
 
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
-    assert 1 in model.date_expander_.expanded_indices  # "signed_on" is 2nd column
+    assert 1 in model.date_expander_.expanded_input_indices  # "signed_on" is 2nd column
 
     if estimator_cls is TabPFNClassifier:
         out = model.predict_proba(X)
@@ -499,35 +529,27 @@ def test__fit__declared_categorical_date__transform_dates_has_no_effect() -> Non
     )
     model.fit(X, y)
 
-    assert model.date_expander_.expanded_indices == []
+    assert model.date_expander_.expanded_input_indices == []
     assert model.inferred_feature_schema_.indices_for(FeatureModality.DATE) == []
     out = model.predict_proba(X)
     assert np.isfinite(out).all()
 
 
-@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
-def test__predict__date_expander_attribute_missing__does_not_crash(
-    estimator_cls: type,
-) -> None:
-    """A path that skips `_initialize_dataset_preprocessing` (e.g.
-    `fit_from_preprocessed`) never sets `date_expander_` at all -- predict
-    must not crash on that, the same way it already tolerates a missing
-    `ordinal_encoder_`.
+def test__fit_with_differentiable_input__leaves_a_usable_expander() -> None:
+    """The differentiable fit path sets `date_expander_` too: `predict` is
+    reachable from it, and transforms through the expander unconditionally --
+    a tensor fit simply has nothing to expand.
     """
     n = 60
     rng = np.random.default_rng(0)
-    X = pd.DataFrame({"num": rng.normal(size=n)})
-    y = _classification_or_regression_target(estimator_cls, rng, n)
+    X = torch.as_tensor(rng.normal(size=(n, 3)), dtype=torch.float32)
+    y = torch.as_tensor(rng.normal(size=n), dtype=torch.float32)
 
-    model = estimator_cls(n_estimators=1, device="cpu")
-    model.fit(X, y)
-    del model.date_expander_
+    model = TabPFNRegressor(n_estimators=1, device="cpu", differentiable_input=True)
+    model.fit_with_differentiable_input(X, y)
 
-    if estimator_cls is TabPFNClassifier:
-        out = model.predict_proba(X)
-    else:
-        out = model.predict(X)
-    assert np.isfinite(out).all()
+    assert model.date_expander_.encoders_ == {}
+    assert model.date_expander_.transform(X) is X
 
 
 def test__predict_proba_batched__transform_dates__reapplies_encoder_on_worker() -> None:

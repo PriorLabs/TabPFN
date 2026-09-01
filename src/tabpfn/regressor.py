@@ -84,11 +84,7 @@ from tabpfn.preprocessing.clean import (
     process_text_na_dataframe,
 )
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import (
-    FittedDateColumns,
-    fitted_date_columns_of,
-    resolve_date_columns,
-)
+from tabpfn.preprocessing.date_encoding import DateTimeExpander
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
@@ -105,9 +101,10 @@ from tabpfn.utils import (
     translate_probs_across_borders,
 )
 from tabpfn.validation import (
-    capture_input_shape,
+    check_input_shape_matches,
     ensure_compatible_fit_inputs_sklearn,
     ensure_compatible_predict_input_sklearn,
+    extract_input_shape,
     validate_dataset_size,
 )
 
@@ -239,8 +236,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
 
-    date_expander_: FittedDateColumns
-    """Expands `DATE`-modality columns into numbers, if `TRANSFORM_DATES` is on."""
+    date_expander_: DateTimeExpander
+    """Expands or text-renders every temporal column, before validation runs."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -823,6 +820,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         ]
         self.inferred_feature_schema_ = FeatureSchema(features=features)
         self.n_features_in_ = n_features
+        # A tensor holds no dates, so this is a fit with nothing to expand. Set
+        # so that `predict`, reachable from here, can transform through it
+        # unconditionally.
+        self.date_expander_ = DateTimeExpander().fit(X)
 
         preprocessor_configs = [PreprocessorConfig("none", differentiable=True)]
         self.n_estimators_ = scale_n_estimators_for_feature_coverage(
@@ -870,21 +871,24 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         """
         # feature_names_in_/n_features_in_ must describe what the caller
         # actually passed in, not TabPFN's internal (possibly wider,
-        # post-date-expansion) representation -- captured here, on the raw
-        # input, before date resolution runs.
-        capture_input_shape(X, estimator=self, reset=True)
+        # post-date-expansion) representation -- so they are read here, from
+        # the raw input, before date expansion runs. n_features_in_ is None
+        # only for an X whose column count can't be read at all (e.g. 1D),
+        # which the value validation below rejects with sklearn's message.
+        feature_names_in, n_features_in = extract_input_shape(X)
+        self.feature_names_in_ = feature_names_in
+        self.n_features_in_ = n_features_in
 
         # Expand or text-render every date column. Runs before the value
         # validation below: sklearn's array machinery cannot assemble a
         # `datetime64` column beside a numeric one into one array, so a
         # genuine datetime column would not survive that call otherwise.
-        resolution = resolve_date_columns(
-            X,
+        self.date_expander_ = DateTimeExpander(
             transform_dates=self.inference_config_.TRANSFORM_DATES,
             categorical_features_indices=self.categorical_features_indices or (),
-        )
+        ).fit(X)
         X, y = ensure_compatible_fit_inputs_sklearn(
-            resolution.X, y, estimator=self, ensure_y_numeric=True
+            self.date_expander_.transform(X), y, estimator=self, ensure_y_numeric=True
         )
         # Only reached once X/y are already sklearn-validated, proper arrays:
         # sparse/list/None/etc. inputs sklearn's own compatibility checks feed
@@ -903,14 +907,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=resolution.merged_feature_names(
-                getattr(self, "feature_names_in_", None)
+            feature_names=self.date_expander_.output_feature_names(feature_names_in),
+            provided_categorical_indices=self.date_expander_.output_indices_for(
+                self.categorical_features_indices or ()
             ),
-            provided_categorical_indices=[
-                resolution.old_to_new_index[i]
-                for i in (self.categorical_features_indices or ())
-            ],
-            provided_numerical_indices=resolution.expanded_new_indices,
+            provided_numerical_indices=self.date_expander_.expanded_output_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -923,7 +924,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
-        self.date_expander_ = FittedDateColumns(resolution.fitted)
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1042,6 +1042,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             batch_of_cat_indices=cat_ix,
             num_features=X_preprocessed[0].shape[1],
         )
+
+        # Preprocessed tensors hold no dates, so this is a fit with nothing to
+        # expand. Never overwritten: `predict_batched` calls this on a worker
+        # that already ran a real `fit`, whose expander must survive.
+        if not hasattr(self, "date_expander_"):
+            self.date_expander_ = DateTimeExpander().fit(X_preprocessed[0])
 
         self.n_estimators_ = len(configs[0])
         self.executor_ = InferenceEngineBatchedNoPreprocessing(
@@ -1320,9 +1326,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        capture_input_shape(X, estimator=self, reset=False)
-        resolution = resolve_date_columns(X, fitted=fitted_date_columns_of(self))
-        X = ensure_compatible_predict_input_sklearn(resolution.X, self)
+        check_input_shape_matches(X, estimator=self)
+        X = ensure_compatible_predict_input_sklearn(
+            self.date_expander_.transform(X), self
+        )
 
         check_is_fitted(self)
 
@@ -1486,12 +1493,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            capture_input_shape(X_holdout_NhF, estimator=tuning_regressor, reset=False)
-            holdout_resolution = resolve_date_columns(
-                X_holdout_NhF, fitted=fitted_date_columns_of(tuning_regressor)
-            )
+            check_input_shape_matches(X_holdout_NhF, estimator=tuning_regressor)
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
-                holdout_resolution.X, tuning_regressor
+                tuning_regressor.date_expander_.transform(X_holdout_NhF),
+                tuning_regressor,
             )
             logits_NhB = tuning_regressor._compute_aggregated_logits(X_holdout_NhF)
 
@@ -1518,14 +1523,14 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Shared by `predict` and `_maybe_calibrate_ensemble_temperature`.
 
-        `X` must already have passed date resolution
-        (`resolve_date_columns`) and `ensure_compatible_predict_input_sklearn`;
+        `X` must already have passed date expansion
+        (`DateTimeExpander.transform`) and `ensure_compatible_predict_input_sklearn`;
         the remaining dtype/NA preprocessing happens here. Constant-target
         models have no executor and must be routed to
         `_handle_constant_target` by the caller instead.
 
         Args:
-            X: The validated, already-date-resolved input data.
+            X: The validated, already-date-expanded input data.
 
         Returns:
             A `[n_samples, n_buckets]` tensor of log-probabilities over the
@@ -1757,12 +1762,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            capture_input_shape(X_test, estimator=worker, reset=False)
-            test_resolution = resolve_date_columns(
-                X_test, fitted=fitted_date_columns_of(worker)
-            )
+            check_input_shape_matches(X_test, estimator=worker)
             X_test = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
-                test_resolution.X, worker
+                worker.date_expander_.transform(X_test), worker
             )
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,

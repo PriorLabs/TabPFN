@@ -191,7 +191,7 @@ def _unsupported_array_dtype_error(dtype: Any) -> ValueError:
     if dtype.kind in STRING_DTYPE_KINDS:
         return ValueError(f"String dtypes are not supported. Got dtype: {dtype}")
     if dtype.kind in TEMPORAL_DTYPE_KINDS:
-        # `resolve_date_columns` (date_encoding.py) recasts these, but per
+        # `DateTimeExpander` (date_encoding.py) recasts these, but per
         # column and so only for a DataFrame; a bare temporal array never
         # passes through it. Say what to do about it rather than name the
         # dtype and stop.

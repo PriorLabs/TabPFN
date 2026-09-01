@@ -54,7 +54,7 @@ def detect_feature_modalities(
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
         provided_numerical_indices: Indices already known to be numerical --
-            e.g. the calendar features `resolve_date_columns` (date_encoding.py)
+            e.g. the calendar features `DateTimeExpander` (date_encoding.py)
             expanded a date column into, before this function ever ran. Tagged
             `NUMERICAL` outright, skipping the cardinality heuristic below:
             a low-cardinality calendar feature (e.g. `year`, in a dataset
@@ -160,7 +160,7 @@ def _detect_feature_modality(
     A date column never reaches here: `detect_feature_modalities` tags it
     `NUMERICAL` outright via `provided_numerical_indices` if it was expanded,
     or lets it fall through to this same heuristic as an ordinary string
-    otherwise (`resolve_date_columns` already rendered it to text).
+    otherwise (`DateTimeExpander` already rendered it to text).
     """
     # Early exit: once a prefix already clears every threshold below, the full
     # count would land in the same bucket, so skip scanning the rest.
@@ -225,7 +225,7 @@ def _classify_string_like_column(
     """Classify a string/categorical-dtype column as CATEGORICAL or TEXT.
 
     No content-based date guessing here: a column is only ever a date because
-    it arrived as a genuine datetime dtype, resolved by `resolve_date_columns`
+    it arrived as a genuine datetime dtype, resolved by `DateTimeExpander`
     (date_encoding.py) before this module ever runs. A string that merely
     looks like a date -- "2020-01-01" -- is just an ordinary string,
     classified by cardinality like any other.

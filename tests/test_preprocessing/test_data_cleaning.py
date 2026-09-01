@@ -30,8 +30,8 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     get_ordinal_encoder,
 )
 from tabpfn.validation import (
-    capture_input_shape,
     ensure_compatible_fit_inputs_sklearn,
+    extract_input_shape,
     original_target_name,
     validate_dataset_size,
 )
@@ -75,7 +75,7 @@ def _get_schema(
 
 
 class TestEnsureCompatibleFitInputsBasic:
-    """Tests for basic input handling: `capture_input_shape` +
+    """Tests for basic input handling: `extract_input_shape` +
     `ensure_compatible_fit_inputs_sklearn` + `original_target_name`, the
     pieces the old `ensure_compatible_fit_inputs` umbrella used to combine.
     """
@@ -88,24 +88,24 @@ class TestEnsureCompatibleFitInputsBasic:
         y = np.array([0, 1, 0])
 
         original_y_name = original_target_name(y)
-        capture_input_shape(X, estimator=classifier, reset=True)
+        feature_names_in, n_features_in = extract_input_shape(X)
         X, y = ensure_compatible_fit_inputs_sklearn(X, y, estimator=classifier)
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert classifier.n_features_in_ == 2
-        assert getattr(classifier, "feature_names_in_", None) is None
+        assert n_features_in == 2
+        # An array carries no names, so there are none to hand back.
+        assert feature_names_in is None
         assert original_y_name is None
 
-    def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier
-    ) -> None:
+    def test__ensure_compatible_fit_inputs__pandas_dataframe(self) -> None:
         """Test that pandas DataFrames preserve column names."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
 
-        capture_input_shape(X, estimator=classifier, reset=True)
+        feature_names_in, n_features_in = extract_input_shape(X)
 
-        assert list(classifier.feature_names_in_) == ["feature_a", "feature_b"]
+        assert list(feature_names_in) == ["feature_a", "feature_b"]
+        assert n_features_in == 2
 
     def test__ensure_compatible_fit_inputs__pandas_series_y(self) -> None:
         """Test that pandas Series y preserves its name."""
@@ -1124,7 +1124,7 @@ def test__classifier_fit__native_temporal_column__is_read_not_rejected(
 
     `validate_data` converts the whole frame to one numpy array, and numpy has
     no dtype that unifies `datetime64` with a numeric or string column, so the
-    frame could not even be assembled. `resolve_date_columns` (date_encoding.py)
+    frame could not even be assembled. `DateTimeExpander` (date_encoding.py)
     recasts the column before validation ever sees it.
     """
     n = 50

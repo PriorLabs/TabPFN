@@ -846,7 +846,7 @@ def test__string_column_that_looks_like_a_date__is_not_a_date() -> None:
     all) as free text.
 
     Detecting a genuine datetime dtype, and expanding or text-rendering it,
-    happens entirely upstream now (`resolve_date_columns`, date_encoding.py)
+    happens entirely upstream now (`DateTimeExpander`, date_encoding.py)
     -- `detect_feature_modalities` never learns a column was ever a date; see
     `tests/test_preprocessing/test_date_encoding.py` for that half.
     """
@@ -876,7 +876,7 @@ def test__string_column_that_looks_like_a_date__is_not_a_date() -> None:
 def test__provided_numerical_indices__forces_numerical_even_at_low_cardinality() -> (
     None
 ):
-    """A column `resolve_date_columns` already expanded (e.g. `year`, which
+    """A column `DateTimeExpander` already expanded (e.g. `year`, which
     can have few distinct values in a small dataset) must not be
     miscategorized by the generic cardinality heuristic below -- it is tagged
     `NUMERICAL` outright.

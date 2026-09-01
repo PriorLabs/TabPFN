@@ -37,17 +37,13 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes
 from tabpfn.preprocessing.datamodel import FeatureModality
-from tabpfn.preprocessing.date_encoding import (
-    fitted_date_columns_of,
-    resolve_date_columns,
-)
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
     infer_devices,
 )
 from tabpfn.validation import (
-    capture_input_shape,
+    check_input_shape_matches,
     ensure_compatible_predict_input_sklearn,
 )
 
@@ -518,9 +514,10 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
-    capture_input_shape(X, estimator=model, reset=False)
-    resolution = resolve_date_columns(X, fitted=fitted_date_columns_of(model))
-    X = ensure_compatible_predict_input_sklearn(resolution.X, model)
+    check_input_shape_matches(X, estimator=model)
+    X = ensure_compatible_predict_input_sklearn(
+        model.date_expander_.transform(X), model
+    )
     # Not model.categorical_features_indices: those are raw, pre-expansion
     # indices, and date expansion can shift every column after it. The
     # inferred schema already reflects the post-expansion layout, exactly
