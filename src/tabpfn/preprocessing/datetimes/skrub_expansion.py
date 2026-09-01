@@ -22,20 +22,17 @@ if TYPE_CHECKING:
     from tabpfn.constants import XType
 
 
-def _make_datetime_encoder() -> DatetimeEncoder:
-    """Build the encoder that turns one date column into calendar features.
+@dataclasses.dataclass
+class FittedDateColumn:
+    """One input column's fitted encoder, and the features it makes.
 
-    Returns:
-        An encoder producing the year, the day of year, the seconds since the
-        epoch, and the cyclical month, day and weekday pairs, plus the time of
-        day when the column carries one.
+    Attributes:
+        encoder: The encoder fitted on that column.
+        output_names: The names of its output features, in order.
     """
-    return DatetimeEncoder(
-        resolution="second",
-        add_weekday=True,
-        add_day_of_year=True,
-        periodic_encoding="circular",
-    )
+
+    encoder: DatetimeEncoder
+    output_names: list[str]
 
 
 class SkrubDateTransformer(DateTransformer):
@@ -43,28 +40,12 @@ class SkrubDateTransformer(DateTransformer):
 
     A year, a day of year, the seconds since the epoch, and cyclical month, day
     and weekday pairs, so a December and the December before it are near each
-    other rather than a year apart. This changes the column count, which is why
-    the conversion reports its resolved feature names and remapped categorical
-    indices: everything downstream indexes the wider frame.
-
-    What each column expands into is decided at fit time and frozen: skrub drops
-    the features a column cannot vary in, so a date-only column and one carrying
-    a time of day do not produce the same width, and `transform` reuses the
-    encoder rather than re-deciding. A duration is still converted to seconds,
-    and so is a point in time that appears at a position which held something
-    else at fit time -- there is no fitted encoder for it to go through.
+    other rather than a year apart.
     """
-
-    @dataclasses.dataclass
-    class _FittedColumn:
-        """One column's fitted encoder, and the names of the features it makes."""
-
-        encoder: DatetimeEncoder
-        output_names: list[str]
 
     def __init__(self, *, categorical_indices: Sequence[int] | None = None) -> None:
         super().__init__(categorical_indices=categorical_indices)
-        self._fitted: dict[int, SkrubDateTransformer._FittedColumn] = {}
+        self._fitted: dict[int, FittedDateColumn] = {}
 
     @property
     def expanded_indices(self) -> list[int]:
@@ -75,6 +56,12 @@ class SkrubDateTransformer(DateTransformer):
         return sorted(self._fitted)
 
     def _fit_transform_frame(self, X: pd.DataFrame) -> DateConversion:
+        """Expand every date, and say where the columns beside it ended up.
+
+        Expansion changes the column count, so the conversion carries the
+        resolved feature names and the declared categorical indices moved to
+        their new positions: everything downstream indexes the wider frame.
+        """
         self._fitted = {}
         to_expand, durations = self._temporal_positions(X)
         converted = self._convert_in_place(X, instants=[], durations=durations)
@@ -110,7 +97,9 @@ class SkrubDateTransformer(DateTransformer):
 
         A position expanded at fit time that no longer holds a point in time
         degrades to `NaN` calendar features, like any other missing value: there
-        is no attempt to parse whatever is sitting there instead.
+        is no attempt to parse whatever is sitting there instead. A date at a
+        position that held something else at fit has no encoder to go through,
+        so it falls back to the plain number the base class makes of it.
         """
         to_expand = self.expanded_indices
         instants, durations = self._temporal_positions(X)
@@ -143,32 +132,49 @@ class SkrubDateTransformer(DateTransformer):
         return [i - sum(1 for j in expanded if j < i) for i in indices]
 
     @staticmethod
+    def _make_encoder() -> DatetimeEncoder:
+        """Build the encoder one date column is expanded through.
+
+        Returns:
+            An encoder producing the year, the day of year, the seconds since the
+            epoch, and the cyclical month, day and weekday pairs, plus the time
+            of day when the column carries one.
+        """
+        return DatetimeEncoder(
+            resolution="second",
+            add_weekday=True,
+            add_day_of_year=True,
+            periodic_encoding="circular",
+        )
+
+    @staticmethod
     def _fit_one(
         column: pd.Series,
         existing_names: Sequence[str],
-    ) -> tuple[pd.DataFrame, SkrubDateTransformer._FittedColumn]:
+    ) -> tuple[pd.DataFrame, FittedDateColumn]:
         """Fit an encoder on one column, naming its output after that column.
 
         skrub names each feature after the column it came from (e.g.
         "signed_on_year"), which is kept as-is, deduplicated only against names
-        already in the frame.
+        already in the frame. How many features there are is settled here too:
+        skrub drops the ones a column cannot vary in, e.g. the time of day of a
+        date-only column, which is why `transform` reuses this encoder rather
+        than fitting a fresh one.
         """
-        encoder = _make_datetime_encoder()
+        encoder = SkrubDateTransformer._make_encoder()
         encoded = pd.DataFrame(encoder.fit_transform(column))
         output_names = make_names_unique(
             [str(name) for name in encoded.columns], existing=existing_names
         )
         return (
             encoded.set_axis(output_names, axis=1).reset_index(drop=True),
-            SkrubDateTransformer._FittedColumn(
-                encoder=encoder, output_names=output_names
-            ),
+            FittedDateColumn(encoder=encoder, output_names=output_names),
         )
 
     @staticmethod
     def _apply_one(
         column: pd.Series,
-        fitted: SkrubDateTransformer._FittedColumn,
+        fitted: FittedDateColumn,
     ) -> pd.DataFrame:
         """Reapply one fitted encoder, or produce its features as all-`NaN`."""
         if not is_instant_dtype(column.dtype):

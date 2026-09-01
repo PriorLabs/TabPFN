@@ -15,7 +15,10 @@ from typing import TYPE_CHECKING
 
 from tabpfn.preprocessing.datetimes.base import DateConversion, DateTransformer
 from tabpfn.preprocessing.datetimes.numerical import NumericalDateTransformer
-from tabpfn.preprocessing.datetimes.skrub_expansion import SkrubDateTransformer
+from tabpfn.preprocessing.datetimes.skrub_expansion import (
+    FittedDateColumn,
+    SkrubDateTransformer,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -25,6 +28,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DateConversion",
     "DateTransformer",
+    "FittedDateColumn",
     "NumericalDateTransformer",
     "SkrubDateTransformer",
     "convert_dates",
