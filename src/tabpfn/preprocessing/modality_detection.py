@@ -41,17 +41,13 @@ def resolve_datetime_columns(
     """Cast genuine `datetime64` columns to numeric, and report their indices.
 
     Must run before `ensure_compatible_fit_inputs`: a `datetime64` dtype has no
-    common numpy dtype with a plain numeric/bool/string column (only with
-    `object`), so `check_array`'s `np.result_type` over the raw column dtypes
-    crashes outright otherwise (a real, previously-unfixed bug -- see
-    `test__classifier_fit__native_datetime_column__no_longer_crashes`).
-    Casting unifies fine with any other numeric dtype, so validation proceeds
-    normally afterward.
+    common numpy dtype with a plain numeric/bool/string column, so
+    `check_array` crashes on it otherwise. Casting unifies fine with any other
+    numeric dtype.
 
     Returns the (possibly cast) `X` and the indices of the columns cast, so the
     caller can tag them `DATE` via `detect_feature_modalities`'s
-    `provided_date_indices`, instead of them silently reading as an ordinary
-    numeric column.
+    `provided_date_indices`.
     """
     date_indices = detect_datetime_columns(
         X, categorical_features_indices=categorical_indices
