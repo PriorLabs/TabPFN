@@ -1535,7 +1535,12 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         n_estimators = 0
         accumulated_logits: torch.Tensor | None = None
-        with handle_oom_errors(self.devices_, X, model_type="regressor"):
+        with handle_oom_errors(
+            self.devices_,
+            X,
+            model_type="regressor",
+            n_train_samples=getattr(self, "n_train_samples_", None),
+        ):
             for borders_t, output in tqdm(
                 self._iter_forward_executor(X, use_inference_mode=True),
                 total=self.n_estimators_,
