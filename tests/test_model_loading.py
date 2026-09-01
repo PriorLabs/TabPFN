@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Literal, overload
@@ -27,7 +27,7 @@ from tabpfn.architectures.interface import (
 from tabpfn.architectures.shared.bar_distribution import FullSupportBarDistribution
 from tabpfn.architectures.tabpfn_v3 import TabPFNV3Config
 from tabpfn.constants import ModelVersion
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import DEFAULT_SOFTMAX_TEMPERATURE, InferenceConfig
 from tabpfn.preprocessing import PreprocessorConfig
 
 
@@ -636,3 +636,128 @@ def test__load_model_criterion_config__parallel_downloads_do_not_crash(
         f"Expected at most 1 concurrent download, got {download_attempts}. "
         "The file lock is not working correctly."
     )
+
+
+def _v3_checkpoints_with_temperatures(
+    tmp_path: Path, temperatures: list[float]
+) -> list[Path]:
+    inference_config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    paths = []
+    for i, temperature in enumerate(temperatures):
+        checkpoint = _build_small_v3_checkpoint(
+            replace(inference_config, SOFTMAX_TEMPERATURE=temperature),
+            max_num_classes=10,
+        )
+        path = tmp_path / f"checkpoint_{i}.ckpt"
+        torch.save(checkpoint, path)
+        paths.append(path)
+    return paths
+
+
+def test__load_ckpts_with_differing_softmax_temperatures__raises(
+    tmp_path: Path,
+) -> None:
+    """One temperature is applied to the whole ensemble, so two of them is an error.
+
+    The message has to point at the way out, since the user can pick one.
+    """
+    paths = _v3_checkpoints_with_temperatures(tmp_path, [0.9, 1.0])
+
+    with pytest.raises(ValueError, match="different softmax temperatures"):
+        model_loading.load_model_criterion_config(
+            model_path=paths,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            estimator_type="classifier",
+            version="v3",
+            download_if_not_exists=False,
+        )
+
+
+def test__load_ckpts_with_differing_softmax_temperatures__override__loads(
+    tmp_path: Path,
+) -> None:
+    paths = _v3_checkpoints_with_temperatures(tmp_path, [0.9, 1.0])
+
+    loaded_models, _, _, loaded_config = model_loading.load_model_criterion_config(
+        model_path=paths,
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        estimator_type="classifier",
+        version="v3",
+        download_if_not_exists=False,
+        softmax_temperature_override=0.7,
+    )
+
+    assert len(loaded_models) == 2
+    # The override is applied by the caller, so the config still carries the first
+    # checkpoint's temperature.
+    assert loaded_config.SOFTMAX_TEMPERATURE == 0.9
+
+
+def test__load_ckpts_with_equal_softmax_temperatures__loads(tmp_path: Path) -> None:
+    paths = _v3_checkpoints_with_temperatures(tmp_path, [1.0, 1.0])
+
+    _, _, _, loaded_config = model_loading.load_model_criterion_config(
+        model_path=paths,
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        estimator_type="classifier",
+        version="v3",
+        download_if_not_exists=False,
+    )
+
+    assert loaded_config.SOFTMAX_TEMPERATURE == 1.0
+
+
+def test__load_ckpts_differing_beyond_softmax_temperature__raises(
+    tmp_path: Path,
+) -> None:
+    """A mismatch the user cannot fix keeps its own error, override or not."""
+    inference_config = InferenceConfig(PREPROCESS_TRANSFORMS=[])
+    paths = []
+    for i, config in enumerate(
+        [
+            replace(inference_config, SOFTMAX_TEMPERATURE=0.9),
+            replace(
+                inference_config, SOFTMAX_TEMPERATURE=1.0, POLYNOMIAL_FEATURES="all"
+            ),
+        ]
+    ):
+        path = tmp_path / f"checkpoint_{i}.ckpt"
+        torch.save(_build_small_v3_checkpoint(config, max_num_classes=10), path)
+        paths.append(path)
+
+    with pytest.raises(ValueError, match="Inference configs for different models"):
+        model_loading.load_model_criterion_config(
+            model_path=paths,
+            check_bar_distribution_criterion=False,
+            cache_trainset_representation=False,
+            estimator_type="classifier",
+            version="v3",
+            download_if_not_exists=False,
+            softmax_temperature_override=0.7,
+        )
+
+
+def test__load_ckpt_without_softmax_temperature__uses_legacy_default(
+    tmp_path: Path,
+) -> None:
+    """Every checkpoint released so far lacks the key and must stay at 0.9."""
+    checkpoint = _build_small_v3_checkpoint(
+        InferenceConfig(PREPROCESS_TRANSFORMS=[]), max_num_classes=10
+    )
+    del checkpoint["inference_config"]["SOFTMAX_TEMPERATURE"]
+    checkpoint_path = tmp_path / "checkpoint.ckpt"
+    torch.save(checkpoint, checkpoint_path)
+
+    _, _, _, inference_config = model_loading.load_model_criterion_config(
+        model_path=checkpoint_path,
+        check_bar_distribution_criterion=False,
+        cache_trainset_representation=False,
+        estimator_type="classifier",
+        version="v3",
+        download_if_not_exists=False,
+    )
+
+    assert inference_config.SOFTMAX_TEMPERATURE == DEFAULT_SOFTMAX_TEMPERATURE == 0.9

@@ -36,7 +36,10 @@ from tabpfn.checkpoint import Checkpoint
 from tabpfn.constants import ModelVersion
 from tabpfn.errors import TabPFNHuggingFaceGatedRepoError
 from tabpfn.inference import InferenceEngine
-from tabpfn.inference_config import InferenceConfig
+from tabpfn.inference_config import (
+    InferenceConfig,
+    raise_if_softmax_temperatures_differ,
+)
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -590,6 +593,7 @@ def load_model_criterion_config(
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["classifier"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss,
@@ -607,6 +611,7 @@ def load_model_criterion_config(
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     estimator_type: Literal["regressor"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     FullSupportBarDistribution,
@@ -623,6 +628,7 @@ def load_model_criterion_config(
     estimator_type: Literal["regressor", "classifier"],
     version: Literal["v2", "v2.5", "v2.6", "v3"],
     download_if_not_exists: bool,
+    softmax_temperature_override: float | None = None,
 ) -> tuple[
     list[Architecture],
     nn.BCEWithLogitsLoss | nn.CrossEntropyLoss | FullSupportBarDistribution,
@@ -632,7 +638,8 @@ def load_model_criterion_config(
     """Load the model(s), criterion(s), and config(s) from the given path.
 
     If multiple model paths are provided, then all models must use the same criterion
-    and inference config.
+    and inference config. They may only disagree on the softmax temperature if
+    `softmax_temperature_override` says which temperature to use instead.
 
     Args:
         model_path: The path to the model, or list of paths if multiple models should be
@@ -646,6 +653,10 @@ def load_model_criterion_config(
         estimator_type: Whether the model is a regressor or classifier.
         version: The version of the model.
         download_if_not_exists: Whether to download the model if it doesn't exist.
+        softmax_temperature_override: The temperature the caller will apply to every
+            model, or None if they did not ask for one. Only used to decide whether
+            checkpoints are allowed to disagree on their temperature; the override
+            itself is applied by the caller.
 
     Returns:
         list of models, the criterion, list of architecture configs, the inference
@@ -727,13 +738,20 @@ def load_model_criterion_config(
 
     first_inference_config = inference_configs[0]
     for inference_config in inference_configs[1:]:
-        if inference_config != first_inference_config:
+        # A temperature mismatch is reported separately below, as the user can fix
+        # that one by naming a temperature.
+        if not inference_config.equals_ignoring_softmax_temperature(
+            first_inference_config
+        ):
             raise ValueError(
                 f"Config 1: {first_inference_config}\n"
                 f"Config 2: {inference_config}\n"
                 "Inference configs for different models are different, which is not "
                 "supported. See above."
             )
+    raise_if_softmax_temperatures_differ(
+        inference_configs, softmax_temperature_override=softmax_temperature_override
+    )
 
     return loaded_models, first_criterion, architecture_configs, first_inference_config
 

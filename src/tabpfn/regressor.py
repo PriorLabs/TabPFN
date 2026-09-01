@@ -48,6 +48,7 @@ from tabpfn.base import (
     get_embeddings,
     initialize_model_variables_helper,
     reject_categoricals_for_differentiable_input,
+    resolved_softmax_temperature,
 )
 from tabpfn.constants import (
     REGRESSION_CONSTANT_TARGET_BORDER_EPSILON,
@@ -79,7 +80,7 @@ from tabpfn.preprocessing import (
     clean_data,
     generate_regression_ensemble_configs,
 )
-from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -241,13 +242,17 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
     time, after the per-estimator `softmax_temperature`. This is `1.0`, a no-op, when
     no temperature calibration is done."""
 
+    softmax_temperature_: float
+    """The resolved per-estimator `softmax_temperature`, i.e. the one the checkpoint
+    declares unless it was overridden."""
+
     def __init__(  # noqa: PLR0913
         self,
         *,
         n_estimators: int | Literal["auto"] = "auto",
         auto_scale_n_estimators: bool = True,
         categorical_features_indices: Sequence[int] | None = None,
-        softmax_temperature: float = 0.9,
+        softmax_temperature: float | Literal["auto"] = "auto",
         average_before_softmax: bool = False,
         model_path: str
         | Path
@@ -327,6 +332,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 confidence of the model's predictions. Lower values make the model's
                 predictions more confident. This is only applied when predicting during
                 a post-processing step. Set `softmax_temperature=1.0` for no effect.
+
+                If `"auto"` (the default), the temperature is taken from the
+                checkpoint (`InferenceConfig.SOFTMAX_TEMPERATURE`), which is `0.9` for
+                every checkpoint released up to and including v8.5.0. Passing a float
+                overrides the checkpoint for every model in the ensemble; it cannot be
+                combined with a `SOFTMAX_TEMPERATURE` in `inference_config`, which is
+                the other way of naming one.
 
             average_before_softmax:
                 Only used if `n_estimators > 1`. Whether to average the predictions of
@@ -581,7 +593,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_5:
             options = {
@@ -589,7 +600,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_5().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V2_6:
             options = {
@@ -597,7 +607,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v2_6().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         elif version == ModelVersion.V3:
             options = {
@@ -605,7 +614,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                     ModelSource.get_regressor_v3().default_filename
                 ),
                 "n_estimators": "auto",
-                "softmax_temperature": 0.9,
             }
         else:
             raise ValueError(f"Unknown version: {version}")
@@ -1508,9 +1516,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         cat_indices = self.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         )
-        X = fix_dtypes(X, cat_indices=cat_indices)
-        X = process_text_na_dataframe(
+        X = clean_data_transform(
             X,
+            cat_indices=cat_indices,
             ord_encoder=getattr(self, "ordinal_encoder_", None),
             passthrough_inf=self.get_inference_config().PASSTHROUGH_INF,
         )
@@ -1734,14 +1742,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
                 X_test, categorical_indices=worker.categorical_features_indices
             )
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
-            X_test = fix_dtypes(  # noqa: PLW2901
+            X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
                     FeatureModality.CATEGORICAL
                 ),
-            )
-            X_test = process_text_na_dataframe(  # noqa: PLW2901
-                X=X_test,
                 ord_encoder=getattr(worker, "ordinal_encoder_", None),
                 passthrough_inf=worker.inference_config_.PASSTHROUGH_INF,
             )
@@ -1858,8 +1863,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         (estimator, dataset) pair of the fused forward.
         """
         out_d = output.float()
-        if self.softmax_temperature != 1:
-            out_d = out_d / self.softmax_temperature
+        temperature = resolved_softmax_temperature(self)
+        if temperature != 1:
+            out_d = out_d / temperature
         if config.target_transform is None:
             borders_t = std_borders.copy()
             logit_cancel_mask = None
@@ -1970,12 +1976,13 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             actual_inference_mode = use_inference_mode and not self.differentiable_input
             self.executor_.use_torch_inference_mode(use_inference=actual_inference_mode)
         std_borders = self.znorm_space_bardist_.borders.cpu().numpy()
+        temperature = resolved_softmax_temperature(self)
         for output, config in self.executor_.iter_outputs(
             X, autocast=self.use_autocast_, task_type="regression"
         ):
             output = output.float()  # noqa: PLW2901
-            if self.softmax_temperature != 1:
-                output = output / self.softmax_temperature  # noqa: PLW2901
+            if temperature != 1:
+                output = output / temperature  # noqa: PLW2901
 
             # BSz.= 1 Scenario, the same as normal predict() function
             # Handled by first if-statement

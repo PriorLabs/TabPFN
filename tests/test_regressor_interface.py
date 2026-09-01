@@ -980,7 +980,7 @@ def test__create_default_for_version__v2__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2-" in estimator.model_path
@@ -991,7 +991,7 @@ def test__create_default_for_version__v2_5__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2.5-" in estimator.model_path
@@ -1002,7 +1002,7 @@ def test__create_default_for_version__v2_6__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v2.6-" in estimator.model_path
@@ -1013,7 +1013,7 @@ def test__create_default_for_version__v3__uses_correct_defaults() -> None:
 
     assert isinstance(estimator, TabPFNRegressor)
     assert estimator.n_estimators == "auto"
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
     assert isinstance(estimator.model_path, str)
     assert "regressor" in estimator.model_path
     assert "-v3-" in estimator.model_path
@@ -1025,7 +1025,7 @@ def test__create_default_for_version__passes_through_overrides() -> None:
     )
 
     assert estimator.n_estimators == 16
-    assert estimator.softmax_temperature == 0.9
+    assert estimator.softmax_temperature == "auto"
 
 
 # ---------------------------------------------------------------------------
