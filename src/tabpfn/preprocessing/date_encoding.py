@@ -53,8 +53,26 @@ def _as_timestamp(column: pd.Series) -> pd.Series:
     return column
 
 
+def _nanoseconds_per_tick(dtype: Any) -> float:
+    """What one `int64` tick of a datetime dtype's own resolution is worth in ns.
+
+    A tz-aware dtype reports its unit itself; a plain `datetime64` only through
+    numpy.
+    """
+    unit = getattr(dtype, "unit", None) or np.datetime_data(dtype)[0]
+    return np.timedelta64(1, unit) / np.timedelta64(1, "ns")
+
+
 def _to_nanoseconds(column: pd.Series) -> pd.Series:
     """Cast one point-in-time column to nanoseconds since the epoch.
+
+    Scaled by the column's own resolution, since `astype("int64")` counts ticks
+    of that resolution rather than nanoseconds: pandas 3 reads a date as
+    `datetime64[us]` where pandas 2 read it as `[ns]`, and the same timestamps
+    have to come out as the same number either way, or a fit and a predict of
+    one column that arrived at different resolutions are scaled apart. Scaled in
+    `float64` rather than by converting the column to `[ns]` first, which raises
+    `OutOfBoundsDatetime` outside 1678-2262.
 
     As `float64`, so a missing date (`NaT`) survives as `NaN`: `NaT.astype`
     `("int64")` maps it to that dtype's huge sentinel value instead, which
@@ -64,7 +82,9 @@ def _to_nanoseconds(column: pd.Series) -> pd.Series:
     tabular feature would need to distinguish.
     """
     is_missing = column.isna().to_numpy()
-    as_ns = column.astype("int64").astype("float64")
+    as_ns = column.astype("int64").astype("float64") * _nanoseconds_per_tick(
+        column.dtype
+    )
     as_ns[is_missing] = np.nan
     return as_ns
 

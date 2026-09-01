@@ -147,6 +147,71 @@ class TestFitTransform:
         assert "'shipped_on'" in message
 
 
+class TestResolutionScaling:
+    """A datetime column converts to the same numbers whatever its resolution.
+
+    `astype("int64")` counts ticks of the column's own resolution, so the same
+    timestamps arriving as `datetime64[us]` (what pandas 3 reads every ordinary
+    date source as) came out 1000x smaller than as `[ns]` (what pandas 2 read
+    them as).
+    """
+
+    stamps = ("2020-01-01", "2020-06-01", "2021-01-01")
+    expected = (1.5778368e18, 1.5909696e18, 1.6094592e18)
+
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test__every_resolution__converts_to_the_same_numbers(self, unit: str) -> None:
+        dates = pd.to_datetime(list(self.stamps)).astype(f"datetime64[{unit}]")
+
+        with pytest.warns(UserWarning, match="hold dates"):
+            out = DateTransformer().fit_transform(_frame(dates)).X
+
+        np.testing.assert_array_equal(out["date"], self.expected)
+
+    def test__fit_and_predict_at_different_resolutions__agree(self) -> None:
+        """The bug that matters: a column normalised against fit-time statistics
+        does not renormalise, so a predict column arriving 1000x off lands far
+        outside the fitted distribution.
+        """
+        transformer = DateTransformer()
+        with pytest.warns(UserWarning, match="hold dates"):
+            fitted = transformer.fit_transform(
+                _frame(pd.to_datetime(list(self.stamps)).astype("datetime64[us]"))
+            ).X
+
+        out = transformer.transform(
+            _frame(pd.to_datetime(list(self.stamps)).astype("datetime64[ns]"))
+        )
+
+        np.testing.assert_array_equal(out["date"], fitted["date"])
+
+    def test__date_outside_the_nanosecond_range__still_converts(self) -> None:
+        """Scaled in `float64` rather than by casting the column to `[ns]` first,
+        which raises `OutOfBoundsDatetime` outside 1678-2262.
+        """
+        dates = pd.to_datetime(["1500-01-01", "2600-01-01"]).astype("datetime64[s]")
+
+        with pytest.warns(UserWarning, match="hold dates"):
+            out = (
+                DateTransformer()
+                .fit_transform(pd.DataFrame({"num": [1.0, 2.0], "date": dates}))
+                .X
+            )
+
+        assert out["date"].tolist() == [-1.48317696e19, 1.98808992e19]
+
+    def test__timezone_aware_column__is_scaled_by_its_own_unit(self) -> None:
+        """A tz-aware dtype reports its unit itself, where a plain `datetime64`
+        only does so through numpy.
+        """
+        dates = pd.to_datetime(list(self.stamps)).tz_localize("UTC")
+
+        with pytest.warns(UserWarning, match="hold dates"):
+            out = DateTransformer().fit_transform(_frame(dates)).X
+
+        np.testing.assert_array_equal(out["date"], self.expected)
+
+
 class TestExpansion:
     """`TRANSFORM_DATES` on: a date becomes calendar features instead of a number."""
 
