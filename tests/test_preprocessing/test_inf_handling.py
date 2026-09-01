@@ -538,7 +538,7 @@ def test__fit_validation__accepts_infinities_when_passthrough_enabled() -> None:
     y = np.array([0, 1, 0])
     estimator = TabPFNClassifier(inference_config={"PASSTHROUGH_INF": True})
 
-    X_out, _, _, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
+    X_out, _ = ensure_compatible_fit_inputs_sklearn(X, y, estimator=estimator)
 
     assert np.isposinf(X_out[0, 1])
 

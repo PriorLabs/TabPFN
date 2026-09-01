@@ -28,7 +28,7 @@ from tabpfn.preprocessing.steps.preprocessing_helpers import (
     EfficientColumnTransformer,
     get_ordinal_encoder,
 )
-from tabpfn.validation import ensure_compatible_fit_inputs
+from tabpfn.validation import capture_input_shape, ensure_compatible_fit_inputs
 
 
 @pytest.fixture
@@ -78,7 +78,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = np.array([0, 1, 0])
 
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,
@@ -90,28 +90,27 @@ class TestEnsureCompatibleFitInputsBasic:
 
         assert X.shape == (3, 2)
         assert len(y) == 3
-        assert n_features == 2
-        assert feature_names is None
         assert original_y_name is None
 
-    def test__ensure_compatible_fit_inputs__pandas_dataframe(
-        self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
+    def test__capture_input_shape__pandas_dataframe(
+        self, classifier: TabPFNClassifier
     ) -> None:
-        """Test that pandas DataFrames preserve column names."""
+        """Column names are taken off the raw frame, before any conversion."""
         X = pd.DataFrame({"feature_a": [1.0, 2.0, 3.0], "feature_b": [4.0, 5.0, 6.0]})
-        y = np.array([0, 1, 0])
 
-        _, _, feature_names, _, _ = ensure_compatible_fit_inputs(
-            X,
-            y,
-            estimator=classifier,
-            max_num_samples=10_000,
-            max_num_features=500,
-            ignore_pretraining_limits=False,
-            devices=cpu_devices,
-        )
+        capture_input_shape(X, estimator=classifier, reset=True)
 
-        assert list(feature_names) == ["feature_a", "feature_b"]  # type: ignore
+        assert list(classifier.feature_names_in_) == ["feature_a", "feature_b"]
+        assert classifier.n_features_in_ == 2
+
+    def test__capture_input_shape__numpy_array(
+        self, classifier: TabPFNClassifier
+    ) -> None:
+        """An array has no column names, so only the width is recorded."""
+        capture_input_shape(np.zeros((3, 2)), estimator=classifier, reset=True)
+
+        assert not hasattr(classifier, "feature_names_in_")
+        assert classifier.n_features_in_ == 2
 
     def test__ensure_compatible_fit_inputs__pandas_series_y(
         self, classifier: TabPFNClassifier, cpu_devices: tuple[torch.device, ...]
@@ -120,7 +119,7 @@ class TestEnsureCompatibleFitInputsBasic:
         X = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]])
         y = pd.Series([0, 1, 0], name="target_column")
 
-        _, _, _, _, original_y_name = ensure_compatible_fit_inputs(
+        _, _, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=classifier,

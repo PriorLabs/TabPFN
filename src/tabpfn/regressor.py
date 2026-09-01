@@ -83,7 +83,6 @@ from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import (
     DateTransformer,
-    apply_date_conversion,
 )
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -101,8 +100,9 @@ from tabpfn.utils import (
     translate_probs_across_borders,
 )
 from tabpfn.validation import (
+    capture_input_shape,
     ensure_compatible_fit_inputs,
-    ensure_compatible_predict_input_sklearn,
+    prepare_predict_input,
     validate_dataset_size,
 )
 
@@ -863,6 +863,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
+        # feature_names_in_/n_features_in_ have to describe what the caller passed,
+        # not the wider frame expansion can make of it, so they come off the raw
+        # input here, before any conversion.
+        capture_input_shape(X, estimator=self, reset=True)
+
         # Must run before validation: a real datetime64 column crashes it otherwise.
         date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
@@ -871,7 +876,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         dates = date_transformer.fit_transform(X)
         X = dates.X
 
-        X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
+        X, y, _ = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -883,13 +888,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             devices=self.devices_,
         )
         # Set class variables for sklearn compatibility
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=dates.feature_names or feature_names,
+            feature_names=dates.feature_names,
             provided_categorical_indices=dates.categorical_indices,
             provided_numerical_indices=dates.numerical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
@@ -1301,8 +1304,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X = apply_date_conversion(X, self)
-        X = ensure_compatible_predict_input_sklearn(X, self)
+        X = prepare_predict_input(X, self)
 
         check_is_fitted(self)
 
@@ -1466,10 +1468,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            X_holdout_NhF = apply_date_conversion(  # noqa: PLW2901
-                X_holdout_NhF, tuning_regressor
-            )
-            X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
+            X_holdout_NhF = prepare_predict_input(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
             )
             logits_NhB = tuning_regressor._compute_aggregated_logits(X_holdout_NhF)
@@ -1735,8 +1734,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            X_test = apply_date_conversion(X_test, worker)  # noqa: PLW2901
-            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            X_test = prepare_predict_input(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(

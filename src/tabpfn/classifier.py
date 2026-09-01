@@ -81,7 +81,6 @@ from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import (
     DateTransformer,
-    apply_date_conversion,
 )
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -96,8 +95,9 @@ from tabpfn.utils import (
     infer_random_state,
 )
 from tabpfn.validation import (
+    capture_input_shape,
     ensure_compatible_fit_inputs,
-    ensure_compatible_predict_input_sklearn,
+    prepare_predict_input,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -722,6 +722,11 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
+        # feature_names_in_/n_features_in_ have to describe what the caller passed,
+        # not the wider frame expansion can make of it, so they come off the raw
+        # input here, before any conversion.
+        capture_input_shape(X, estimator=self, reset=True)
+
         # Must run before validation: a real datetime64 column crashes it otherwise.
         date_transformer = DateTransformer(
             categorical_indices=self.categorical_features_indices,
@@ -731,7 +736,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         X = dates.X
 
         # Data validation and cleaning
-        X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
+        X, y, original_y_name = ensure_compatible_fit_inputs(
             X,
             y,
             estimator=self,
@@ -745,7 +750,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         feature_schema = detect_feature_modalities(
             X=X,
-            feature_names=dates.feature_names or feature_names,
+            feature_names=dates.feature_names,
             provided_categorical_indices=dates.categorical_indices,
             provided_numerical_indices=dates.numerical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
@@ -761,8 +766,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
         self.date_transformer_ = date_transformer
-        self.feature_names_in_ = feature_names
-        self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
 
         # Label encoding
@@ -1112,8 +1115,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test = apply_date_conversion(X_test, worker)  # noqa: PLW2901
-            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
+            X_test = prepare_predict_input(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
@@ -1402,8 +1404,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = apply_date_conversion(X, self)
-            X = ensure_compatible_predict_input_sklearn(X, self)
+            X = prepare_predict_input(X, self)
             X = fix_dtypes(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(

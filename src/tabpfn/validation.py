@@ -11,27 +11,88 @@ from __future__ import annotations
 import typing
 import warnings
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 import pandas as pd
 import torch
 from sklearn.base import is_classifier
 from sklearn.utils.multiclass import check_classification_targets
+from sklearn.utils.validation import _num_features
 
 from tabpfn.errors import TabPFNValidationError
-from tabpfn.misc._sklearn_compat import check_array, validate_data
+from tabpfn.misc._sklearn_compat import (
+    _check_feature_names,
+    check_array,
+    check_X_y,
+)
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
+from tabpfn.preprocessing.date_encoding import apply_date_conversion
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
     import numpy as np
-    import numpy.typing as npt
     import torch
 
     from tabpfn import TabPFNClassifier, TabPFNRegressor
     from tabpfn.constants import XType, YType
 
     T = TypeVar("T")
+
+
+def capture_input_shape(
+    X: XType,
+    *,
+    estimator: TabPFNRegressor | TabPFNClassifier,
+    reset: bool,
+) -> None:
+    """Set (`reset=True`) or check (`reset=False`) `feature_names_in_`/`n_features_in_`.
+
+    Call on the raw input, before date resolution (`DateTransformer`) or value
+    validation run: both attributes have to describe what the caller actually
+    passed, not TabPFN's internal, post-expansion representation of it. Only the
+    input's shape and column labels are read here, never its values, so this is
+    safe on an `X` still holding a genuine `datetime64` column, unlike the rest
+    of validation.
+
+    An `X` whose column count cannot be determined at all (e.g. a 1D array) is
+    left unchecked rather than rejected here: value validation downstream has
+    sklearn's own clearer message for that ("Reshape your data ..."), and it is
+    the one that should fire.
+    """
+    try:
+        _check_feature_names(estimator, X, reset=reset)
+    except (ValueError, TypeError) as e:
+        raise TabPFNValidationError(str(e)) from e
+
+    try:
+        n_features = _num_features(X)
+    except TypeError:
+        return
+
+    if reset:
+        estimator.n_features_in_ = n_features
+        return
+    expected = getattr(estimator, "n_features_in_", None)
+    if expected is not None and n_features != expected:
+        raise TabPFNValidationError(
+            f"X has {n_features} features, but {estimator.__class__.__name__} "
+            f"is expecting {expected} features as input."
+        )
+
+
+def prepare_predict_input(
+    X: XType,
+    estimator: TabPFNRegressor | TabPFNClassifier,
+) -> np.ndarray:
+    """Everything a raw predict input needs before the preprocessors see it.
+
+    One call, rather than three of them remembered at every predict entry point:
+    the shape check has to happen on the raw input, date resolution after it but
+    before value validation, and value validation last.
+    """
+    capture_input_shape(X, estimator=estimator, reset=False)
+    X = apply_date_conversion(X, estimator)
+    return ensure_compatible_predict_input_sklearn(X, estimator)
 
 
 def ensure_compatible_fit_inputs(
@@ -45,8 +106,12 @@ def ensure_compatible_fit_inputs(
     ensure_y_numeric: bool = False,
     devices: tuple[torch.device, ...],
     max_cpu_samples: int = 1000,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int, str | None]:
-    """Validate and convert inputs to standardized format.
+) -> tuple[np.ndarray, np.ndarray, str | None]:
+    """Validate the values of already-shape-captured, already-date-resolved inputs.
+
+    `capture_input_shape` must already have run, on the raw `X`, to set
+    `feature_names_in_`/`n_features_in_`: nothing here touches those, so they are
+    never taken from the shape of the (possibly wider) `X` handed over here.
 
     Args:
         X: The input data.
@@ -61,19 +126,15 @@ def ensure_compatible_fit_inputs(
         max_cpu_samples: Sample count above which CPU inference raises by default.
 
     Returns:
-        A tuple of five elements:
+        A tuple of three elements:
         - the validated input data X as np.ndarray,
         - target data y as np.ndarray,
-        - feature names as npt.NDArray[Any] | None,
-        - number of features as int
         - target name if the input was a Series, otherwise None
     """
     # Preserve the name of the target data, if it exists.
     original_y_name: str | None = str(y.name) if isinstance(y, pd.Series) else None
 
-    # Rely on sklearn's validation to return feature names to be consistent
-    # with sklearn interfaces.
-    X, y, feature_names_in, n_features_in = ensure_compatible_fit_inputs_sklearn(
+    X, y = ensure_compatible_fit_inputs_sklearn(
         X,
         y,
         estimator=estimator,
@@ -88,26 +149,27 @@ def ensure_compatible_fit_inputs(
         devices=devices,
         ignore_pretraining_limits=ignore_pretraining_limits,
     )
-    return X, y, feature_names_in, n_features_in, original_y_name
+    return X, y, original_y_name
 
 
 def ensure_compatible_predict_input_sklearn(
     X: XType,
     estimator: TabPFNRegressor | TabPFNClassifier,
 ) -> np.ndarray:
-    """Validate and convert the input data for prediction.
+    """Validate the values of an already-shape-checked, already-date-resolved input.
+
+    `capture_input_shape` must already have run, on the raw input, to check it
+    against `feature_names_in_`/`n_features_in_`; this checks values only, via
+    `check_array` rather than `validate_data`, so it never re-reads those two
+    attributes off the (possibly wider) `X` handed over here.
 
     Note that this also changes the type of X to np.ndarray.
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
-        result = validate_data(
-            estimator,
-            X=X,
-            # NOTE: Important that reset is False, i.e. doesn't reset estimator
-            reset=False,
-            # Parameters to `check_X_y()`
+        result = check_array(
+            X,
             accept_sparse=False,
             dtype=None,
             ensure_all_finite=False
@@ -161,29 +223,26 @@ def ensure_compatible_fit_inputs_sklearn(
     *,
     estimator: TabPFNRegressor | TabPFNClassifier,
     ensure_y_numeric: bool = False,
-) -> tuple[np.ndarray, np.ndarray, npt.NDArray[Any] | None, int]:
-    """Validate the input data for fitting with standard input.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Validate the values of already-shape-captured fit inputs.
 
     Note that this also changes the type of X and y to np.ndarray.
 
     Args:
-        X: The input data.
+        X: The input data, already date-resolved (`DateTransformer`).
         y: The target data.
         estimator: The estimator to validate the data for.
         ensure_y_numeric: Whether to ensure the target data is numeric.
 
     Returns:
-        A tuple of the validated input data X, target data y, feature names,
-        and number of features.
+        A tuple of the validated input data X and target data y.
     """
     if isinstance(X, pd.DataFrame):
         X = coerce_nullable_dtypes_to_numpy(X)
     try:
-        X, y = validate_data(
-            estimator,
-            X=X,
-            y=y,
-            # Parameters to `check_X_y()`
+        X, y = check_X_y(
+            X,
+            y,
             accept_sparse=False,
             dtype=None,  # This is handled later in `fit()`
             ensure_all_finite=False
@@ -223,10 +282,7 @@ def ensure_compatible_fit_inputs_sklearn(
             )
         raise TabPFNValidationError(e_str) from e
 
-    # NOTE: Theoretically we don't need to return the feature names and number,
-    # but it makes it clearer in the calling code that these variables now exist
-    # and can be set on the estimator.
-    return X, y, getattr(estimator, "feature_names_in_", None), estimator.n_features_in_
+    return X, y
 
 
 def validate_num_classes(

@@ -541,3 +541,43 @@ def test__fit_with_transform_dates__expands_the_date_column(
     assert any(name.endswith("signed_on_year") for name in names)
     assert any(name.endswith("signed_on_weekday_circular_0") for name in names)
     assert len(predictions) == n
+
+
+@pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])
+def test__fit_with_transform_dates__reports_the_caller_s_own_columns(
+    estimator_cls: type,
+) -> None:
+    """Expansion widens the frame internally, which must not leak into the
+    sklearn attributes: they describe what the caller passed, so the error a
+    caller gets for the wrong columns names their columns, not ours.
+    """
+    n = 150
+    rng = np.random.default_rng(seed=42)
+    X = pd.DataFrame(
+        {
+            "num": rng.normal(size=n),
+            "signed_on": pd.date_range("2020-01-01", periods=n, freq="37h"),
+        }
+    )
+    y = (
+        rng.integers(0, 2, size=n)
+        if estimator_cls is TabPFNClassifier
+        else rng.normal(size=n)
+    )
+
+    model = estimator_cls(
+        n_estimators=1, device="cpu", inference_config={"TRANSFORM_DATES": True}
+    ).fit(X, y)
+
+    assert model.n_features_in_ == 2
+    assert list(model.feature_names_in_) == ["num", "signed_on"]
+    # The schema is the internal, expanded view, and stays that way.
+    assert len(model.inferred_feature_schema_.features) > 2
+
+    with pytest.raises(TabPFNValidationError, match="feature names should match"):
+        model.predict(X.assign(extra=1.0))
+    with pytest.raises(TabPFNValidationError, match="feature names should match"):
+        model.predict(X.rename(columns={"num": "nums"}))
+    # Positional input has no names to check, only a width.
+    with pytest.raises(TabPFNValidationError, match="expecting 2 features"):
+        model.predict(np.zeros((10, 3)))
