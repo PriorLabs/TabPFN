@@ -81,14 +81,15 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.date_encoding import (
+    DateTransformer,
+    apply_date_conversion,
+)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
-from tabpfn.preprocessing.modality_detection import (
-    detect_feature_modalities,
-    resolve_datetime_columns,
-)
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.preprocessing.steps import (
     get_all_reshape_feature_distribution_preprocessors,
 )
@@ -232,6 +233,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    date_transformer_: DateTransformer
+    """The transformer that converted every temporal column before validation."""
 
     eval_metric_: RegressorEvalMetrics
     """The validated evaluation metric to optimize for during prediction."""
@@ -860,9 +864,10 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         target variable in the DatasetCollectionWithPreprocessing class.
         """
         # Must run before validation: a real datetime64 column crashes it otherwise.
-        X, date_indices = resolve_datetime_columns(
-            X, categorical_indices=self.categorical_features_indices
+        date_transformer = DateTransformer(
+            categorical_indices=self.categorical_features_indices
         )
+        X = date_transformer.fit_transform(X)
 
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
             X,
@@ -884,7 +889,6 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
-            resolved_date_indices=date_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -897,6 +901,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
+        self.date_transformer_ = date_transformer
 
         # TODO: Introduce regressor target transformer that also keeps track of
         # target name
@@ -1293,9 +1298,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X, _ = resolve_datetime_columns(
-            X, categorical_indices=self.categorical_features_indices
-        )
+        X = apply_date_conversion(X, self)
         X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
@@ -1460,9 +1463,8 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            X_holdout_NhF, _ = resolve_datetime_columns(  # noqa: PLW2901
-                X_holdout_NhF,
-                categorical_indices=tuning_regressor.categorical_features_indices,
+            X_holdout_NhF = apply_date_conversion(  # noqa: PLW2901
+                X_holdout_NhF, tuning_regressor
             )
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
@@ -1730,9 +1732,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
-                X_test, categorical_indices=worker.categorical_features_indices
-            )
+            X_test = apply_date_conversion(X_test, worker)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,

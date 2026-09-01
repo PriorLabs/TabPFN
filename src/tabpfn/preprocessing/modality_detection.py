@@ -9,7 +9,6 @@ import warnings
 from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
-import numpy as np
 import pandas as pd
 
 from tabpfn.errors import TabPFNUserError
@@ -23,88 +22,13 @@ from tabpfn.preprocessing.datamodel import (
 )
 
 if TYPE_CHECKING:
-    from tabpfn.constants import XType
+    import numpy as np
 
 _EARLY_EXIT_PREFIX_ROWS = 1024
 
 #: Cap on how many column names the likely-text warning lists, so a wide frame of
 #: text columns does not produce an unreadable multi-kilobyte message.
 _MAX_TEXT_COLUMNS_IN_WARNING = 10
-
-
-def resolve_datetime_columns(
-    X: XType,
-    *,
-    categorical_indices: Sequence[int] | None,
-) -> tuple[XType, list[int]]:
-    """Cast genuine `datetime64` columns to numeric, and report their indices.
-
-    Must run before `ensure_compatible_fit_inputs`: a `datetime64` dtype has no
-    common numpy dtype with a plain numeric/bool/string column, so
-    `check_array` crashes on it otherwise. Casting unifies fine with any other
-    numeric dtype.
-
-    Returns the (possibly cast) `X` and the indices of the columns cast, so the
-    caller can report them via `detect_feature_modalities`'s
-    `resolved_date_indices`.
-    """
-    date_indices = detect_datetime_columns(
-        X, categorical_features_indices=categorical_indices
-    )
-    if not date_indices:
-        return X, []
-
-    date_set = set(date_indices)
-    columns = [
-        _datetime_column_to_numeric(X.iloc[:, i]) if i in date_set else X.iloc[:, i]
-        for i in range(X.shape[1])
-    ]
-    # `.iloc[:, i] = ...` would try to preserve the column's existing datetime64
-    # storage and reject the cast; rebuilding column-by-column changes its dtype
-    # instead. Positional, so duplicate column labels are handled correctly.
-    resolved = pd.concat(columns, axis=1)
-    resolved.columns = X.columns
-    return resolved, date_indices
-
-
-def detect_datetime_columns(
-    X: XType,
-    *,
-    categorical_features_indices: Sequence[int] | None,
-) -> list[int]:
-    """Indices of real `datetime64` columns in `X`, before validation runs.
-
-    Must be computed off the raw input, before `ensure_compatible_fit_inputs`
-    converts it: sklearn's own validation flattens a mixed-dtype DataFrame into
-    one numpy array, so a genuine `datetime64` dtype is only visible here.
-
-    A column already declared categorical is excluded -- the user's declared
-    intent for it wins over treating it as a date.
-    """
-    if not isinstance(X, pd.DataFrame):
-        return []
-    declared = set(categorical_features_indices or ())
-    return [
-        i
-        for i, dtype in enumerate(X.dtypes)
-        if pd.api.types.is_datetime64_any_dtype(dtype) and i not in declared
-    ]
-
-
-def _datetime_column_to_numeric(column: pd.Series) -> pd.Series:
-    """Cast one `datetime64` column to nanoseconds since the epoch.
-
-    As `float64`, so a missing date (`NaT`) survives as `NaN` -- `NaT.astype`
-    `("int64")` maps it to that dtype's huge sentinel value instead, which
-    `float64` has no equivalent of. Exact enough for any realistic datetime
-    column: nanosecond-since-epoch magnitudes are still ~256ns short of
-    float64's precision limit for a present-day date, far below anything a
-    tabular feature would need to distinguish.
-    """
-    is_missing = column.isna().to_numpy()
-    as_ns = column.astype("int64").astype("float64")
-    as_ns[is_missing] = np.nan
-    return as_ns
 
 
 def detect_feature_modalities(
@@ -116,7 +40,6 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
-    resolved_date_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -129,10 +52,6 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
-        resolved_date_indices: Indices `resolve_datetime_columns` already cast
-            from a real `datetime64` dtype. Only reported in a warning: nothing
-            expands a date into calendar features yet, so by here the column is
-            a plain number and is classified as one.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -162,14 +81,12 @@ def detect_feature_modalities(
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
     _warn_on_multimodal(
-        feature_schema,
-        resolved_date_indices=resolved_date_indices,
-        declared_cat_indices=provided_categorical_indices,
+        feature_schema, declared_cat_indices=provided_categorical_indices
     )
     return feature_schema
 
 
-def _format_names_for_warning(names: list[str]) -> str:
+def format_names_for_warning(names: list[str]) -> str:
     """Render column names for a warning, capped so it stays readable."""
     shown = names[:_MAX_TEXT_COLUMNS_IN_WARNING]
     printed = ", ".join(repr(name) for name in shown)
@@ -181,35 +98,19 @@ def _format_names_for_warning(names: list[str]) -> str:
 def _warn_on_multimodal(
     feature_schema: FeatureSchema,
     *,
-    resolved_date_indices: Sequence[int] | None = None,
     declared_cat_indices: Sequence[int] | None = None,
 ) -> None:
-    """Warn about resolved dates, then about any remaining free-text columns.
+    """Warn about any free-text columns.
 
-    A resolved date is numeric by now, so it is never also reported as free
-    text and needs no special-casing to avoid a double warning.
+    A converted date is numeric by the time detection runs (see
+    `date_encoding.DateTransformer`), so it is never reported here.
 
     Args:
         feature_schema: The schema produced by detection.
-        resolved_date_indices: Indices cast from `datetime64` before detection
-            ran; named here since the schema no longer marks them.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
     """
-    date_columns = [
-        feature_schema.features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index in (resolved_date_indices or ())
-    ]
-    if date_columns:
-        warnings.warn(
-            f"These columns hold dates, which are not yet expanded into calendar "
-            f"features, so they are read as plain numbers (nanoseconds since the "
-            f"epoch): {_format_names_for_warning(date_columns)}.",
-            UserWarning,
-            stacklevel=6,
-        )
-
     declared = set(declared_cat_indices or ())
     text_names = [
         feature.name.removeprefix(INPUT_FEATURE_PREFIX)
@@ -222,7 +123,7 @@ def _warn_on_multimodal(
     warnings.warn(
         f"These columns look like free text and are being ordinal-encoded as "
         f"high-cardinality categoricals, which usually adds noise rather than "
-        f"signal: {_format_names_for_warning(text_names)}.\n"
+        f"signal: {format_names_for_warning(text_names)}.\n"
         "If such a column holds numbers stored as strings, convert it to a numeric "
         "dtype. If it is a category rather than text, raise "
         '`inference_config={"MIN_CARDINALITY_FOR_TEXT": ...}` above its number of '

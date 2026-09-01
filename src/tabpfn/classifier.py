@@ -79,15 +79,16 @@ from tabpfn.preprocessing import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes, process_text_na_dataframe
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
+from tabpfn.preprocessing.date_encoding import (
+    DateTransformer,
+    apply_date_conversion,
+)
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
     scale_n_estimators_for_feature_coverage,
 )
 from tabpfn.preprocessing.label_encoder import TabPFNLabelEncoder
-from tabpfn.preprocessing.modality_detection import (
-    detect_feature_modalities,
-    resolve_datetime_columns,
-)
+from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 from tabpfn.utils import (
     DevicesSpecification,
     balance_probas_by_class_counts,
@@ -193,6 +194,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
     ordinal_encoder_: OrderPreservingColumnTransformer
     """The column transformer used to preprocess categorical data to be numeric."""
+
+    date_transformer_: DateTransformer
+    """The transformer that converted every temporal column before validation."""
 
     tuned_classification_thresholds_: npt.NDArray[Any] | None
     """The tuned classification thresholds for each class or None if no tuning is
@@ -719,9 +723,10 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Must run before validation: a real datetime64 column crashes it otherwise.
-        X, date_indices = resolve_datetime_columns(
-            X, categorical_indices=self.categorical_features_indices
+        date_transformer = DateTransformer(
+            categorical_indices=self.categorical_features_indices
         )
+        X = date_transformer.fit_transform(X)
 
         # Data validation and cleaning
         X, y, feature_names, n_features, original_y_name = ensure_compatible_fit_inputs(
@@ -740,7 +745,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
-            resolved_date_indices=date_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
@@ -753,6 +757,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         )
         self.inferred_feature_schema_ = feature_schema
         self.ordinal_encoder_ = ordinal_encoder
+        self.date_transformer_ = date_transformer
         self.feature_names_in_ = feature_names
         self.n_features_in_ = n_features
         self.n_train_samples_ = len(X)
@@ -1104,9 +1109,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
-                X_test, categorical_indices=worker.categorical_features_indices
-            )
+            X_test = apply_date_conversion(X_test, worker)  # noqa: PLW2901
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
                 X_test,
@@ -1396,9 +1399,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X, _ = resolve_datetime_columns(
-                X, categorical_indices=self.categorical_features_indices
-            )
+            X = apply_date_conversion(X, self)
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = fix_dtypes(
                 X,
