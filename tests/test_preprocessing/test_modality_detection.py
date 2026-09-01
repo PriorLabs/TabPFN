@@ -28,6 +28,7 @@ from tabpfn.preprocessing.modality_detection import (
     _is_numeric_or_missing_for_old_pandas,
     _is_numeric_pandas_series,
     _warn_on_multimodal,
+    detect_datetime_columns,
     detect_feature_modalities,
     resolve_datetime_columns,
 )
@@ -842,13 +843,46 @@ def test__category_and_text_thresholds__move_independently() -> None:
     assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
 
-class TestResolveDatetimeColumns:
-    """`resolve_datetime_columns`: casting real dates before validation runs.
+class TestDetectDatetimeColumns:
+    """`detect_datetime_columns`: which raw columns are genuine dates.
 
     Must run on the raw DataFrame, before validation flattens it into a numpy
-    array -- only a genuine `datetime64` dtype is ever cast; a string that
-    merely looks like a date is left untouched, since dtype is all this
-    function reads.
+    array -- only a genuine `datetime64` dtype is ever detected; a string that
+    merely looks like a date is not, since dtype is all this function reads.
+    """
+
+    def test__real_datetime_column__is_detected(self) -> None:
+        X = pd.DataFrame(
+            {"num": [1.0, 2.0, 3.0], "date": pd.date_range("2020-01-01", periods=3)}
+        )
+        assert detect_datetime_columns(X, categorical_features_indices=None) == [1]
+
+    def test__date_like_string_column__is_not_detected(self) -> None:
+        X = pd.DataFrame(
+            {
+                "num": [1.0, 2.0, 3.0],
+                "date": ["2020-01-01", "2020-01-02", "2020-01-03"],
+            }
+        )
+        assert detect_datetime_columns(X, categorical_features_indices=None) == []
+
+    def test__declared_categorical__is_excluded(self) -> None:
+        X = pd.DataFrame(
+            {"num": [1.0, 2.0, 3.0], "date": pd.date_range("2020-01-01", periods=3)}
+        )
+        assert detect_datetime_columns(X, categorical_features_indices=[1]) == []
+
+    def test__non_dataframe_input__returns_empty(self) -> None:
+        X = np.array([[1.0, 2.0], [3.0, 4.0]])
+        assert detect_datetime_columns(X, categorical_features_indices=None) == []
+
+
+class TestResolveDatetimeColumns:
+    """`resolve_datetime_columns`: casting a detected date to numeric.
+
+    Which columns count as a date is `detect_datetime_columns`'s decision (see
+    `TestDetectDatetimeColumns`); this only covers what happens to a column
+    once detected, and that nothing else is touched.
     """
 
     def test__real_datetime_column__is_cast_to_numeric_and_reported(self) -> None:
@@ -878,7 +912,10 @@ class TestResolveDatetimeColumns:
         out, _ = resolve_datetime_columns(X, categorical_features_indices=None)
         assert out["date"].isna().tolist() == [False, True, False]
 
-    def test__date_like_string_column__is_left_untouched(self) -> None:
+    def test__nothing_detected__is_a_noop(self) -> None:
+        """Delegates detection to `detect_datetime_columns`: nothing found there
+        means `X` is returned as-is, not merely with an empty index list.
+        """
         X = pd.DataFrame(
             {
                 "num": [1.0, 2.0, 3.0],
@@ -887,16 +924,6 @@ class TestResolveDatetimeColumns:
         )
         out, date_indices = resolve_datetime_columns(
             X, categorical_features_indices=None
-        )
-        assert date_indices == []
-        assert out is X
-
-    def test__declared_categorical__is_excluded(self) -> None:
-        X = pd.DataFrame(
-            {"num": [1.0, 2.0, 3.0], "date": pd.date_range("2020-01-01", periods=3)}
-        )
-        out, date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=[1]
         )
         assert date_indices == []
         assert out is X

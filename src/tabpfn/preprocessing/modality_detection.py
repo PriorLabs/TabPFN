@@ -44,48 +44,72 @@ def resolve_datetime_columns(
     common numpy dtype with a plain numeric/bool/string column (only with
     `object`), so `check_array`'s `np.result_type` over the raw column dtypes
     crashes outright otherwise (a real, previously-unfixed bug -- see
-    `test__classifier_fit__native_datetime_column__known_unfixed_crash`).
-    Casting to nanoseconds since the epoch, as `float64` so a missing date
-    stays `NaN` rather than becoming a huge sentinel integer, is exact enough
-    for any realistic datetime column and unifies fine with any other numeric
-    dtype, so validation proceeds normally afterward.
-
-    A column already declared categorical is left untouched -- the user's
-    declared intent for it wins over treating it as a date.
+    `test__classifier_fit__native_datetime_column__no_longer_crashes`).
+    Casting unifies fine with any other numeric dtype, so validation proceeds
+    normally afterward.
 
     Returns the (possibly cast) `X` and the indices of the columns cast, so the
     caller can tag them `DATE` via `detect_feature_modalities`'s
     `provided_date_indices`, instead of them silently reading as an ordinary
     numeric column.
     """
-    if not isinstance(X, pd.DataFrame):
-        return X, []
-    declared = set(categorical_features_indices or ())
-    date_indices = [
-        i
-        for i, dtype in enumerate(X.dtypes)
-        if pd.api.types.is_datetime64_any_dtype(dtype) and i not in declared
-    ]
+    date_indices = detect_datetime_columns(
+        X, categorical_features_indices=categorical_features_indices
+    )
     if not date_indices:
         return X, []
 
     date_set = set(date_indices)
-    columns = []
-    for i, name in enumerate(X.columns):
-        if i not in date_set:
-            columns.append(X.iloc[:, i])
-            continue
-        column = X.iloc[:, i]
-        is_missing = column.isna().to_numpy()
-        as_ns = column.astype("int64").astype("float64")
-        as_ns[is_missing] = np.nan
-        columns.append(pd.Series(as_ns, name=name, index=X.index))
+    columns = [
+        _datetime_column_to_numeric(X.iloc[:, i]) if i in date_set else X.iloc[:, i]
+        for i in range(X.shape[1])
+    ]
     # `.iloc[:, i] = ...` would try to preserve the column's existing datetime64
     # storage and reject the cast; rebuilding column-by-column changes its dtype
     # instead. Positional, so duplicate column labels are handled correctly.
     resolved = pd.concat(columns, axis=1)
     resolved.columns = X.columns
     return resolved, date_indices
+
+
+def detect_datetime_columns(
+    X: XType,
+    *,
+    categorical_features_indices: Sequence[int] | None,
+) -> list[int]:
+    """Indices of real `datetime64` columns in `X`, before validation runs.
+
+    Must be computed off the raw input, before `ensure_compatible_fit_inputs`
+    converts it: sklearn's own validation flattens a mixed-dtype DataFrame into
+    one numpy array, so a genuine `datetime64` dtype is only visible here.
+
+    A column already declared categorical is excluded -- the user's declared
+    intent for it wins over treating it as a date.
+    """
+    if not isinstance(X, pd.DataFrame):
+        return []
+    declared = set(categorical_features_indices or ())
+    return [
+        i
+        for i, dtype in enumerate(X.dtypes)
+        if pd.api.types.is_datetime64_any_dtype(dtype) and i not in declared
+    ]
+
+
+def _datetime_column_to_numeric(column: pd.Series) -> pd.Series:
+    """Cast one `datetime64` column to nanoseconds since the epoch.
+
+    As `float64`, so a missing date (`NaT`) survives as `NaN` -- `NaT.astype`
+    `("int64")` maps it to that dtype's huge sentinel value instead, which
+    `float64` has no equivalent of. Exact enough for any realistic datetime
+    column: nanosecond-since-epoch magnitudes are still ~256ns short of
+    float64's precision limit for a present-day date, far below anything a
+    tabular feature would need to distinguish.
+    """
+    is_missing = column.isna().to_numpy()
+    as_ns = column.astype("int64").astype("float64")
+    as_ns[is_missing] = np.nan
+    return as_ns
 
 
 def detect_feature_modalities(
