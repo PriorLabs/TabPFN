@@ -43,15 +43,15 @@ _TRANSFORM_BLOCK_BYTES = 32 * 1024 * 1024
 def _scalar(value: float, like: torch.Tensor) -> torch.Tensor:
     """A 0-dim tensor of `like`'s dtype and device, to broadcast into `where`.
 
-    Broadcasting one number costs nothing, where `torch.full_like` would allocate a
-    tensor the size of `x` to carry it.
+    `torch.where` takes a Python float directly, but not alongside `out=`; a 0-dim
+    tensor is what lets the result be written straight into an existing buffer.
     """
     return torch.full((), value, dtype=like.dtype, device=like.device)
 
 
 def _replace_inf_with_nan(x: torch.Tensor) -> torch.Tensor:
     """Replace ±inf with NaN so percentile/min/max see only finite values."""
-    return torch.where(torch.isinf(x), _scalar(float("nan"), x), x)
+    return torch.where(torch.isinf(x), float("nan"), x)
 
 
 def _block_size(x: torch.Tensor, dim: int, budget_bytes: int) -> int:
@@ -201,18 +201,14 @@ class TorchSquashingScaler:
         x_masked = _replace_inf_with_nan(x)
 
         is_nan = torch.isnan(x_masked)
-        col_min = torch.amin(
-            torch.where(is_nan, _scalar(float("inf"), x_masked), x_masked), dim=0
-        )
-        col_max = torch.amax(
-            torch.where(is_nan, _scalar(float("-inf"), x_masked), x_masked), dim=0
-        )
+        col_min = torch.amin(torch.where(is_nan, float("inf"), x_masked), dim=0)
+        col_max = torch.amax(torch.where(is_nan, float("-inf"), x_masked), dim=0)
         # All-NaN columns yield ±inf above; surface them as NaN so the masks
         # in `fit` treat them as the "general" path (output stays NaN).
         all_nan = is_nan.all(dim=0)
         del is_nan
-        col_min = torch.where(all_nan, _scalar(float("nan"), col_min), col_min)
-        col_max = torch.where(all_nan, _scalar(float("nan"), col_max), col_max)
+        col_min = torch.where(all_nan, float("nan"), col_min)
+        col_max = torch.where(all_nan, float("nan"), col_max)
 
         # the dominant cost
         quantiles = torch.nanquantile(x_masked.to(quantile_dtype), qs, dim=0).to(
