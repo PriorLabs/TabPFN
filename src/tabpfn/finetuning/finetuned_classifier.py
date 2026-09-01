@@ -234,14 +234,6 @@ class FinetunedTabPFNClassifier(FinetunedTabPFNBase, ClassifierMixin):
         )
 
     @override
-    def _setup_estimator(self) -> None:
-        """No additional setup needed for classifier.
-
-        `softmax_temperature_` is resolved by `_initialize_model_variables`, which
-        runs right after this.
-        """
-
-    @override
     def _setup_batch(self, batch: ClassifierBatch) -> None:  # type: ignore[override]
         """No batch-specific setup needed for classifier."""
 
