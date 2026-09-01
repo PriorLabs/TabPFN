@@ -9,6 +9,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from packaging.version import Version
 
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
@@ -185,9 +186,16 @@ class TestResolutionScaling:
 
         np.testing.assert_array_equal(out["date"], fitted["date"])
 
+    @pytest.mark.skipif(
+        Version(pd.__version__) < Version("2.0.0"),
+        reason="pandas 1 holds every datetime as [ns], so such a date cannot be built",
+    )
     def test__date_outside_the_nanosecond_range__still_converts(self) -> None:
         """Scaled in `float64` rather than by casting the column to `[ns]` first,
         which raises `OutOfBoundsDatetime` outside 1678-2262.
+
+        Skipped below pandas 2: `to_datetime` there raises on the date itself, so
+        the scenario cannot be constructed, let alone converted.
         """
         dates = pd.to_datetime(["1500-01-01", "2600-01-01"]).astype("datetime64[s]")
 
