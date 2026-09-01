@@ -31,9 +31,12 @@ import pytest
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.preprocessing import pipeline_interface
 
-N_ROWS = 80
-N_TEST = 20
+N_ROWS = 12
+N_TEST = 6
 N_FEATURES = 5
+# Spacing of the missing values in the object column, kept at or below `N_TEST`
+# so the smaller split cannot come out without one.
+N_MISSING_EVERY = 5
 # +/-inf reaches the ordinal encoder only with this on; without it validation
 # rejects the input before any of the code under test runs.
 PASSTHROUGH_INF = {"PASSTHROUGH_INF": True}
@@ -62,7 +65,7 @@ def _object_mixed() -> np.ndarray:
     # Three levels, so it detects as categorical rather than as free text.
     X[:, 1] = [f"lvl{i % 3}" for i in range(n)]
     X[:, 2] = rng.integers(0, 5, n)
-    X[:, 3] = [None if i % 17 == 0 else f"k{i % 2}" for i in range(n)]
+    X[:, 3] = [None if i % N_MISSING_EVERY == 0 else f"k{i % 2}" for i in range(n)]
     return X
 
 
