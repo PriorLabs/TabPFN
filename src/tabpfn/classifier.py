@@ -1427,7 +1427,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X,
             model_type="classifier",
             n_train_samples=getattr(self, "n_train_samples_", None),
-            n_features=getattr(self, "n_features_in_", None),
         ):
             return self.forward(
                 X,

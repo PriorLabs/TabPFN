@@ -40,7 +40,7 @@ from tabpfn.model_loading import (
     load_model_criterion_config,
     resolve_model_version,
 )
-from tabpfn.preprocessing.clean import fix_dtypes
+from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import FeatureModality
 from tabpfn.preprocessing.date_encoding import convert_dates
 from tabpfn.utils import (
@@ -608,13 +608,14 @@ def get_embeddings(
     capture_input_shape(X, estimator=model, reset=False)
     X = convert_dates(X, model)
     X = ensure_compatible_predict_input_sklearn(X, model)
-    X = fix_dtypes(
+    X = clean_data_transform(
         X,
         cat_indices=model.inferred_feature_schema_.indices_for(
             FeatureModality.CATEGORICAL
         ),
+        ord_encoder=getattr(model, "ordinal_encoder_", None),
+        passthrough_inf=model.get_inference_config().PASSTHROUGH_INF,
     )
-    X = model.ordinal_encoder_.transform(X)
 
     embeddings: list[np.ndarray] = []
 
