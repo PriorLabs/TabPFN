@@ -24,26 +24,26 @@
 ```bash
 pip install tabpfn
 ```
-
-TabPFN supports Python 3.10+. `pip install tabpfn` installs a compatible
-PyTorch build automatically. If you want a smaller CPU-only install, need a
-PyTorch build for a specific accelerator or CUDA version, or want platform
-notes for Windows and WSL, choose the matching command from the
-[PyTorch installation selector](https://pytorch.org/get-started/locally/) before
-installing TabPFN.
-
-Note: For best performance on Apple Silicon/MPS, consider installing a PyTorch
-version after the nightly "2.13.0.dev20260510". This enables flash attention
-without relying on MLX (the latter requires a GPU-CPU-GPU roundtrip).
-
-
-### Basic Usage
+TabPFN supports Python 3.10+.
 
 > ⚡ **GPU Recommended**:
 > For optimal performance, use a GPU (even older ones with ~8GB VRAM work well; 16GB needed for some large datasets).
 > On CPU, only moderate datasets are feasible (the default TabPFN-3 allows up to 5000 samples; older versions up to 1000).
 > No GPU? Use our free hosted inference via [TabPFN Client](https://github.com/PriorLabs/tabpfn-client).
 
+**On macOS:** GPU support is automatically included for Apple Silicon Macs. For best performance, ensure you are using PyTorch 2.13 or newer (see [#949](https://github.com/PriorLabs/TabPFN/pull/949)).
+
+**On Linux:** Nvidia GPU support is automatically included. For AMD GPUs, first [install PyTorch with ROCm](https://pytorch.org/get-started/locally/), then install TabPFN. For example,
+```bash
+pip install torch --index-url https://download.pytorch.org/whl/rocm7.2
+pip install tabpfn
+```
+For a CPU-only install, first [install CPU-only PyTorch](https://pytorch.org/get-started/locally/), then install TabPFN. This saves disk space if you do not have a GPU.
+
+**On Windows:** For Nvidia GPUs, [install PyTorch with CUDA](https://pytorch.org/get-started/locally/), then install TabPFN. For AMD GPUs, [install PyTorch with ROCm](https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installrad/windows/install-pytorch.html), then install TabPFN.
+
+
+### Basic Usage
 To use our default TabPFN-3 model:
 
 ```python
