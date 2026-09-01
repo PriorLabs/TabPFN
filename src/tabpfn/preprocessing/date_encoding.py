@@ -53,16 +53,6 @@ def _as_timestamp(column: pd.Series) -> pd.Series:
     return column
 
 
-def _nanoseconds_per_tick(dtype: Any) -> float:
-    """What one `int64` tick of a datetime dtype's own resolution is worth in ns.
-
-    A tz-aware dtype reports its unit itself; a plain `datetime64` only through
-    numpy.
-    """
-    unit = getattr(dtype, "unit", None) or np.datetime_data(dtype)[0]
-    return np.timedelta64(1, unit) / np.timedelta64(1, "ns")
-
-
 def _to_nanoseconds(column: pd.Series) -> pd.Series:
     """Cast one point-in-time column to nanoseconds since the epoch.
 
@@ -82,8 +72,10 @@ def _to_nanoseconds(column: pd.Series) -> pd.Series:
     tabular feature would need to distinguish.
     """
     is_missing = column.isna().to_numpy()
-    as_ns = column.astype("int64").astype("float64") * _nanoseconds_per_tick(
-        column.dtype
+    # A tz-aware dtype carries `.unit`; a plain one reports it only through numpy.
+    unit = getattr(column.dtype, "unit", None) or np.datetime_data(column.dtype)[0]
+    as_ns = column.astype("int64").astype("float64") * (
+        np.timedelta64(1, unit) / np.timedelta64(1, "ns")
     )
     as_ns[is_missing] = np.nan
     return as_ns
