@@ -910,6 +910,39 @@ class TestResolveDatetimeColumns:
         out, _ = resolve_datetime_columns(X, categorical_indices=None)
         assert out["date"].isna().tolist() == [False, True, False]
 
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test__every_datetime_resolution__converts_to_the_same_numbers(
+        self, unit: str
+    ) -> None:
+        """`astype("int64")` counts ticks of the column's own resolution, so the
+        same timestamps arriving as `datetime64[us]` (pandas 3's default) used to
+        come out 1000x smaller than as `[ns]` (pandas 2's), scaling a fit and a
+        predict of one column apart from each other.
+        """
+        dates = pd.to_datetime(["2020-01-01", "2020-06-01", "2021-01-01"])
+        X = pd.DataFrame({"date": dates.astype(f"datetime64[{unit}]")})
+
+        out, _ = resolve_datetime_columns(X, categorical_indices=None)
+
+        expected = [1.5778368e18, 1.5909696e18, 1.6094592e18]
+        np.testing.assert_array_equal(out["date"], expected)
+
+    def test__date_outside_the_nanosecond_range__still_converts(self) -> None:
+        """Scaling in `float64` rather than casting the column to `[ns]` first,
+        which raises `OutOfBoundsDatetime` outside 1678-2262.
+        """
+        X = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["1500-01-01", "2600-01-01"]).astype(
+                    "datetime64[s]"
+                )
+            }
+        )
+
+        out, _ = resolve_datetime_columns(X, categorical_indices=None)
+
+        assert out["date"].tolist() == [-1.48317696e19, 1.98808992e19]
+
     def test__nothing_detected__is_a_noop(self) -> None:
         """Delegates detection to `detect_datetime_columns`: nothing found there
         means `X` is returned as-is, not merely with an empty index list.
