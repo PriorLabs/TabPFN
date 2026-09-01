@@ -719,7 +719,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
         # Must run before validation: a real datetime64 column crashes it otherwise.
-        X, provided_date_indices = resolve_datetime_columns(
+        X, date_indices = resolve_datetime_columns(
             X, categorical_indices=self.categorical_features_indices
         )
 
@@ -740,7 +740,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X,
             feature_names=feature_names,
             provided_categorical_indices=self.categorical_features_indices,
-            provided_date_indices=provided_date_indices,
+            resolved_date_indices=date_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,

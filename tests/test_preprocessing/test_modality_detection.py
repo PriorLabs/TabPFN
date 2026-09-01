@@ -931,18 +931,15 @@ class TestResolveDatetimeColumns:
         assert out is X
 
 
-class TestDateColumnDetection:
-    """`detect_feature_modalities` tagging a real-`datetime64` column DATE.
+class TestResolvedDateColumnClassification:
+    """How a genuine `datetime64` column is classified once it is resolved.
 
-    Nothing expands a date into calendar features yet, so a recognized date is
-    always demoted to whichever of CATEGORICAL/TEXT its cardinality implies --
-    exactly the modality a non-date string of the same shape would get. The
-    only observable difference recognizing it makes right now is the warning:
-    a demoted date is named as a date, not reported as generic free text.
+    Nothing expands a date into calendar features yet, so `resolve_datetime_columns`
+    leaves a plain nanoseconds-since-epoch column, and detection classifies it as
+    the number it now is. `resolved_date_indices` only feeds the warning naming
+    the column, so the user knows no calendar expansion happened.
 
-    Detection is dtype-based only, via `provided_date_indices` (what a caller
-    computes with `resolve_datetime_columns` on the raw DataFrame before it
-    becomes the numpy `X` below) -- a date-*like string* is never tagged DATE,
+    Resolution is dtype-based only, so a date-*like string* is not a date here;
     see `test__date_like_string__is_not_a_date`.
     """
 
@@ -951,13 +948,13 @@ class TestDateColumnDetection:
     def _numeric_column(self) -> np.ndarray:
         return np.random.default_rng(0).normal(size=self.n_rows)
 
-    def _detect(
-        self, X: pd.DataFrame, provided_date_indices: list[int] | None = None
-    ) -> FeatureSchema:
+    def _detect(self, X: pd.DataFrame) -> FeatureSchema:
+        """Resolve, then detect, in the order `fit` does it."""
+        resolved, date_indices = resolve_datetime_columns(X, categorical_indices=None)
         return detect_feature_modalities(
-            X=X.to_numpy(dtype=object),
+            X=resolved.to_numpy(dtype=object),
             feature_names=list(X.columns),
-            provided_date_indices=provided_date_indices,
+            resolved_date_indices=date_indices,
             min_samples_for_inference=100,
             max_unique_for_category=30,
             min_unique_for_numerical=4,
@@ -968,32 +965,33 @@ class TestDateColumnDetection:
         pool = pd.date_range("2020-01-01", periods=n_unique)
         return pd.DatetimeIndex([pool[i % n_unique] for i in range(self.n_rows)])
 
-    def test__high_cardinality_date__is_text_like_a_same_shaped_string(self) -> None:
+    def test__high_cardinality_date__is_numerical(self) -> None:
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
         with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X, provided_date_indices=[1])
-        assert schema.features[1].modality is FeatureModality.TEXT
+            schema = self._detect(X)
+        assert schema.features[1].modality is FeatureModality.NUMERICAL
 
     def test__low_cardinality_date__is_categorical(self) -> None:
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(4)})
+        """Below `min_unique_for_numerical`, so categorical like any other number."""
+        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(3)})
         with pytest.warns(UserWarning, match="hold dates"):
-            schema = self._detect(X, provided_date_indices=[1])
+            schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
-    def test__demoted_date__is_not_also_reported_as_free_text(self) -> None:
-        """The date warning fires; the free-text warning must not repeat it."""
+    def test__resolved_date__is_not_also_reported_as_free_text(self) -> None:
+        """The date warning fires once; the free-text warning must not repeat it."""
         X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(60)})
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            self._detect(X, provided_date_indices=[1])
+            self._detect(X)
         date_warnings = [w for w in caught if "hold dates" in str(w.message)]
         text_warnings = [w for w in caught if "look like free text" in str(w.message)]
         assert len(date_warnings) == 1
         assert not text_warnings
 
     def test__date_like_string__is_not_a_date(self) -> None:
-        """A string column that merely looks like a date is never tagged DATE:
-        only a genuine `datetime64` dtype, hinted via `provided_date_indices`, is.
+        """A string column that merely looks like a date is left as text: only a
+        genuine `datetime64` dtype is resolved, so no date warning names it.
         """
         X = pd.DataFrame(
             {
@@ -1006,25 +1004,6 @@ class TestDateColumnDetection:
             schema = self._detect(X)
         assert schema.features[1].modality is FeatureModality.TEXT
         assert not [w for w in caught if "hold dates" in str(w.message)]
-
-    def test__declared_categorical_real_date__is_categorical_not_date(self) -> None:
-        """Excluded from `provided_date_indices` (see `resolve_datetime_columns`),
-        so it is classified via the ordinary categorical path instead, exactly
-        like a declared-categorical numeric column.
-        """
-        X = pd.DataFrame({"num": self._numeric_column(), "date": self._dates(10)})
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            schema = detect_feature_modalities(
-                X=X.to_numpy(dtype=object),
-                feature_names=list(X.columns),
-                provided_categorical_indices=[1],
-                min_samples_for_inference=100,
-                max_unique_for_category=30,
-                min_unique_for_numerical=4,
-                min_cardinality_for_text=30,
-            )
-        assert schema.features[1].modality is FeatureModality.CATEGORICAL
 
 
 @pytest.mark.parametrize("estimator_cls", [TabPFNClassifier, TabPFNRegressor])

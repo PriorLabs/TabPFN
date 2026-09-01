@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import math
 import warnings
 from collections.abc import Sequence
@@ -46,8 +45,8 @@ def resolve_datetime_columns(
     numeric dtype.
 
     Returns the (possibly cast) `X` and the indices of the columns cast, so the
-    caller can tag them `DATE` via `detect_feature_modalities`'s
-    `provided_date_indices`.
+    caller can report them via `detect_feature_modalities`'s
+    `resolved_date_indices`.
     """
     date_indices = detect_datetime_columns(
         X, categorical_features_indices=categorical_indices
@@ -117,7 +116,7 @@ def detect_feature_modalities(
     min_unique_for_numerical: int,
     min_cardinality_for_text: int,
     provided_categorical_indices: Sequence[int] | None = None,
-    provided_date_indices: Sequence[int] | None = None,
+    resolved_date_indices: Sequence[int] | None = None,
 ) -> FeatureSchema:
     """Infer each feature's modality, using heuristics and declared categoricals.
 
@@ -130,8 +129,10 @@ def detect_feature_modalities(
         X: The data to infer feature modalities from.
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
-        provided_date_indices: Indices already known to hold a real `datetime64`
-            dtype.
+        resolved_date_indices: Indices `resolve_datetime_columns` already cast
+            from a real `datetime64` dtype. Only reported in a warning: nothing
+            expands a date into calendar features yet, so by here the column is
+            a plain number and is classified as one.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -146,12 +147,8 @@ def detect_feature_modalities(
     features: list[Feature] = []
     big_enough_n_to_infer_cat = len(X) > min_samples_for_inference
     unique_feature_names = build_input_feature_names(feature_names, X.shape[1])
-    date_indices = set(provided_date_indices or ())
     for i, index in enumerate(range(X.shape[1])):
         feature_name = unique_feature_names[i]
-        if index in date_indices:
-            features.append(Feature(name=feature_name, modality=FeatureModality.DATE))
-            continue
         X_slice: np.ndarray = X[:, index]
         reported_categorical = index in (provided_categorical_indices or ())
         feat_modality = _detect_feature_modality(
@@ -165,61 +162,11 @@ def detect_feature_modalities(
         features.append(Feature(name=feature_name, modality=feat_modality))
     feature_schema = FeatureSchema(features=features)
     _warn_on_multimodal(
-        feature_schema, declared_cat_indices=provided_categorical_indices
-    )
-    return _demote_dates_for_now(
         feature_schema,
-        X,
-        provided_categorical_indices=provided_categorical_indices,
-        max_unique_for_category=max_unique_for_category,
-        min_unique_for_numerical=min_unique_for_numerical,
-        min_cardinality_for_text=min_cardinality_for_text,
-        big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
+        resolved_date_indices=resolved_date_indices,
+        declared_cat_indices=provided_categorical_indices,
     )
-
-
-def _demote_dates_for_now(
-    feature_schema: FeatureSchema,
-    X: np.ndarray,
-    *,
-    provided_categorical_indices: Sequence[int] | None,
-    max_unique_for_category: int,
-    min_unique_for_numerical: int,
-    min_cardinality_for_text: int,
-    big_enough_n_to_infer_cat: bool,
-) -> FeatureSchema:
-    """Temporary: demote every detected `DATE` feature to `CATEGORICAL`/`TEXT`.
-
-    Nothing expands a date into calendar features yet, so `DATE` isn't
-    consumable downstream -- demoted the same way a same-shaped non-date
-    string would be. A follow-up adding real date expansion should delete this
-    function outright. Called after `_warn_on_multimodal`, while the schema
-    still says `DATE`.
-    """
-    date_indices = feature_schema.indices_for(FeatureModality.DATE)
-    if not date_indices:
-        return feature_schema
-
-    declared = set(provided_categorical_indices or ())
-    features = list(feature_schema.features)
-    for index in date_indices:
-        n_unique = _get_unique_with_sklearn_compatible_error(pd.Series(X[:, index]))
-        if _detect_numeric_as_categorical(
-            n_unique=n_unique,
-            reported_categorical=index in declared,
-            max_unique_for_category=max_unique_for_category,
-            min_unique_for_numerical=min_unique_for_numerical,
-            big_enough_n_to_infer_cat=big_enough_n_to_infer_cat,
-        ):
-            demoted = FeatureModality.CATEGORICAL
-        else:
-            demoted = (
-                FeatureModality.CATEGORICAL
-                if n_unique <= min_cardinality_for_text
-                else FeatureModality.TEXT
-            )
-        features[index] = dataclasses.replace(features[index], modality=demoted)
-    return FeatureSchema(features=features)
+    return feature_schema
 
 
 def _format_names_for_warning(names: list[str]) -> str:
@@ -234,28 +181,31 @@ def _format_names_for_warning(names: list[str]) -> str:
 def _warn_on_multimodal(
     feature_schema: FeatureSchema,
     *,
+    resolved_date_indices: Sequence[int] | None = None,
     declared_cat_indices: Sequence[int] | None = None,
 ) -> None:
-    """Warn about detected dates, then about any remaining free-text columns.
+    """Warn about resolved dates, then about any remaining free-text columns.
 
-    Called before `_demote_dates_for_now` acts on `DATE`, so a date column
-    isn't `TEXT` yet and needs no special-casing to avoid a double warning.
+    A resolved date is numeric by now, so it is never also reported as free
+    text and needs no special-casing to avoid a double warning.
 
     Args:
-        feature_schema: The schema produced by detection, before `DATE` is acted on.
+        feature_schema: The schema produced by detection.
+        resolved_date_indices: Indices cast from `datetime64` before detection
+            ran; named here since the schema no longer marks them.
         declared_cat_indices: Indices passed as `categorical_features_indices`;
             never reported, since declaring a column categorical means the user
             already intends its non-numeric values as categories.
     """
     date_columns = [
         feature_schema.features[index].name.removeprefix(INPUT_FEATURE_PREFIX)
-        for index in feature_schema.indices_for(FeatureModality.DATE)
+        for index in (resolved_date_indices or ())
     ]
     if date_columns:
         warnings.warn(
             f"These columns hold dates, which are not yet expanded into calendar "
-            f"features, so they are read as plain categories or text: "
-            f"{_format_names_for_warning(date_columns)}.",
+            f"features, so they are read as plain numbers (nanoseconds since the "
+            f"epoch): {_format_names_for_warning(date_columns)}.",
             UserWarning,
             stacklevel=6,
         )
