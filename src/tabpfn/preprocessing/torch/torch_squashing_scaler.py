@@ -198,14 +198,14 @@ class TorchSquashingScaler:
         quantile_dtype: torch.dtype,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """min, max and quantiles for one block of columns."""
-        x_finite = _replace_inf_with_nan(x)
+        x_masked = _replace_inf_with_nan(x)
 
-        is_nan = torch.isnan(x_finite)
+        is_nan = torch.isnan(x_masked)
         col_min = torch.amin(
-            torch.where(is_nan, _scalar(float("inf"), x_finite), x_finite), dim=0
+            torch.where(is_nan, _scalar(float("inf"), x_masked), x_masked), dim=0
         )
         col_max = torch.amax(
-            torch.where(is_nan, _scalar(float("-inf"), x_finite), x_finite), dim=0
+            torch.where(is_nan, _scalar(float("-inf"), x_masked), x_masked), dim=0
         )
         # All-NaN columns yield ±inf above; surface them as NaN so the masks
         # in `fit` treat them as the "general" path (output stays NaN).
@@ -215,7 +215,7 @@ class TorchSquashingScaler:
         col_max = torch.where(all_nan, _scalar(float("nan"), col_max), col_max)
 
         # the dominant cost
-        quantiles = torch.nanquantile(x_finite.to(quantile_dtype), qs, dim=0).to(
+        quantiles = torch.nanquantile(x_masked.to(quantile_dtype), qs, dim=0).to(
             x.dtype
         )
         return col_min, col_max, quantiles
