@@ -1488,8 +1488,8 @@ def test__predict_proba_batched__rejects_mismatched_classes() -> None:
 def test__predict_proba_batched__matches_per_dataset_dataframe(device: str) -> None:
     """Batched prediction matches per-dataset on non-numeric DataFrame inputs.
 
-    The standard predict path runs fix_dtypes / process_text_na_dataframe /
-    ordinal encoding on X_test before the member preprocessors; predict_proba_batched
+    The standard predict path runs `clean_data_transform` -- dtype fixing and
+    ordinal encoding -- on X_test before the member preprocessors; predict_proba_batched
     must apply the same validation or non-numeric inputs would diverge from (or
     crash relative to) predict_proba. To actually exercise those paths the frames
     here mix dtypes that need conversion: a categorical-dtype column, an
