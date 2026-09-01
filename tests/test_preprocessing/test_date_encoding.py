@@ -241,23 +241,6 @@ class TestExpansion:
         assert "date_year" in conversion.feature_names
         assert conversion.X.notna().all().all()
 
-    def test__expanded_output__is_reported_numerical(self) -> None:
-        """Positions the caller passes to `detect_feature_modalities`.
-
-        A narrow training window gives a cyclical pair few enough distinct values
-        to look categorical, and the ensemble members that ordinal-encode a
-        category turn a value unseen at fit into `NaN`. A third month at predict
-        time is ordinary for such a window, so the feature would go missing on
-        exactly the rows carrying the new information.
-        """
-        X = _frame(pd.date_range("2020-01-01", periods=3))
-
-        conversion = self._expander().fit_transform(X)
-
-        assert conversion.numerical_indices == list(
-            range(1, len(conversion.feature_names))
-        )
-
     def test__declared_categorical_indices__are_remapped(self) -> None:
         """The expanded column is gone from where it was, so what came after it
         has moved down.
@@ -281,7 +264,6 @@ class TestExpansion:
         conversion = self._expander(categorical_indices=[1]).fit_transform(X)
 
         assert conversion.X is X
-        assert conversion.numerical_indices == []
 
     def test__duration_column__still_becomes_seconds(self) -> None:
         """A duration has no calendar to expand into, flag or no flag."""

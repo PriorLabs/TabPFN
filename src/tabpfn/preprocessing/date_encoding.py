@@ -181,16 +181,11 @@ class DateConversion:
             the input was not a `DataFrame` and so has no labels.
         categorical_indices: The caller's declared categorical indices, moved to
             where those columns ended up.
-        numerical_indices: Positions holding calendar-expansion output. Numbers
-            by construction, so they bypass the cardinality heuristics; see
-            `detect_feature_modalities`'s `provided_numerical_indices` for why
-            a computed feature must not be read as a category.
     """
 
     X: XType
     feature_names: list[str] | None
     categorical_indices: list[int] | None
-    numerical_indices: list[int]
 
 
 class DateTransformer:
@@ -257,7 +252,6 @@ class DateTransformer:
                 X=X,
                 feature_names=None,
                 categorical_indices=self._categorical_indices,
-                numerical_indices=[],
             )
 
         instants, durations = self._temporal_positions(X)
@@ -273,7 +267,6 @@ class DateTransformer:
                 X=converted,
                 feature_names=[str(column) for column in converted.columns],
                 categorical_indices=self._categorical_indices,
-                numerical_indices=[],
             )
 
         # `_drop_and_append` concatenates the kept columns against skrub's own
@@ -298,9 +291,6 @@ class DateTransformer:
             X=_drop_and_append(converted, to_expand, blocks),
             feature_names=kept_names + expanded_names,
             categorical_indices=self._remap(self._categorical_indices, to_expand),
-            numerical_indices=list(
-                range(len(kept_names), len(kept_names) + len(expanded_names))
-            ),
         )
 
     def transform(self, X: XType) -> XType:

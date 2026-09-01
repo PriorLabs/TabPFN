@@ -758,7 +758,6 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             X=X,
             feature_names=dates.feature_names,
             provided_categorical_indices=dates.categorical_indices,
-            provided_numerical_indices=dates.numerical_indices,
             min_samples_for_inference=self.inference_config_.MIN_NUMBER_SAMPLES_FOR_CATEGORICAL_INFERENCE,
             max_unique_for_category=self.inference_config_.MAX_UNIQUE_FOR_CATEGORICAL_FEATURES,
             min_unique_for_numerical=self.inference_config_.MIN_UNIQUE_FOR_NUMERICAL_FEATURES,
