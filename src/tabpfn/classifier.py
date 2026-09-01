@@ -718,10 +718,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         random_state: int | np.random.Generator,
     ) -> tuple[list[ClassifierEnsembleConfig], np.ndarray, np.ndarray]:
         """Initialize the model for standard input."""
-        # Must run before validation: a real datetime64 column crashes it
-        # otherwise (see `resolve_datetime_columns`).
+        # Must run before validation: a real datetime64 column crashes it otherwise.
         X, provided_date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=self.categorical_features_indices
+            X, categorical_indices=self.categorical_features_indices
         )
 
         # Data validation and cleaning
@@ -1106,7 +1105,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
             X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
-                X_test, categorical_features_indices=worker.categorical_features_indices
+                X_test, categorical_indices=worker.categorical_features_indices
             )
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901
@@ -1398,7 +1397,7 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
 
         if not self.differentiable_input:
             X, _ = resolve_datetime_columns(
-                X, categorical_features_indices=self.categorical_features_indices
+                X, categorical_indices=self.categorical_features_indices
             )
             X = ensure_compatible_predict_input_sklearn(X, self)
             X = fix_dtypes(

@@ -859,10 +859,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         BarDistribution here, since it is vital for computing the standardized
         target variable in the DatasetCollectionWithPreprocessing class.
         """
-        # Must run before validation: a real datetime64 column crashes it
-        # otherwise (see `resolve_datetime_columns`).
+        # Must run before validation: a real datetime64 column crashes it otherwise.
         X, provided_date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=self.categorical_features_indices
+            X, categorical_indices=self.categorical_features_indices
         )
 
         X, y, feature_names, n_features, _ = ensure_compatible_fit_inputs(
@@ -1295,7 +1294,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         # TODO: Move these at some point to InferenceEngine
         X, _ = resolve_datetime_columns(
-            X, categorical_features_indices=self.categorical_features_indices
+            X, categorical_indices=self.categorical_features_indices
         )
         X = ensure_compatible_predict_input_sklearn(X, self)
 
@@ -1463,7 +1462,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # `softmax_temperature` correctly still applied.
             X_holdout_NhF, _ = resolve_datetime_columns(  # noqa: PLW2901
                 X_holdout_NhF,
-                categorical_features_indices=tuning_regressor.categorical_features_indices,
+                categorical_indices=tuning_regressor.categorical_features_indices,
             )
             X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
@@ -1732,7 +1731,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
             X_test, _ = resolve_datetime_columns(  # noqa: PLW2901
-                X_test, categorical_features_indices=worker.categorical_features_indices
+                X_test, categorical_indices=worker.categorical_features_indices
             )
             X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = fix_dtypes(  # noqa: PLW2901

@@ -512,7 +512,7 @@ def get_embeddings(
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
     X, _ = resolve_datetime_columns(
-        X, categorical_features_indices=model.categorical_features_indices
+        X, categorical_indices=model.categorical_features_indices
     )
     X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(X, cat_indices=model.categorical_features_indices)

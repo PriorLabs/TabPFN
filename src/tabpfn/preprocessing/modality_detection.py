@@ -36,7 +36,7 @@ _MAX_TEXT_COLUMNS_IN_WARNING = 10
 def resolve_datetime_columns(
     X: XType,
     *,
-    categorical_features_indices: Sequence[int] | None,
+    categorical_indices: Sequence[int] | None,
 ) -> tuple[XType, list[int]]:
     """Cast genuine `datetime64` columns to numeric, and report their indices.
 
@@ -54,7 +54,7 @@ def resolve_datetime_columns(
     numeric column.
     """
     date_indices = detect_datetime_columns(
-        X, categorical_features_indices=categorical_features_indices
+        X, categorical_features_indices=categorical_indices
     )
     if not date_indices:
         return X, []
@@ -135,8 +135,7 @@ def detect_feature_modalities(
         feature_names: The names of the features.
         provided_categorical_indices: User-provided indices considered categorical.
         provided_date_indices: Indices already known to hold a real `datetime64`
-            dtype before validation (see `resolve_datetime_columns`); tagged
-            `DATE` outright, without running the heuristics below.
+            dtype.
         min_samples_for_inference: Minimum samples required to auto-infer a
             feature not provided as categorical.
         max_unique_for_category: Max unique values for a feature to be categorical.
@@ -344,11 +343,10 @@ def _detect_feature_modality(
         s.dtype, pd.CategoricalDtype
     )
     if is_string_like:
-        return (
-            FeatureModality.CATEGORICAL
-            if n_unique <= min_cardinality_for_text
-            else FeatureModality.TEXT
-        )
+        if n_unique <= min_cardinality_for_text:
+            return FeatureModality.CATEGORICAL
+        else:  # noqa: RET505
+            return FeatureModality.TEXT
     raise TabPFNUserError(
         f"Unknown dtype: {s.dtype}, with {s.nunique(dropna=False)} unique values"
     )

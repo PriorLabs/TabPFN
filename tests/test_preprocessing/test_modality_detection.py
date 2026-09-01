@@ -889,9 +889,7 @@ class TestResolveDatetimeColumns:
         dates = pd.date_range("2020-01-01", periods=3)
         X = pd.DataFrame({"num": [1.0, 2.0, 3.0], "date": dates})
 
-        out, date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=None
-        )
+        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
 
         assert date_indices == [1]
         assert pd.api.types.is_numeric_dtype(out["date"])
@@ -909,7 +907,7 @@ class TestResolveDatetimeColumns:
                 "date": pd.to_datetime(["2020-01-01", None, "2020-01-03"]),
             }
         )
-        out, _ = resolve_datetime_columns(X, categorical_features_indices=None)
+        out, _ = resolve_datetime_columns(X, categorical_indices=None)
         assert out["date"].isna().tolist() == [False, True, False]
 
     def test__nothing_detected__is_a_noop(self) -> None:
@@ -922,17 +920,13 @@ class TestResolveDatetimeColumns:
                 "date": ["2020-01-01", "2020-01-02", "2020-01-03"],
             }
         )
-        out, date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=None
-        )
+        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
         assert date_indices == []
         assert out is X
 
     def test__non_dataframe_input__is_a_noop(self) -> None:
         X = np.array([[1.0, 2.0], [3.0, 4.0]])
-        out, date_indices = resolve_datetime_columns(
-            X, categorical_features_indices=None
-        )
+        out, date_indices = resolve_datetime_columns(X, categorical_indices=None)
         assert date_indices == []
         assert out is X
 
