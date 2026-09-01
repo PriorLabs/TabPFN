@@ -1176,8 +1176,8 @@ def test__classifier_fit__native_datetime_column__no_longer_crashes() -> None:
     `validate_data` converts the whole frame to one numpy array, and numpy has
     no dtype that unifies `datetime64` with a numeric or string column.
 
-    Fixed by `resolve_datetime_columns` (see
-    `tests/test_preprocessing/test_modality_detection.py`), which casts such a
+    Fixed by `DateTransformer` (see
+    `tests/test_preprocessing/test_date_encoding.py`), which converts such a
     column to numeric (nanoseconds since the epoch) before validation runs, so
     it unifies fine with the rest of the frame.
     """
