@@ -1375,30 +1375,25 @@ def test___compute_feature_importance_order__lightgbm():
     X = rng.standard_normal((n_samples, n_features))
     y = (X[:, 5] > 0).astype(int)
 
-    orderings = _compute_feature_importance_order(
+    order = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=3,
         rng=rng,
     )
 
-    assert len(orderings) == 1
-    for order in orderings:
-        assert len(order) == n_features
-        assert order[0] == 5
+    assert len(order) == n_features
+    assert order[0] == 5
 
     # With categorical indices — no crash.
-    orderings_cat = _compute_feature_importance_order(
+    order_cat = _compute_feature_importance_order(
         X=np.abs(X),  # non-negative for LightGBM categorical handling
         y=y,
         task_type="classifier",
-        n_estimators=2,
         categorical_feature_indices=[0, 1],
         rng=rng,
     )
-    assert len(orderings_cat) == 1
-    assert len(orderings_cat[0]) == n_features
+    assert len(order_cat) == n_features
 
 
 @skip_on_macos
@@ -1413,18 +1408,15 @@ def test___compute_feature_importance_order__handles_nan():
     nan_mask = rng.random((n_samples, n_features)) < 0.1
     X[nan_mask] = np.nan
 
-    orderings = _compute_feature_importance_order(
+    order = _compute_feature_importance_order(
         X=X,
         y=y,
         task_type="classifier",
-        n_estimators=2,
         rng=rng,
     )
 
-    assert len(orderings) == 1
-    for order in orderings:
-        assert len(order) > 0
-        assert not np.isnan(order).any()
+    assert len(order) > 0
+    assert not np.isnan(order).any()
 
 
 def test__generate_regression_ensemble_configs__target_transforms_not_shared():
