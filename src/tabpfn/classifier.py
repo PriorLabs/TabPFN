@@ -82,6 +82,7 @@ from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import (
     DateTransformer,
+    convert_dates,
 )
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -98,7 +99,7 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     capture_input_shape,
     ensure_compatible_fit_inputs,
-    prepare_predict_input,
+    ensure_compatible_predict_input_sklearn,
     validate_dataset_size,
     validate_num_classes,
 )
@@ -1120,7 +1121,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
             # Validate/clean X_test exactly as the standard predict path does
             # (_raw_predict) before the per-member preprocessors run, so non-numeric
             # inputs (DataFrames, categoricals, NaNs) are handled identically.
-            X_test = prepare_predict_input(X_test, worker)  # noqa: PLW2901
+            capture_input_shape(X_test, estimator=worker, reset=False)
+            X_test = convert_dates(X_test, worker)  # noqa: PLW2901
+            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(
@@ -1408,7 +1411,9 @@ class TabPFNClassifier(ClassifierMixin, BaseEstimator):
         check_is_fitted(self)
 
         if not self.differentiable_input:
-            X = prepare_predict_input(X, self)
+            capture_input_shape(X, estimator=self, reset=False)
+            X = convert_dates(X, self)
+            X = ensure_compatible_predict_input_sklearn(X, self)
             X = clean_data_transform(
                 X,
                 cat_indices=self.inferred_feature_schema_.indices_for(

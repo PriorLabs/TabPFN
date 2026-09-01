@@ -13,7 +13,7 @@ import pytest
 from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.errors import TabPFNValidationError
 from tabpfn.preprocessing.datamodel import FeatureModality, FeatureSchema
-from tabpfn.preprocessing.date_encoding import DateTransformer, apply_date_conversion
+from tabpfn.preprocessing.date_encoding import DateTransformer, convert_dates
 from tabpfn.preprocessing.modality_detection import detect_feature_modalities
 
 
@@ -329,8 +329,8 @@ class TestTransform:
         assert DateTransformer().transform(X) is X
 
 
-class TestApplyDateConversion:
-    """`apply_date_conversion`: the predict paths' guard for an unset attribute."""
+class TestConvertDates:
+    """`convert_dates`: the predict paths' guard for an unset attribute."""
 
     class _Source:
         def __init__(self, **attributes: object) -> None:
@@ -341,14 +341,14 @@ class TestApplyDateConversion:
         pre-existing `ordinal_encoder_` guard.
         """
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        out = apply_date_conversion(X, self._Source(categorical_features_indices=None))
+        out = convert_dates(X, self._Source(categorical_features_indices=None))
         assert pd.api.types.is_numeric_dtype(out["date"])
 
     def test__source_without_a_transformer__honours_declared_categoricals(
         self,
     ) -> None:
         X = _frame(pd.date_range("2020-01-01", periods=3))
-        out = apply_date_conversion(X, self._Source(categorical_features_indices=[1]))
+        out = convert_dates(X, self._Source(categorical_features_indices=[1]))
         assert out is X
 
     def test__source_with_a_fitted_transformer__uses_it(self) -> None:
@@ -357,7 +357,7 @@ class TestApplyDateConversion:
             date_transformer_=DateTransformer(categorical_indices=[1]),
             categorical_features_indices=None,
         )
-        assert apply_date_conversion(X, source) is X
+        assert convert_dates(X, source) is X
 
 
 class TestConvertedDateClassification:

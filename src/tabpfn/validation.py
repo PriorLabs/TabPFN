@@ -26,7 +26,6 @@ from tabpfn.misc._sklearn_compat import (
     check_X_y,
 )
 from tabpfn.preprocessing.clean import coerce_nullable_dtypes_to_numpy
-from tabpfn.preprocessing.date_encoding import apply_date_conversion
 from tabpfn.settings import settings
 
 if TYPE_CHECKING:
@@ -78,21 +77,6 @@ def capture_input_shape(
             f"X has {n_features} features, but {estimator.__class__.__name__} "
             f"is expecting {expected} features as input."
         )
-
-
-def prepare_predict_input(
-    X: XType,
-    estimator: TabPFNRegressor | TabPFNClassifier,
-) -> np.ndarray:
-    """Everything a raw predict input needs before the preprocessors see it.
-
-    One call, rather than three of them remembered at every predict entry point:
-    the shape check has to happen on the raw input, date resolution after it but
-    before value validation, and value validation last.
-    """
-    capture_input_shape(X, estimator=estimator, reset=False)
-    X = apply_date_conversion(X, estimator)
-    return ensure_compatible_predict_input_sklearn(X, estimator)
 
 
 def ensure_compatible_fit_inputs(

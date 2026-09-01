@@ -410,7 +410,7 @@ class DateTransformer:
         return encoded.set_axis(fitted.output_names, axis=1).reset_index(drop=True)
 
 
-def apply_date_conversion(X: XType, source: object) -> XType:
+def convert_dates(X: XType, source: object) -> XType:
     """Convert `X`'s temporal columns via `source`'s fitted `date_transformer_`.
 
     `source` (a fitted estimator or ensemble worker) may never have set

@@ -84,6 +84,7 @@ from tabpfn.preprocessing.clean import clean_data_transform
 from tabpfn.preprocessing.datamodel import Feature, FeatureModality, FeatureSchema
 from tabpfn.preprocessing.date_encoding import (
     DateTransformer,
+    convert_dates,
 )
 from tabpfn.preprocessing.ensemble import (
     TabPFNEnsemblePreprocessor,
@@ -103,7 +104,7 @@ from tabpfn.utils import (
 from tabpfn.validation import (
     capture_input_shape,
     ensure_compatible_fit_inputs,
-    prepare_predict_input,
+    ensure_compatible_predict_input_sklearn,
     validate_dataset_size,
 )
 
@@ -1312,7 +1313,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
         check_is_fitted(self)
 
         # TODO: Move these at some point to InferenceEngine
-        X = prepare_predict_input(X, self)
+        capture_input_shape(X, estimator=self, reset=False)
+        X = convert_dates(X, self)
+        X = ensure_compatible_predict_input_sklearn(X, self)
 
         check_is_fitted(self)
 
@@ -1476,7 +1479,11 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
             # The tuning regressor has no `ensemble_softmax_temperature_`, so these
             # are the untempered aggregated logits, with the per-estimator
             # `softmax_temperature` correctly still applied.
-            X_holdout_NhF = prepare_predict_input(  # noqa: PLW2901
+            capture_input_shape(X_holdout_NhF, estimator=tuning_regressor, reset=False)
+            X_holdout_NhF = convert_dates(  # noqa: PLW2901
+                X_holdout_NhF, tuning_regressor
+            )
+            X_holdout_NhF = ensure_compatible_predict_input_sklearn(  # noqa: PLW2901
                 X_holdout_NhF, tuning_regressor
             )
             logits_NhB = tuning_regressor._compute_aggregated_logits(X_holdout_NhF)
@@ -1504,7 +1511,7 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
         Shared by `predict` and `_maybe_calibrate_ensemble_temperature`.
 
-        `X` must already have passed `prepare_predict_input`;
+        `X` must already have passed `ensure_compatible_predict_input_sklearn`;
         the remaining dtype/NA preprocessing happens here. Constant-target
         models have no executor and must be routed to
         `_handle_constant_target` by the caller instead.
@@ -1742,7 +1749,9 @@ class TabPFNRegressor(RegressorMixin, BaseEstimator):
 
             # Clean X_test as the standard predict path does, so DataFrames,
             # categoricals and NaNs behave identically.
-            X_test = prepare_predict_input(X_test, worker)  # noqa: PLW2901
+            capture_input_shape(X_test, estimator=worker, reset=False)
+            X_test = convert_dates(X_test, worker)  # noqa: PLW2901
+            X_test = ensure_compatible_predict_input_sklearn(X_test, worker)  # noqa: PLW2901
             X_test = clean_data_transform(  # noqa: PLW2901
                 X_test,
                 cat_indices=worker.inferred_feature_schema_.indices_for(

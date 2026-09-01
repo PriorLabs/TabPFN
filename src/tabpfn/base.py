@@ -42,12 +42,16 @@ from tabpfn.model_loading import (
 )
 from tabpfn.preprocessing.clean import fix_dtypes
 from tabpfn.preprocessing.datamodel import FeatureModality
+from tabpfn.preprocessing.date_encoding import convert_dates
 from tabpfn.utils import (
     DevicesSpecification,
     infer_autocast_inference_mode,
     infer_devices,
 )
-from tabpfn.validation import prepare_predict_input
+from tabpfn.validation import (
+    capture_input_shape,
+    ensure_compatible_predict_input_sklearn,
+)
 
 if TYPE_CHECKING:
     from tabpfn.architectures.interface import Architecture, ArchitectureConfig
@@ -601,7 +605,9 @@ def get_embeddings(
 
     task_type = "regression" if isinstance(model, TabPFNRegressor) else "multiclass"
 
-    X = prepare_predict_input(X, model)
+    capture_input_shape(X, estimator=model, reset=False)
+    X = convert_dates(X, model)
+    X = ensure_compatible_predict_input_sklearn(X, model)
     X = fix_dtypes(
         X,
         cat_indices=model.inferred_feature_schema_.indices_for(
